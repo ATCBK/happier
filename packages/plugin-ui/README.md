@@ -141,6 +141,17 @@ composition; it receives `null` before the first measurement. Put outer padding
 around the component and pane padding in `listStyle` or `detailStyle` so its
 measurement represents the available pane region.
 
+In 0.3 development source, both `ListDetailLayout` and `Collection` resize their
+split rail with the shared pointer, keyboard and accessibility handle. Supply
+`resizeKey` to remember its width on this device when mounted in Happier; the
+host namespaces that key to the plugin. Without the host sizing port, widths
+stay in the mounted component's memory. Use `listWidthPx` and
+`onListWidthChange` for controlled geometry, and `onListWidthCommit` to persist
+only the released width. `onListWidthReset` handles double-click reset. The
+requested width clamps to the existing list/detail minima without changing
+when the composition stacks. `labels` can supply `resize`, `resizeHint` and
+`resizeValue` for the handle.
+
 Use `Columns` with `Column` children for a wrapping layout of up to four columns
 per row. `minColumnWidth` determines how many columns fit in the measured
 container, `columns` requests their maximum count, and `span` assigns a child

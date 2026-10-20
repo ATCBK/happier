@@ -28,8 +28,11 @@ hide control. Session and Project headers supply their domain wording; app pages
 `PaneScopeState.mainHidden` is a persisted preference, changed by `setMainHidden` through the
 scoped pane API. `usePaneMainColumn()` exposes the host's effective `hidden`, `canHide`, `folded`,
 labels, identity and `setHidden`/`toggle` controls to descendants. It returns null outside a host.
-Code already holding the scoped pane API, such as admitted Session presentation intents, changes
-the same preference through `setMainHidden` rather than constructing another visibility owner.
+The scoped pane API's `setMainHidden` changes the persisted preference. An active presentation
+outside the host's descendant context, such as Session presentation intents, receives the same
+measured controls through `onMainColumnControlsChange` and calls their `setHidden`. This also opens
+a folded main drawer whose persisted flag may already be false; dispatching the persisted flag alone
+cannot reveal that drawer. An absent published control returns the presentation's unavailable result.
 
 `AppPaneScopeHost` only hides main when the layout supports neighbouring content and a side or
 details column is available. It clears stale hide state when the last neighbouring column closes,
