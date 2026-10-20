@@ -178,15 +178,16 @@ describe('release-less plugin declarations', () => {
     it.each([
         { label: 'bundled', custody: BUNDLED, sourceClass: 'bundledFirstParty' },
         { label: 'drop-in', custody: DEVELOPMENT, sourceClass: 'localPath' },
-    ])('observes a selected $label UI-only source without claiming an enabled Account intent', ({ custody, sourceClass }) => {
+    ])('observes a selected $label UI-only source with a missing artifact without claiming an enabled Account intent', ({ custody, sourceClass }) => {
         const uiOnlyManifest = manifest('acme.ui-only', {
             ui: {
                 views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, renderer: 'page-renderer', title: 'Page' }],
-                renderers: [{ id: 'page-renderer', kind: 'declarative', root: { kind: 'text', text: 'Page' } }],
+                renderers: [{ id: 'page-renderer', kind: 'reactNative', artifact: 'missing-page' }],
             },
         });
         const declarations = projectReleaseLessPluginDeclarations({
-            activationTargets: [{ pluginId: uiOnlyManifest.id, manifest: uiOnlyManifest }],
+            activationTargets: [{ pluginId: uiOnlyManifest.id, manifest: uiOnlyManifest,
+                generatedUiArtifactsManifest: { version: 2, entries: [] } }],
             sourceCustodiesByPluginId: new Map([[uiOnlyManifest.id, custody]]),
             registryMaterializationIdsByPluginId: {},
             observedAt: 12,
@@ -199,6 +200,7 @@ describe('release-less plugin declarations', () => {
                 declaredManifest: uiOnlyManifest,
                 portableRelease: false,
                 sourceClass,
+                uiArtifacts: [],
             },
         });
     });
