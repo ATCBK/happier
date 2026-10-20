@@ -8,6 +8,8 @@ import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createAutomationRunFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
+import { createAccountNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
+import { AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
@@ -787,6 +789,34 @@ describe('InboxContent renders the canonical item model in three views (C1 L10, 
             await act(async () => pressInboxKey('j'));
             expect(screen.findByTestId('inbox.selected')?.props.children).toBe(JSON.stringify(item.focus));
         }
+    });
+
+    it('dismisses any stored notice from its own row through the shared notice owner (C1 M4)', async () => {
+        const { InboxContent } = await import('./InboxContent');
+        const notices = (['update', 'decision'] as const).map((type) => {
+            const artifact = createAccountNoticeArtifactFixture({ id: `notice-${type}`, createdAt: NOW - 60_000,
+                header: { type, page: undefined, title: `Notice ${type}`, body: 'Plain words' } });
+            return { artifact, header: AccountNoticeArtifactHeaderV1Schema.parse(artifact.rawHeader) };
+        });
+        const base = createModel({ needsYou: false });
+        const sessionPresentation = { ...base.sessionPresentation, readySessions: [], markAllReadTargets: [] };
+        const dismissAccountNotice = vi.fn(async () => {});
+        const items = buildInboxItems({ workGroups: [], sessionPresentation: sessionPresentation as never,
+            workflowServerId: 'server-a', accountServerId: 'server-a', notices });
+        const model = { ...base, sessionPresentation, friendRequests: [], items, accountNotices: notices, openAccountNotices: notices,
+            dismissAccountNotice } as InboxModel;
+        for (const [view, notice] of [['updates', notices[0]!], ['needs_you', notices[1]!]] as const) {
+            const screen = await renderScreen(<InboxContent model={model} view={view} />, { wrapper: PagePresentation });
+            const item = items.find((row) => row.source.id === notice.artifact.id)!;
+            const dismiss = screen.findByTestId(`inbox.item.${item.key}.dismiss`);
+            expect(dismiss).not.toBeNull();
+            await act(async () => { await dismiss!.props.onPress(); });
+            expect(dismissAccountNotice).toHaveBeenLastCalledWith(notice);
+            await screen.unmount();
+        }
+        // Live owners keep their own quick actions; a session row gains no notice Dismiss.
+        const plain = await renderScreen(<InboxContent model={createModel({ extraItems: [mentionItem('m-2')] })} view="mentions" />, { wrapper: PagePresentation });
+        expect(plain.findByTestId('inbox.item.discussion:server-a:disc-1:m-2.dismiss')).toBeNull();
     });
 
     it('lists Updates newest first: finished sessions, what stopped asking, and people', async () => {

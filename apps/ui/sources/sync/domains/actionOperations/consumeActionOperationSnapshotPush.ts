@@ -38,21 +38,37 @@ export async function consumeActionOperationSnapshotPush(params: Readonly<{
     if (!shouldContinue()) return;
     const parsed = ActionOperationSnapshotV1Schema.safeParse(opened);
     if (!parsed.success) return;
-    let snapshot = parsed.data;
+    const snapshot = parsed.data;
     if (
         snapshot.scope.accountId !== params.accountId
         || snapshot.scope.machineId !== params.update.machineId
     ) return;
 
+    await refreshActionOperationSnapshot({ ...params, operation: { serverId: sourceServerId, snapshot } });
+}
+
+/** Both notifications and terminal exit re-read the daemon through this admission path. */
+export async function refreshActionOperationSnapshot(params: Readonly<{
+    operation: QualifiedActionOperation;
+    readSnapshot: (operationId: string) => Promise<ActionOperationGetV1Response>;
+    store?: ActionOperationStore;
+    shouldContinue?: () => boolean;
+    onSnapshot?: (operation: QualifiedActionOperation) => void | Promise<void>;
+}>): Promise<void> {
+    const shouldContinue = params.shouldContinue ?? (() => true);
+    if (!shouldContinue()) return;
+    const sourceServerId = params.operation.serverId;
+    let snapshot = params.operation.snapshot;
+    const { accountId, machineId } = snapshot.scope;
     const store = params.store ?? actionOperationStore;
-    const unavailable = () => store.setMachineObservation({ serverId: sourceServerId, machineId: params.update.machineId }, 'unavailable');
+    const unavailable = () => store.setMachineObservation({ serverId: sourceServerId, machineId }, 'unavailable');
     try {
         const response = await params.readSnapshot(snapshot.operationId);
         if (!shouldContinue()) return;
         if (response.kind !== 'found' || response.operation.operationId !== snapshot.operationId
             || response.operation.actionId !== snapshot.actionId
-            || response.operation.scope.accountId !== params.accountId
-            || response.operation.scope.machineId !== params.update.machineId
+            || response.operation.scope.accountId !== accountId
+            || response.operation.scope.machineId !== machineId
             || response.operation.scope.sessionId !== snapshot.scope.sessionId
             || response.operation.revision < snapshot.revision) {
             unavailable();
@@ -80,6 +96,6 @@ export async function consumeActionOperationSnapshotPush(params: Readonly<{
     // The store owns revision/lifecycle advancement. An earlier read may finish
     // after a newer observation; present only the accepted canonical snapshot.
     if (!operation || !sameStrictJsonValue(operation.snapshot, snapshot)) return;
-    store.setMachineObservation({ serverId: sourceServerId, machineId: params.update.machineId }, 'available');
+    store.setMachineObservation({ serverId: sourceServerId, machineId }, 'available');
     await params.onSnapshot?.(operation);
 }

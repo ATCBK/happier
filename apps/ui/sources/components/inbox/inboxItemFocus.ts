@@ -41,14 +41,24 @@ export const INBOX_ITEM_DETAIL_REGISTRY = {
             ? createWorkflowInvocationRoute(focus.id, focus.invocationId, focus.serverId) : createWorkflowRunRoute(focus.id, focus.serverId) },
     approval: { prefix: 'approval:', detail: 'approval', openLabel: 'inbox.work.detail.openApproval',
         route: (focus: InboxItemFocus) => `/inbox/approvals/${encodeURIComponent(focus.id)}${focus.serverId ? `?serverId=${encodeURIComponent(focus.serverId)}` : ''}` },
-    notice: { prefix: 'notice:', detail: 'page', openLabel: 'common.open',
+    notice: { prefix: 'notice:', detail: 'notice', openLabel: 'common.open',
         route: (focus: InboxItemFocus, context?: InboxItemDetailContext) => resolveInboxNoticePageRoute(focus.id, context?.notice, focus.serverId) },
     automation_run: { prefix: 'automation:', detail: 'page', openLabel: 'inbox.work.groups.openRun',
         route: (focus: InboxItemFocus) => focus.kind === 'automation_run'
             ? createWorkflowRunRoute({ kind: 'occurrence', automationId: focus.automationId, runId: focus.id }, focus.serverId) : '/inbox' },
 } as const;
 
+/**
+ * A notice that points nowhere is its own content, so its page is its Inbox item: a phone pushes the
+ * same selected notice the wide pane shows, never the stored document page with its JSON.
+ */
 export function resolveInboxNoticePageRoute(id: string, notice?: InboxItemDetailContext['notice'], serverId?: string): string {
+    return resolveInboxNoticeOwnPageRoute(notice, serverId)
+        ?? `/inbox?item=${encodeURIComponent(inboxNoticeFocusKeyV1(serverId ?? '', id))}`;
+}
+
+/** The page a notice points at (a plugin page, usage, a machine, a run), or null when the notice is its own content. */
+export function resolveInboxNoticeOwnPageRoute(notice?: InboxItemDetailContext['notice'], serverId?: string): string | null {
     if (notice?.kind === 'account_notice.v1' && notice.source.kind === 'plugin' && notice.page) {
         return buildPluginAppPageRoutePath({ pluginId: notice.source.pluginId, localId: notice.page.pageId,
             ...(notice.page.subPath === undefined ? {} : { subPath: notice.page.subPath }) });
@@ -62,7 +72,7 @@ export function resolveInboxNoticePageRoute(id: string, notice?: InboxItemDetail
             : createWorkflowRunRoute(source.runId, serverId);
         if (route) return route;
     }
-    return `/artifacts/${encodeURIComponent(id)}`;
+    return null;
 }
 
 export function createInboxItemRoute(focus: InboxItemFocus) {

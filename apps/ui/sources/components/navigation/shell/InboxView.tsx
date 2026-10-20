@@ -7,7 +7,7 @@ import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/advance
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { InboxContent, type InboxView as InboxContentView } from '@/components/inbox/InboxContent';
-import { createInboxItemRoute, resolveInboxItemPageRoute, type InboxItemFocus } from '@/components/inbox/inboxItemFocus';
+import { createInboxItemRoute, resolveInboxItemPageRoute, resolveInboxNoticeOwnPageRoute, type InboxItemDetailContext, type InboxItemFocus } from '@/components/inbox/inboxItemFocus';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { countInboxMentions, countInboxNeedsYou, countInboxUpdates } from '@/components/inbox/inboxCounts';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -94,13 +94,16 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
         return counts.approvals + counts.decisions + counts.blocked > 0 ? t('inbox.work.needsYouSummary', counts) : null;
     }, [model.items]);
     // Lab P4: what needs you, what changed and who mentioned you, as three views of one Inbox.
-    const tabs = (
+    // `beneathTitle`: a phone, or the narrow list beside an open item, where the control has the
+    // column to itself and fits it: counts drop before a name is cut, then More takes the rest.
+    const renderTabs = (beneathTitle: boolean) => (
         <SegmentedTabBar
             testIDPrefix="inbox.view"
             accessibilityLabel={t('inbox.work.tabs.a11y')}
             // A phone's control spans the width as a thumb target (lab `phone-P4`); the header's hugs its
             // labels beside the title at the control step (lab `inbox-I1`), not the compact one.
             segmentSizing={phone ? undefined : 'content'}
+            overflow={beneathTitle ? { label: t('common.more'), testID: 'inbox.view:more' } : undefined}
             tabs={[
                 { id: 'needs_you' as const, label: t('inbox.work.tabs.needsYou'), ...(needsYouCount > 0 ? { count: String(needsYouCount) } : {}) },
                 { id: 'updates' as const, label: t('inbox.work.tabs.updates'), ...(updatesCount > 0 ? { count: String(updatesCount) } : {}) },
@@ -111,7 +114,10 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
         />
     );
 
-    const renderList = (onSelectItem: ((focus: InboxItemFocus) => void) | undefined) => (
+    const renderList = (onSelectItem: ((focus: InboxItemFocus) => void) | undefined) => {
+        // Beside an open item the list is a narrow column and the header puts the control under the title.
+        const tabs = renderTabs(phone || (onSelectItem !== undefined && focusedItem !== null));
+        return (
         <NavigationTitleChromeProvider showsTitle={false}>
             {/* A page of work rows with their inline answers (lab `inbox-I1`): the wide column. */}
             <ItemList testID="inbox.screen" pageColumn="wide">
@@ -126,7 +132,8 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
             </ItemList>
             {phone ? null : <InboxKeyHints itemOpen={focusedItem !== null && onSelectItem !== undefined} advancesOnAnswer={view === 'needs_you'} />}
         </NavigationTitleChromeProvider>
-    );
+        );
+    };
 
     return (
         <View style={[styles.container, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
@@ -141,25 +148,47 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
                 />
             )}
             {phone ? (
-                <>
-                    {renderList(undefined)}
-                    {focusedItem ? <OpenFocusedItemPage focus={focusedItem} /> : null}
-                </>
+                <FocusedItemPage focus={focusedItem} list={renderList(undefined)} close={close} />
             ) : <InboxListDetail focusedItem={focusedItem} renderList={renderList} select={select} close={close} />}
         </View>
     );
 });
 
 /**
- * Where the list is the whole page (a phone, or a window too narrow for the detail beside it), a link
- * to an item (`/inbox?item=`, from a Boards card or Artifacts) lands on that item's own page, the same
- * place a tapped row pushes. Replacing the Inbox entry keeps Back on the page the link came from.
+ * Where the list is the whole page (a phone, or a window too narrow for the detail beside it), the
+ * selected item opens its own page. A notice that points nowhere is its own content, so the Inbox is
+ * its page: the notice replaces the list, and Back returns to it (lab P4 phone notice).
  */
-function OpenFocusedItemPage(props: Readonly<{ focus: InboxItemFocus }>) {
+function FocusedItemPage(props: Readonly<{ focus: InboxItemFocus | null; list: React.ReactNode; close: () => void }>) {
+    const model = useInboxModel();
+    const focus = props.focus;
+    const notice = focus?.kind === 'notice' ? model.accountNotices.find(entry => entry.artifact.id === focus.id)?.header
+        ?? model.openUsageNotices.find(entry => entry.artifact.id === focus.id)?.header ?? null : null;
+    const hostsNotice = focus?.kind === 'notice' && (notice !== null || !model.isLoading)
+        && resolveInboxNoticeOwnPageRoute(notice, focus.serverId) === null;
+    if (focus && hostsNotice) {
+        return (
+            <React.Suspense fallback={<PaneLoadingFallback />}>
+                <InboxItemDetail focus={focus} onClose={props.close} />
+            </React.Suspense>
+        );
+    }
+    return (
+        <>
+            {props.list}
+            {focus ? <OpenFocusedItemPage focus={focus} notice={notice} /> : null}
+        </>
+    );
+}
+
+/**
+ * A link to an item (`/inbox?item=`, from a Boards card or Artifacts) lands on that item's own page,
+ * the same place a tapped row pushes. Replacing the Inbox entry keeps Back on the page the link came from.
+ */
+function OpenFocusedItemPage(props: Readonly<{ focus: InboxItemFocus; notice: InboxItemDetailContext['notice'] }>) {
     const router = useRouter();
     const model = useInboxModel();
-    const notice = props.focus.kind === 'notice' ? model.accountNotices.find(entry => entry.artifact.id === props.focus.id)?.header
-        ?? model.openUsageNotices.find(entry => entry.artifact.id === props.focus.id)?.header : null;
+    const notice = props.notice;
     const href = resolveInboxItemPageRoute(props.focus, { notice });
     React.useEffect(() => {
         if (props.focus.kind === 'notice' && !notice && model.isLoading) return;
@@ -207,10 +236,8 @@ const InboxListDetail = React.memo(function InboxListDetail(props: Readonly<{
             // The hairline separates the list from an open item; a list alone has nothing to separate from.
             listStyle={props.focusedItem ? { borderRightWidth: 1, borderRightColor: theme.colors.border.default } : undefined}
             list={(layout) => (
-                <>
-                    {props.renderList(layout?.mode === 'split' ? props.select : undefined)}
-                    {layout?.mode === 'stacked' && props.focusedItem ? <OpenFocusedItemPage focus={props.focusedItem} /> : null}
-                </>
+                <FocusedItemPage focus={layout?.mode === 'stacked' ? props.focusedItem : null}
+                    list={props.renderList(layout?.mode === 'split' ? props.select : undefined)} close={props.close} />
             )}
             detail={props.focusedItem ? (
                 <React.Suspense fallback={<PaneLoadingFallback />}>

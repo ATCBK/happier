@@ -26,6 +26,7 @@ export const ProjectCommandOutputPane = React.memo(
   function ProjectCommandOutputPane(
     props: Readonly<{
       operation: ActionOperationProjection;
+      operationStopPending?: boolean;
       title: string;
       height?: number;
       /**
@@ -130,6 +131,7 @@ export const ProjectCommandOutputPane = React.memo(
           serverId={attachment.serverId}
           rootPath={attachment.kind === 'projectCommand' ? attachment.cwd : null}
           attachedTerminalId={attachment.terminalId}
+          operationStopPending={props.operationStopPending}
           workspace={workspace ?? undefined}
           terminalKey={`project-command:${attachment.terminalId}`}
           title={joinHappierFacts(props.title, machineName)}

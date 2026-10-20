@@ -2,6 +2,9 @@ import * as React from 'react';
 import type { MachineVitalsNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import { happierPageTextMetrics, type HappierSceneId } from '@happier-dev/plugin-ui/presentation';
 import { Platform, Pressable, View } from 'react-native';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { Modal } from '@/modal';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -75,9 +78,11 @@ const InboxItemRow = React.memo(function InboxItemRow(props: Readonly<{
     item: InboxItem; selected: boolean; narrow: boolean; showDivider?: boolean;
     navigate: (route: string) => void; onSelectItem?: (focus: InboxItemFocus) => void;
     markOpened: InboxModel['markItemOpened'];
+    /** A stored notice's one quick action, the same Dismiss every Inbox notice row carries. */
+    dismissNotice: (item: InboxItem) => Promise<void>;
 }>) {
     const { theme } = useUnistyles();
-    const { item, navigate, onSelectItem, markOpened } = props;
+    const { item, navigate, onSelectItem, markOpened, dismissNotice } = props;
     // Lab P4 row: where it comes from, the title, what it says, and who. The excerpt is the detail
     // when the item carries one; a Discussion row without it says what happened.
     const fact = item.excerpt
@@ -94,6 +99,10 @@ const InboxItemRow = React.memo(function InboxItemRow(props: Readonly<{
             navigate(item.pageRoute);
         }
     }, [item, navigate, onSelectItem, markOpened]);
+    const dismiss = React.useCallback(async () => {
+        try { await dismissNotice(item); }
+        catch { Modal.alert(t('common.error'), t('errors.unknownError')); }
+    }, [dismissNotice, item]);
     return <InboxWorkRow testID={`inbox.item.${item.key}`} title={item.title} facts={fact ? [fact] : []}
         source={item.source.displayName ?? null} byline={byline}
         selected={props.selected} showDivider={props.showDivider} narrow={props.narrow}
@@ -101,6 +110,12 @@ const InboxItemRow = React.memo(function InboxItemRow(props: Readonly<{
         time={<InboxRelativeTime timestamp={item.createdAt} />}
         mark={<Icon name={ITEM_MARKS[item.type]} size={18}
             color={item.view === 'needs_you' ? theme.colors.state.attention.foreground : theme.colors.text.secondary} />}
+        trailingAccessory={item.producer === 'notice' ? (
+            <IconButton testID={`inbox.item.${item.key}.dismiss`} accessibilityLabel={t('inbox.actionOperations.dismiss')}
+                tooltip={t('inbox.actionOperations.dismiss')} iconName="x" variant="plain" size={28}
+                minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={8}
+                onPress={dismiss} />
+        ) : undefined}
         onPress={open} />;
 });
 
@@ -189,6 +204,11 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
     })), [model.sessionPresentation.readySessions]);
     const viewItems = React.useMemo(() => selectInboxItemsForView(model.items, view), [model.items, view]);
     const focusedRouteKey = props.focusedItem ? createInboxItemRoute(props.focusedItem).params.item : null;
+    const { accountNotices, dismissAccountNotice } = model;
+    const dismissNotice = React.useCallback(async (item: InboxItem) => {
+        const entry = accountNotices.find((notice) => notice.artifact.id === item.source.id);
+        if (entry) await dismissAccountNotice(entry);
+    }, [accountNotices, dismissAccountNotice]);
 
     const renderRow = (item: InboxItem, index: number, count: number) => {
         const showDivider = index < count - 1;
@@ -236,7 +256,7 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
         return (
             <InboxItemRow key={item.key} item={item} narrow={!(page && wide)} showDivider={showDivider}
                 selected={focusedRouteKey !== null && createInboxItemRoute(item.focus).params.item === focusedRouteKey}
-                navigate={navigate} onSelectItem={props.onSelectItem} markOpened={model.markItemOpened} />
+                navigate={navigate} onSelectItem={props.onSelectItem} markOpened={model.markItemOpened} dismissNotice={dismissNotice} />
         );
     };
 

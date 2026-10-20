@@ -8,7 +8,7 @@ import type {
 import { projectActionOperationSnapshotForV1Reader } from '@happier-dev/protocol/actions/operations/v1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
-import { listActionOperations } from '@/sync/ops/actionOperations';
+import { getActionOperation, listActionOperations } from '@/sync/ops/actionOperations';
 import { useActiveServerAccountScope, useAllMachines, useSocketStatus } from '@/sync/domains/state/storage';
 import {
     captureActiveServerAccountScopeLifetime,
@@ -16,13 +16,51 @@ import {
 } from '@/sync/domains/scope/activeServerAccountScope';
 import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import type { ActionOperationObservation } from './actionOperationStore';
-import { actionOperationStore, type ActionOperationStore } from './actionOperationStore';
+import { actionOperationStore, isActionOperationTerminal, type ActionOperationStore } from './actionOperationStore';
+import { selectTerminalActionOperation, type TerminalActionOperationQuery } from './actionOperationSelectors';
+import { refreshActionOperationSnapshot } from './consumeActionOperationSnapshotPush';
 import {
     actionOperationAddressKey,
     normalizeActionOperationServerId,
     type QualifiedActionOperation,
 } from './qualifiedActionOperation';
 import { actionOperationPresentationCoordinator } from '@/components/inbox/actionOperations/actionOperationPresentationRuntime';
+
+const terminalExitReads = new WeakMap<ActiveServerAccountScopeLifetime, Map<string, Promise<void>>>();
+
+/** Exit wakes the same daemon reader as a push, including for a Stop on another device. */
+export function refreshTerminalActionOperation(query: TerminalActionOperationQuery, lifetime: ActiveServerAccountScopeLifetime): Promise<void> {
+    if (!lifetime.isCurrent() || lifetime.scope.accountId !== query.accountId || lifetime.scope.serverId !== query.serverId) return Promise.resolve();
+    const operation = selectTerminalActionOperation(actionOperationStore.getSnapshot(), query);
+    if (!operation || isActionOperationTerminal(operation.snapshot.state)) return Promise.resolve();
+    let reads = terminalExitReads.get(lifetime);
+    if (!reads) {
+        reads = new Map();
+        terminalExitReads.set(lifetime, reads);
+    }
+    const key = actionOperationAddressKey({ serverId: operation.serverId, operationId: operation.snapshot.operationId });
+    const pending = reads.get(key);
+    if (pending) return pending;
+    const controller = new AbortController();
+    const retirement = lifetime.onRetire(() => controller.abort());
+    const read = refreshActionOperationSnapshot({
+        operation,
+        shouldContinue: () => lifetime.isCurrent() && !controller.signal.aborted,
+        readSnapshot: operationId => getActionOperation({
+            serverId: operation.serverId, accountId: operation.snapshot.scope.accountId,
+            machineId: operation.snapshot.scope.machineId, operationId,
+            // An exit frame can precede operation settlement. Join its existing runner
+            // rather than racing one snapshot read or starting another polling timer.
+            waitForTerminal: true, signal: controller.signal,
+        }),
+        onSnapshot: value => actionOperationPresentationCoordinator.observe(value),
+    }).finally(() => {
+        retirement.dispose();
+        reads.delete(key);
+    });
+    reads.set(key, read);
+    return read;
+}
 
 export type ActionOperationMachineRuntimeScope = Readonly<{
     accountId: string;

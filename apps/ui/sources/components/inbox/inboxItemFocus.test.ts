@@ -102,4 +102,14 @@ describe('Home-qualified Inbox focus', () => {
     it('retains a notice Artifact selection without putting plugin routing authority in the URL', () => {
         expect(readInboxItemFocus('notice:home-a:artifact-42')).toEqual({ kind: 'notice', serverId: 'home-a', id: 'artifact-42' });
     });
+
+    it('opens a notice that points nowhere as its own Inbox item, never the stored document page', () => {
+        const focus = { kind: 'notice', serverId: 'home a', id: 'artifact/42' } as const;
+        const route = resolveInboxItemPageRoute(focus, { notice: null });
+        expect(route.startsWith('/artifacts')).toBe(false);
+        const url = new URL(route, 'https://happier.test');
+        expect(url.pathname).toBe('/inbox');
+        // The phone pushes this route and lands on the same selected notice the wide pane shows.
+        expect(readInboxItemFocus(url.searchParams.get('item') ?? undefined)).toEqual(focus);
+    });
 });

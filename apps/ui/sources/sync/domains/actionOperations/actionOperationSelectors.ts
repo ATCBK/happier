@@ -78,13 +78,18 @@ export type TerminalActionOperationQuery = Readonly<{
 
 /** Custody may live at the Source; match the PTY's actual execution target. */
 export function selectTerminalActionOperationState(state: ActionOperationStoreSnapshot, query: TerminalActionOperationQuery): ActionOperationSnapshotV1['state'] | null {
+    return selectTerminalActionOperation(state, query)?.snapshot.state ?? null;
+}
+
+export function selectTerminalActionOperation(state: ActionOperationStoreSnapshot, query: TerminalActionOperationQuery): QualifiedActionOperation | null {
     if (!query.serverId || !query.accountId || !query.machineId || !query.terminalId) return null;
-    for (const { snapshot } of state.operationsByKey.values()) {
+    for (const operation of state.operationsByKey.values()) {
+        const { snapshot } = operation;
         const output = snapshot.domainRef;
         if ((output?.kind === 'projectCommand' || output?.kind === 'machineEnvironment')
             && snapshot.scope.accountId === query.accountId
             && areServerProfileIdentifiersEquivalent(output.serverId, query.serverId)
-            && output.machineId === query.machineId && output.terminalId === query.terminalId) return snapshot.state;
+            && output.machineId === query.machineId && output.terminalId === query.terminalId) return operation;
     }
     return null;
 }
