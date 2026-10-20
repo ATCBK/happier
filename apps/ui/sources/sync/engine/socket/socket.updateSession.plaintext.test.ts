@@ -2177,6 +2177,95 @@ describe('socket update handling: plaintext update-session', () => {
         expect((params.applySessions as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
     });
 
+    it('brings a cache-only renderable online when update-session reports it active again', async () => {
+        storage.getState().replaceSessionListRenderables([
+            {
+                id: 's_cached_reactivated',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: false,
+                activeAt: 1,
+                archivedAt: null,
+                metadataVersion: 1,
+                agentStateVersion: 0,
+                metadata: { path: '/tmp', host: 'localhost' },
+                thinking: false,
+                thinkingAt: 0,
+                presence: 1,
+            },
+        ]);
+
+        const params = buildBaseParams();
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_reactivated_active',
+                seq: 14,
+                createdAt: 1238,
+                body: { t: 'update-session', id: 's_cached_reactivated', active: true, activeAt: 1230 },
+            },
+        });
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_reactivated_pending',
+                seq: 15,
+                createdAt: 1240,
+                body: {
+                    t: 'update-session',
+                    id: 's_cached_reactivated',
+                    pendingPermissionRequestCount: 1,
+                    pendingUserActionRequestCount: 0,
+                    pendingRequestObservedAt: 1239,
+                },
+            },
+        });
+
+        const renderable = storage.getState().sessionListRenderables['s_cached_reactivated'];
+        expect(renderable?.presence).toBe('online');
+        expect(deriveSessionRuntimePresentationState(renderable!, 1250).freshPermissionRequired).toBe(true);
+
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_reactivated_stale_inactive',
+                seq: 16,
+                createdAt: 1245,
+                body: { t: 'update-session', id: 's_cached_reactivated', active: false, activeAt: 1200 },
+            },
+        });
+        const afterStaleInactive = storage.getState().sessionListRenderables['s_cached_reactivated'];
+        expect(afterStaleInactive).toMatchObject({ active: true, activeAt: 1230, presence: 'online' });
+        expect(deriveSessionRuntimePresentationState(afterStaleInactive!, 1250).freshPermissionRequired).toBe(true);
+
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_reactivated_inactive',
+                seq: 17,
+                createdAt: 1260,
+                body: { t: 'update-session', id: 's_cached_reactivated', active: false, activeAt: 1255 },
+            },
+        });
+        expect(storage.getState().sessionListRenderables['s_cached_reactivated']?.presence).toBe(1255);
+
+        await handleUpdateContainer({
+            ...params,
+            updateData: {
+                id: 'u_reactivated_stale_active',
+                seq: 18,
+                createdAt: 1265,
+                body: { t: 'update-session', id: 's_cached_reactivated', active: true, activeAt: 1240 },
+            },
+        });
+        expect(storage.getState().sessionListRenderables['s_cached_reactivated']).toMatchObject({
+            active: false,
+            activeAt: 1255,
+            presence: 1255,
+        });
+    });
+
     it('updates cache-only renderables for safe projection fields while deferring agentState payloads', async () => {
         storage.getState().replaceSessionListRenderables([
             {

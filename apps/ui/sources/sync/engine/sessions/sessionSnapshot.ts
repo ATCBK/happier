@@ -20,6 +20,7 @@ import {
     type SessionListRenderableMetadata,
 } from '@/sync/domains/session/listing/sessionListRenderable';
 import { resolveSessionRuntimePresenceFields } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { resolveSessionPresence } from '@/sync/domains/session/sessionLifecycleProjection';
 import type { SessionListCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
 import { isSessionListCacheEntryMetadataUsable } from '@/sync/domains/state/warmCacheAdapters';
 import {
@@ -211,7 +212,7 @@ function buildHydratedSessionFromDecryptedRow(
         rollbackEligibleTurnStarts: (row as Record<string, unknown>).rollbackEligibleTurnStarts === undefined
             ? null
             : readRollbackEligibleTurnStarts((row as Record<string, unknown>).rollbackEligibleTurnStarts),
-        presence: row.active ? 'online' : row.activeAt,
+        presence: resolveSessionPresence(row),
     };
 }
 
@@ -374,7 +375,7 @@ function buildRenderableFromRowAndCache(
         metadata: renderableMetadata,
         thinking: runtimePresence.thinking,
         thinkingAt: runtimePresence.thinkingAt,
-        presence: row.active ? 'online' : row.activeAt,
+        presence: resolveSessionPresence(row),
         latestTurnId: row.latestTurnId ?? null,
         rollbackEligibleTurnStarts: rowRecord.rollbackEligibleTurnStarts === undefined
             ? null

@@ -77,11 +77,11 @@ export function resolveSessionRowPresentation(input: Readonly<{
      */
     standing?: boolean;
 }>): SessionRowPresentation {
+    // Background work only speaks for a row with nothing of its own to say: unread, pending, ready and
+    // every higher attention state keep their indicator, so a reply awaiting the person is never
+    // disguised as work still running.
     const backgroundActiveUsesWorkingIndicator = input.backgroundActive === true
-        && input.attentionState !== 'working'
-        && input.attentionState !== 'failed'
-        && input.attentionState !== 'permission_required'
-        && input.attentionState !== 'action_required';
+        && input.attentionState === 'quiet';
     const signalIndicator = backgroundActiveUsesWorkingIndicator
         ? 'working'
         : resolveAttentionIndicator(input.attentionState);
@@ -120,12 +120,12 @@ export function resolveSessionRowPresentation(input: Readonly<{
         return { attentionIndicator, titleTone, secondaryLine: 'status' };
     }
 
-    if (input.backgroundActive === true) {
-        return { attentionIndicator, titleTone, secondaryLine: 'status', backgroundActivityStatusLine: true };
-    }
-
     if (input.attentionState === 'ready') {
         return { attentionIndicator, titleTone, secondaryLine: 'status', statusTextKey: 'status.readyForReview' };
+    }
+
+    if (input.backgroundActive === true) {
+        return { attentionIndicator, titleTone, secondaryLine: 'status', backgroundActivityStatusLine: true };
     }
 
     if (presentsStanding) {
