@@ -27,6 +27,7 @@ type Theme = Pick<ThemeStyleScales, 'space'> & Readonly<{
         surface?: Readonly<{
             base?: string;
             inset?: string;
+            selected?: string;
         }>;
         border?: Readonly<{
             default?: string;
@@ -126,6 +127,8 @@ export type ScmChangeRowProps = Readonly<{
     /** Stacked: the folder line for a file at the repository root (the repository's name). */
     rootLabel?: string | null;
     onPress?: () => void;
+    /** This file's tab is the front of the pane it opens in (P3 chip ↔ tab linkage): the ink selection fill. */
+    selected?: boolean;
     testID?: string;
     style?: StyleProp<ViewStyle>;
     pathAccessory?: React.ReactNode;
@@ -200,6 +203,8 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
         // appears reads as belonging to it.
         const bg = props.proposalEmphasis === 'in'
             ? theme.colors.state.active.background
+            : props.selected && theme.colors.surface?.selected
+                ? theme.colors.surface.selected
             : highlighted || ((stacked || compact) && isWeb && actionsRevealed)
                 ? (theme.colors.surface?.inset ?? theme.colors.surface?.base ?? theme.colors.text.secondary)
                 : (theme.colors.surface?.base ?? theme.colors.text.secondary);
@@ -214,7 +219,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
             borderBottomWidth: props.showDivider ? Platform.select({ ios: 0.33, default: 1 }) : 0,
             borderBottomColor: theme.colors.border?.default ?? theme.colors.text.secondary,
         } as const;
-    }, [actionsRevealed, highlighted, isWeb, minHeight, paddingVertical, props.proposalEmphasis, props.showDivider, stacked, theme.colors.state.active.background, theme.colors.border?.default, theme.colors.surface?.base, theme.colors.surface?.inset, theme.colors.text.secondary]);
+    }, [actionsRevealed, highlighted, isWeb, minHeight, paddingVertical, props.proposalEmphasis, props.selected, theme.colors.surface?.selected, props.showDivider, stacked, theme.colors.state.active.background, theme.colors.border?.default, theme.colors.surface?.base, theme.colors.surface?.inset, theme.colors.text.secondary]);
 
     const onKeyDown = React.useCallback((event: any) => {
         if (!isWeb) return;
@@ -367,6 +372,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                     testID={props.testID ?? `scm-change-row-${testIdSafePath}`}
                     accessibilityRole="button"
                     accessibilityLabel={accessibilityLabel}
+                    accessibilityState={props.selected ? { selected: true } : undefined}
                     onClick={onClick as any}
                     onDoubleClick={
                         props.onPressPinned
@@ -388,6 +394,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                     testID={props.testID ?? `scm-change-row-${testIdSafePath}`}
                     accessibilityRole="button"
                     accessibilityLabel={accessibilityLabel}
+                    accessibilityState={props.selected ? { selected: true } : undefined}
                     onPress={props.onPress}
                     style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 }}
                 >

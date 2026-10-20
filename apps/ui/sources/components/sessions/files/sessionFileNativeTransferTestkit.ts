@@ -34,6 +34,7 @@ export function createSessionFileNativeTransferBoundary(input: Readonly<{ bytes?
     let bytes = input.bytes ?? new Uint8Array([97, 98, 99]);
     let name = input.name ?? 'file.png';
     let nextGate: ReturnType<typeof createDeferred<void>> | null = null;
+    let completeGate: ReturnType<typeof createDeferred<void>> | null = null;
     let counter = 0;
     let tunnelCounter = 0;
     const exports = new Map<string, { bytes: Uint8Array; name: string; destinationId?: string; manifestHash?: string }>();
@@ -60,6 +61,8 @@ export function createSessionFileNativeTransferBoundary(input: Readonly<{ bytes?
         get activeNativeTunnelIds() { return [...sdk.tunnels.keys()]; },
         setPayload(nextBytes: Uint8Array, nextName = name) { bytes = nextBytes; name = nextName; },
         deferNextOpen() { const gate = createDeferred<void>(); nextGate = gate; return gate; },
+        /** Holds the next transfer after its bytes arrived, before the daemon confirms it. */
+        deferNextComplete() { const gate = createDeferred<void>(); completeGate = gate; return gate; },
         rpc(request: FileViewRpcRequest) {
             if (request.method === RPC_METHODS.STAT_FILE) return { success: true, exists: true, kind: 'file', sizeBytes: bytes.byteLength };
             if (request.method === getActionSpec('daemon.filesystem.readFile').bindings?.rpcMethod) {
@@ -117,6 +120,8 @@ export function createSessionFileNativeTransferBoundary(input: Readonly<{ bytes?
             const exported = exports.get(transferId);
             if (!exported) return new Response('{}', { status: 404 });
             if (parsed.pathname.endsWith('/complete')) {
+                const gate = completeGate; completeGate = null;
+                if (gate) await gate.promise;
                 const outcome = JSON.parse(String(init?.body)) as { destinationId?: string; success?: boolean; manifestHash?: string; sizeBytes?: number };
                 if (outcome.destinationId !== exported.destinationId || (outcome.success === true
                     && (outcome.manifestHash !== exported.manifestHash || outcome.sizeBytes !== exported.bytes.byteLength))) {

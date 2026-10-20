@@ -11,7 +11,7 @@ export function useReviewComposerHandoff(scopeId: string): () => void {
     const cockpitNavigation = useSessionCockpitSurfaceNavigation();
     return React.useCallback(() => {
         deferOnWeb(() => {
-            // The reducer exits focus mode and retains review tabs and their saved state.
+            // Retain review state; the composer's shared focus request reveals its main column.
             closeDetails();
             closeRight();
             cockpitNavigation?.switchSurface('chat');

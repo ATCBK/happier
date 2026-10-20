@@ -8,7 +8,7 @@ import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/se
 import { useSessionMachineName } from '@/components/sessions/agents/presentation/useSessionMachineName';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { useSessionFileUploadAvailability } from '@/components/sessions/files/useSessionFileUploadAvailability';
-import { storage, useSessionDirectoryKind, useSessionProjectScmSnapshot, useSessionRepositoryTreeExpandedPaths } from '@/sync/domains/state/storage';
+import { storage, useSessionDirectoryKind, useSessionProjectScmSnapshot, useSessionRepositoryTreeExpandedPaths, useSetting } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
@@ -26,6 +26,9 @@ import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
 import { leafFolderName } from '@/utils/path/pathUtils';
 import { formatExactCount } from '@/components/ui/navigation/tabBadge/tabBadgeModel';
 import { RepositoryTreeCreateMenu } from '@/components/workspaces/files/repositoryTree/RepositoryTreeCreateMenu';
+import type { FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
+import { applyFileDiscardAction } from '@/scm/operations/applyFileDiscardAction';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 
 const styles = StyleSheet.create({
     root: { flex: 1 },
@@ -103,6 +106,17 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
         }
         return { segments };
     }, [machineName, repoChangedCount, rootPath, withoutFolder]);
+    // A changed file's row menu ends with Discard all changes in this file, the Session's own discard (lab FB1k).
+    const scmWriteEnabled = useFeatureEnabled('scm.writeOperations');
+    const commitStrategy = useSetting('scmCommitStrategy');
+    const changedFiles = React.useMemo(() => scmSnapshot?.capabilities?.writeDiscard === true ? selectScmChangedFiles(scmSnapshot) : [],
+        [scmSnapshot]);
+    const buildFileMenuContext = React.useCallback((path: string): Partial<FileMenuContext> => {
+        const file = scmWriteEnabled ? changedFiles.find(entry => entry.fullPath === path) : undefined;
+        if (!file) return {};
+        return { changes: { discardAll: () => applyFileDiscardAction({ sessionId: props.sessionId, serverId: serverId ?? undefined,
+            sessionPath: rootPath, file, snapshot: scmSnapshot ?? null, scmWriteEnabled, commitStrategy, surface: 'files' }) } };
+    }, [changedFiles, commitStrategy, props.sessionId, rootPath, scmSnapshot, scmWriteEnabled, serverId]);
     const scrollFades = useScrollEdgeFades({ enabledEdges: { top: true, bottom: true }, overflowThreshold: 1, edgeThreshold: 1 });
     const scrollProps = React.useMemo(() => ({ onLayout: scrollFades.onViewportLayout, onContentSizeChange: scrollFades.onContentSizeChange,
         onScroll: scrollFades.onScroll, scrollEventThrottle: 16 }), [scrollFades.onViewportLayout, scrollFades.onContentSizeChange, scrollFades.onScroll]);
@@ -113,6 +127,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
             {...props}
             scope={scope}
             fileHref={fileHref}
+            buildFileMenuContext={buildFileMenuContext}
             contextKey={props.sessionId}
             effectsEnabled={machineRpcTargetAvailable}
             transferEffectsEnabled={uploadAvailable}

@@ -32,6 +32,7 @@ import { ChangedFilesSectionHeader } from '@/components/workspaces/scm/review/Ch
 import { HorizontalScrollableRow } from '@/components/ui/scroll/HorizontalScrollableRow';
 import { ChangedFilesReviewDiffAreaSelector } from '@/components/workspaces/scm/review/ChangedFilesReviewDiffAreaSelector';
 import { useChangedFilesReviewDiffBlockRenderer } from '@/components/workspaces/scm/review/useChangedFilesReviewDiffBlockRenderer';
+import type { ReviewBlockHunkReview } from '@/components/workspaces/scm/review/ChangedFilesReviewDiffBlock';
 import { ScmComparisonBar } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { useInitialScrollRestore } from '@/components/workspaces/scm/review/useInitialScrollRestore';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
@@ -153,6 +154,8 @@ type ChangedFilesReviewProps = {
     activeReviewFile?: Readonly<{ key: string; presented: boolean; externalLifecycle?: boolean }> | null;
     /** The comparison's one review controller also owns row/bar keyboard actions. */
     keyboardController?: ReviewKeyboardController;
+    /** Keep / Discard rows on each file's changes (the live checkout; `useReviewListHunkReview`). */
+    hunkReview?: ReviewBlockHunkReview | null;
     theme: ChangedFilesReviewTheme;
     sessionId?: string;
     /** Presentation/cache identity only. Workspace hosts always supply their Machine diff reader. */
@@ -1064,6 +1067,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         onDeleteReviewCommentDraft: props.onDeleteReviewCommentDraft,
         onReviewCommentError: props.onReviewCommentError,
         flat: Boolean(props.comparisonChrome),
+        hunkReview: props.evidenceOnly ? null : props.hunkReview ?? null,
     });
 
     const onFilePressPinned = props.onFilePressPinned;

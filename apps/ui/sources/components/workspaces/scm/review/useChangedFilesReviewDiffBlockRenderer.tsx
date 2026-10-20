@@ -35,6 +35,8 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
     hunkNotes?: ChangedFilesReviewDiffBlockProps['hunkNotes'];
     /** Before/after facts per changed image path, from the Review's comparison entries. */
     getImageCompare?: (path: string) => ChangedFilesReviewDiffBlockProps['imageCompare'];
+    /** Keep / Discard rows on every file's changes (one checkout, one discard owner). */
+    hunkReview?: ChangedFilesReviewDiffBlockProps['hunkReview'];
 }>): (path: string) => React.ReactNode {
     const {
         theme,
@@ -103,6 +105,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
                 evidenceOnly={input.evidenceOnly}
                 hunkNotes={input.hunkNotes}
                 imageCompare={input.getImageCompare?.(path) ?? null}
+                hunkReview={input.hunkReview ?? null}
             />
         );
     }, [
@@ -110,6 +113,7 @@ export function useChangedFilesReviewDiffBlockRenderer(input: Readonly<{
         flat,
         input.evidenceOnly,
         input.hunkNotes,
+        input.hunkReview,
         input.getImageCompare,
         input.findModel,
         input.findActive,

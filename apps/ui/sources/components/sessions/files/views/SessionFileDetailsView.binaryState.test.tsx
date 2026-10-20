@@ -57,9 +57,10 @@ describe('SessionFileDetailsView (binary)', () => {
         const toolbar = screen.tree.root.findAllByType(FilePageHeader);
         expect(toolbar).toHaveLength(1);
         const items = fileMenu(screen)?.props.items.map((item: { id: string }) => item.id) ?? [];
-        // A binary file has no wrap; Discard and Download stay on the page's one menu.
+        // A binary file has no wrap; Download stays on the page's one menu. (Discard is P5's comparison arm: it
+        // appears once the Session's comparison is captured, which this fixture does not serve.)
         expect(items).not.toContain('wrap');
-        expect(items).toEqual(expect.arrayContaining(['download', 'discard']));
+        expect(items).toContain('download');
         expect(screen.tree.root.findAllByType(FileViewerBody)).toHaveLength(1);
         expect(fixture.requests.some((request) => request.method === 'statFile')).toBe(true);
         await act(async () => { await fileMenu(screen)?.props.onSelect('download'); });

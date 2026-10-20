@@ -6,6 +6,7 @@ import { WorkspaceRepositoryTreeList } from '@/components/projects/files/Workspa
 import { ChangedFilesLayoutSwitch, useGitDisplaySettings } from '@/components/sessions/panes/git/display/GitDisplayMenu';
 import { resolveChangedOnlyTreeInitiallyClosedPaths } from '@/components/workspaces/files/repositoryTree/buildChangedFilesOutlineTree';
 import { ScmChangeRow, resolveScmChangeStatsColumnWidth } from '@/components/workspaces/scm/changes/ScmChangeRow';
+import { useSessionFileTabFront } from '@/components/appShell/panes/details/useFileTabFront';
 import { DiffStat } from '@/components/workspaces/scm/DiffStat';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -31,12 +32,16 @@ export type TurnChangesCardWorkspace = Readonly<{
     rootPath?: string | null;
 }>;
 
+export type TurnChangesFrontSession = Readonly<{ sessionId: string; serverId?: string | null }>;
+
 export type TurnChangesCardProps = Readonly<{
     /** Every file the turn changed, from the turn's own evidence (never the later working copy). */
     files: readonly ScmFileStatus[];
     /** Where those files live: the tree's identity. The card reads no folder listing. */
     workspace?: TurnChangesCardWorkspace | null;
     onOpenFile: (fullPath: string) => void;
+    /** The Session whose Details pane the rows open into: a row whose file is that pane's front tab keeps the selection fill. */
+    frontSession?: TurnChangesFrontSession | null;
     /** Opens this turn's comparison in Files. Absent: the action is not offered. */
     onOpenInFiles?: (() => void) | null;
     /** Opens this turn's walkthrough. Absent while no walkthrough destination exists. */
@@ -121,6 +126,7 @@ export const TurnChangesCard = React.memo(function TurnChangesCard(props: TurnCh
                     files={props.files}
                     workspace={props.workspace ?? null}
                     onOpenFile={props.onOpenFile}
+                    frontSession={props.frontSession ?? null}
                     messageId={props.messageId}
                     findBodyActive={revealBody}
                     countLabel={displayText.count}
@@ -138,6 +144,7 @@ const TurnChangesCardBody = React.memo(function TurnChangesCardBody(props: Reado
     files: readonly ScmFileStatus[];
     workspace: TurnChangesCardWorkspace | null;
     onOpenFile: (fullPath: string) => void;
+    frontSession: TurnChangesFrontSession | null;
     messageId?: string;
     findBodyActive: boolean;
     countLabel: string;
@@ -166,6 +173,7 @@ const TurnChangesCardBody = React.memo(function TurnChangesCardBody(props: Reado
                     statsFiles={props.files}
                     onShowMore={showMore}
                     onOpenFile={props.onOpenFile}
+                    frontSession={props.frontSession}
                     messageId={props.messageId}
                     findBodyActive={props.findBodyActive}
                 />
@@ -182,6 +190,7 @@ const TurnChangesList = React.memo(function TurnChangesList(props: Readonly<{
     statsFiles: readonly ScmFileStatus[];
     onShowMore: () => void;
     onOpenFile: (fullPath: string) => void;
+    frontSession: TurnChangesFrontSession | null;
     messageId?: string;
     findBodyActive: boolean;
 }>) {
@@ -191,8 +200,9 @@ const TurnChangesList = React.memo(function TurnChangesList(props: Readonly<{
     return (
         <View style={styles.rows}>
             {props.files.map((file, index) => (
-                <ScmChangeRow
+                <TurnChangesFileRow
                     key={file.fullPath}
+                    frontSession={props.frontSession}
                     theme={theme}
                     file={file}
                     layout="compact"
@@ -225,6 +235,13 @@ const TurnChangesList = React.memo(function TurnChangesList(props: Readonly<{
         </View>
     );
 });
+
+/** One changed-file row; it alone subscribes to whether its file is the front tab (one boolean, per row). */
+function TurnChangesFileRow(props: React.ComponentProps<typeof ScmChangeRow> & Readonly<{ frontSession: TurnChangesFrontSession | null }>) {
+    const { frontSession, ...row } = props;
+    const front = useSessionFileTabFront(frontSession?.sessionId, frontSession?.serverId, row.file.fullPath);
+    return <ScmChangeRow {...row} selected={front} />;
+}
 
 const TurnChangesTree = React.memo(function TurnChangesTree(props: Readonly<{
     files: readonly ScmFileStatus[];

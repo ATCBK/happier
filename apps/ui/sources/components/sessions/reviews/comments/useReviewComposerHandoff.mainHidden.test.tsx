@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from '@/components/sessions/agentInput/agentInputTestHelpers';
-import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 
 const focusObservation = vi.hoisted(() => ({
     readMainHidden: (): boolean | undefined => undefined,
@@ -21,13 +20,14 @@ installAgentInputCommonModuleMocks({
         });
     },
 });
+// Configure the native OS boundary before the real runtime imports React Native.
+const { installSessionPaneRuntimeTestHarness } = await import('@/components/sessions/panes/sessionPaneRuntimeTestHarness');
 const runtime = installSessionPaneRuntimeTestHarness();
 
 const { useAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
 const { AppPaneScopeHost } = await import('@/components/appShell/panes/AppPaneScopeHost');
 const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
 const { usePaneMainColumn } = await import('@/components/appShell/panes/mainColumn/usePaneMainColumn');
-const { buildDetailsWorkspaceStateView } = await import('@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors');
 const { KeyboardShortcutProvider, useKeyboardCommand } = await import('@/keyboard/KeyboardShortcutProvider');
 const { AgentInput } = await import('@/components/sessions/agentInput/AgentInput');
 const { storage } = await import('@/sync/domains/state/storage');
@@ -94,7 +94,7 @@ describe('review composer handoff', () => {
         expect(refs.pane?.scopeState?.details.isOpen).toBe(false);
         expect(refs.pane?.scopeState?.right.isOpen).toBe(false);
         const details = refs.pane?.scopeState?.details;
-        expect(details && buildDetailsWorkspaceStateView(details).tabs.map(tab => tab.key)).toEqual(['scmReview:working']);
+        expect(details?.tabs.map(tab => tab.key)).toEqual(['scmReview:working']);
         expect(details?.tabState['scmReview:working']).toEqual({ scrollTop: 120 });
         expect(focusObservation.focusedWhileHidden).toEqual([]);
         await act(async () => { for (const callback of frames.splice(0)) callback(0); });
@@ -114,6 +114,11 @@ describe('review composer handoff', () => {
         await act(async () => { refs.setPresented?.(false); refs.main?.setHidden(true); });
         await act(async () => { refs.requestFocus?.(); refs.command?.('composer.focus'); });
         expect(refs.main?.hidden).toBe(true);
+        expect(focusObservation.focusedWhileHidden.length).toBe(focusCount);
+        await act(async () => { refs.setPresented?.(true); });
+        await act(async () => { refs.requestFocus?.(); refs.setPresented?.(false); });
+        expect(focusObservation.focusedWhileHidden.length).toBe(focusCount);
+        await act(async () => { refs.setPresented?.(true); });
         expect(focusObservation.focusedWhileHidden.length).toBe(focusCount);
         expect(sent).toBe(false);
     });

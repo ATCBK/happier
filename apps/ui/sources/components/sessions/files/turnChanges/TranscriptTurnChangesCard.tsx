@@ -42,6 +42,8 @@ export const TranscriptTurnChangesCard = React.memo(function TranscriptTurnChang
         return () => navigate(href);
     }, [canOpen, navigate, props.serverId, props.sessionId, props.turnId]);
     const workspace = React.useMemo(() => ({ serverId: props.serverId ?? null, rootPath }), [props.serverId, rootPath]);
+    const frontSession = React.useMemo(() => (canOpen ? { sessionId: props.sessionId, serverId: props.serverId ?? null } : null),
+        [canOpen, props.sessionId, props.serverId]);
     const openFile = React.useCallback((path: string) => {
         const anchor = props.firstHunkAnchors?.[path];
         openPath(path, { view: 'changes', changesScope: { kind: 'turn', turnId: props.turnId },
@@ -62,6 +64,7 @@ export const TranscriptTurnChangesCard = React.memo(function TranscriptTurnChang
             messageId={props.messageId}
             workspace={workspace}
             onOpenFile={openFile}
+            frontSession={frontSession}
             onOpenInFiles={openInFiles}
             onWalkThrough={walkThrough}
         />
