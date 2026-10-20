@@ -71,15 +71,9 @@ describe('VirtualizedSectionList', () => {
         expect(screen.findAllByType('SectionList' as any)).toHaveLength(0);
     });
 
-    it('renders the Legend section backend when explicitly preferred', async () => {
-        const screen = await renderSectionList({ backendPreference: 'legend' });
-        expect(screen.findAllByType('LegendSectionList' as any)).toHaveLength(1);
-        expect(screen.findAllByType('SectionList' as any)).toHaveLength(0);
-    });
-
     it('forwards the stable section ref contract onto the Legend backend handle', async () => {
         const ref = React.createRef<any>();
-        await renderSectionList({ backendPreference: 'legend' }, ref);
+        await renderSectionList({}, ref);
         ref.current.scrollToLocation({ sectionIndex: 0, itemIndex: 1 });
         ref.current.scrollToIndex({ index: 2 });
         ref.current.clearMeasurementCache({ mode: 'sizes' });
@@ -89,7 +83,6 @@ describe('VirtualizedSectionList', () => {
     });
 
     it('forwards keyboard persistence and dismiss mode so row taps survive the soft keyboard', async () => {
-        // Legend backend.
         const legend = await renderSectionList({
             keyboardShouldPersistTaps: 'handled',
             keyboardDismissMode: 'interactive',
@@ -97,15 +90,5 @@ describe('VirtualizedSectionList', () => {
         const legendProps = legend.findAllByType('LegendSectionList' as any)[0]!.props;
         expect(legendProps.keyboardShouldPersistTaps).toBe('handled');
         expect(legendProps.keyboardDismissMode).toBe('interactive');
-
-        // Explicit flat backend.
-        const flat = await renderSectionList({
-            backendPreference: 'flat',
-            keyboardShouldPersistTaps: 'handled',
-            keyboardDismissMode: 'on-drag',
-        });
-        const flatProps = flat.findAllByType('SectionList' as any)[0]!.props;
-        expect(flatProps.keyboardShouldPersistTaps).toBe('handled');
-        expect(flatProps.keyboardDismissMode).toBe('on-drag');
     });
 });

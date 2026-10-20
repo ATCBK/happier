@@ -812,7 +812,6 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
                             {inventoryAnnouncementElement}
                         </>
                     )}
-                    backendPreference="auto"
                     initialNumToRender={6}
                     maxToRenderPerBatch={4}
                     windowSize={7}

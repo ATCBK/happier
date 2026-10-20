@@ -144,38 +144,3 @@ export function normalizeVirtualizedListProps<T>(
         },
     };
 }
-
-/**
- * FlatList has no native `onStartReached`; migrated surfaces that need it get
- * the same scroll-offset synthesis the historical compatibility fallback
- * used, so behavior is preserved when `auto` resolves to the flat backend on
- * web.
- */
-export function createFlatListStartReachedHandler<T>(
-    shared: NormalizedSharedListProps<T>,
-    virtualization: NormalizedVirtualizationProps<T>,
-    startReachedRef: React.MutableRefObject<boolean>,
-): ((event: NativeSyntheticEvent<NativeScrollEvent>) => void) | undefined {
-    const { onStartReached } = virtualization;
-    if (!onStartReached) {
-        return shared.onScroll;
-    }
-    return (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-        shared.onScroll?.(event);
-        const thresholdRatio =
-            typeof virtualization.onStartReachedThreshold === 'number'
-            && Number.isFinite(virtualization.onStartReachedThreshold)
-                ? Math.max(0, virtualization.onStartReachedThreshold)
-                : 0;
-        const thresholdPx = Math.max(1, thresholdRatio * 100);
-        const offsetY = event.nativeEvent.contentOffset?.y ?? 0;
-        if (offsetY <= thresholdPx) {
-            if (!startReachedRef.current) {
-                startReachedRef.current = true;
-                onStartReached({ distanceFromStart: offsetY });
-            }
-            return;
-        }
-        startReachedRef.current = false;
-    };
-}
