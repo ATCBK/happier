@@ -31,7 +31,7 @@ export function attachWheelZoom(target: WheelZoomTarget, handlers: WheelZoomHand
             const lineHeight = Number.parseFloat(style?.lineHeight ?? '') || Number.parseFloat(style?.fontSize ?? '');
             if (Number.isFinite(lineHeight)) unit = lineHeight;
         }
-        handlers.onPan({ x: -wheel.deltaX * unit, y: -wheel.deltaY * unit });
+        handlers.onPan({ x: -wheel.deltaX * (wheel.deltaMode === 2 ? rect.width : unit), y: -wheel.deltaY * unit });
     };
     target.addEventListener('wheel', listener, { passive: false });
     return () => target.removeEventListener('wheel', listener);
