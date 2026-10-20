@@ -90,6 +90,7 @@ it.each([
     const reply = (body: unknown, status = 200) => { response.statusCode = status; response.end(JSON.stringify(body)); };
     if (mode === 'plain' && path === '/v2/account/settings') return reply({ version: 1,
       content: { t: 'plain', v: scope === 'draft creation' ? draftAccountSettings : {} } });
+    if (mode === 'e2ee' && path === '/v2/account/settings') return reply({ version: 0, content: null });
     if (mode === 'plain' && path === '/v1/account/entity-rows/prompt-library') return reply({ status: 'listed',
       rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
         content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) });
@@ -208,7 +209,8 @@ it.each([
       localId: parsed.request.localId, seq: 2, authorAccountId: 'owner', accountActor: { v: 1, accountId: 'owner', profile: null },
       producerV1: { v: 1, kind: 'agent', sessionId }, content: parsed.request.content, mentionedAccountIds: [], createdAt: 1 } } };
   } });
-  if (mode === 'plain') await runWithServerHttpBaseUrl(serverUrl, () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking' }));
+  if (mode === 'plain' || scope === 'publication replay') await runWithServerHttpBaseUrl(serverUrl,
+    () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking' }));
   const client = new ApiSessionClient(token, createPlainSessionFixture({ id: sessionId }), { localMachineId: machineId,
     metadataAuthority: { kind: 'owner', credentials }, transport: { serverId, serverUrl,
       createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) } });
@@ -605,7 +607,13 @@ it.each([
           actionArgs: { discussionId: summary.id, localId: returnLocalId,
             content: { v: 1, parts: [{ t: 'text', text }] }, replyTarget: { kind: 'message', messageId: 'question-1' } },
           executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, sessionId,
-            sessionInputSource: undefined, discussionReplyReturn: { ...terminal.replyReturn, requestLocalId },
+            // Retain the real fallback producer's complete origin, not the
+            // formerly sparse host fixture that skipped policy/source checks.
+            sessionAgentSpawnPolicyV1: accountSettingsParse({}).sessionAgentSpawnPolicyV1,
+            sessionInputSource: { sourceSessionId: sessionId, sourceTurnId: 'retired-turn', sourceInputId: requestLocalId,
+              via: 'action', discussionAddressing: { discussionId: summary.id, messageId: 'question-1',
+                throughSeq: 1, participantSessionId: sessionId } },
+            discussionReplyReturn: { ...terminal.replyReturn, requestLocalId },
             actionId: 'discussion.reply', requestId: returnLocalId } });
         const { artifactId } = await store.approvalsCreate({ request: proposal, serverId });
         lastHostApprovalArtifactId = artifactId;

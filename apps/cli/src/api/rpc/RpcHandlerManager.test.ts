@@ -1500,6 +1500,22 @@ describe('RpcHandlerManager.handleRequest (plaintext)', () => {
     expect(JSON.stringify(logger.mock.calls)).not.toContain('handler failed');
   });
 
+  it.each([
+    { error: 'discussion_post_denied', outcomeCode: 'discussion_post_denied' },
+    { error: 'Private publication details must not enter diagnostics', outcomeCode: 'unclassified_error' },
+  ])('classifies a returned domain refusal without logging error prose ($outcomeCode)', async ({ error, outcomeCode }) => {
+    const logger = vi.fn();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'sess_1', encryptionMode: 'plain', logger });
+    rpc.registerHandler('demo.domain-refusal', async () => ({ v: 1, ok: false, error }));
+
+    await expect(rpc.handleRequest({ method: 'sess_1:demo.domain-refusal', params: {} }))
+      .resolves.toEqual({ v: 1, ok: false, error });
+    expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({
+      method: 'demo.domain-refusal', outcomeCode,
+    })]]);
+    if (outcomeCode === 'unclassified_error') expect(JSON.stringify(logger.mock.calls)).not.toContain(error);
+  });
+
   it('projects only explicit protocol RPC error codes into the plaintext response', async () => {
     const rpc = new RpcHandlerManager({
       scopePrefix: 'sess_1',
