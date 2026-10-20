@@ -63,9 +63,9 @@ export function readSessionExplicitStopV1FromMetadata(metadata: unknown):
   return parsed.success ? parsed.data : { status: 'invalid' };
 }
 
-export function writeSessionExplicitStopV1ToMetadata(
-  metadata: Record<string, unknown>, stop: SessionExplicitStopV1,
-): Record<string, unknown> {
+export function writeSessionExplicitStopV1ToMetadata<M extends Record<string, unknown>>(
+  metadata: M, stop: SessionExplicitStopV1,
+): M & Record<typeof SESSION_EXPLICIT_STOP_METADATA_KEY, SessionExplicitStopV1> {
   return { ...metadata, [SESSION_EXPLICIT_STOP_METADATA_KEY]: SessionExplicitStopV1Schema.parse(stop) };
 }
 
