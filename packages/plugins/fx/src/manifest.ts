@@ -4,6 +4,7 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 import { AGENT_DEFINITION } from './agent/definition.js';
 import { FX_ACP_COMMAND } from './agent/preflight.js';
 import { FX_TERMINAL_CONTRIBUTION } from './agent/terminal/contribution.js';
+import { fxExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 import { FX_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 
 export const FX_PLUGIN = definePlugin({
@@ -26,18 +27,13 @@ export const FX_PLUGIN = definePlugin({
       },
       primary: 'sessions',
       catalog: { vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume } },
-      // Resume-only: `fx acp` answers `session/list`, so the host composes its
-      // own generic ACP session-listing producer for this declaration. The
-      // source promises discovery for resume-in-Happier and nothing else — no
-      // link, transcript, follow, takeover or writer-safety claim — so this
-      // plugin contributes no External Sessions runtime of its own.
       surfaces: {
         externalSession: {
           sources: [{
-            sourceKind: 'fxAcpSessionList',
-            resumeOnly: true,
-            schema: { fields: [{ kind: 'literal', name: 'kind', value: 'fxAcpSessionList' }] },
-            key: { segments: [{ kind: 'literal', value: 'fxAcpSessionList' }] },
+            sourceKind: 'fxHome',
+            contentSearch: true,
+            schema: { fields: [{ kind: 'literal', name: 'kind', value: 'fxHome' }] },
+            key: { segments: [{ kind: 'literal', value: 'fxHome' }] },
             instances: [{ kind: 'default', constants: {} }],
           }],
         },
@@ -58,6 +54,7 @@ export const FX_PLUGIN = definePlugin({
       }),
     } satisfies PluginHostOwnedAgentDeclaration,
     terminal: FX_TERMINAL_CONTRIBUTION,
+    externalSessions: fxExternalSessionsContribution,
   } },
   systemTools: { 'fx-cli': { title: 'FX CLI', executableNames: ['fx'] } },
   ui: { translations: FX_UI_TRANSLATION_BUNDLES },

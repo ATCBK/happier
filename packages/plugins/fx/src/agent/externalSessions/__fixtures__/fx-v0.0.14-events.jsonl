@@ -1,0 +1,11 @@
+{"schema_version":3,"seq":1,"timestamp_ms":1792490400000,"event":{"user":{"text":"ordinary title","images":[]}}}
+{"schema_version":3,"seq":2,"timestamp_ms":1792490400001,"event":{"assistant":{"text":"body-only phrase with \"quotes\"\n\u6771\u4eac café","provider_replay":null,"standalone_response":false}}}
+{"schema_version":3,"seq":3,"timestamp_ms":1792490400002,"event":{"turn_completed":{"files":[],"turn_summary":null}}}
+{"schema_version":3,"seq":4,"timestamp_ms":1792490400003,"event":{"context_checkpoint":{"covers_through_seq":3,"summary":"model-only checkpoint summary"}}}
+{"schema_version":3,"seq":5,"timestamp_ms":1792490400004,"event":{"user":{"text":"inspect result","images":[]}}}
+{"schema_version":3,"seq":6,"timestamp_ms":1792490400005,"event":{"assistant":{"text":"before steering","provider_replay":null,"standalone_response":false}}}
+{"schema_version":3,"seq":7,"timestamp_ms":1792490400006,"event":{"steering":{"text":"steering request"}}}
+{"schema_version":3,"seq":8,"timestamp_ms":1792490400007,"event":{"tool_call":{"call_id":"call-1","tool_name":"read_file","arguments_json":"{\"path\":\"tool-metadata-only phrase\"}","argument_integrity":"valid","provisional_id":null,"provider_result":null,"final_identity":"valid","provenance":"fx_local"}}}
+{"schema_version":3,"seq":9,"timestamp_ms":1792490400008,"event":{"tool_result":{"call_id":"call-1","tool_name":"read_file","status":"success","artifact_ref":"result-read_file-1111111111111111-2222222222222222.txt","tool_image_handle":null,"output_bytes":48,"stored_bytes":48,"completeness":"complete","preview":"external result preview","provider_native":false,"created_at_ms":1792490400008,"permission_feedback":[],"committed_file_presentation":null,"command_replay_ref":null,"command_replay_bytes":null,"command_process_presentation":null,"terminal_action_presentation":null}}}
+{"schema_version":3,"seq":10,"timestamp_ms":1792490400009,"event":{"assistant":{"text":"final response","provider_replay":null,"standalone_response":false}}}
+{"schema_version":3,"seq":11,"timestamp_ms":1792490400010,"event":{"turn_completed":{"files":[],"turn_summary":null}}}
