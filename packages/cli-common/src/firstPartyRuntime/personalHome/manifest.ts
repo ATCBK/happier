@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readPortablePathSegmentViolation } from '@happier-dev/protocol/filesystem/portablePathSegment';
 
 export type PersonalHomeBackupEntry = Readonly<{ path: string; size: number; sha256: string }>;
 export type PersonalHomeBackupManifestV1 = Readonly<{
@@ -11,7 +12,6 @@ export type PersonalHomeBackupManifestV1 = Readonly<{
 export const PERSONAL_HOME_BACKUP_FORMAT = 'happier-personal-home-backup' as const;
 export const PERSONAL_HOME_BACKUP_VERSION = 1 as const;
 const HEX_64 = /^[a-f0-9]{64}$/u;
-const WINDOWS_RESERVED_NAMES = /^(?:con|prn|aux|nul|clock\$|com[0-9\uff11-\uff19]|lpt[0-9\uff11-\uff19])(?:\..*)?$/iu;
 // Backup v1 is portable across the supported local filesystems. 4096 bytes is the
 // common POSIX path ceiling and 255 bytes is the common directory-entry ceiling;
 // these are filesystem interoperability bounds, not limits on Home content bytes.
@@ -26,12 +26,9 @@ export function comparePersonalHomeBackupArtifactNames(left: string, right: stri
 export function fingerprintMasterSecret(secret: Buffer | string): string { return createHash('sha256').update(secret).digest('hex'); }
 
 function isSafePersonalHomeBackupPathShape(path: string): boolean {
-  if (!path || path.includes('\\') || path.includes(':')) return false;
+  if (!path || path.includes('\\')) return false;
   if (Buffer.byteLength(path, 'utf8') > PERSONAL_HOME_BACKUP_MAX_PATH_BYTES) return false;
-  if (path.startsWith('/') || path.startsWith('./') || path.split('/').some((part) => !part || part === '.' || part === '..')) return false;
-  if (/[\u0000-\u001f\u007f]/u.test(path)) return false;
-  const segments = path.split('/');
-  return !segments.some((segment) => Buffer.byteLength(segment, 'utf8') > PERSONAL_HOME_BACKUP_MAX_SEGMENT_BYTES || /[ .]$/u.test(segment) || WINDOWS_RESERVED_NAMES.test(segment));
+  return path.split('/').every((segment) => readPortablePathSegmentViolation(segment) === null);
 }
 export function isAllowedPersonalHomeBackupPath(path: string): boolean {
   return isSafePersonalHomeBackupPathShape(path) && (path === 'manifest.json' || path === 'database/home.sqlite' || path === 'secrets/handy-master-secret.txt'
