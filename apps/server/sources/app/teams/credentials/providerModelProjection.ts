@@ -188,6 +188,9 @@ export function projectTeamCredentialProviderModels(input: Readonly<{
                 },
                 descriptor: row.descriptor,
                 application: row.application,
+                ...(row.sourceFacts ? { sourceFacts: row.sourceFacts } : {}),
+                ...(row.confirmationSource ? { confirmationSource: row.confirmationSource } : {}),
+                compatibility: { ...row.compatibility, confirmed: false },
                 sourceRevision,
                 direct: input.deliveryMode === 'direct'
                     && input.directMaterialReferences?.length === 1

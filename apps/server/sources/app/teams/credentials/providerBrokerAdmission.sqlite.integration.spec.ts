@@ -10,6 +10,8 @@ import {
 } from '@happier-dev/protocol';
 import { computeTeamCredentialSourceMemberKeyV1 } from '@happier-dev/protocol/teams';
 import { db } from '@/storage/db';
+import { readSessionDetail } from '@/app/api/routes/session/registerSessionListingRoutes';
+import { evaluateAccountStoredContentCompatibility } from '@/app/clientCompatibility/accountStoredContentCompatibility';
 import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import {
@@ -364,6 +366,39 @@ describe('Team credential Provider broker admission', () => {
         });
     }, 180_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('projects the accepted Team model witness on owner detail even before runner activation', async () => {
+        const fixture = await createBrokerFixture('accepted-attach');
+        const resource = await fixture.createResource('accepted-connection');
+        const session = await fixture.createSession();
+        await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+        await db.session.update({ where: { id: session.id }, data: { active: false, primaryTeamId: fixture.team.id } });
+        const detail = await readSessionDetail({ userId: fixture.requester.id, sessionId: session.id,
+            authentication: TEST_AUTHENTICATION,
+            storedContentCompatibility: evaluateAccountStoredContentCompatibility({ status: 'missing' }) });
+        expect(detail).toMatchObject({ status: 200, body: { session: { acceptedTeamCredentialBinding: {
+            v: 1, slot: { kind: 'provider_model' }, resourceId: resource.id,
+            expectedResourceRevision: resource.revision, deliveryMode: 'brokered', teamId: fixture.team.id,
+        } } } });
+        const foreign = await readSessionDetail({ userId: fixture.custodian.id, sessionId: session.id,
+            authentication: TEST_AUTHENTICATION,
+            storedContentCompatibility: evaluateAccountStoredContentCompatibility({ status: 'missing' }) });
+        expect(foreign.status).toBe(404);
+        const edited = await inTx(tx => updateTeamCredentialResourceInTx(tx, {
+            actorAccountId: fixture.custodian.id, authentication: { authenticationAuthority: 'present_user', authenticationEvidence: [] },
+            patch: { resourceId: resource.id, expectedRevision: resource.revision, sessionUsePolicy: 'team_context_required' },
+        }));
+        expect(edited.ok).toBe(true);
+        if (!edited.ok) throw new Error(edited.error);
+        expect(edited.revision).toBe(resource.revision + 1);
+        const attachedAgain = await readSessionDetail({ userId: fixture.requester.id, sessionId: session.id,
+            authentication: TEST_AUTHENTICATION, storedContentCompatibility: evaluateAccountStoredContentCompatibility({ status: 'missing' }) });
+        expect(attachedAgain).toMatchObject({ status: 200, body: { session: { acceptedTeamCredentialBinding: {
+            resourceId: resource.id, expectedResourceRevision: edited.revision,
+        } } } });
+        expect(await inTx(tx => readSessionTeamCredentialBindingInTx(tx, { sessionId: session.id,
+            slot: { kind: 'provider_model' }, deliveryMode: 'brokered' }))).toMatchObject({ resourceRevision: resource.revision });
+    });
 
     it('admits a personal connection without Team authority and withdraws it when the exact hub capability disappears', async () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });

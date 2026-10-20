@@ -129,6 +129,14 @@ describe("projectTeamCredentialProviderModels", () => {
             allowedModelIds: ["gpt-5"], deliveryMode: "brokered",
         } as const;
         expect(projectTeamCredentialProviderModels(input).models).toHaveLength(1);
+        const experimental = response();
+        Object.assign(experimental.groups[0]!.rows[0]!.compatibility, { result: {
+            status: 'experimental', selectedProtocol: application.protocol, reasons: ['compatibility_evidence_missing'],
+            confirmationScope: { kind: 'model', modelId: 'gpt-5' },
+        }, confirmed: false });
+        expect(projectTeamCredentialProviderModels({ ...input, response: experimental }).models).toEqual([
+            expect.objectContaining({ compatibility: expect.objectContaining({ result: expect.objectContaining({ status: 'experimental' }), confirmed: false }) }),
+        ]);
         const changedSource = TeamCredentialSourceBindingV1Schema.parse({
             ...source,
             connectionSecurityFingerprint: `connection-security:v1:${"b".repeat(43)}`,

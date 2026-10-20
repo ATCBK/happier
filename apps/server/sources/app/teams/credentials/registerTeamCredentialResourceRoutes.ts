@@ -1143,6 +1143,7 @@ export function registerTeamCredentialResourceRoutes(
                     machineId,
                     agentTargetKey: body.data.application!.agentTargetKey,
                     application: body.data.application,
+                    sourceCatalog: true,
                     ...(poolSnapshot?.ok ? { refreshPolicy: "current_only" as const } : {}),
                     ...(projectionRequest.deliveryMode === 'direct'
                         && projectionRequest.directMaterialReferences.length === 1
