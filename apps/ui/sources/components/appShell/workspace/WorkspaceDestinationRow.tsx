@@ -15,6 +15,8 @@ type WorkspaceDestinationRowProps = Readonly<{
     href: string | null;
     /** Handoff, not a copy: release this source only once the destination has opened. */
     onOpened?: () => void;
+    /** Document tabs handle middle click through their own close callback. Other rows open a tab. */
+    middleClickBehavior?: 'open' | 'passthrough';
     /** Host-built qualified identity for destinations that also supply context. */
     entityItem?: EntityDragItemV1 | null;
     children: React.ReactNode | ((actions: ReturnType<typeof useWorkspaceOpenActions>) => React.ReactNode);
@@ -91,8 +93,9 @@ function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps)
         host.current = element;
         // A row's secondary controls keep their own actions (disclosure, selection, pin, overflow).
         const secondaryControl = (event: Event) => isSecondaryEntityRowControl(event, element);
-        const pointer = (event: Event) => {
+        const pointer = (event: MouseEvent) => {
             if (event.defaultPrevented || secondaryControl(event)) return;
+            if (event.button === 1 && latest.current.props.middleClickBehavior === 'passthrough') return;
             const mode = resolveWorkspaceOpenModeFromPointer(event);
             if (mode && latest.current.actions.open(mode)) {
                 event.preventDefault();

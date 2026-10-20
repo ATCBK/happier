@@ -20,6 +20,7 @@ import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflow
 import { storage } from '@/sync/domains/state/storageStore';
 import { ENTITY_DRAG_DELIVERY_MIME_V1 } from '@happier-dev/protocol/plugins/ui';
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
+import { registerMountedTabUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -70,6 +71,45 @@ describe('workspace destination row browser gestures', () => {
             storage.setState({ profileScope: previousScope });
         });
         standardCleanup();
+    });
+    it('lets a Details tab middle click reach guarded close without outward-opening its non-null href', async () => {
+        const h = harness();
+        const tab = { key: 'file:src/app.ts', kind: 'file', title: 'app.ts', isPinned: true, isPreview: false,
+            resource: { kind: 'file', path: 'src/app.ts' } } as const;
+        const closeDetailsTab = vi.fn();
+        const requestDecision = vi.fn(async () => 'keepEditing' as const);
+        const remove = registerMountedTabUnsavedChangesGuard(tab.key, {
+            isDirtyRef: { current: true }, tag: 'file-editor', requestDecision,
+        });
+        try {
+            const screen = await renderScreen(<WorkspaceNavigationContext.Provider value={h.workspace}>
+                <DetailsTabStrip sessionId="B1" serverId="home-b"
+                    pane={{ setActiveDetailsTab: () => {}, pinDetailsTab: () => {}, unpinDetailsTab: () => {}, closeDetailsTab }}
+                    group={{ id: 'details', tabKeys: [tab.key], activeTabKey: tab.key, tabs: [tab], isFocused: true }}
+                    testIds={{ tab: () => 'file-tab-primary' }} />
+            </WorkspaceNavigationContext.Provider>);
+            const destination = screen.root.findByType(WorkspaceDestinationRow);
+            expect(destination.props.href).toContain('/session/B1/details');
+            const host = document.createElement('div');
+            const primary = document.createElement('div');
+            primary.setAttribute('role', 'tab');
+            host.append(primary);
+            // Match the existing native-host boundary: real capture and bubble listeners share a DOM tree.
+            destination.findAllByType('View')[0].props.ref(host);
+            const tabPress = screen.findHostByTestId('file-tab-primary')!;
+            primary.addEventListener('auxclick', event => tabPress.props.onAuxClick(event));
+            const middle = new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true });
+            await act(async () => { primary.dispatchEvent(middle); });
+            expect(Object.keys(h.state().tabs)).toEqual(['A']);
+            expect(requestDecision).toHaveBeenCalledTimes(1);
+            expect(closeDetailsTab).not.toHaveBeenCalled();
+            expect(middle.defaultPrevented).toBe(true);
+            await act(async () => {
+                primary.dispatchEvent(new MouseEvent('click', { altKey: true, bubbles: true, cancelable: true }));
+            });
+            expect(Object.values(h.state().tabs).some(entry => entry.target.kind === 'sessionDetails')).toBe(true);
+            expect(closeDetailsTab).not.toHaveBeenCalled();
+        } finally { remove(); }
     });
     it('opens the mixed-list Workflow Run row through the same kept-tab gesture owner', async () => {
         const previous = storage.getState();

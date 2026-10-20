@@ -81,12 +81,17 @@ const testIds = {
     tabSpinner: (k: string) => `tab-spinner-${k}`,
 };
 
+// Load the real surface during collection, outside individual gesture decision budgets.
+await import('./DetailsTabStrip');
+
 describe('DetailsTabStrip chrome absorption for browser-view tabs', () => {
     it.each([
         ['keepEditing', 'x'], ['save', 'x'], ['discard', 'x'],
         ['keepEditing', 'middle'], ['save', 'middle'], ['discard', 'middle'],
+        ['keepEditing', 'opened'], ['save', 'opened'], ['discard', 'opened'],
     ] as const)('guards a dirty close and handles %s through %s', async (decision, entryPoint) => {
         const { DetailsTabStrip } = await import('./DetailsTabStrip');
+        const { WorkspaceDestinationRow } = await import('@/components/appShell/workspace/WorkspaceDestinationRow');
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
         const pane = createPane();
@@ -101,7 +106,8 @@ describe('DetailsTabStrip chrome absorption for browser-view tabs', () => {
             const screen = await renderScreen(<DetailsTabStrip pane={pane} group={group(tab)} testIds={testIds} />);
             await act(async () => {
                 if (entryPoint === 'x') screen.findByTestId('tab-close-browser-view_bs_bv')?.props.onPress({});
-                else screen.findByTestId('tab-browser-view_bs_bv')?.props.onAuxClick?.({ button: 1, preventDefault: vi.fn(), stopPropagation: vi.fn() });
+                else if (entryPoint === 'middle') screen.findByTestId('tab-browser-view_bs_bv')?.props.onAuxClick?.({ button: 1, preventDefault: vi.fn(), stopPropagation: vi.fn() });
+                else screen.findAllByType(WorkspaceDestinationRow)[0]!.props.onOpened();
             });
             expect(requestDecision).toHaveBeenCalledTimes(1);
             expect(pane.closeDetailsTab).toHaveBeenCalledTimes(decision === 'discard' ? 1 : 0);

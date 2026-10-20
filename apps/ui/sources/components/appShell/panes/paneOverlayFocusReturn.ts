@@ -3,7 +3,6 @@ import {
     restoreFocusToBestTarget,
     type FocusReturnRef,
     type FocusReturnMutableRef,
-    type FocusReturnTarget,
 } from '@/keyboard/focusReturn';
 
 export type PaneOverlayFocusSurface = 'bottom' | 'details' | 'right' | 'main';
@@ -100,7 +99,10 @@ export function createPaneOverlayFocusReturnOwner(): PaneOverlayFocusReturnOwner
         recordDetailsTabOrigin: (scopeId, tabKey, origin, kind) => {
             const refs = getRefs(scopeId);
             const ref = getRef(scopeId, 'details', tabKey);
-            ref.current = origin.focusReturnRef?.current;
+            // Text-link callbacks may have no press event; the scope already captured
+            // their native host tag synchronously before the pane command began.
+            ref.current = origin.focusReturnRef?.current
+                ?? (typeof document === 'undefined' ? refs.nativeCommandTarget.current : null);
             refs.detailsTabs.set(tabKey, { ref, kind, onReturn: origin.onReturn });
             if (kind === 'route') refs.routeFileTabKey.current = tabKey;
         },

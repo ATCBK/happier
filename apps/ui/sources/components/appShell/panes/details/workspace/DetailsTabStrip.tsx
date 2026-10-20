@@ -77,8 +77,8 @@ export const DetailsTabStrip = React.memo((props: DetailsTabStripProps) => {
             return <Icon name={iconName as IconName} size={M.tabGlyphPx}
                 color={active ? theme.colors.text.primary : theme.colors.text.secondary} />;
         }}
-        wrapTab={(tab, content) => <WorkspaceDestinationRow href={hrefs.get(tab.key) ?? null}
-            onOpened={() => props.pane.closeDetailsTab(tab.key)}>{content}</WorkspaceDestinationRow>}
+        wrapTab={(tab, content) => <WorkspaceDestinationRow href={hrefs.get(tab.key) ?? null} middleClickBehavior="passthrough"
+            onOpened={() => closeTab(tab.key)}>{content}</WorkspaceDestinationRow>}
     />;
 });
 
