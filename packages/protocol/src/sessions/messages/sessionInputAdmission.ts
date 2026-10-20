@@ -8,6 +8,7 @@ import { ActionRequestAttributionV1Schema } from '../../actions/actionRequestAtt
 import { isRunFollowOriginalV1, SessionFollowInputV1Schema } from '../follow/sessionFollowInputV1.js';
 import { DiscussionAddressingV1Schema } from '../../discussions/references.js';
 import { SessionFollowSourceOccurrenceWitnessesV1Schema, SessionFollowRelationWitnessesV1Schema } from '../follow/sessionFollowSourceOccurrenceV1.js';
+import { NextTurnFileReviewNoteV1Schema } from '../../messages/structured/fileReviewNoteV1.js';
 
 import {
   assertNonEscalatingPermissionMode,
@@ -925,10 +926,16 @@ export const SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1 = {
   followDeliveryV1: z.optional(z.lazy(() => SessionFollowInputV1Schema)),
 };
 
+/** Explicit quiet delivery intent, never inferred from display metadata. */
+export const SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1 = {
+  nextTurnNote: z.optional(NextTurnFileReviewNoteV1Schema),
+};
+
 export const SessionInputAdmissionReceiptV1Schema = lazyZodSchema(() => z.discriminatedUnion('issuer', [
   z.strictObject({
     v: z.literal(1),
     issuer: z.literal('authenticatedAccount'),
+    ...SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1,
     ...SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
     callerInputConstraints: zMini.optional(CallerInputConstraintsV1Schema),
     actorAccountId: AccountIdSchema,
@@ -938,6 +945,7 @@ export const SessionInputAdmissionReceiptV1Schema = lazyZodSchema(() => z.discri
   z.strictObject({
     v: z.literal(1),
     issuer: z.literal('authenticatedMachine'),
+    ...SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1,
     ...SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
     discussionAddressing: z.optional(DiscussionAddressingV1Schema),
     callerInputConstraints: zMini.optional(CallerInputConstraintsV1Schema),

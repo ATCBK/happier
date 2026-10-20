@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./messages/structured/fileReviewNoteV1": {
+      "happier-source": "./src/messages/structured/fileReviewNoteV1.ts",
+      "types": "./dist/messages/structured/fileReviewNoteV1.d.ts",
+      "default": "./dist/messages/structured/fileReviewNoteV1.js"
+    },
     "./runtime/agentRuntimeDiagnosticV1": {
       "happier-source": "./src/runtime/agentRuntimeDiagnosticV1.ts",
       "types": "./dist/runtime/agentRuntimeDiagnosticV1.d.ts",

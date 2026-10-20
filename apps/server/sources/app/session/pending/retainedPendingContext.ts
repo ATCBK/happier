@@ -20,6 +20,7 @@ export async function isRetainedPendingContextForPublisherInTx(
         && row.targetExecutionRunId === null
         && (row.deliveryState === 'delivering' || (row.deliveryState === 'blocked'
             && row.deliveryBlockedReason === 'delivery_outcome_uncertain'))
-        && (receipt?.followDeliveryV1?.delivery === 'next_turn' || row.autonomousExchangeCause === 'returned_answer')
+        && (receipt?.nextTurnNote === 'file_review_note.v1'
+            || receipt?.followDeliveryV1?.delivery === 'next_turn' || row.autonomousExchangeCause === 'returned_answer')
         && await isSessionInputTargetCurrentForPublisherInTx(tx, row.inputAdmissionReceipt, publisher);
 }

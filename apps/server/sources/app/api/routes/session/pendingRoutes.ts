@@ -49,7 +49,7 @@ import {
 } from "@/app/session/pending/publishPendingMutation";
 import { controlAutonomousExchange, readAutonomousExchangeControl } from '@/app/session/pending/autonomousExchangeControl';
 import { AccountRouteAuthenticationForbiddenResponseSchema } from '@/app/api/utils/enableAuthentication';
-import { SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1, SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
 type SessionStoredMessageContent = z.infer<typeof SessionStoredMessageContentSchema>;
 
@@ -270,6 +270,7 @@ function registerSessionPendingResource(app: Fastify, executionRunTarget: boolea
                     z.strictObject({
                         ciphertext: z.string().check(z.minLength(1)),
                         ...SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
+                        ...SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1,
                         reply: z.optional(SessionMessageReplyAdmissionV1Schema),
                         localId: PendingLocalIdSchema,
                         messageRole: z.optional(z.unknown()),
@@ -284,6 +285,7 @@ function registerSessionPendingResource(app: Fastify, executionRunTarget: boolea
                     z.strictObject({
                         content: SessionStoredMessageContentSchema,
                         ...SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
+                        ...SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1,
                         reply: z.optional(SessionMessageReplyAdmissionV1Schema),
                         localId: PendingLocalIdSchema,
                         messageRole: z.optional(z.unknown()),
@@ -363,6 +365,7 @@ function registerSessionPendingResource(app: Fastify, executionRunTarget: boolea
                 ...('followSources' in body ? { followSources: SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1.followSources.parse(body.followSources) } : {}),
                 ...('followRelations' in body ? { followRelations: SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1.followRelations.parse(body.followRelations) } : {}),
                 ...('followDeliveryV1' in body ? { followDeliveryV1: SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1.followDeliveryV1.parse(body.followDeliveryV1) } : {}),
+                ...('nextTurnNote' in body ? { nextTurnNote: SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1.nextTurnNote.parse(body.nextTurnNote) } : {}),
             } : {};
             const res = await (content
                 ? enqueuePendingMessage({
