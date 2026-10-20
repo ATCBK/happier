@@ -13,7 +13,7 @@ import { getStorage, useLocalSetting } from '@/sync/domains/state/storage';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { useDeviceType } from '@/utils/platform/responsive';
 
-import { AppPaneScopeLayoutProvider } from './hooks/useAppPaneScopeLayout';
+import { AppPaneScopeLayoutProvider, type AppPaneScopeLayoutState } from './hooks/useAppPaneScopeLayout';
 import { applyMainHiddenLayoutOverride } from './layout/applyMainHiddenLayoutOverride';
 import {
     PANE_SIZING_DEFAULTS,
@@ -458,7 +458,7 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
         rightPaneHiddenByDetails,
     }), [showActionRail, mirrored, containerWidthPx, rightPaneHiddenByDetails]);
     const detailsAvailable = resolvePaneLayout({ ...paneLayoutInput, rightOpen: true, detailsOpen: true }).details === 'docked';
-    const layoutContext = React.useMemo(() => ({
+    const layoutContext = React.useMemo<AppPaneScopeLayoutState>(() => ({
         arrangement, mainHidden, mainDrawerOpen, effectiveDetailsOpen: detailsOpen,
         detailsAvailable,
         containerWidthPx,

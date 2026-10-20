@@ -47,6 +47,7 @@ vi.mock('react-native', async () => {
 const pane = {
     scopeId: 'scope:details',
     scopeState: {
+        mainHidden: false,
         right: {
             isOpen: false,
             activeTabId: null,

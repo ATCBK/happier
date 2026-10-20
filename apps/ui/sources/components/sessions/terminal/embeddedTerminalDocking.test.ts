@@ -24,6 +24,7 @@ describe('embeddedTerminalDocking', () => {
         const pane: AppPaneScopeApi = {
             scopeId: 'session:s1',
             scopeState: {
+                mainHidden: false,
                 right: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
                 bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
                 details: {

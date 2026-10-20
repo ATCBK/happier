@@ -878,6 +878,7 @@ describe('appPaneReduce', () => {
             type: 'mergePersistedScopes',
             scopes: {
                 'session:1': {
+                    mainHidden: false,
                     right: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
                     details: {
                         isOpen: false,
