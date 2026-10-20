@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { DaemonLocallyPersistedState } from '@/persistence';
 import { spawnInlineNodeTestProcess } from '@/testkit/process/spawn';
-import { requestDaemonSelfRestart, waitForReplacementDaemon } from './requestDaemonSelfRestart';
+import type { ManagedConnectionState } from '@happier-dev/connection-supervisor';
+import {
+  requestDaemonSelfRestart,
+  resolveMachineConnectionHandover,
+  waitForReplacementDaemon,
+} from './requestDaemonSelfRestart';
 import { requestDaemonSelfRestartWithLockHandoff } from './requestDaemonSelfRestartWithLockHandoff';
 
 function makeState(overrides: Partial<DaemonLocallyPersistedState> = {}): DaemonLocallyPersistedState {
@@ -53,6 +58,58 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<v
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+describe('resolveMachineConnectionHandover', () => {
+  function connectionState(phase: ManagedConnectionState['phase']): ManagedConnectionState {
+    return {
+      phase, reason: 'transport_disconnect', attempt: 0, nextRetryAt: null,
+      lastConnectedAt: null, lastDisconnectedAt: null, lastErrorMessage: null,
+    };
+  }
+
+  it('reports the machine client online only in the online phase and hands the incumbent over on the next phase', async () => {
+    const clientListeners = new Set<(state: ManagedConnectionState) => void>();
+    const client = {
+      onConnectionStateChange: (listener: (state: ManagedConnectionState) => void) => {
+        clientListeners.add(listener);
+        listener(connectionState('online'));
+        return () => { clientListeners.delete(listener); };
+      },
+    };
+    const { observeMachineConnectionOnline } = resolveMachineConnectionHandover({
+      successorServerUrl: 'http://127.0.0.1:53288/',
+      configuredServerUrl: 'http://127.0.0.1:53288',
+      getMachineClient: () => client,
+    });
+    if (!observeMachineConnectionOnline) throw new Error('Same-server successor must receive the handover');
+    const observed: boolean[] = [];
+    const unsubscribe = observeMachineConnectionOnline((online) => observed.push(online));
+    for (const listener of clientListeners) listener(connectionState('offline'));
+    unsubscribe();
+    expect(observed).toEqual([true, false]);
+    expect(clientListeners.size).toBe(0);
+  });
+
+  it('offers no handover to a successor sent to another server', () => {
+    const getMachineClient = vi.fn(() => null);
+    expect(resolveMachineConnectionHandover({
+      successorServerUrl: 'https://other.example.test',
+      configuredServerUrl: 'http://127.0.0.1:53288',
+      getMachineClient,
+    })).toEqual({});
+    expect(getMachineClient).not.toHaveBeenCalled();
+  });
+
+  it('reports not online when the daemon has no machine client yet', () => {
+    const { observeMachineConnectionOnline } = resolveMachineConnectionHandover({
+      configuredServerUrl: 'http://127.0.0.1:53288',
+      getMachineClient: () => null,
+    });
+    const observed: boolean[] = [];
+    observeMachineConnectionOnline?.((online) => observed.push(online))();
+    expect(observed).toEqual([false]);
+  });
+});
 
 describe('daemon self-restart machine connection handover (composed lock handoff + restart)', () => {
   function startHandoff(params: Readonly<{

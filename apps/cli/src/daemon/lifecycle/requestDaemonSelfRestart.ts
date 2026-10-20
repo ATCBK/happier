@@ -5,6 +5,8 @@ import { logger } from '@/ui/logger';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
 import type { DetachedDaemonStartProcess } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
 import { buildDaemonControlHttpHeaders } from '@/daemon/controlHttp';
+import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import type { ManagedConnectionState } from '@happier-dev/connection-supervisor';
 import {
   hasObservableDaemonStartProcessExited,
   hasObservableDaemonStartProcessRunning,
@@ -28,6 +30,36 @@ type ConfirmReplacementDaemonState = (state: DaemonLocallyPersistedState) => Pro
  */
 export type ObserveMachineConnectionOnline = (listener: (online: boolean) => void) => () => void;
 type MachineConnectionHandover = 'handed_over' | 'not_connected' | 'successor_stopped' | 'budget_elapsed';
+
+/**
+ * The handover input for a self-restart: the incumbent's machine connection, observed as online or
+ * not. A successor sent to another server can never take this socket over, so none is offered.
+ */
+export function resolveMachineConnectionHandover(params: Readonly<{
+  successorServerUrl?: string;
+  configuredServerUrl: string;
+  getMachineClient: () => Readonly<{
+    onConnectionStateChange: (listener: (state: ManagedConnectionState) => void) => () => void;
+  }> | null;
+}>): { observeMachineConnectionOnline?: ObserveMachineConnectionOnline } {
+  if (
+    params.successorServerUrl
+    && normalizeServerHttpBaseUrl(params.successorServerUrl)
+      !== normalizeServerHttpBaseUrl(params.configuredServerUrl)
+  ) {
+    return {};
+  }
+  return {
+    observeMachineConnectionOnline: (listener) => {
+      const client = params.getMachineClient();
+      if (!client) {
+        listener(false);
+        return () => {};
+      }
+      return client.onConnectionStateChange((state) => listener(state.phase === 'online'));
+    },
+  };
+}
 
 async function delay(ms: number): Promise<void> {
   if (ms <= 0) return;

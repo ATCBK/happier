@@ -212,8 +212,8 @@ import type {
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { createServerUrlServerFeaturesSnapshotStore } from '@/features/serverFeaturesSnapshotStore';
 import { startServerFeaturesSnapshotRefreshLoop } from './serverFeaturesSnapshotRefreshLoop';
-import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import type { ObserveMachineConnectionOnline } from './lifecycle/requestDaemonSelfRestart';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveMachineConnectionHandover } from './lifecycle/requestDaemonSelfRestart';
 import { createDaemonPeerMediationObservabilityRuntime } from './machine/peerMediationObservabilityRuntime';
 import { resolvePeerMediationTrustRoots as resolvePeerMediationTrustRootsFromSnapshot } from './peer/mediation/resolvePeerMediationTrustRoots';
 import {
@@ -1325,27 +1325,11 @@ export async function startDaemon(
     });
     // A successor that connects to this daemon's server takes over its machine socket; until the
     // server moves it, the incumbent keeps serving (requestDaemonSelfRestart owns the handover).
-    const withMachineConnectionHandover = (
-      successorServerUrl?: string,
-    ): { observeMachineConnectionOnline?: ObserveMachineConnectionOnline } => {
-      if (
-        successorServerUrl
-        && normalizeServerHttpBaseUrl(successorServerUrl)
-          !== normalizeServerHttpBaseUrl(configuration.apiServerUrl)
-      ) {
-        return {};
-      }
-      return {
-        observeMachineConnectionOnline: (listener) => {
-          const client = apiMachineForSessions;
-          if (!client) {
-            listener(false);
-            return () => {};
-          }
-          return client.onConnectionStateChange((state) => listener(state.phase === 'online'));
-        },
-      };
-    };
+    const withMachineConnectionHandover = (successorServerUrl?: string) => resolveMachineConnectionHandover({
+      ...(successorServerUrl ? { successorServerUrl } : {}),
+      configuredServerUrl: configuration.apiServerUrl,
+      getMachineClient: () => apiMachineForSessions,
+    });
     const requestControlServerSelfRestart = async (
       {
         successorDistClosureFingerprint,
