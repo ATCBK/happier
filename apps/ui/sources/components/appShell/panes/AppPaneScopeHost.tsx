@@ -161,7 +161,7 @@ function AppPaneScopeControls(props: Readonly<{
                 visible: value?.hidden !== true,
                 available: value?.canHide === true,
                 label: value?.hidden ? value.labels.showLabel : value?.labels.hideLabel,
-                arrangementAvailable: props.arrangementHonoured && layout?.deviceType !== 'phone',
+                arrangementAvailable: props.arrangementHonoured && layout?.multiPaneEnabled === true && layout.deviceType !== 'phone',
                 setVisible: visible => value?.setHidden(!visible),
             };
         });
@@ -387,10 +387,10 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
     ), [effectiveDetailsOpen, mainHiddenPreference, props.mainColumn, rightOpen]);
     React.useEffect(() => {
         // Route-owned details cannot be seen by the reducer. Reconcile them here with every host.
-        if (mainHiddenPreference && !rightOpen && !effectiveDetailsOpen) {
+        if (screenFocused && mainHiddenPreference && !rightOpen && !effectiveDetailsOpen) {
             dispatch({ type: 'setMainHidden', scopeId: props.scopeId, hidden: false });
         }
-    }, [dispatch, effectiveDetailsOpen, mainHiddenPreference, props.scopeId, rightOpen]);
+    }, [dispatch, effectiveDetailsOpen, mainHiddenPreference, props.scopeId, rightOpen, screenFocused]);
     const drawerControls = React.useRef<Readonly<{ open(): void; close(): void }> | null>(null);
     const receiveDrawerControls = React.useCallback((controls: typeof drawerControls.current) => {
         drawerControls.current = controls;
