@@ -79,6 +79,7 @@ class MockTerminal {
     onResize(_callback: () => void) { return { dispose: vi.fn() }; }
     onWriteParsed(_callback: () => void) { return { dispose: vi.fn() }; }
     parser = {
+        registerCsiHandler: vi.fn(() => ({ dispose: vi.fn() })),
         registerOscHandler: registerOscHandlerSpy,
         registerDcsHandler: registerDcsHandlerSpy,
     };
@@ -310,6 +311,8 @@ describe('XtermTerminalView.web', () => {
         expect(terminal.disposed).toBe(false);
         expect(ref.current?.find).toBe(find);
         expect(find?.query).toBe('retained query');
+        expect(terminal.options).toMatchObject({ cursorBlink: false, cursorStyle: 'bar', cursorInactiveStyle: 'none', disableStdin: true,
+            theme: { cursor: '#00000000' } });
         // A finished Script has no more stream data to repaint a reset renderer after resize.
         await act(async () => root.render(<EmbeddedTerminalPane title="renamed shell"
             controller={{ ...controller, status: 'exited', readOnly: true, exitCode: 0 }} terminalRef={ref}
@@ -326,12 +329,36 @@ describe('XtermTerminalView.web', () => {
         expect(surface?.getAttribute('data-happier-terminal-text') ?? '').toContain('retained terminal output');
         expect(ref.current?.find).toBe(find);
         expect(terminal.options.theme).toMatchObject({ foreground: '#000000' });
+        expect(terminal.options).toMatchObject({ cursorBlink: false, cursorStyle: 'bar', cursorInactiveStyle: 'none',
+            theme: { cursor: '#00000000' } });
         await act(async () => root.render(<EmbeddedTerminalPane title="renamed shell"
-            controller={{ ...controller, status: 'exited', onInput: nextInput }} terminalRef={ref}
+            controller={{ ...controller, status: 'connected', onInput: nextInput }} terminalRef={ref}
             chrome="none" showQuickKeys={false} focused testIdPrefix="loaded-terminal" />));
+        expect(terminal.options).toMatchObject({ cursorBlink: true, cursorStyle: 'block', cursorInactiveStyle: 'outline', disableStdin: false,
+            theme: { cursor: '#000000' } });
         onDataSpy('continued input');
         expect(nextInput).toHaveBeenCalledWith('continued input');
         expect(onInput).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { status: 'connected', readOnly: true },
+        { status: 'exited', readOnly: false },
+    ] as const)('mounts a phone $status output without a focused or inactive cursor (readOnly=$readOnly)', async (state) => {
+        const ref = React.createRef<XtermTerminalHandle>();
+        const controller: EmbeddedTerminalPaneController = {
+            ...state, error: null, detectedUrl: null,
+            onInput: () => {}, onPaste: () => {}, onResize: () => {}, onReady: () => {},
+            onWriteComplete: () => {}, clearTerminal: () => {}, requestRestart: () => {},
+            retryConnect: () => {}, dismissDetectedUrl: () => {},
+        };
+        await act(async () => {
+            root.render(<EmbeddedTerminalPane title="output" controller={controller} terminalRef={ref}
+                chrome="none" showQuickKeys focused testIdPrefix="readonly-terminal" />);
+            await vi.dynamicImportSettled();
+        });
+        expect(terminalInstances[0].options).toMatchObject({ cursorBlink: false, cursorStyle: 'bar', cursorInactiveStyle: 'none',
+            disableStdin: true, theme: { cursor: '#00000000' } });
     });
 
     it('hands Find to the replacement phone renderer only for the same logical terminal surface', async () => {

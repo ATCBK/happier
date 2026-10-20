@@ -74,6 +74,7 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneWeb(
                             ref: xtermRef,
                             onFindEngine: find.onFindEngine,
                             fontSize: fontMetrics.fontSize,
+                            readOnly: !terminalAcceptsKeys(props.controller),
                             lineHeight: fontMetrics.lineHeight / fontMetrics.fontSize,
                             onInput: showKeys ? keys.onInput : props.controller.onInput,
                             onPaste: props.controller.onPaste,

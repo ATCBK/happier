@@ -64,6 +64,7 @@ export type XtermWebViewSurfaceProps = Readonly<{
     onWriteComplete?: (event: XtermWriteCompleteEvent) => void;
     onRendererFailure?: (failure: XtermWebViewRendererFailure) => void;
     fontSize: number;
+    readOnly?: boolean;
     lineHeightPx: number;
     bridgeMaxChunkBytes?: number;
     maxPendingWriteBytes?: number;
@@ -131,6 +132,8 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
         const maxPendingWriteBytes = props.maxPendingWriteBytes ?? DEFAULT_XTERM_WEBVIEW_MAX_PENDING_WRITE_BYTES;
 
         const allowCdnFallback = typeof __DEV__ === 'boolean' ? __DEV__ : true;
+        const readOnlyRef = React.useRef(props.readOnly === true);
+        readOnlyRef.current = props.readOnly === true;
 
         const html = React.useMemo(
             () =>
@@ -144,6 +147,9 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
                         findColors: resolveXtermFindColors(theme.colors.find, theme.colors.surface.base),
                     },
                     fontSizePx: Math.max(8, Math.round(props.fontSize)),
+                    // State changes travel over the bridge; rebuilding HTML discards retained output.
+                    // A real HTML rebuild/recovery still starts with the current state.
+                    readOnly: readOnlyRef.current,
                     lineHeightPx: Math.max(10, Math.round(props.lineHeightPx)),
                     maxChunkBytes,
                     allowCdnFallback,
@@ -344,6 +350,11 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
 
         React.useEffect(() => {
             if (!readyRef.current) return;
+            postEnvelope({ v: 1, type: 'setReadOnly', payload: { readOnly: props.readOnly === true } });
+        }, [postEnvelope, props.readOnly]);
+
+        React.useEffect(() => {
+            if (!readyRef.current) return;
             postEnvelope({
                 v: 1,
                 type: 'setTheme',
@@ -417,6 +428,7 @@ export const XtermWebViewSurface = React.forwardRef<XtermWebViewSurfaceHandle, X
                             postEnvelope({ v: 1, type: 'find.keybindings', payload: { signatures: findKeyboard.signatures } });
                             requestNativeFocus();
                             props.onReady(payload.cols, payload.rows);
+                            postEnvelope({ v: 1, type: 'setReadOnly', payload: { readOnly: props.readOnly === true } });
                             postEnvelope({
                                 v: 1,
                                 type: 'setTheme',

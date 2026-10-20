@@ -1,6 +1,8 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
+import { runInNewContext } from 'node:vm';
+import { Terminal } from '@xterm/xterm';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -110,6 +112,84 @@ const nativeWebViewBootFailureCases = [
 }>[];
 
 describe('XtermWebViewSurface (native)', () => {
+    it('keeps the read-only cursor hidden through the real HTML bridge without replacing retained output', async () => {
+        postMessageSpy.mockReset();
+        const ref = React.createRef<XtermWebViewSurfaceHandle>();
+        const render = (readOnly: boolean) => <XtermWebViewSurface ref={ref} readOnly={readOnly} fontSize={14} lineHeightPx={18}
+            onInput={() => {}} onResize={() => {}} onReady={() => {}} />;
+        const screen = await renderScreen(render(true));
+        const html: string = lastWebViewProps.source.html;
+        const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1];
+        if (!script) throw new Error('WebView module script missing');
+        const listeners = new Map<string, (event: { data: string }) => void>();
+        let terminal: Terminal | null = null;
+        const parsed: Promise<void>[] = [];
+        const cursorColorChanges: Array<Readonly<{ kind: 'set'; color: string }> | Readonly<{ kind: 'reset' }>> = [];
+        // Only WebView layout is replaced; xterm's real options and byte parser remain active.
+        class ParserTerminal extends Terminal {
+            constructor(options: ConstructorParameters<typeof Terminal>[0]) {
+                super(options);
+                terminal = this;
+                // Observe SDK delivery below the host policy without opening a canvas renderer.
+                this.parser.registerOscHandler(12, (color) => { cursorColorChanges.push({ kind: 'set', color }); return false; });
+                this.parser.registerOscHandler(112, () => { cursorColorChanges.push({ kind: 'reset' }); return false; });
+            }
+            open() {}
+            focus() {}
+            write(data: string | Uint8Array, callback?: () => void) {
+                parsed.push(new Promise<void>((resolve) => super.write(data, () => { callback?.(); resolve(); })));
+            }
+        }
+        const send = (raw: string) => {
+            const listener = listeners.get('message');
+            if (!listener) throw new Error('WebView host message listener missing');
+            listener({ data: raw });
+        };
+        runInNewContext(script, {
+            HAPPIER_XTERM_WEBVIEW: { Terminal: ParserTerminal, FitAddon: class { activate() {} fit() {} dispose() {} } },
+            window: { ReactNativeWebView: { postMessage: () => {} },
+                addEventListener: (name: string, listener: (event: { data: string }) => void) => listeners.set(name, listener) },
+            document: { getElementById: () => ({ addEventListener: () => {},
+                getBoundingClientRect: () => ({ width: 480, height: 320 }) }), addEventListener: () => {} },
+            TextEncoder, TextDecoder, Uint8Array, atob, btoa, setTimeout: () => 1, clearTimeout: () => {},
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        const active = terminal as Terminal | null;
+        if (!active) throw new Error('WebView terminal not booted');
+        try {
+            expect(active.options).toMatchObject({ cursorBlink: false, cursorStyle: 'bar', cursorInactiveStyle: 'none',
+                disableStdin: true, theme: { cursor: '#00000000' } });
+            postMessageSpy.mockImplementation(send);
+            await act(async () => emitEnvelope({ v: 1, type: 'ready', payload: { cols: 80, rows: 24 } }));
+            requireWebViewSurfaceHandle(ref).write('\u001b[2 q\u001b]12;red\u0007\u001b]112;\u0007retained output', { intent: 'replay' });
+            await Promise.all(parsed);
+            expect(active.options.cursorStyle).toBe('bar');
+            expect(cursorColorChanges).toEqual([]);
+            send(JSON.stringify({ v: 1, type: 'setTheme', payload: {
+                backgroundColor: '#fff', textColor: '#000', cursorColor: '#000', selectionBackgroundColor: '#ddd',
+            } }));
+            expect(active.options).toMatchObject({ cursorBlink: false, cursorStyle: 'bar', cursorInactiveStyle: 'none',
+                theme: { foreground: '#000', cursor: '#00000000' } });
+            await screen.update(render(false));
+            expect(lastWebViewProps.source.html).toBe(html);
+            expect(active.options).toMatchObject({ cursorBlink: true, cursorStyle: 'block', cursorInactiveStyle: 'outline',
+                disableStdin: false, theme: { cursor: '#000' } });
+            requireWebViewSurfaceHandle(ref).write('\u001b[4 q\u001b]12;green\u0007\u001b]112;\u0007');
+            await Promise.all(parsed);
+            expect(active.options.cursorStyle).toBe('underline');
+            expect(cursorColorChanges).toEqual([{ kind: 'set', color: 'green' }, { kind: 'reset' }]);
+            await screen.update(render(true));
+            expect(active.options).toMatchObject({ cursorBlink: false, cursorInactiveStyle: 'none', disableStdin: true,
+                theme: { cursor: '#00000000' } });
+            expect(active.buffer.active.getLine(0)?.translateToString(true)).toBe('retained output');
+        } finally {
+            postMessageSpy.mockReset();
+            active.dispose();
+            await screen.unmount();
+        }
+    });
+
     it('publishes engine Find results, rejects a stale query reply and retires results on renderer recovery', async () => {
         postMessageSpy.mockClear();
         const ref = React.createRef<XtermWebViewSurfaceHandle>();

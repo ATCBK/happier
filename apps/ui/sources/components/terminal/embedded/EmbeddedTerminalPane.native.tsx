@@ -254,6 +254,7 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNati
                             onFindEngine={find.onFindEngine}
                             testID={props.testIdPrefix ? `${props.testIdPrefix}-xterm` : undefined}
                             fontSize={fontMetrics.fontSize}
+                            readOnly={!terminalAcceptsKeys(props.controller)}
                             lineHeightPx={fontMetrics.lineHeight}
                             onInput={onRendererInput}
                             onPaste={props.controller.onPaste}

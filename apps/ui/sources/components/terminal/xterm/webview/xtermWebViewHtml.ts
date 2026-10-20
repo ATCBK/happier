@@ -1,5 +1,6 @@
 import { XTERM_WEBVIEW_BUNDLE_JS, XTERM_WEBVIEW_CSS } from './xtermWebViewAssets.generated';
 import { XTERM_READABILITY_OPTIONS } from '../readability';
+import { registerXtermReadOnlyCursorPolicy, resolveXtermCursorAppearance } from '../cursorAppearance';
 import { createXtermFindEngine, type XtermFindColors } from '../findEngine';
 import {
     buildTerminalRendererInteractionContract,
@@ -26,6 +27,7 @@ export function buildXtermWebViewHtml(params: Readonly<{
     lineHeightPx: number;
     maxChunkBytes: number;
     allowCdnFallback: boolean;
+    readOnly?: boolean;
     interactionContract?: TerminalRendererInteractionContract;
 }>): string {
     const maxChunkBytes = clampNumber(params.maxChunkBytes, 64_000, 8_000, 256_000);
@@ -82,9 +84,14 @@ export function buildXtermWebViewHtml(params: Readonly<{
         theme: ${themeJson},
         fontSizePx: ${Math.round(fontSizePx)},
         lineHeight: ${lineHeight},
+        readOnly: ${params.readOnly === true},
       };
       const INTERACTION_POLICY = ${interactionContractJson};
       const createXtermFindEngine = ${createXtermFindEngine.toString()};
+      const resolveXtermCursorAppearance = ${resolveXtermCursorAppearance.toString()};
+      const registerXtermReadOnlyCursorPolicy = ${registerXtermReadOnlyCursorPolicy.toString()};
+      let readOnly = DEFAULT_CONFIG.readOnly;
+      let currentTheme = DEFAULT_CONFIG.theme;
       const INITIAL_READY_FIT_DELAY_MS = 20;
       const READY_FIT_RETRY_INTERVAL_MS = 50;
       const READY_FIT_RETRY_LIMIT = 30;
@@ -354,11 +361,14 @@ export function buildXtermWebViewHtml(params: Readonly<{
 
       function applyTheme(theme) {
         if (!term || !theme) return;
+        currentTheme = theme;
         try {
+          const cursor = resolveXtermCursorAppearance(readOnly, theme.cursorColor);
+          Object.assign(term.options, cursor.options);
           term.options.theme = {
             background: theme.backgroundColor,
             foreground: theme.textColor,
-            cursor: theme.cursorColor,
+            cursor: cursor.color,
             selectionBackground: theme.selectionBackgroundColor,
           };
           if (find && theme.findColors) find.setColors(theme.findColors);
@@ -514,6 +524,11 @@ export function buildXtermWebViewHtml(params: Readonly<{
           applyTheme(payload);
           return;
         }
+        if (message.type === 'setReadOnly' && typeof payload.readOnly === 'boolean') {
+          readOnly = payload.readOnly;
+          applyTheme(currentTheme);
+          return;
+        }
         if (message.type === 'setFontSize') {
           if (typeof payload.fontSizePx === 'number') {
             applyFont(payload.fontSizePx, payload.lineHeight);
@@ -533,10 +548,11 @@ export function buildXtermWebViewHtml(params: Readonly<{
           return;
         }
 
+        const cursor = resolveXtermCursorAppearance(readOnly, DEFAULT_CONFIG.theme.cursorColor);
         term = new mod.Terminal({
           allowProposedApi: true,
           ...${JSON.stringify(XTERM_READABILITY_OPTIONS)},
-          cursorBlink: true,
+          ...cursor.options,
           fontFamily: 'Menlo, ui-monospace, SFMono-Regular, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace',
           fontSize: DEFAULT_CONFIG.fontSizePx,
           lineHeight: DEFAULT_CONFIG.lineHeight,
@@ -545,7 +561,7 @@ export function buildXtermWebViewHtml(params: Readonly<{
           theme: {
             background: DEFAULT_CONFIG.theme.backgroundColor,
             foreground: DEFAULT_CONFIG.theme.textColor,
-            cursor: DEFAULT_CONFIG.theme.cursorColor,
+            cursor: cursor.color,
             selectionBackground: DEFAULT_CONFIG.theme.selectionBackgroundColor,
           },
         });
@@ -574,6 +590,7 @@ export function buildXtermWebViewHtml(params: Readonly<{
         } catch {}
 
         term.open(root);
+        const cursorPolicy = registerXtermReadOnlyCursorPolicy(term, () => readOnly);
         if (mod.SearchAddon && DEFAULT_CONFIG.theme.findColors) {
           const search = new mod.SearchAddon();
           term.loadAddon(search);
@@ -583,7 +600,7 @@ export function buildXtermWebViewHtml(params: Readonly<{
             sendEnvelope({ v: 1, type: 'find.results', payload: { revision: findRevision, status: snapshot.status, retainedLines: snapshot.retainedLines } });
           });
         }
-        window.addEventListener('pagehide', () => { if (find) find.dispose(); term.dispose(); }, { once: true });
+        window.addEventListener('pagehide', () => { if (find) find.dispose(); cursorPolicy.dispose(); term.dispose(); }, { once: true });
         const focusTerminalWhenAllowed = () => {
           if (INTERACTION_POLICY.mouseCaptureEnabled === true) focusTerminal();
         };
