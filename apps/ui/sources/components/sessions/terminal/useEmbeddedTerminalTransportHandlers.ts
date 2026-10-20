@@ -3,6 +3,7 @@ import { TerminalInputEventSchema } from '@happier-dev/protocol/terminal/input';
 
 import { resolveTerminalPasteAction, type TerminalPasteAction } from '@/components/terminal/interaction/paste';
 import { Modal } from '@/modal';
+import { readTerminalStreamInputErrorCode } from '@/sync/domains/terminal/stream/carrier';
 import type { TerminalInputEvent, TerminalStreamCarrier } from '@/sync/domains/terminal/stream/model';
 import { t } from '@/text';
 
@@ -150,10 +151,12 @@ export function useEmbeddedTerminalTransportHandlers(params: Readonly<{
             const carrier = params.terminalStreamCarrierRef.current;
             if (!carrier) return;
             void carrier.sendInput(terminalId, { t: 'resize', cols: pending.cols, rows: pending.rows }).catch((error) => {
+                // Fixed-size PTYs remain usable for input and output after an unsupported resize.
+                if (readTerminalStreamInputErrorCode(error) === 'terminal_resize_unavailable') return;
                 params.onInputError?.(error);
             });
         }, 120);
-    }, [params.machineId, params.terminalIdRef, params.terminalStreamCarrierRef]);
+    }, [params.machineId, params.onInputError, params.terminalIdRef, params.terminalStreamCarrierRef]);
 
     const onReady = React.useCallback((cols: number, rows: number) => {
         const nextSize = normalizeTerminalSize(cols, rows);

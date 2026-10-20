@@ -1834,7 +1834,44 @@ describe('useMachineTerminalSession', () => {
         await hook.unmount();
     });
 
-    it('reports non-recoverable stream input failures instead of silently staying connected', async () => {
+    it('keeps the live terminal connected after unsupported resizes and accepts subsequent input', async () => {
+        const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
+        terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'term-fixed-size', reused: false });
+        terminalOps.streamReadBytes.mockResolvedValue({
+            ok: true,
+            terminalId: 'term-fixed-size',
+            frames: [],
+            nextByteOffset: 0,
+            availableByteOffset: 0,
+            droppedBeforeByteOffset: 0,
+            done: false,
+        });
+        terminalOps.streamSendInput
+            .mockResolvedValueOnce({ ok: false, code: 'terminal_resize_unavailable', message: 'Resize unavailable' })
+            .mockResolvedValue({ ok: true });
+
+        const renderer: EmbeddedTerminalRendererHandle = { write: vi.fn(), writeBytes: vi.fn(), clear: vi.fn() };
+        const terminalRef = { current: renderer };
+        const hook = await renderHook(() => useMachineTerminalSession({
+            machineId: 'machine-1', cwd: '/repo', terminalKey: 'session:fixed-size:terminal', terminalRef,
+        }), { flushOptions: { cycles: 1, turns: 1 } });
+        await act(async () => { hook.getCurrent().onReady(80, 24); });
+        await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
+
+        await act(async () => { hook.getCurrent().onResize(120, 40); });
+        await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
+        expect(hook.getCurrent()).toMatchObject({ status: 'connected', error: null });
+
+        hook.getCurrent().onInput('echo still connected\r');
+        await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
+        expect(terminalOps.streamSendInput).toHaveBeenLastCalledWith('machine-1', {
+            terminalId: 'term-fixed-size', event: { t: 'text', text: 'echo still connected\r' },
+        }, expect.any(Object));
+        expect(hook.getCurrent()).toMatchObject({ status: 'connected', error: null });
+        await hook.unmount();
+    });
+
+    it.each(['text', 'resize'] as const)('reports non-recoverable %s failures instead of silently staying connected', async (event) => {
         terminalOps.ensure.mockResolvedValue({ ok: true, terminalId: 'term-input-failure', reused: false });
         terminalOps.streamReadBytes.mockResolvedValue({
             ok: true,
@@ -1873,7 +1910,10 @@ describe('useMachineTerminalSession', () => {
         });
         await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
 
-        hook.getCurrent().onInput('echo hidden\r');
+        await act(async () => {
+            if (event === 'resize') hook.getCurrent().onResize(120, 40);
+            else hook.getCurrent().onInput('echo hidden\r');
+        });
         await flushHookEffects({ cycles: 2, turns: 1, runOnlyPendingTimers: true });
 
         expect(hook.getCurrent()).toEqual(expect.objectContaining({
