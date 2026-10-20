@@ -27,6 +27,12 @@ async function directory(path: string) {
   if (info.isSymbolicLink() || !info.isDirectory()) throw new QwenSourceError('source_invalid', 'Qwen history directory is not a native directory.');
   return opendir(path);
 }
+export async function validateQwenHistoryRoot(source: QwenSource): Promise<void> {
+  // Source-wide observation must share candidate admission's no-symlink rule.
+  // The SDK discovery helper treats its supplied root as already admitted.
+  const root = await directory(join(source.runtimeDir, 'projects'));
+  await root?.close();
+}
 
 /** v0.25.3 Storage.getProjectDir + SessionService.getArchiveChatsDir.
  * Do not recursively admit arbitrary JSONL stores or follow vendor symlinks. */

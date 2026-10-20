@@ -5,7 +5,7 @@ import { createAgentExternalSessionsProducerOverflowFailure, getAgentExternalSes
 import { discoverAgentAccountingJsonlSource } from '@happier-dev/plugin-sdk/sessions/file-stores';
 import { join } from 'node:path';
 import { decode, encode, listQwenCandidates } from './candidates.js';
-import { listQwenFiles, QwenSourceError, resolveQwenSource, validSessionId, type QwenSource } from './source.js';
+import { listQwenFiles, QwenSourceError, resolveQwenSource, validSessionId, validateQwenHistoryRoot, type QwenSource } from './source.js';
 import { digestItems, readQwenTranscript, type QwenTranscript } from './transcript.js';
 
 type Cursor = { v: 1; source: string; sessionId: string; identity: string; count: number; digest: string; position: number };
@@ -81,6 +81,7 @@ export function createQwenExternalSessionsContribution(params: Readonly<{ env?: 
     resolveSource: request => run(request, async () => {
       const source = resolve(request.source);
       if (request.includeAccountingSource === false) return { source: source.source };
+      await validateQwenHistoryRoot(source);
       const inventory = await discoverAgentAccountingJsonlSource([join(source.runtimeDir, 'projects')], request.signal);
       return { source: source.source, accountingSource: { rootPath: source.runtimeDir, rootField: 'runtimeDir',
         resourceKey: `qwen:transcripts:${createHash('sha256').update(source.runtimeDir).digest('base64url')}`,

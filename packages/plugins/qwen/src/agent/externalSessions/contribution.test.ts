@@ -54,6 +54,14 @@ describe('Qwen v0.25.3 native reader', () => {
       }
       for (const searchTerm of ['metadata-only topaz', 'model-only compression secret']) expect(await f.reader.listCandidates({ ...f.request, searchTarget: 'content', searchTerm }))
         .toMatchObject({ ok: true, value: { candidates: [], contentCoverage: 'complete' } });
+      await writeFile(f.path, jsonl([records[0], record('split', 'u1', 'assistant', { message: { role: 'model', parts: [
+        { text: 'spanning ' }, { text: 'quartz' },
+      ] } })]));
+      // A real raw-text prefilter cannot see the phrase across JSON parts.
+      // Matching must remain authoritative on the already-decoded body.
+      expect(await f.reader.listCandidates({ ...f.request, searchTarget: 'content', searchTerm: 'spanning quartz',
+        ripgrep: { run: async () => ({ exitCode: 1, stdout: '', stderr: '' }) } }))
+        .toMatchObject({ ok: true, value: { candidates: [{ match: { sourceItemId: 'split', snippet: expect.stringContaining('spanning quartz') } }] } });
     } finally { await f.kit.dispose(); }
   });
 
@@ -148,6 +156,12 @@ describe('Qwen v0.25.3 native reader', () => {
       expect(await f.reader.pageTranscript({ ...f.request, remoteSessionId: '../escape', direction: 'older' })).toMatchObject({ ok: false, code: 'invalid_request' });
       await rm(f.path); await symlink(join(tmpdir(), 'foreign-qwen.jsonl'), f.path);
       expect(await f.reader.listCandidates(f.request)).toMatchObject({ ok: false, code: 'source_invalid' });
+      const outside = await mkdtemp(join(tmpdir(), 'happier-qwen-outside-')); roots.push(outside);
+      await mkdir(join(outside, 'project', 'chats'), { recursive: true });
+      await writeFile(join(outside, 'project', 'chats', `${sessionId}.jsonl`), jsonl());
+      await rm(join(f.root, 'projects'), { recursive: true });
+      await symlink(outside, join(f.root, 'projects'), 'dir');
+      expect(await f.reader.resolveSource(f.request)).toMatchObject({ ok: false, code: 'source_invalid' });
       const controller = new AbortController(); controller.abort();
       expect(await f.reader.listCandidates({ ...f.request, signal: controller.signal })).toMatchObject({ ok: false, code: 'cancelled' });
     } finally { await f.kit.dispose(); }
