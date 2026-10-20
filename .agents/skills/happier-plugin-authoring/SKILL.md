@@ -44,6 +44,19 @@ API declarations and the [maintained example](../../../packages/plugin-ui/README
 
 ## Cross-plugin integrations
 
+For Machine-independent plugin Actions in 0.3 development source, declare the
+explicit `execution.target: 'account'` artifact/export and export
+`definePlugin(...).activateAccount` through the package's existing portable
+artifact entry. Account scope alone does not select execution placement. These
+handlers run in the invoking UI/CLI from the current enabled Account release or
+trusted host-bundled declaration; they use Account storage, host Actions and
+admitted targeted contributions, not Machine services. Keep provider-backed
+Actions daemon-placed and preserve per-source Machine-required results. Use the
+[maintained Account author reference](../../../packages/plugin-sdk/README.md#portable-account-actions-03-development)
+and its public fixture; check the generated API and capability matrix before
+targeting a published toolchain. Do not add an Account loader, registry or bypass
+for policy/approval/currentness, and never replay an uncertain write.
+
 For a PRs & Issues source's selectable repositories/projects/teams/environments
 in 0.3 development source, use the optional `listScopeUnits` contribution role,
 descriptor `scopeUnit`, and `createTriageSourceSettingsSurface({ scopeSelection })`.

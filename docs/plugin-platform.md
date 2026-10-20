@@ -152,6 +152,50 @@ activation therefore cannot block an already applied client handler, while a
 missing, replaced or retired client registration still refuses execution. This
 applies to bundled and installed plugins in 0.3 development source.
 
+### Portable Account Actions (0.3 development source)
+
+An Action may declare `execution: { target: 'account', account: { artifactId,
+exportName } }`. It runs in the invoking UI or CLI process, without a Machine,
+from the Account's current enabled release or the host's trusted bundled
+declaration. Account scope alone does not select this placement. Daemon Actions
+retain their selected Machine occurrence; client Actions retain their UI target.
+
+The existing Account Availability selection and executable registration index
+own custody and currentness. Explicit disablement and a selected release take
+precedence over bundled declarations. Replacement, disablement or Account
+retirement withdraws the old registration and pending capabilities. Invocation
+uses the same declaration schema, registration rights, schema compiler, input
+validation, final policy, approval and post-decision currentness checks as other
+placements. There is no Account-specific invocation or settlement engine;
+refused, applied, uncertain and failed outcomes retain their existing meaning.
+An uncertain write is not automatically replayed.
+
+`definePlugin(...).activateAccount` exports the same `activate(api)` ABI, limited
+to the declared Account Action ids for that artifact/export. Its context exposes
+`services.storage.account`, `services.actions.execute`,
+`services.actions.executeAdmittedTargetedOperation` and
+`services.targetedContributions`, together with the invocation surface, signal
+and host-stamped caller. It exposes no Machine filesystem, process, credentials
+or UI navigation services. Storage remains with the existing Account KV and
+Collection authorization/CAS owners; nested Actions independently pass the
+ordinary host policy and approval gate.
+
+Portable artifacts use the SDK's existing universal CommonJS compiler (including
+its Node-builtin rejection), the UI's existing client executable module host,
+and the CLI's existing plugin module loader. A package exports its portable
+entry under `./happier-plugin-ui/<artifactId>`; it must not import host internals.
+See the [SDK author reference](../packages/plugin-sdk/README.md#portable-account-actions-03-development)
+and [separately authored fixture](../packages/plugin-sdk/fixtures/account-actions/src/index.ts).
+
+Triage's aggregate and credentialless personal source use this placement while
+the existing `tasks.internal.*` Actions remain the task data/CAS owner. The
+aggregate still merges sources through its existing targeted-source owner.
+Provider-backed source Actions remain Machine-placed: without their required
+Machine, they report `plugin_action_machine_required` per source without hiding
+personal rows. Account placement grants neither provider credentials nor Machine
+execution. This is an unreleased source contract, not evidence that a currently
+loaded UI or CLI has been updated.
+
 In 0.3 development source, a client Action declared for `message.menu` receives
 the same optional `context.messageAction` bounded snapshot as a daemon Action.
 The existing contributed-Action controller stamps the selected row's opaque
@@ -702,7 +746,8 @@ In unreleased 0.3 source, Channels' existing testkit also owns the reusable
 `defineProviderConformanceJourneys` suite in
 `packages/plugins/channels/src/testkit/providerConformance.ts`. The native
 Telegram, Discord and Email adapters are exercised by
-`packages/plugins/channels/src/providerConformance.test.ts`. A new adapter
+`packages/plugins/channels/src/providerConformance.test.ts`; Slack uses
+`slackProviderConformance.test.ts` beside it. A new adapter
 (including Slack Socket Mode) supplies its registered provider, retained
 connection fixture and host execution origin; native message constructors and
 captured outbound request fields; parent/thread endpoints and immutable actors;
@@ -712,7 +757,10 @@ and the existing journey fixture's poll or authenticated ingress entry. `gap`
 must derive provider continuity-loss evidence rather than write core status.
 The suite owns admission, replay, router children, reply projection, native
 chunking/currentness, mention suppression and provenance assertions. Adapters
-never reproduce those decisions. Native acceptance hooks permit authority
+never reproduce those decisions. Optional native adapter facts distinguish a
+thread-root reply relation from the source message ID and bodyless unsupported
+shared attachments from providers with authenticated forwarding provenance.
+Native acceptance hooks permit authority
 revocation between chunks. Extra topic vectors supply only native inputs and
 expected addressing; provider-specific edge cases remain in their owner suites.
 An unmet fix dependency must stay explicitly pending with its lane pointer,
