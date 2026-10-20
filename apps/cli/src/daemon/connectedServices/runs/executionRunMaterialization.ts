@@ -16,7 +16,7 @@ import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtim
 import type { ExecutionRunAgentContributionIdentityV1 } from '@happier-dev/protocol';
 
 import type { resolveConnectedServiceAuthForSpawn } from '../resolveConnectedServiceAuthForSpawn';
-import { ConnectedServiceSpawnModelUnavailableError } from '../resolveConnectedServiceAuthForSpawn';
+import { ConnectedServiceSpawnModelUnavailableError, ConnectedServiceSpawnResumeUnreachableError } from '../resolveConnectedServiceAuthForSpawn';
 import { ConnectedServiceMaterializationBlockedError } from '../materialize/materializeConnectedServicesForSpawn';
 import {
     boundConnectedServiceMaterializationDiagnosticValue,
@@ -36,6 +36,7 @@ import type { ConnectedServiceRuntimeFailureClassification } from '../runtimeAut
 import { applyConnectedServiceRuntimeAuthFailureSourceBinding, readConnectedServiceRuntimeAuthFailureSourceBinding } from '../runtimeAuth/handleConnectedServiceRuntimeAuthFailure';
 import type { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import type { RequesterSessionRuntimeContext } from '../../sessionEncryption/requesterSessionCredentials';
+import { readRetainedExecutionRunRecord } from '../../executionRunRegistry';
 import { readRequesterHomeWithinActionLifetime } from '../../sessionEncryption/requesterCurrentness';
 import { ConnectedServiceCredentialRevisionV1Schema, type ConnectedServiceCredentialRevisionV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { ConnectedServiceAuthGroupSwitchCoordinator } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
@@ -954,6 +955,23 @@ export function createExecutionRunConnectedServicesBridge(
                 );
             }
             signal?.throwIfAborted();
+            // The sealed Run record owns continuation identity. A runner's
+            // materialize request is also used during native launch, before
+            // the provider is opened, and must not turn a retained Run into
+            // a fresh home merely because this is not auth-failure recovery.
+            let retainedRun: Awaited<ReturnType<typeof readRetainedExecutionRunRecord>>;
+            try {
+                retainedRun = await readRetainedExecutionRunRecord(runKey);
+            } catch {
+                return blocked('Retained execution-run state is unavailable. Reopen the Run before continuing.');
+            }
+            if (retainedRun && (retainedRun.state.sessionId !== runner.parentSessionId
+                || retainedRun.state.backendId !== agentId)) {
+                return blocked('Retained execution-run identity does not match this materialization.');
+            }
+            const nativeResumeId = input.recovery?.nativeResumeId
+                ?? (retainedRun?.state.resumeHandle?.kind === 'provider_session.v1'
+                    ? retainedRun.state.resumeHandle.providerSessionId : null);
             const recoveryEntry = input.recovery ? retainedCleanupByRunKey.get(runKey) : null;
             if (input.recovery && (!recoveryEntry || recoveryEntry.activationId !== input.recovery.activationId
                 || recoveryEntry.runnerPid !== input.runnerPid || recoveryEntry.runnerIdentity !== runner.identity
@@ -1018,8 +1036,9 @@ export function createExecutionRunConnectedServicesBridge(
                         connectedServicesBindingsRaw: input.connectedServices,
                         materializationKey: runKey,
                         sessionDirectory: input.cwd,
-                        vendorResumeId: input.recovery?.nativeResumeId ?? null,
-                        resumeReachabilityRequired: input.recovery !== undefined,
+                        vendorResumeId: nativeResumeId,
+                        resumeReachabilityRequired: input.recovery !== undefined
+                            || Boolean(nativeResumeId && contributionLease.catalogEntry?.verifyResumeReachable),
                         ...(input.modelId ? { modelId: input.modelId } : {}),
                         resolveQualifiedPurposeBindingSnapshot: (bindings) =>
                             resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
@@ -1064,6 +1083,9 @@ export function createExecutionRunConnectedServicesBridge(
                     if (error instanceof ConnectedServiceSpawnModelUnavailableError) {
                         return { ok: false, errorCode: CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable,
                             modelId: error.modelId, errorMessage: error.message };
+                    }
+                    if (error instanceof ConnectedServiceSpawnResumeUnreachableError) {
+                        return blocked('The retained Agent conversation is unavailable in its prepared home. Restore its native state or start a new conversation from the saved result.');
                     }
                     if (error instanceof ConnectedServiceMaterializationBlockedError) {
                         // Plugin-authored diagnostic prose reaches the retained

@@ -442,7 +442,6 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
           durableNativeHome && effectiveStateMode !== 'shared' ? [] : null;
         if (isolatedImportRoots) {
           for (const sourceRoot of sourceRoots) {
-            if (resolve(sourceRoot) === resolve(nativeRoot)) continue;
             const accountHome = homesRootIsOwned && await isCanonicalConnectedServiceMaterializedRoot({
               baseDir: homesRoot, rootDir: sourceRoot,
             });
@@ -457,8 +456,24 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
                 ...(params.runtimeDescriptorV1 ? { runtimeDescriptorV1: params.runtimeDescriptorV1 } : {}),
               });
               if (!resumed?.ok) continue;
-              const resumedPath = relative(await realpath(sourceRoot), resumed.resolvedPath).split(sep).join('/');
-              isolatedImportRoots.push({ sourceRoot, destinationRoot: nativeRoot, includeFile: path => path === resumedPath });
+              // Capture the declared entry's physical source before isolated
+              // preparation detaches a borrowed link. Only this conversation
+              // may cross the Account boundary, never the whole native store.
+              for (const entry of stateSharingDescriptor.state.entries) {
+                const declaredRoot = await realpath(join(sourceRoot, entry.path)).catch(() => null);
+                if (!declaredRoot) continue;
+                const resumedPath = relative(declaredRoot, resumed.resolvedPath);
+                if (!resumedPath || resumedPath.startsWith('..') || isAbsolute(resumedPath)) continue;
+                const normalizedPath = resumedPath.split(sep).join('/');
+                isolatedImportRoots.push({
+                  sourceRoot: declaredRoot, destinationRoot: join(nativeRoot, entry.path),
+                  includeFile: path => path === normalizedPath,
+                  ...(mergeSharedStateFile ? { mergeSharedStateFile: file => mergeSharedStateFile({
+                    ...file, entryPath: `${entry.path}/${file.entryPath}`,
+                  }) } : {}),
+                });
+                break;
+              }
             } else {
               // A legacy Run home belongs to this session, so retain its declared private state.
               isolatedImportRoots.push({ sourceRoot, destinationRoot: nativeRoot, includeFile: includePrivateStateFile,
