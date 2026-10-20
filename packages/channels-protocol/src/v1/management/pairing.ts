@@ -17,7 +17,7 @@ import {
     ConversationCollectionRowRevisionV1ProtocolSchema,
     ConversationConnectionIdV1ProtocolSchema,
 } from '../identity.js';
-import { ConversationEndpointDisplayLabelV1ProtocolSchema } from '../provider/resolution.js';
+import { ConversationEndpointDisplayLabelV1ProtocolSchema, ConversationResolvedEndpointV1ProtocolSchema } from '../provider/resolution.js';
 import {
     ConversationAutomationTargetNotVerifiedResultV1ProtocolSchema,
     ConversationBindingEndpointSelectionV1ProtocolSchema,
@@ -25,6 +25,7 @@ import {
 import {
     ConversationBindingTargetV1ProtocolSchema,
     ConversationBindingV1ProtocolSchema,
+    ConversationPrincipalIdV1ProtocolSchema,
 } from './targets.js';
 
 const pairingIdentifier = defineProtocolString({
@@ -74,6 +75,7 @@ const conversationPairingChallengePresentationV1 = {
     }),
     attemptsRemaining: defineProtocolNumber({ integer: true, minimum: 0, maximum: 5 }),
     destinationLabel: ConversationEndpointDisplayLabelV1ProtocolSchema,
+    proofEndpoint: ConversationResolvedEndpointV1ProtocolSchema.optional(),
     manualToken: defineProtocolString({ pattern: '^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{8}$' }),
     deepLinkUrl: defineProtocolUtf8String({
         maxUtf8Bytes: MAX_CONVERSATION_PAIRING_DEEP_LINK_TEMPLATE_UTF8_BYTES,
@@ -100,7 +102,7 @@ const conversationPairingChallengeResourceEntryV1 = defineProtocolObject({
     ...conversationPairingChallengePresentationV1,
 }, { policy: 'closed' });
 
-/** The proposal omits frozen target, endpoint identity, materialization, and binding custody. */
+/** Owner review sees the actual sender and proof location, never mutation overrides or binding custody. */
 const conversationPairingProposalResourceEntryV1 = defineProtocolObject({
     challengeId: pairingIdentifier,
     proposalId: pairingIdentifier,
@@ -112,6 +114,8 @@ const conversationPairingProposalResourceEntryV1 = defineProtocolObject({
         maximum: Number.MAX_SAFE_INTEGER,
     }),
     endpointLabel: ConversationEndpointDisplayLabelV1ProtocolSchema.nullable(),
+    proofEndpoint: ConversationResolvedEndpointV1ProtocolSchema,
+    principalId: ConversationPrincipalIdV1ProtocolSchema,
     state: defineProtocolUnion([
         defineProtocolLiteral('proposed'),
         defineProtocolLiteral('finalizing'),
@@ -133,7 +137,8 @@ const conversationPairingResourceV1 = defineProtocolObject({
 /**
  * @internal Relative-only input for pairing creation.
  *
- * Pairing proves an external human through a private message, but the
+ * Pairing proves an external human through a private message or one explicitly
+ * selected shared proof endpoint, but the
  * conversation it binds is the one the owner selected. The two are separate
  * facts, so the selected destination travels with the challenge instead of
  * being inferred from wherever the proof happened to arrive.
@@ -150,6 +155,7 @@ export const ConversationPairingCreateInputV1ProtocolSchema = defineProtocolObje
     expectedConnectionRevision: collectionRowRevision,
     pairingRequestId: pairingIdentifier,
     endpointSelection: ConversationBindingEndpointSelectionV1ProtocolSchema,
+    proofEndpointSelection: ConversationBindingEndpointSelectionV1ProtocolSchema.optional(),
     target: ConversationBindingTargetV1ProtocolSchema,
 }, { policy: 'closed' });
 

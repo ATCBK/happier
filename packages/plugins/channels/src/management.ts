@@ -1466,9 +1466,24 @@ async function verifyPairingTargetForFeedback(
   context: PluginInvocationContext,
 ): Promise<ConversationAutomationTargetNotVerifiedResult | null> {
   if (target.kind === 'session') return null;
-  if (target.kind === 'threadRouter') throw pluginError('channels_pairing_router_unsupported', 'Thread routers require provider-resolved principal groups through binding creation.');
+  if (target.kind === 'threadRouter') {
+    assertPairingRouterBootstrapTarget(target);
+    return null;
+  }
   const verification = await verifyAutomationBindingTarget(target, context);
   return verification.kind === 'notVerified' ? verification : null;
+}
+
+/** Empty membership exists only in a frozen pairing draft, never in a saved router. */
+function assertPairingRouterBootstrapTarget(
+  target: Extract<ConversationBindingTargetV1, { kind: 'threadRouter' }>,
+): void {
+  if (target.principalGroups.length !== 1 || target.principalGroups[0]?.principalIds.length !== 0) {
+    throw pluginError(
+      'channels_pairing_router_bootstrap_invalid',
+      'Router pairing requires exactly one named group with no supplied members.',
+    );
+  }
 }
 
 type ConversationBindingRowCreateInput = Readonly<{
@@ -1649,7 +1664,15 @@ async function writeConversationPairingBinding(
   // Pairing proposals freeze only a caller precondition. Recheck it after the
   // proposal claim and current connection/materialization checks, immediately
   // before the guarded Account write.
-  const target = await resolveBindingTargetForPersistence(input.target, context);
+  let provedTarget = input.target;
+  if (provedTarget.kind === 'threadRouter') {
+    assertPairingRouterBootstrapTarget(provedTarget);
+    provedTarget = {
+      ...provedTarget,
+      principalGroups: provedTarget.principalGroups.map(group => ({ ...group, principalIds: [input.principalId] })),
+    };
+  }
+  const target = await resolveBindingTargetForPersistence(provedTarget, context, [input.principalId]);
   if (target.kind === 'notVerified') {
     if (input.target.kind !== 'automation') return target;
     // A prior attempt may have committed before its response was lost. The
@@ -1750,6 +1773,34 @@ export function createConversationPairingManagementHandlers(pairing: Conversatio
           destination.kind === 'notReady',
         );
       }
+      let proofEndpoint: ConversationResolvedEndpointV1 | undefined;
+      if (createInput.proofEndpointSelection !== undefined) {
+        const proof = await resolveBindingEndpointSelection({
+          connectionId: createInput.connectionId,
+          expectedConnectionRevision: createInput.expectedConnectionRevision,
+          endpointSelection: createInput.proofEndpointSelection,
+          context,
+        });
+        if (proof.kind !== 'endpointSelected'
+          || !isSameBindingResolutionProvider({ before: destination.witness, after: proof.witness })) {
+          throw pluginError(
+            'channels_pairing_proof_endpoint_unavailable',
+            'The proof location must resolve on the same current connection and provider as the destination.',
+            true,
+          );
+        }
+        if (destination.endpoint.audience !== 'shared' || proof.endpoint.audience !== 'shared'
+          || (!areConversationEndpointIdentitiesEqual(destination.endpoint, proof.endpoint)
+            && !(createInput.target.kind === 'threadRouter'
+              && proof.endpoint.kind === 'thread'
+              && proof.endpoint.parentId === destination.endpoint.id))) {
+          throw pluginError(
+            'channels_pairing_proof_endpoint_mismatch',
+            'Shared proof must use the selected destination or, for a router, one authenticated child thread.',
+          );
+        }
+        proofEndpoint = proof.endpoint;
+      }
       return pairing.createChallenge({
         connectionId: createInput.connectionId,
         expectedConnectionRevision: createInput.expectedConnectionRevision,
@@ -1760,6 +1811,7 @@ export function createConversationPairingManagementHandlers(pairing: Conversatio
           ? {}
           : { pairingDeepLinkTemplate: facts.pairingDeepLinkTemplate }),
         endpoint: destination.endpoint,
+        ...(proofEndpoint === undefined ? {} : { proofEndpoint }),
         target: createInput.target,
       });
     },

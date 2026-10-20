@@ -29,7 +29,7 @@ type PairingIdKind = 'challenge' | 'proposal' | 'binding';
 /**
  * Whether a repeated create matches the frozen content of the challenge its
  * request key created: revision, execution origin, destination label, selected
- * endpoint, target, and the deep link rendered for this exact challenge
+ * endpoint, proof endpoint, target, and the deep link rendered for this exact challenge
  * token. Callers reach this comparison only after the request keys matched.
  */
 function isSameChallengeRequest(
@@ -39,6 +39,7 @@ function isSameChallengeRequest(
     executionOrigin: PluginMachineExecutionRoutingV1;
     destinationLabel: string;
     endpoint: ConversationResolvedEndpointV1;
+    proofEndpoint?: ConversationResolvedEndpointV1;
     target: ConversationBindingTargetV1;
   }>,
   requestedDeepLinkUrl: string | null,
@@ -48,6 +49,7 @@ function isSameChallengeRequest(
     && challenge.destinationLabel === input.destinationLabel
     && areConversationEndpointIdentitiesEqual(challenge.endpoint, input.endpoint)
     && challenge.endpoint.label === input.endpoint.label
+    && pluginJsonValuesEqual(challenge.proofEndpoint ?? null, input.proofEndpoint ?? null)
     && challenge.deepLinkUrl === requestedDeepLinkUrl
     && pluginJsonValuesEqual(challenge.target, input.target);
 }
@@ -96,10 +98,12 @@ type Challenge = Readonly<{
   /**
    * The conversation the owner chose to bind, resolved from the exact current
    * provider candidates before this challenge existed. It is deliberately not
-   * the endpoint the proof arrives on: the token must travel privately, while
-   * the destination may be a group nobody can prove identity in.
+   * necessarily the endpoint the proof arrives on: proof travels privately
+   * unless the owner explicitly selects a shared proof endpoint.
    */
   endpoint: ConversationResolvedEndpointV1;
+  /** Explicit shared proof scope; absence retains the private human path. */
+  proofEndpoint?: ConversationResolvedEndpointV1;
   target: ConversationBindingTargetV1;
   deepLinkUrl: string | null;
 }>;
@@ -113,7 +117,7 @@ type Proposal = Readonly<{
   executionOrigin: PluginMachineExecutionRoutingV1;
   /** The owner-selected destination frozen by the challenge. */
   endpoint: ConversationResolvedEndpointV1;
-  /** The private conversation the `/pair` proof actually arrived on. */
+  /** The provider-authenticated conversation the `/pair` proof actually arrived on. */
   proofEndpoint: ConversationResolvedEndpointV1;
   principalId: string;
   target: ConversationBindingTargetV1;
@@ -188,6 +192,12 @@ export type ConversationPairingCancelResult =
   }>;
 
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function isEligibleProofEndpoint(challenge: Challenge, endpoint: ConversationResolvedEndpointV1): boolean {
+  return challenge.proofEndpoint === undefined
+    ? endpoint.audience === 'direct'
+    : areConversationEndpointIdentitiesEqual(challenge.proofEndpoint, endpoint);
+}
 
 function encodePairingToken(bytes: Uint8Array): string {
   if (bytes.length !== 5) throw new Error('Pairing randomness must contain exactly 5 bytes.');
@@ -375,10 +385,14 @@ export function createConversationPairingManager(dependencies: Readonly<{
       destinationLabel: string;
       pairingDeepLinkTemplate?: string;
       endpoint: ConversationResolvedEndpointV1;
+      proofEndpoint?: ConversationResolvedEndpointV1;
       target: ConversationBindingTargetV1;
     }>) {
       if (!Number.isSafeInteger(input.expectedConnectionRevision) || input.expectedConnectionRevision < 1) {
         throw new Error('Pairing challenge must freeze a valid connection revision.');
+      }
+      if (input.proofEndpoint !== undefined && input.proofEndpoint.audience !== 'shared') {
+        throw new Error('Pairing proof endpoint must have a shared audience.');
       }
       const now = dependencies.now();
       pruneExpiredAndPublish(now);
@@ -387,7 +401,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
         ? undefined
         : challengesById.get(previousChallengeId);
       if (previousChallenge !== undefined) {
-        const requestedDeepLinkUrl = input.pairingDeepLinkTemplate === undefined
+        const requestedDeepLinkUrl = input.proofEndpoint !== undefined || input.pairingDeepLinkTemplate === undefined
           ? null
           : renderConversationPairingDeepLink({
             template: input.pairingDeepLinkTemplate,
@@ -410,6 +424,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
             expiresAt: previousChallenge.expiresAt,
             attemptsRemaining: MAX_CONVERSATION_PAIRING_FAILED_ATTEMPTS_PER_REQUESTER,
             destinationLabel: previousChallenge.destinationLabel,
+            ...(previousChallenge.proofEndpoint === undefined ? {} : { proofEndpoint: previousChallenge.proofEndpoint }),
             manualToken: previousChallenge.token,
             deepLinkUrl: previousChallenge.deepLinkUrl,
           } as const;
@@ -432,8 +447,9 @@ export function createConversationPairingManager(dependencies: Readonly<{
         destinationLabel: input.destinationLabel,
         expiresAt: now + CONVERSATION_PAIRING_EXPIRY_MS,
         endpoint: input.endpoint,
+        ...(input.proofEndpoint === undefined ? {} : { proofEndpoint: Object.freeze({ ...input.proofEndpoint }) }),
         target: input.target,
-        deepLinkUrl: input.pairingDeepLinkTemplate === undefined
+        deepLinkUrl: input.proofEndpoint !== undefined || input.pairingDeepLinkTemplate === undefined
           ? null
           : renderConversationPairingDeepLink({
             template: input.pairingDeepLinkTemplate,
@@ -455,6 +471,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
         expiresAt: challenge.expiresAt,
         attemptsRemaining: MAX_CONVERSATION_PAIRING_FAILED_ATTEMPTS_PER_REQUESTER,
         destinationLabel: challenge.destinationLabel,
+        ...(challenge.proofEndpoint === undefined ? {} : { proofEndpoint: challenge.proofEndpoint }),
         manualToken: token,
         deepLinkUrl: challenge.deepLinkUrl,
       } as const;
@@ -471,6 +488,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
           expiresAt: challenge.expiresAt,
           attemptsRemaining: MAX_CONVERSATION_PAIRING_FAILED_ATTEMPTS_PER_REQUESTER,
           destinationLabel: challenge.destinationLabel,
+          ...(challenge.proofEndpoint === undefined ? {} : { proofEndpoint: challenge.proofEndpoint }),
           manualToken: challenge.token,
           deepLinkUrl: challenge.deepLinkUrl,
         } as const;
@@ -499,8 +517,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
       contentProvenance: 'original' | 'forwarded' | 'viaBot';
       command: ConversationCommandClassification;
     }>): ConversationPreBindingPairingPreparation {
-      if (input.endpoint.audience !== 'direct'
-        || input.actor.kind !== 'human'
+      if (input.actor.kind !== 'human'
         || input.actor.principalId === null
         || input.actor.isIntegrationSelf
         || input.contentProvenance !== 'original') {
@@ -513,12 +530,30 @@ export function createConversationPairingManager(dependencies: Readonly<{
       const now = dependencies.now();
       pruneExpiredAndPublish(now);
       const existingProposalId = proposalByCensusId.get(input.censusId);
-      if (existingProposalId !== undefined && proposals.has(existingProposalId)) {
+      const existingProposal = existingProposalId === undefined ? undefined : proposals.get(existingProposalId);
+      if (existingProposal !== undefined) {
+        if (existingProposal.connectionId !== input.connectionId
+          || !arePluginMachineExecutionRoutingsEqual(existingProposal.executionOrigin, input.executionOrigin)
+          || !areConversationEndpointIdentitiesEqual(existingProposal.proofEndpoint, input.endpoint)) {
+          return { kind: 'silent', ownerReason: 'ineligibleCaller' } as const;
+        }
         return {
           kind: 'reserved',
           censusId: input.censusId,
-          proposalId: existingProposalId,
+          proposalId: existingProposal.proposalId,
         } as const satisfies ConversationPreBindingPairingReservation;
+      }
+
+      const challengeId = challengeIdsByToken.get(input.command.token);
+      const challenge = challengeId === undefined ? undefined : challengesById.get(challengeId);
+      // Eligibility comes from this connection's live challenge even for a
+      // mistyped token, so shared proof uses the incumbent requester budget.
+      const connectionChallengeId = challengeIdByConnection.get(input.connectionId);
+      const connectionChallenge = connectionChallengeId === undefined ? undefined : challengesById.get(connectionChallengeId);
+      if (connectionChallenge === undefined
+        ? input.endpoint.audience !== 'direct'
+        : !isEligibleProofEndpoint(connectionChallenge, input.endpoint)) {
+        return { kind: 'silent', ownerReason: 'ineligibleCaller' } as const;
       }
 
       /**
@@ -541,8 +576,6 @@ export function createConversationPairingManager(dependencies: Readonly<{
         } as const;
       }
 
-      const challengeId = challengeIdsByToken.get(input.command.token);
-      const challenge = challengeId === undefined ? undefined : challengesById.get(challengeId);
       if (challenge === undefined
         || challenge.connectionId !== input.connectionId
         || !arePluginMachineExecutionRoutingsEqual(challenge.executionOrigin, input.executionOrigin)) {
@@ -619,6 +652,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
         || challenge.token !== reservation.challengeToken
         || challenge.connectionId !== reservation.connectionId
         || !arePluginMachineExecutionRoutingsEqual(challenge.executionOrigin, reservation.executionOrigin)
+        || !isEligibleProofEndpoint(challenge, reservation.endpoint)
       ) {
         return { kind: 'silent', ownerReason: 'reservationUnavailable' } as const;
       }
@@ -824,6 +858,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
           expiresAt: challenge.expiresAt,
           attemptsRemaining: MAX_CONVERSATION_PAIRING_FAILED_ATTEMPTS_PER_REQUESTER,
           destinationLabel: challenge.destinationLabel,
+          ...(challenge.proofEndpoint === undefined ? {} : { proofEndpoint: challenge.proofEndpoint }),
           manualToken: challenge.token,
           deepLinkUrl: challenge.deepLinkUrl,
         })),
@@ -835,9 +870,11 @@ export function createConversationPairingManager(dependencies: Readonly<{
           connectionId: proposal.connectionId,
           expectedConnectionRevision: proposal.expectedConnectionRevision,
           expiresAt: proposal.expiresAt,
-          // The owner already chose the destination; the new fact this
-          // projection carries is which private conversation proved the human.
+          // These authenticated proof facts let the owner review the actual
+          // sender even when every contender shares the same proof location.
           endpointLabel: proposal.proofEndpoint.label ?? null,
+          proofEndpoint: proposal.proofEndpoint,
+          principalId: proposal.principalId,
           state: proposal.state,
         })),
       };

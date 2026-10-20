@@ -1,4 +1,4 @@
-import { arePluginMachineExecutionOriginsEqual, PluginError } from '@happier-dev/plugin-sdk';
+import { arePluginMachineExecutionOriginsEqual, definePlugin, PluginError } from '@happier-dev/plugin-sdk';
 import { arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting, type PluginMachineExecutionOriginV1, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
 import type { SessionSendRequest, SessionSummary } from '@happier-dev/plugin-sdk/sessions';
 import type {
@@ -23,6 +23,10 @@ import type {
   ConversationProviderObservationIngestInputV1,
 } from '@happier-dev/channels-protocol/v1';
 import {
+  CONVERSATION_MANAGEMENT_ACTION_IDS_V1,
+  ConversationPairingCreateResultV1Schema,
+  ConversationPairingFinalizeResultV1Schema,
+  ConversationPairingResourceV1Schema,
   ConversationProviderObservationIngestInputV1JsonSchema,
   ConversationProviderObservationIngestInputV1Schema,
   ConversationBindingUpdateInputV1Schema,
@@ -60,6 +64,7 @@ import {
   updateConversationConnectionForInvocation,
   createConversationThreadBindingForInvocation,
   updateConversationBindingForInvocation,
+  createConversationPairingManagementHandlers,
 } from './management.js';
 import {
   CHANNEL_DELIVERIES_COLLECTION,
@@ -69,9 +74,14 @@ import { isChannelStateJsonRecord, readConversationConnectionUpdateRow, readConv
 import { getConversationConnectionExecutionRouting, getConversationConnectionTransportOrigin, startConversationConnectionTransfer } from './connectionLifecycle.js';
 import type { ConversationConnectionTransportOriginV1 } from './connectionLifecycle.js';
 import { pollTelegramObservations } from '../../channel-telegram/src/channelActions.js';
+import { parseDiscordMessageDispatch } from '../../channel-discord/src/discordMessage.js';
+import { mapDiscordMessageToSocketIngress } from '../../channel-discord/src/discordObservation.js';
 import { createConversationPairingManager } from './pairing.js';
+import { createConversationPairingResourceRuntime } from './pairingResource.js';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
+import { classifySupervisorFailure } from './supervisorFailure.js';
+import { resourceText } from './testkit/resourceContract.js';
 
 /**
  * Retained payloads are read back as opaque JSON here. These fixtures rebuild
@@ -127,6 +137,7 @@ import {
   createCurrentConversationConnectionFixture,
   createCurrentConversationPendingOldTransportStopFixture,
   type ConversationConnectionFixtureAuthority,
+  type CurrentConversationConnectionFixture,
 } from './testkit/currentConnectionFixture.js';
 
 import { assertChannelsTestCollectionQueryLimit } from './testkit/collectionQueryBound.js';
@@ -448,7 +459,7 @@ type SessionSendResult =
   | Readonly<{ status: 'outcomeUnknown'; localId: string; code: string }>;
 
 type IngressHarnessOptions = Readonly<{
-  connection?: ReturnType<typeof channelConnection>;
+  connection?: CurrentConversationConnectionFixture;
   sessionSendResult?: SessionSendResult;
   sessionSendResults?: readonly SessionSendResult[];
   sessionSend?: (input: unknown) => Promise<SessionSendResult>;
@@ -1343,6 +1354,278 @@ function threadSpawnBoundary(actionId: string, input: JsonValue): JsonValue {
 }
 
 describe('thread router admission', () => {
+  it.each(['telegram', 'discord'] as const)('pairs real %s shared proof into a paused parent router before ordinary enable and thread admission', async provider => {
+    const providerPluginId = `happier.channel.${provider}`;
+    const executionOrigin = {
+      ...telegramExecutionOrigin,
+      serverIdentityId: provider === 'discord' ? 'srv_plugin_testkit' : telegramExecutionOrigin.serverIdentityId,
+      materializationRef: { ...telegramExecutionOrigin.materializationRef, pluginId: providerPluginId },
+    };
+    const parentEndpoint = provider === 'telegram'
+      ? { kind: 'shared' as const, audience: 'shared' as const, id: '100' }
+      : { kind: 'shared' as const, audience: 'shared' as const, id: 'discord:channel:parent-1' };
+    const proofEndpoint = provider === 'telegram'
+      ? { kind: 'thread' as const, audience: 'shared' as const, id: '100:7', parentId: '100' }
+      : parentEndpoint;
+    const principalId = provider === 'telegram' ? '42' : 'discord:user:42';
+    const mention = provider === 'telegram' ? '@happier_bot' : '<@12345>';
+    const freshThreadId = provider === 'telegram' ? '100:8' : 'discord:channel:thread-1';
+    const connection = createCurrentConversationConnectionFixture({
+      connectionId: 'connection-1',
+      authority: {
+        ...telegramConnectionAuthority,
+        providerPluginId,
+        transportOrigin: { serverIdentityId: executionOrigin.serverIdentityId, machineId: 'machine-1' },
+        providerConfig: { botUsername: 'happier_bot', canReadAllGroupMessages: true },
+        integrationPrincipal: { id: provider === 'telegram' ? '12345' : 'discord:user:12345' },
+      },
+      transport: provider === 'telegram' ? { kind: 'checkpointedPull' } : { kind: 'socket' },
+      overlapSafety: 'safe',
+      replayContinuity: provider === 'telegram' ? 'checkpointed' : 'none',
+      outboundTextLimit: { maximum: 4_096, unit: 'utf8Bytes' },
+    });
+    const manager = createConversationPairingManager({
+      generationId: 'pairing-router-generation',
+      now: () => Date.now(),
+      randomBytes: () => Uint8Array.from([0, 0, 0, 0, 1]),
+      createId: kind => `${kind}-paired-router`,
+    });
+    let messageNumber = 0;
+    let pairedRouterId = '';
+    let nextTelegramMessage: JsonValue | null = null;
+    const harness = createIngressHarness({ connection, availableSessionIds: ['session-2'],
+      execute: (actionId, input) => {
+        if (actionId === 'session.spawn_new') {
+          expect(input).toMatchObject({
+            creationKey: `channel-thread:${pairedRouterId}:${freshThreadId}`,
+            attestedContext: { externalPrincipalId: principalId, sourceMessageId: '3' },
+          });
+          return { type: 'success', disposition: 'created', sessionId: 'session-2',
+            attestedContext: { externalPrincipalId: principalId, sourceMessageId: '3' },
+            executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+            organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
+        }
+        return threadSpawnBoundary(actionId, input);
+      },
+      pollExecution: async (input, signal) => pollTelegramObservations(input, {
+        plugin: { id: providerPluginId, version: '0.0.0' },
+        contribution: { id: 'telegram/poll-updates', qualifiedId: `${providerPluginId}/actions/telegram/poll-updates` },
+        surface: 'plugin', invokedAtMs: Date.now(),
+        caller: { kind: 'plugin', pluginId: 'happier.channels',
+          contribution: { id: 'ingress-supervisor', qualifiedId: 'happier.channels/background/ingress-supervisor' },
+          occurrenceId: 'paired-router-poll', sourceCustody: { kind: 'development', registeredRootId: 'paired-router-test' },
+          materialization: executionOrigin.materializationRef },
+        signal,
+        // Only Telegram HTTP and Connected Account materialization are substituted.
+        services: {
+          connectedAccounts: { materialize: async () => ({ kind: 'environment', env: { TELEGRAM_BOT_TOKEN: '12345:fixture-token' } }) },
+          http: { request: async (request: Readonly<{ url: string }>) => {
+            let result: JsonValue;
+            if (request.url.endsWith('/getMe')) result = { id: 12345, is_bot: true, first_name: 'Happier', username: 'happier_bot', can_read_all_group_messages: true };
+            else if (request.url.endsWith('/getUpdates')) {
+              result = nextTelegramMessage === null ? [] : [nextTelegramMessage];
+              nextTelegramMessage = null;
+            } else throw new Error(`Unexpected Telegram endpoint ${request.url}`);
+            return { status: 200, finalUrl: request.url, headers: { 'content-type': 'application/json' },
+              body: new TextEncoder().encode(JSON.stringify({ ok: true, result })) };
+          } },
+        } as unknown as PluginInvocationContext['services'],
+      }),
+    });
+    harness.rows.delete('binding-1');
+    const endpointResolve = { identity: { ...telegramPollAction.identity,
+      contributor: { ...telegramPollAction.identity.contributor, pluginId: providerPluginId }, role: 'endpointResolve' } };
+    const providerContribution = { ...admittedTelegramProviderContribution,
+      contributor: { ...admittedTelegramProviderContribution.contributor, pluginId: providerPluginId },
+      operations: provider === 'telegram'
+        ? { ...admittedTelegramProviderContribution.operations, endpointResolve }
+        : { endpointResolve } };
+    const services: PluginServices = {
+      ...harness.context.services,
+      targetedContributions: targetedTelegramPollContribution(() => [providerContribution]),
+      actions: {
+        ...harness.context.services.actions,
+        // Endpoint resolution is a provider Action boundary. Pairing, target
+        // validation, storage transitions, parsing and routing all stay real.
+        executeAdmittedTargetedOperationWithExecutionOrigin: async (operation, input, options) => operation === endpointResolve
+          ? { result: { kind: 'resolved', candidates: provider === 'telegram' ? [parentEndpoint, proofEndpoint] : [parentEndpoint] }, executionOrigin }
+          : harness.context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(operation, input, options),
+      } as PluginServices['actions'],
+    };
+    const context: PluginInvocationContext = { ...harness.context, services,
+      caller: { kind: 'plugin', pluginId: providerPluginId,
+        contribution: { id: 'channel-worker', qualifiedId: `${providerPluginId}/background/channel-worker` },
+        occurrenceId: 'paired-router-provider', sourceCustody: { kind: 'development', registeredRootId: 'paired-router-test' },
+        materialization: executionOrigin.materializationRef, executionOrigin } };
+    const pairingHandlers = createConversationPairingManagementHandlers(manager);
+    const ingest = createConversationProviderObservationIngestHandler(manager);
+    const pairingActionIds = new Set<string>([
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingFinalize,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate,
+      'provider/observation-ingest-v1',
+    ]);
+    const kit = await createPluginTestkit({ manifest: provider === 'discord' ? PLUGIN_MANIFEST : {
+      ...PLUGIN_MANIFEST,
+      contributes: {
+        actions: PLUGIN_MANIFEST.contributes?.actions?.filter(action => pairingActionIds.has(action.id)) ?? [],
+        resources: PLUGIN_MANIFEST.contributes?.resources?.filter(resource => resource.id === 'pairing-v1' || resource.id === 'brand-icon') ?? [],
+      },
+    }, services,
+      module: provider === 'discord' ? CHANNELS_PLUGIN : { activate(api) {
+        api.actions.register(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate, pairingHandlers.create);
+        api.actions.register(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingFinalize, pairingHandlers.finalize);
+        api.actions.register(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate, updateConversationBindingForInvocation);
+        api.actions.register('provider/observation-ingest-v1', ingest);
+        api.resources.registerDynamicResource('pairing-v1', createConversationPairingResourceRuntime(manager));
+      } },
+    });
+    const discordSource = definePlugin({ id: providerPluginId, version: '0.0.0',
+      actions: { 'fixture/ingest': {
+        title: 'Deliver provider observation', surfaces: ['cli'], dangerLevel: 'safe',
+        inputSchema: ConversationProviderObservationIngestInputV1JsonSchema,
+        async run(input, invocation) {
+          await invocation.services.actions.execute({ pluginId: 'happier.channels', localId: 'provider/observation-ingest-v1' }, input);
+        },
+      } },
+    });
+    let discordSourceKit: Awaited<ReturnType<typeof createPluginTestkit>> | null = null;
+    const deliver = async (text: string, threadId: number | null, senderId = '42') => {
+      messageNumber += 1;
+      if (provider === 'telegram') {
+        nextTelegramMessage = { update_id: 9000 + messageNumber, message: {
+          message_id: messageNumber, message_thread_id: threadId,
+          date: Math.floor(Date.now() / 1000), chat: { id: 100, type: 'supergroup', title: 'Forum' },
+          from: { id: Number(senderId), is_bot: false, first_name: 'Ada' }, text,
+          ...(text.startsWith('@happier_bot') ? { entities: [{ type: 'mention', offset: 0, length: 12 }] } : {}),
+        } };
+        await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, context, manager);
+      } else {
+        const parsed = parseDiscordMessageDispatch({ event: 'MESSAGE_CREATE',
+          channel: threadId === null
+            ? { kind: 'shared', channelId: 'parent-1' }
+            : { kind: 'thread', channelId: `thread-${threadId}`, parentChannelId: 'parent-1' },
+          payload: { id: String(messageNumber), timestamp: new Date().toISOString(), content: text,
+            type: 0, author: { id: senderId, bot: false },
+            mentions: text.startsWith('<@12345>') ? [{ id: '12345' }] : [] },
+          context: { botUserId: '12345', applicationId: 'application-1', botRoleIds: [], messageContentIntentEnabled: true },
+        });
+        const normalized = mapDiscordMessageToSocketIngress({ parsed });
+        if (normalized === null) throw new Error('Expected an authenticated Discord message.');
+        if (discordSourceKit === null) throw new Error('Expected the authenticated Discord provider Action source.');
+        await discordSourceKit.invokeAction('fixture/ingest', {
+          connectionId: 'connection-1', entry: { observation: normalized, eventCandidate: null },
+        });
+      }
+    };
+    try {
+      if (provider === 'discord') {
+        discordSourceKit = await createPluginTestkit({
+          manifest: discordSource.manifest, module: discordSource, actionTargets: [kit],
+          resolveCurrentPluginMaterializationRef: () => executionOrigin.materializationRef,
+        });
+      }
+      if (provider === 'telegram') {
+        await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, context, manager);
+      }
+      const endpointSelection = (endpoint: typeof parentEndpoint | typeof proofEndpoint) => ({ query: endpoint.id, selected: endpoint });
+      const challenge = ConversationPairingCreateResultV1Schema.parse(await kit.invokeAction(
+        CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate,
+        { connectionId: 'connection-1', expectedConnectionRevision: connection.payload.configurationRevision,
+          pairingRequestId: 'pairing-router-request', endpointSelection: endpointSelection(parentEndpoint),
+          proofEndpointSelection: endpointSelection(proofEndpoint),
+          target: { kind: 'threadRouter', principalGroups: [{ id: 'owner', principalIds: [] }], routes: [{
+            id: 'owner-route', when: { group: 'owner', forwarded: 'any' },
+            recipe: { executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+              directory: { kind: 'path', path: '/workspace/channels' },
+              agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } },
+            policy: channelBinding().payload.target.policy,
+          }] } }, { surface: 'agent' },
+      ));
+      if (challenge.kind !== 'created') throw new Error('Expected the shared router challenge.');
+      expect(challenge).toMatchObject({ proofEndpoint, deepLinkUrl: null });
+      await deliver(`/pair ${challenge.manualToken}`, provider === 'telegram' ? 7 : null);
+      const pairingResource = kit.registration('resources', 'pairing-v1');
+      if (pairingResource === undefined) throw new Error('Expected the activated Channels pairing Resource.');
+      const accountStorage = services.storage.account;
+      if (accountStorage === undefined) throw new Error('Expected the pairing Resource Account storage boundary.');
+      const projection = ConversationPairingResourceV1Schema.parse(JSON.parse(resourceText(await pairingResource.read({
+        signal: context.signal, context: { kind: 'global' }, accountStorage,
+      }))));
+      expect(projection.proposals).toHaveLength(1);
+      const proposal = projection.proposals[0];
+      if (proposal === undefined) throw new Error('Expected the actual sender proposal.');
+      expect(proposal).toMatchObject({ principalId, proofEndpoint });
+      expect(harness.execute.mock.calls.filter(([action]) => action === 'session.spawn_new')).toHaveLength(0);
+      expect(harness.send).not.toHaveBeenCalled();
+      expect([...harness.rows.values()].filter(row => row.value['record-kind'] === 'binding')).toHaveLength(0);
+      const finalized = ConversationPairingFinalizeResultV1Schema.parse(await kit.invokeAction(
+        CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingFinalize,
+        { generationId: challenge.generationId, proposalId: proposal.proposalId, connectionId: 'connection-1',
+          expectedConnectionRevision: connection.payload.configurationRevision, finalizeIdempotencyKey: 'pairing-router-finalize' },
+        { surface: 'agent' },
+      ));
+      if (finalized.kind !== 'created') throw new Error(`Expected a new paused router, got ${finalized.kind}.`);
+      expect(finalized.binding).toMatchObject({ endpoint: parentEndpoint, enabled: false, allowedPrincipalIds: [principalId],
+        target: { kind: 'threadRouter', principalGroups: [{ id: 'owner', principalIds: [principalId] }] } });
+      const routerId = finalized.binding.id;
+      pairedRouterId = routerId;
+      const readRouter = () => {
+        const row = harness.rows.get(routerId);
+        if (row === undefined) throw new Error('Expected the persisted parent router.');
+        return row;
+      };
+      expect(readRouter().value.payload).toMatchObject({ endpoint: parentEndpoint, enabled: false, allowedPrincipalIds: [principalId] });
+      await deliver(`${mention} paused topic`, provider === 'telegram' ? 6 : 0);
+      expect(harness.send).not.toHaveBeenCalled();
+      expect(harness.execute.mock.calls.filter(([action]) => action === 'session.spawn_new')).toHaveLength(0);
+      await kit.invokeAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate,
+        { bindingId: routerId, expectedRevision: readRouter().revision, enabled: true, inboundDebounceMs: 0 }, { surface: 'agent' });
+      await deliver(`${mention} first topic message`, provider === 'telegram' ? 8 : 1);
+      await deliver(`${mention} follow-up`, provider === 'telegram' ? 8 : 1);
+      const children = [...harness.rows.values()].filter(row => record(row.value.payload).parentBindingId === routerId);
+      expect(children).toHaveLength(1);
+      expect(children[0]?.value.payload).toMatchObject({
+        endpoint: { kind: 'thread', audience: 'shared', id: freshThreadId, parentId: parentEndpoint.id },
+        target: { kind: 'session', sessionId: 'session-2' }, allowedPrincipalIds: [principalId],
+      });
+      expect(harness.execute.mock.calls.filter(([action]) => action === 'session.spawn_new')).toHaveLength(1);
+      expect(harness.send.mock.calls.map(([request]) => sentUserTextRequest(request).text))
+        .toEqual([`${mention} first topic message`, `${mention} follow-up`]);
+      await deliver(`${mention} unknown sender`, provider === 'telegram' ? 9 : 2, '99');
+      await deliver(`${mention} unknown child sender`, provider === 'telegram' ? 8 : 1, '99');
+      await kit.invokeAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate,
+        { bindingId: routerId, expectedRevision: readRouter().revision, enabled: false }, { surface: 'agent' });
+      await deliver(`${mention} disabled child`, provider === 'telegram' ? 8 : 1);
+      await deliver(`${mention} disabled new thread`, provider === 'telegram' ? 10 : 3);
+      expect(harness.send).toHaveBeenCalledTimes(2);
+      expect(harness.execute.mock.calls.filter(([action]) => action === 'session.spawn_new')).toHaveLength(1);
+      expect([...harness.rows.values()].filter(row => record(row.value.payload).parentBindingId === routerId)).toHaveLength(1);
+    } finally {
+      await discordSourceKit?.dispose();
+      await kit.dispose();
+      manager.dispose();
+    }
+  });
+
+  it('preserves the typed Session refusal in the content-free supervisor diagnostic', async () => {
+    const harness = createIngressHarness({ connection: socketChannelConnection(), execute: (actionId, input) => {
+      if (actionId === 'session.spawn_new') return { type: 'error', code: 'spawn_failed', retryable: true,
+        launchError: { kind: 'launch_error', code: 'SPAWN_VALIDATION_FAILED',
+          message: 'private-message sales@example.test secret-token' } };
+      return threadSpawnBoundary(actionId, input);
+    } });
+    routerFixture(harness.rows);
+    const failure = await ingestConversationProviderObservationForInvocation(topicObservation('spawn-refused'), harness.context)
+      .catch((error: unknown) => error);
+    expect(classifySupervisorFailure(failure)).toEqual({ code: 'channels_thread_spawn_failed', retryable: true,
+      sessionSpawnCode: 'spawn_failed', sessionSpawnReason: 'SPAWN_VALIDATION_FAILED' });
+    expect(JSON.stringify(classifySupervisorFailure(failure))).not.toMatch(/private-message|sales@|secret-token/);
+    expect(JSON.stringify(failure)).not.toMatch(/private-message|sales@|secret-token/);
+    expect(harness.send).not.toHaveBeenCalled();
+    expect([...harness.rows.values()].filter(row => record(row.value.payload).parentBindingId === 'binding-1')).toHaveLength(0);
+  });
+
   it.each([
     { reason: 'actorUnattributable', kind: 'unknown', principalId: null },
     { reason: 'actorNotAllowed', kind: 'human', principalId: 'private-unlisted@example.test' },
@@ -1426,7 +1709,7 @@ describe('thread router admission', () => {
     const payload = record(router.value.payload);
     const target = record(payload.target);
     harness.rows.set(router.rowId, stateRow({ ...router.value, payload: { ...payload,
-      endpoint: { kind: 'direct', audience: 'direct', id: '100' },
+      endpoint: { kind: 'shared', audience: 'shared', id: '100' },
       target: { ...target, principalGroups: [{ id: 'sales', principalIds: ['42'] }] },
     } }));
     replaceConnectionPayload(harness.rows, { providerConfig: { botUsername: 'happier_bot', canReadAllGroupMessages: true } });
