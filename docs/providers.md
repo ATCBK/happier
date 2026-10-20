@@ -548,6 +548,11 @@ request-auth capability and qualified purposes. A physical management bearer
 cannot authorize inference. Releasing one consumer withdraws only its access;
 the final consumer and its in-flight requests must settle before idle stop.
 
+In development source, a gateway's request-auth lookup follows the containing
+native request's deadline and cancellation. It adds no shorter transport-phase
+deadline around Home admission or OAuth materialization. Failure reports retain
+their existing recovery and quota-report lifetimes.
+
 The side-effect-free connection description reads Running/Idle from this same
 process-custody owner, using the current exact Home, Account, connection and
 execution machine. The detail page addresses the saved hub, not a different
@@ -556,10 +561,15 @@ uncertain process state remains `not_checked`; endpoint health and an online
 machine do not establish peer reachability. The current owner reports peer
 reachability as `not_checked`, separately from its process status. Reading these
 facts neither starts a gateway nor acquires a consumer claim.
+Description reobserves the Account catalog without marking an admitted row as
+changed. A confirmed catalog change still withdraws authority through the
+Account observer; an unavailable read returns a catalog error.
 
 The runner keeps its own loopback access endpoint across daemon replacement.
 Each new request re-admits the captured binding before obtaining fresh access;
 transport failure does not replay inference or substitute another source.
+An access refusal withdraws that consumer projection while the Session retains
+its Provider invocation; later access must freshly authorize before rejoining.
 An unavailable exact executable source remains unavailable: retained declaration
 attestation alone does not load an older plugin runtime. The chosen-hub path
 uses the existing machine carrier and broker with a personal Account-connection
