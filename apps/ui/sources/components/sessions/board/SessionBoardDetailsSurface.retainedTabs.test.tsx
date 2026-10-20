@@ -617,7 +617,7 @@ function DestinationOwner(props: Readonly<{
             detailsOpen: true,
             detailsShowsBoard: true,
             detailsExpandedItemIds: props.expandedVisible ? ['item-2'] : [],
-            detailsFocusModeActive: false,
+            mainHidden: false,
             rightOpen: false,
             rightActiveTabId: null,
         },

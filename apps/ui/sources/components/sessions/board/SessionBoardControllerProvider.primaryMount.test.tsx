@@ -92,7 +92,7 @@ const visibility = resolveSessionBoardHostVisibility({
         detailsShowsBoard: true,
         detailsShowsGenericBoard: true,
         detailsExpandedItemIds: [],
-        detailsFocusModeActive: false,
+        mainHidden: false,
         rightOpen: false,
         rightActiveTabId: null,
     },

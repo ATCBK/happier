@@ -45,7 +45,7 @@ export type SessionBoardPaneVisibilityFacts = Readonly<{
      */
     detailsExpandedItemIds?: readonly string[];
     /** Incumbent pane focus mode, which is also what selects the focused Details renderer. */
-    detailsFocusModeActive: boolean;
+    mainHidden: boolean;
     rightOpen: boolean;
     rightActiveTabId: string | null;
 }>;
@@ -156,7 +156,7 @@ export function resolveSessionBoardHostVisibility(
         detailsRendersBoard = facts.panes.detailsOpen
             && (facts.panes.detailsShowsBoard ?? true);
         if (detailsRendersBoard) visibleHosts.push('details');
-        if (detailsRendersBoard && facts.panes.detailsFocusModeActive) visibleHosts.push('focusedDetails');
+        if (detailsRendersBoard && facts.panes.mainHidden) visibleHosts.push('focusedDetails');
         if (facts.panes.rightOpen && facts.panes.rightActiveTabId === SESSION_BOARD_DESTINATION.id) {
             visibleHosts.push('sidebar');
         }

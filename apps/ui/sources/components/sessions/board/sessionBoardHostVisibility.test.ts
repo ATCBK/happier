@@ -10,7 +10,7 @@ import {
 function facts(overrides: Partial<SessionBoardHostVisibilityFacts> = {}): SessionBoardHostVisibilityFacts {
     return {
         foreground: true,
-        panes: { detailsOpen: false, detailsFocusModeActive: false, rightOpen: false, rightActiveTabId: null },
+        panes: { detailsOpen: false, mainHidden: false, rightOpen: false, rightActiveTabId: null },
         companionPlacement: { kind: 'hidden' },
         mobileSurface: null,
         ...overrides,
@@ -20,7 +20,7 @@ function facts(overrides: Partial<SessionBoardHostVisibilityFacts> = {}): Sessio
 describe('resolveSessionBoardHostVisibility', () => {
     it('gathers every candidate host the incumbent owners currently render', () => {
         expect(resolveSessionBoardHostVisibility(facts({
-            panes: { detailsOpen: true, detailsFocusModeActive: false, rightOpen: true, rightActiveTabId: 'board' },
+            panes: { detailsOpen: true, mainHidden: false, rightOpen: true, rightActiveTabId: 'board' },
             companionPlacement: { kind: 'reserved_rail', edge: 'trailing', widthPx: 280 },
         })).visibleHosts).toEqual(['details', 'sidebar', 'companion']);
     });
@@ -33,7 +33,7 @@ describe('resolveSessionBoardHostVisibility', () => {
             panes: {
                 detailsOpen: true,
                 detailsShowsBoard: false,
-                detailsFocusModeActive: false,
+                mainHidden: false,
                 rightOpen: true,
                 rightActiveTabId: 'board',
             },
@@ -48,7 +48,7 @@ describe('resolveSessionBoardHostVisibility', () => {
 
     it('does not count the sidebar while another right tab is active', () => {
         expect(resolveSessionBoardHostVisibility(facts({
-            panes: { detailsOpen: false, detailsFocusModeActive: false, rightOpen: true, rightActiveTabId: 'git' },
+            panes: { detailsOpen: false, mainHidden: false, rightOpen: true, rightActiveTabId: 'git' },
         })).visibleHosts).toEqual([]);
     });
 
@@ -73,7 +73,7 @@ describe('resolveSessionBoardHostVisibility', () => {
             panes: {
                 detailsOpen: true,
                 detailsShowsBoard: true,
-                detailsFocusModeActive: true,
+                mainHidden: true,
                 rightOpen: true,
                 rightActiveTabId: 'board',
             },
@@ -93,7 +93,7 @@ describe('resolveSessionBoardHostVisibility', () => {
             panes: {
                 detailsOpen: true,
                 detailsShowsBoard: true,
-                detailsFocusModeActive: false,
+                mainHidden: false,
                 rightOpen: true,
                 rightActiveTabId: 'board',
             },
@@ -112,7 +112,7 @@ describe('resolveSessionBoardHostVisibility', () => {
 
     it('gives focused Details keyboard focus so it wins over precedence', () => {
         const resolved = resolveSessionBoardHostVisibility(facts({
-            panes: { detailsOpen: true, detailsFocusModeActive: true, rightOpen: false, rightActiveTabId: null },
+            panes: { detailsOpen: true, mainHidden: true, rightOpen: false, rightActiveTabId: null },
             companionPlacement: { kind: 'reserved_rail', edge: 'trailing', widthPx: 280 },
         }));
 
@@ -129,7 +129,7 @@ describe('resolveSessionBoardHostVisibility', () => {
         // to self-appoint from its own visibility while the Companion resolved a
         // different winner, so one executable item mounted twice.
         const resolved = resolveSessionBoardHostVisibility(facts({
-            panes: { detailsOpen: false, detailsFocusModeActive: false, rightOpen: true, rightActiveTabId: 'board' },
+            panes: { detailsOpen: false, mainHidden: false, rightOpen: true, rightActiveTabId: 'board' },
             companionPlacement: { kind: 'reserved_rail', edge: 'trailing', widthPx: 280 },
         }));
 
@@ -142,7 +142,7 @@ describe('resolveSessionBoardHostVisibility', () => {
 
     it('resolves the primary host per item when only some Board items are in Companion', () => {
         const visibility = resolveSessionBoardHostVisibility(facts({
-            panes: { detailsOpen: false, detailsFocusModeActive: false, rightOpen: true, rightActiveTabId: 'board' },
+            panes: { detailsOpen: false, mainHidden: false, rightOpen: true, rightActiveTabId: 'board' },
             companionPlacement: { kind: 'reserved_rail', edge: 'trailing', widthPx: 280 },
         }));
 
@@ -159,7 +159,7 @@ describe('resolveSessionBoardHostVisibility', () => {
     it('drives no executable mount from a background window', () => {
         const visibility = resolveSessionBoardHostVisibility(facts({
             foreground: false,
-            panes: { detailsOpen: true, detailsFocusModeActive: false, rightOpen: false, rightActiveTabId: null },
+            panes: { detailsOpen: true, mainHidden: false, rightOpen: false, rightActiveTabId: null },
         }));
         expect(resolveSessionBoardItemPrimaryMountHost({
             visibility,
@@ -185,7 +185,7 @@ describe('resolveSessionBoardHostVisibility', () => {
                 detailsOpen: true,
                 detailsShowsBoard: true,
                 detailsExpandedItemIds: ['item-1'],
-                detailsFocusModeActive: false,
+                mainHidden: false,
                 rightOpen: false,
                 rightActiveTabId: null,
             },
@@ -214,7 +214,7 @@ describe('resolveSessionBoardHostVisibility', () => {
                 detailsOpen: true,
                 detailsShowsBoard: true,
                 detailsExpandedItemIds: ['item-1'],
-                detailsFocusModeActive: false,
+                mainHidden: false,
                 rightOpen: false,
                 rightActiveTabId: null,
             },
@@ -223,7 +223,7 @@ describe('resolveSessionBoardHostVisibility', () => {
             panes: {
                 detailsOpen: true,
                 detailsShowsBoard: true,
-                detailsFocusModeActive: false,
+                mainHidden: false,
                 rightOpen: false,
                 rightActiveTabId: null,
             },
@@ -252,7 +252,7 @@ describe('resolveSessionBoardHostVisibility', () => {
                 detailsShowsBoard: true,
                 detailsShowsGenericBoard: false,
                 detailsExpandedItemIds: ['item-a'],
-                detailsFocusModeActive: false,
+                mainHidden: false,
                 rightOpen: false,
                 rightActiveTabId: null,
             },
@@ -277,7 +277,7 @@ describe('resolveSessionBoardHostVisibility', () => {
                 detailsShowsBoard: true,
                 detailsShowsGenericBoard: true,
                 detailsExpandedItemIds: ['item-a'],
-                detailsFocusModeActive: false,
+                mainHidden: false,
                 rightOpen: false,
                 rightActiveTabId: null,
             },
@@ -297,7 +297,7 @@ describe('resolveSessionBoardHostVisibility', () => {
                 detailsShowsBoard: true,
                 detailsShowsGenericBoard: false,
                 detailsExpandedItemIds: ['item-a'],
-                detailsFocusModeActive: true,
+                mainHidden: true,
                 rightOpen: true,
                 rightActiveTabId: 'board',
             },
@@ -318,7 +318,7 @@ describe('resolveSessionBoardHostVisibility', () => {
                 detailsOpen: true,
                 detailsShowsBoard: false,
                 detailsExpandedItemIds: ['item-1'],
-                detailsFocusModeActive: false,
+                mainHidden: false,
                 rightOpen: false,
                 rightActiveTabId: null,
             },
@@ -340,7 +340,7 @@ describe('resolveSessionBoardHostVisibility', () => {
 // ("Maximum update depth exceeded").
 describe('inline transcript candidacy', () => {
     const boardSidebar = resolveSessionBoardHostVisibility(facts({
-        panes: { detailsOpen: false, detailsFocusModeActive: false, rightOpen: true, rightActiveTabId: 'board' },
+        panes: { detailsOpen: false, mainHidden: false, rightOpen: true, rightActiveTabId: 'board' },
     }));
     const nothingOnScreen = resolveSessionBoardHostVisibility(facts());
 
@@ -386,10 +386,10 @@ describe('inline transcript candidacy', () => {
 describe('retainSessionBoardHostVisibility', () => {
     it('keeps the previous visibility when the next one says the same thing', () => {
         const previous = resolveSessionBoardHostVisibility(facts({
-            panes: { detailsOpen: true, detailsFocusModeActive: false, rightOpen: false, rightActiveTabId: null, detailsExpandedItemIds: ['a'] },
+            panes: { detailsOpen: true, mainHidden: false, rightOpen: false, rightActiveTabId: null, detailsExpandedItemIds: ['a'] },
         }));
         const next = resolveSessionBoardHostVisibility(facts({
-            panes: { detailsOpen: true, detailsFocusModeActive: false, rightOpen: false, rightActiveTabId: null, detailsExpandedItemIds: ['a'] },
+            panes: { detailsOpen: true, mainHidden: false, rightOpen: false, rightActiveTabId: null, detailsExpandedItemIds: ['a'] },
         }));
         expect(next).not.toBe(previous);
         expect(retainSessionBoardHostVisibility(previous, next)).toBe(previous);
@@ -399,7 +399,7 @@ describe('retainSessionBoardHostVisibility', () => {
         const previous = resolveSessionBoardHostVisibility(facts());
         const hidden = resolveSessionBoardHostVisibility(facts({ foreground: false }));
         const sidebar = resolveSessionBoardHostVisibility(facts({
-            panes: { detailsOpen: false, detailsFocusModeActive: false, rightOpen: true, rightActiveTabId: 'board' },
+            panes: { detailsOpen: false, mainHidden: false, rightOpen: true, rightActiveTabId: 'board' },
         }));
         expect(retainSessionBoardHostVisibility(previous, hidden)).toBe(hidden);
         expect(retainSessionBoardHostVisibility(previous, sidebar)).toBe(sidebar);
