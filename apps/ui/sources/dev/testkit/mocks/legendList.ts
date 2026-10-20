@@ -48,6 +48,8 @@ type CapturingLegendListMockOptions = Readonly<{
     renderItemLimit?: number;
     /** Native viewability follows the rows rendered by this measured-viewport substitute. */
     emitViewability?: boolean;
+    /** Keep mounted cells until their item or the recycler's dataVersion changes. */
+    memoizeItems?: boolean;
     /** Stateful geometry feed: merged over the static defaults on every getState() read. */
     resolveState?: () => Partial<LegendListMockState> | null | undefined;
 }>;
@@ -90,8 +92,17 @@ export function createCapturingLegendListMock(
         },
         refHandle,
     };
+    const MemoizedItem = React.memo((itemProps: Readonly<{
+        item: unknown;
+        index: number;
+        dataVersion: unknown;
+        renderItemRef: React.RefObject<((input: Readonly<{ item: unknown; index: number }>) => React.ReactNode) | undefined>;
+    }>) => React.createElement('LegendListItem', null, itemProps.renderItemRef.current?.({ item: itemProps.item, index: itemProps.index })));
     const LegendList = React.forwardRef<any, any>((nextProps, ref) => {
         props = nextProps;
+        // Like the recycler, changing renderItem alone updates the callback but does not invalidate a cell.
+        const renderItemRef = React.useRef(nextProps.renderItem);
+        renderItemRef.current = nextProps.renderItem;
         if (typeof ref === 'function') ref(refHandle);
         else if (ref && typeof ref === 'object') ref.current = refHandle;
 
@@ -111,7 +122,10 @@ export function createCapturingLegendListMock(
             ? []
             : nextProps.data
                 .slice(0, options.renderItemLimit ?? nextProps.data.length)
-                .map((item: any, index: number) => React.createElement(
+                .map((item: any, index: number) => options.memoizeItems ? React.createElement(MemoizedItem, {
+                    key: nextProps.keyExtractor?.(item, index) ?? item?.id ?? String(index),
+                    item, index, dataVersion: nextProps.dataVersion, renderItemRef,
+                }) : React.createElement(
                 'LegendListItem',
                 { key: nextProps.keyExtractor?.(item, index) ?? item?.id ?? String(index) },
                 nextProps.renderItem?.({ item, index }),
