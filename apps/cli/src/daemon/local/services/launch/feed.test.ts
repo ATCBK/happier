@@ -66,7 +66,8 @@ function inventoryEntry(
 }
 
 describe('createLocalServiceLauncherFeed', () => {
-    it('keeps the managed occurrence for its native listener bindings and preserves an unrelated listener on the same port', async () => {
+    it.each(['inventory', 'declaration', 'move'] as const)('keeps native listener provenance through %s custody and preserves unrelated listeners', async scenario => {
+        let current = true;
         const owner = createManagedServicesOwner({
             processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
             // This literal Project command does not install plugin dependencies.
@@ -78,7 +79,7 @@ describe('createLocalServiceLauncherFeed', () => {
             const handle = await owner.superviseProject({
                 workspace: { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 },
                 declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'httpPort' } },
-                cwd: process.cwd(), serviceId: 'project-service:httpPort', specIdentity: 'httpPort', isCurrent: () => true,
+                cwd: process.cwd(), serviceId: 'project-service:httpPort', specIdentity: 'httpPort', isCurrent: () => current,
                 requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
                 processSpec: { mode: { kind: 'managedSpawn', host: '127.0.0.1' } },
                 authorizeLaunch: async input => ({ command: process.execPath,
@@ -107,8 +108,14 @@ describe('createLocalServiceLauncherFeed', () => {
                 owner: { kind: 'user', id: 'owner' }, target: { scheme: 'http', host: '127.0.0.1', port },
                 initialPath: { pathname: '/', search: '' }, display: { title: 'httpPort', addressLabel: `localhost:${port}` }, originMode: 'host' });
             expect(preview.ok).toBe(true);
-            const feed = createLocalServiceLauncherFeed({ machineId: 'machine-a', projectManagedServices: owner,
-                inventoryRegistry, previewRegistry });
+            const createFeed = () => createLocalServiceLauncherFeed({ machineId: 'machine-a', projectManagedServices: owner,
+                inventoryRegistry, previewRegistry, runTargets: scenario === 'inventory' ? [] : [{
+                    id: handle.serviceId, cwd: handle.cwd, workspaceId: handle.workspace.id,
+                    workspace: { serverId: handle.workspace.serverId, machineId: handle.workspace.machineId,
+                        workspaceId: handle.workspace.id, rootPath: handle.workspace.rootPath },
+                    declaration: handle.declaration, title: 'httpPort',
+                }] });
+            const feed = createFeed();
             const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot());
             expect(snapshot.targets.map(target => target.id)).toEqual([handle.serviceId, 'inventory:unrelated']);
             expect(snapshot.targets[0]).toMatchObject({ title: 'httpPort', actions: ['manage', 'open_preview', 'register_preview'],
@@ -132,11 +139,40 @@ describe('createLocalServiceLauncherFeed', () => {
             ]);
             inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 5_000,
                 refreshState: 'idle', entries: [direct, child, unrelated], diagnostics: [] });
-            // Once custody settles, the feed must not hide a later listener at the same address.
+            if (scenario === 'move') {
+                // Move retires serving authority before the old Machine finishes Stop.
+                current = false;
+                const handoff = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot());
+                expect(handoff.targets.map(target => target.id)).toEqual([handle.serviceId, 'inventory:unrelated']);
+                expect(handoff.targets[0]?.actions).toEqual(['manage']);
+                expect(handoff.targets[0]?.browserTarget).toBeUndefined();
+                // A first read during retirement must also correlate the live root.
+                expect((await createFeed().getSnapshot()).targets.map(target => target.id)).toEqual([
+                    handle.serviceId, 'inventory:unrelated',
+                ]);
+            }
             await handle.stop();
-            expect((await feed.getSnapshot()).targets.map(target => target.id)).toEqual([
+            expect(owner.listProjectServices()).toEqual([]);
+            expect(owner.readProcessRoots()).toEqual([]);
+            const stopped = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot());
+            expect(stopped.targets.map(target => target.id)).toEqual(scenario === 'inventory' ? [
                 'inventory:owned-loopback', 'inventory:owned-wildcard', 'inventory:unrelated',
-            ]);
+            ] : [handle.serviceId, 'inventory:unrelated']);
+            if (scenario !== 'inventory') {
+                // With only the cached owned listener, exactly the declaration remains.
+                inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 6_000,
+                    refreshState: 'idle', entries: [{ ...direct }], diagnostics: [] });
+                expect((await feed.getSnapshot()).targets.map(target => target.id)).toEqual([handle.serviceId]);
+                // A fresh listener on the identical address/id, even with a reused PID,
+                // is not the previously correlated cached observation.
+                inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 7_000,
+                    refreshState: 'idle', entries: [{ ...direct, lastSeenAt: 7_000, provenance: {
+                        process: { ...direct.provenance!.process!, processStartTimeMs: 7_000 },
+                    } }], diagnostics: [] });
+                expect((await feed.getSnapshot()).targets.map(target => target.id)).toEqual([
+                    handle.serviceId, 'inventory:owned-loopback',
+                ]);
+            }
         } finally { await owner.dispose(); }
     });
 

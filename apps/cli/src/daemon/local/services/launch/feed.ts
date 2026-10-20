@@ -3,6 +3,7 @@ import type { LocalServiceLauncherSnapshotV1, LocalServiceLaunchTargetV1 } from 
 import { expandHomeDirPath } from '../../../../utils/path/expandHomeDirPath';
 import { isWorkspacePathWithin } from '../inventory/provenance';
 import type { LocalServiceInventoryRegistry } from '../inventory/registry';
+import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
 import { listLocalServicePreviewResources, type LocalServicePreviewRegistry } from '../preview/registry';
 import type { LocalServiceLauncherRunTarget } from './runTargets';
 import type { LocalServiceLauncherHistoryStore } from './leaves';
@@ -159,6 +160,10 @@ export function createLocalServiceLauncherFeed(
     input: CreateLocalServiceLauncherFeedInput,
 ): LocalServiceLauncherFeed {
     const now = input.now ?? (() => Date.now());
+    // Custody can settle before the next scan. Retain only correlations proven
+    // against native roots for the cached provenance object, never an address or
+    // PID tombstone that could hide a fresh listener after process reuse.
+    const cachedInventoryOwners = new WeakMap<NonNullable<NormalizedLocalServiceInventoryEntry['provenance']>, string>();
     return {
         async getSnapshot(request) {
             if (request?.projection === 'managed_bindings' && !input.projectManagedServices) {
@@ -205,13 +210,19 @@ export function createLocalServiceLauncherFeed(
                     const target = managedTarget(handle);
                     const root = processRoots.find(root => root.live === true && root.owner.kind === 'service'
                         && root.owner.serviceId === handle.instanceId);
-                    if (!root || !handle.isCurrent() || target.unavailableReason) return target;
+                    if (!root) return target;
                     // Correlate each binding independently: several interfaces can belong to
                     // one occurrence. This does not select or change its advertised endpoint.
                     const owned = inventoryEntries.filter(entry => entry.machineId === input.machineId
                         && entry.state === 'listening' && inventoryTargets.has(entry.id)
                         && selectManagedOwnedTreeEndpoint({ entries: [entry], managedPid: root.pid, minimumConfidence: 'high' }));
-                    for (const entry of owned) correlatedInventoryIds.add(entry.id);
+                    for (const entry of owned) {
+                        correlatedInventoryIds.add(entry.id);
+                        if (entry.provenance) cachedInventoryOwners.set(entry.provenance, handle.serviceId);
+                    }
+                    // Retiring serving authority does not make its cached listeners
+                    // independent targets, but it must still remove preview authority.
+                    if (!handle.isCurrent() || target.unavailableReason) return target;
                     // Prefer usable preview evidence, then a direct-root binding. This only
                     // chooses presentation; native endpoint authority stays with the supervisor.
                     const entry = owned.sort((a, b) => Number(!inventoryTargets.get(a.id)?.browserTarget) - Number(!inventoryTargets.get(b.id)?.browserTarget)
@@ -228,6 +239,13 @@ export function createLocalServiceLauncherFeed(
                 });
             if (bindingsOnly) return { v: 1, machineId: input.machineId, updatedAt: snapshot.updatedAt, targets: sortTargets(managed) };
             const managedIds = new Set(managed.map(target => target.id));
+            const declaredIds = new Set([...snapshot.targets, ...managed]
+                .filter(target => target.declaration).map(target => target.id));
+            for (const entry of inventoryEntries) {
+                const ownerId = entry.provenance ? cachedInventoryOwners.get(entry.provenance) : undefined;
+                // Undeclared inventory remains independently discoverable after Stop.
+                if (ownerId && declaredIds.has(ownerId)) correlatedInventoryIds.add(entry.id);
+            }
             return {
                 ...snapshot,
                 targets: [...sortTargets([
