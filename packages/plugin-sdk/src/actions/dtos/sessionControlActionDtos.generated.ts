@@ -712,7 +712,7 @@ export type SessionControlActionResultById = {
     readonly "session.turn.cancel": JsonValue;
     readonly "session.runtime.refresh": {
         ok: boolean;
-        status: 'restarted' | 'already_current' | 'dry_run_restartable' | 'not_found' | 'not_tracked' | 'not_daemon_started' | 'runner_not_active' | 'version_unknown' | 'runner_identity_changed' | 'busy' | 'missing_resume_snapshot' | 'missing_spawn_options' | 'unsupported_daemon' | 'ineligible' | 'stop_failed' | 'spawn_failed' | 'partial_failure';
+        status: 'restarted' | 'already_current' | 'dry_run_restartable' | 'not_found' | 'not_tracked' | 'not_daemon_started' | 'runner_not_active' | 'version_unknown' | 'runner_identity_changed' | 'busy' | 'missing_resume_snapshot' | 'missing_spawn_options' | 'unsupported_daemon' | 'restart_admission_unsupported' | 'ineligible' | 'stop_failed' | 'spawn_failed' | 'partial_failure';
         sessionId: string;
         previous?: {
             pid?: number | null | undefined;
@@ -726,7 +726,7 @@ export type SessionControlActionResultById = {
             entrypointVersion?: string | null | undefined;
             processCommandHash?: string | null | undefined;
         } | undefined;
-        reasonCode?: 'not_daemon_started' | 'missing_spawn_options' | 'not_remote_started' | 'not_active' | 'no_tracked_process' | 'missing_resume_identity' | 'missing_credentials' | 'unsupported_backend' | 'turn_in_progress' | 'approval_pending' | 'terminal_detached' | 'terminal_host_attached' | 'non_destructive_refresh_unsupported' | 'windows_hosted_runner' | 'restart_already_running' | 'current_entrypoint_unknown' | 'runner_entrypoint_unknown' | 'runner_generation_unattested' | 'unsupported_daemon_version' | null | undefined;
+        reasonCode?: 'not_daemon_started' | 'missing_spawn_options' | 'restart_admission_unsupported' | 'not_remote_started' | 'not_active' | 'no_tracked_process' | 'missing_resume_identity' | 'missing_credentials' | 'unsupported_backend' | 'turn_in_progress' | 'approval_pending' | 'terminal_detached' | 'terminal_host_attached' | 'non_destructive_refresh_unsupported' | 'windows_hosted_runner' | 'restart_already_running' | 'current_entrypoint_unknown' | 'runner_entrypoint_unknown' | 'runner_generation_unattested' | 'unsupported_daemon_version' | null | undefined;
         diagnostics?: Record<string, unknown> | undefined;
     };
     readonly "session.stop": JsonValue;
