@@ -168,7 +168,7 @@ describe('actionToolExposure', () => {
   });
   it('makes landed explanation Actions reachable through the existing UI and Voice catalogs', () => {
     const voiceIds = new Set(listVoiceToolActionSpecs().map((spec) => spec.id));
-    for (const actionId of ['scm.diffSummary.capture', 'scm.diffSummary.generate', 'scm.diffSummary.result.read',
+    for (const actionId of ['scm.diffSummary.capture', 'scm.diffSummary.generate', 'scm.diffSummary.draftPullRequest', 'scm.diffSummary.result.read',
       'scm.diffSummary.result.edit', 'scm.diffSummary.result.undo', 'scm.diffSummary.result.delete',
       'scm.diffSummary.refine', 'scm.diffSummary.addOutputs', 'scm.diffSummary.discuss',
       'scm.diffSummary.reviewed.mark', 'scm.diffSummary.reviewed.unmark'] as const) {

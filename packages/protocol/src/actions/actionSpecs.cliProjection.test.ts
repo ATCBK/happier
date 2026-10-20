@@ -66,6 +66,7 @@ describe('ActionSpec.cli declaration', () => {
     for (const [id, path] of [
       ['scm.diffSummary.capture', ['scm', 'diff-summary', 'capture']],
       ['scm.diffSummary.generate', ['scm', 'diff-summary', 'generate']],
+      ['scm.diffSummary.draftPullRequest', ['scm', 'diff-summary', 'draft-pull-request']],
       ['scm.diffSummary.result.edit', ['scm', 'diff-summary', 'result', 'edit']],
       ['scm.diffSummary.result.undo', ['scm', 'diff-summary', 'result', 'undo']],
       ['scm.diffSummary.result.delete', ['scm', 'diff-summary', 'result', 'delete']],
