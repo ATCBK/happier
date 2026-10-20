@@ -136,6 +136,20 @@ afterEach(async () => {
 });
 
 describe('shared flat reorder UI binding', () => {
+    it('gives neighboring descriptions of one effective gap the same identity', async () => {
+        const f = fixture();
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 90 }); });
+        const afterB = runtime.getSnapshot().destinationKey;
+        expect(afterB).toBeTypeOf('string');
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 110 }); });
+        expect(runtime.getSnapshot().destinationKey).toBe(afterB);
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 140 }); });
+        expect(runtime.getSnapshot().destinationKey).not.toBe(afterB);
+    });
+
     it('keeps a release press from opening the grip chooser while its pointer move waits for acknowledgement', async () => {
         const acknowledgement = createDeferred<void>();
         const f = fixture(undefined, acknowledgement.promise);

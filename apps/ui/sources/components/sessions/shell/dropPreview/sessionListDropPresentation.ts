@@ -1,6 +1,7 @@
 import type { EntityDropPreviewV1, EntityDropReasonV1 } from '@happier-dev/protocol/plugins/ui';
 
 import { t } from '@/text';
+import { ENTITY_DROP_UNCHANGED_CODES } from '@/components/ui/treeDragDrop/entityDropNoChange';
 
 /**
  * The words of a Session-list drop (DnD lab E1): what releasing does and its limit, or why the place
@@ -63,6 +64,7 @@ export function describeSessionListRefusedPutUnder(leadName: string): EntityDrop
 export const SESSION_LIST_NO_TARGET_CODE = 'no-target';
 
 function reasonMessage(code: string): string {
+    if (ENTITY_DROP_UNCHANGED_CODES.has(code)) return t('entityDragDrop.reasons.noChange');
     switch (code) {
         case 'no-row-above': return t('entityDragDrop.reasons.noRowAbove');
         case 'read': return t('entityDragDrop.reasons.read');
@@ -82,9 +84,6 @@ function reasonMessage(code: string): string {
         case 'date-ordering-mode':
         case 'ordering-mode':
             return t('entityDragDrop.reasons.dateOrder');
-        case 'no-change':
-        case 'same-position':
-            return t('entityDragDrop.reasons.noChange');
         case 'descendant-cycle': return t('entityDragDrop.reasons.descendantCycle');
         case 'max-depth-exceeded': return t('entityDragDrop.reasons.maxDepth');
         // The tree's structural blocks: each says why, so a refusal never reads "can't · can't".
