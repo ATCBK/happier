@@ -104,6 +104,29 @@ describe('server profiles', () => {
     });
   });
 
+  it('binds an authenticated env-only credential without changing its scope or the focused Home', async () => {
+    await withTempDir('happier-cli-env-home-', async homeDir => {
+      const serverUrl = 'https://env.example.test';
+      envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined,
+        HAPPIER_SERVER_URL: serverUrl, HAPPIER_WEBAPP_URL: serverUrl });
+      reloadConfiguration();
+      const id = configuration.activeServerId;
+      await writeCredentialsTokenOnlyForServerId(id, { token: 'env-home-token' });
+      const before = await readSettings();
+      const descriptor = { v: 1 as const, homeServerIdentityId: 'srv_env_home', canonicalServerUrl: serverUrl,
+        revision: 1, endpoints: [{ kind: 'https' as const, url: serverUrl }] };
+      vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},
+        capabilities: { serverIdentity: { serverIdentityId: descriptor.homeServerIdentityId } },
+        homeConnectionDescriptor: descriptor })));
+      const { refreshServerProfileHomeConnectionDescriptor, getServerProfile } = await import('./serverProfiles');
+      expect(await refreshServerProfileHomeConnectionDescriptor({ profileId: id, serverUrl, token: 'env-home-token' }))
+        .toBe('updated');
+      expect((await getServerProfile(id)).homeConnectionDescriptor).toEqual(descriptor);
+      expect((await readSettings()).activeServerId).toBe(before.activeServerId);
+      expect((await readStoredCredentialsForServerId(id))?.token).toBe('env-home-token');
+    });
+  });
+
   it.each(['public', 'unsupported', 'identity-mismatch', 'profile-mismatch'] as const)(
     'does not assign exact authority from a %s observation', async scenario => {
       await withTempDir('happier-cli-home-refusal-', async homeDir => {

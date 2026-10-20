@@ -359,19 +359,19 @@ export async function doAuth(options: Readonly<{
             : await doBothAuth(authContext);
     const exactDescriptorObservation = authenticatedExactDescriptorObservation.current
         ?? { kind: 'unavailable' as const };
-    if (exactDescriptorObservation.kind === 'available') {
+    if (credentials && exactDescriptorObservation.kind === 'available') {
         const descriptor = exactDescriptorObservation.descriptor;
         const target = await resolveCurrentCliHomeTarget();
         assertResolvedHomeTargetIdentity(target, serverIdentityId);
-        // Env-only manual targets remain usable without manufacturing a profile.
-        // Persisted targets adopt at their immutable profile/credential owner.
-        if (target.profileId) {
-            await adoptServerProfileHomeConnectionDescriptor({
-                descriptor,
-                expectedProfileId: target.profileId,
-                observation: 'exact',
-            });
-        }
+        // Retain the authenticated identity at the existing credential scope,
+        // including env-only enrollment, without moving credentials or focus.
+        await adoptServerProfileHomeConnectionDescriptor({
+            descriptor,
+            expectedProfileId: target.profileId ?? configuration.activeServerId,
+            createIfMissing: !target.profileId,
+            webappUrl: configuration.webappUrl,
+            observation: 'exact',
+        });
     }
     if (credentials && options.onAuthenticated) {
         await options.onAuthenticated({

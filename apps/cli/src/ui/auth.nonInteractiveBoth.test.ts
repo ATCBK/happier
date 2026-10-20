@@ -383,7 +383,7 @@ describe.sequential('doAuth (non-interactive)', () => {
     }
   }, 15_000);
 
-  it('fetches and persists the authenticated exact Home descriptor only after authentication succeeds', async () => {
+  it.each([false, true])('fetches and persists the authenticated exact Home descriptor after authentication (env only: %s)', async envOnly => {
     const home = await createTempDir('happier-cli-auth-home-descriptor-');
     const envScope = createEnvKeyScope(envKeys);
     const restoreTty = setStdioTtyForTest({ stdin: false, stdout: false });
@@ -412,7 +412,7 @@ describe.sequential('doAuth (non-interactive)', () => {
     try {
       envScope.patch({
         HAPPIER_HOME_DIR: home,
-        HAPPIER_SERVER_URL: undefined,
+        HAPPIER_SERVER_URL: envOnly ? 'https://server.example.test' : undefined,
         HAPPIER_WEBAPP_URL: 'https://webapp.example.test',
         HAPPIER_ACTIVE_SERVER_ID: undefined,
         HAPPIER_NO_BROWSER_OPEN: '1',
@@ -420,7 +420,7 @@ describe.sequential('doAuth (non-interactive)', () => {
       });
       vi.resetModules();
       const { addServerProfile, listServerProfiles } = await import('@/server/serverProfiles');
-      await addServerProfile({
+      if (!envOnly) await addServerProfile({
         name: 'auth-home',
         serverUrl: 'https://server.example.test',
         webappUrl: 'https://webapp.example.test',
@@ -429,7 +429,8 @@ describe.sequential('doAuth (non-interactive)', () => {
       const configurationModule = await import('@/configuration');
       const { reloadConfiguration } = configurationModule;
       reloadConfiguration();
-      expect(configurationModule.configuration.activeServerId).toBe('auth-home');
+      const credentialScopeId = configurationModule.configuration.activeServerId;
+      if (!envOnly) expect(credentialScopeId).toBe('auth-home');
       const { doAuth } = await import('./auth');
       expect((await doAuth())?.token).toBe('tok');
       expect(fetchServerFeaturesSnapshotMock).toHaveBeenLastCalledWith({
@@ -439,7 +440,7 @@ describe.sequential('doAuth (non-interactive)', () => {
       expect((await listServerProfiles()).map((profile) => ({
         id: profile.id,
         descriptor: profile.homeConnectionDescriptor,
-      }))).toContainEqual({ id: 'auth-home', descriptor });
+      }))).toContainEqual({ id: credentialScopeId, descriptor });
     } finally {
       output.restore();
       restoreTty();
