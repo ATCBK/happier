@@ -6,7 +6,7 @@ type ReplyWithHeaders = {
     header: (name: string, value: string) => unknown;
 };
 
-type V2SessionListServerTimingMetric = "cursor" | "query" | "page";
+type V2SessionListServerTimingMetric = "cursor" | "query" | "page" | "snapshot" | "readmission";
 
 export type V2SessionListInitialPageTiming = Readonly<{
     measureQuery: <T>(fn: () => Promise<T>) => Promise<T>;
@@ -20,6 +20,8 @@ const SERVER_TIMING_NAME_BY_METRIC: Record<V2SessionListServerTimingMetric | "to
     cursor: "happier_v2_sessions_cursor",
     query: "happier_v2_sessions_query",
     page: "happier_v2_sessions_page",
+    snapshot: "happier_v2_sessions_snapshot",
+    readmission: "happier_v2_sessions_readmission",
     total: "happier_v2_sessions_total",
 };
 
@@ -52,6 +54,8 @@ export function createV2SessionListServerTiming(request: RequestWithHeaders) {
         cursor: 0,
         query: 0,
         page: 0,
+        snapshot: 0,
+        readmission: 0,
     };
 
     const addDuration = (metric: V2SessionListServerTimingMetric, startedAt: number): void => {
@@ -89,6 +93,8 @@ export function createV2SessionListServerTiming(request: RequestWithHeaders) {
                 `${SERVER_TIMING_NAME_BY_METRIC.query};dur=${formatDurationMs(durations.query)}`,
                 `${SERVER_TIMING_NAME_BY_METRIC.page};dur=${formatDurationMs(durations.page)}`,
                 `${SERVER_TIMING_NAME_BY_METRIC.total};dur=${formatDurationMs(totalMs)}`,
+                `${SERVER_TIMING_NAME_BY_METRIC.snapshot};dur=${formatDurationMs(durations.snapshot)}`,
+                `${SERVER_TIMING_NAME_BY_METRIC.readmission};dur=${formatDurationMs(durations.readmission)}`,
             ].join(", "));
         },
         initialPageTiming(): V2SessionListInitialPageTiming {

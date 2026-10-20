@@ -101,6 +101,53 @@ describe("Session listing predicate composition (SQLite)", () => {
         } finally { verify.mockRestore(); }
     });
 
+    it("keeps page reads and Account derivations independent of the number of own Sessions", async () => {
+        const binding = createSignedAccountContentBinding(tweetnacl.box.keyPair().publicKey);
+        const owner = await db.account.create({ data: {
+            publicKey: binding.publicKey, encryptionMode: "e2ee",
+            contentPublicKey: Buffer.from(binding.contentPublicKey),
+            contentPublicKeySig: Buffer.from(binding.contentPublicKeySig),
+        } });
+        const { sealEncryptedDataKeyEnvelopeV1 } = await import("@happier-dev/protocol");
+        const envelope = sealEncryptedDataKeyEnvelopeV1({ dataKey: tweetnacl.randomBytes(32),
+            recipientPublicKey: binding.contentPublicKey, randomBytes: tweetnacl.randomBytes });
+        for (let index = 0; index < 6; index += 1) {
+            await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}",
+                encryptionMode: "e2ee", dataKeyEnvelopes: { create: {
+                    recipientAccountId: owner.id, encryptedDataKey: Buffer.from(envelope),
+                } } } });
+        }
+        const measure = async (limit: number) => {
+            const requests: string[] = [];
+            let projectionReads = 0;
+            const stop = observeSqliteRequests({ before: request => {
+                if (request.model) requests.push(`${request.model}.${request.action}`);
+                const args = request.args as { select?: { metadata?: boolean } } | undefined;
+                if (request.model === "Session" && request.action === "findMany" && args?.select?.metadata) {
+                    projectionReads += 1;
+                }
+            } });
+            const verify = vi.spyOn(accountCurrentness, "deriveAccountEncryptionCurrentnessFromRow");
+            try {
+                const timing = createV2SessionListServerTiming({ headers: { "x-happier-session-list-timing": "1" } });
+                const page = await listSessionsForAccount({ userId: owner.id, authentication,
+                    source: { kind: "legacy", storage: "active", limit }, rowRepresentabilityWhere: {},
+                    timing });
+                expect(page?.sessions).toHaveLength(limit);
+                expect(projectionReads).toBe(1);
+                let serverTiming = "";
+                timing.apply({ header: (_name, value) => { serverTiming = value; } });
+                expect(serverTiming).toMatch(/happier_v2_sessions_snapshot;dur=[0-9.]+/);
+                expect(serverTiming).toMatch(/happier_v2_sessions_readmission;dur=[0-9.]+/);
+                console.info("r194 page census", JSON.stringify({ limit, requests, derivations: verify.mock.calls.length, serverTiming }));
+                return { requests, derivations: verify.mock.calls.length };
+            } finally { stop(); verify.mockRestore(); }
+        };
+        const single = await measure(1);
+        const five = await measure(5);
+        expect(five).toEqual(single);
+    });
+
     async function fixture() {
         const viewer = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
