@@ -67,9 +67,6 @@ func (c Config) Validate() error {
 	if c.DownstreamBearer == "" {
 		return fmt.Errorf("downstream bearer is required")
 	}
-	if len(c.DownstreamBearer) > 128*1024 {
-		return fmt.Errorf("downstream bearer is too large")
-	}
 	if !filepath.IsAbs(c.RuntimeDir) {
 		return fmt.Errorf("runtime directory must be absolute")
 	}

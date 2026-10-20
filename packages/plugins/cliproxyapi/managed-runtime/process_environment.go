@@ -14,8 +14,6 @@ const (
 	ManagedPurposeConfigurationEnvironmentVariable = "HAPPIER_CLIPROXYAPI_MANAGED_PURPOSE_CONFIGURATION"
 )
 
-const managedPurposeConfigurationMaxBytes = 4096
-
 type ManagedPurposeConfiguration struct {
 	V                  int                                         `json:"v"`
 	ModelListEnabled   bool                                        `json:"modelListEnabled"`
@@ -52,7 +50,7 @@ type ManagedPurposeConfigurationRow struct {
 // launch snapshot. Credentials stay in request-auth and never enter this
 // process configuration.
 func ParseManagedPurposeConfiguration(value string) (ManagedPurposeConfiguration, error) {
-	if value == "" || value != strings.TrimSpace(value) || len(value) > managedPurposeConfigurationMaxBytes {
+	if value == "" || value != strings.TrimSpace(value) {
 		return ManagedPurposeConfiguration{}, fmt.Errorf("managed purpose configuration is invalid")
 	}
 	decoder := json.NewDecoder(bytes.NewReader([]byte(value)))
@@ -127,7 +125,7 @@ func ImmutableGatewayConfig(
 func normalizeManagedPurposeConfiguration(
 	configuration ManagedPurposeConfiguration,
 ) (ManagedPurposeConfiguration, error) {
-	if configuration.V != 3 || len(configuration.Purposes) > 8 {
+	if configuration.V != 3 {
 		return ManagedPurposeConfiguration{}, fmt.Errorf("managed purpose configuration is invalid")
 	}
 	providerConnection := configuration.ProviderConnection
