@@ -30,6 +30,7 @@ type JsonRpcApplicationError = Error & Readonly<{
     method?: string;
 }>;
 const MAX_JSON_RPC_ERROR_MESSAGE_BYTES = 500;
+export const DEFAULT_JSON_RPC_MAX_FRAME_BYTES = 1024 * 1024;
 
 export type CreateJsonRpcProcessClientParams = Readonly<{
     process: ExecProcessHandleV1;
@@ -190,7 +191,7 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
     const requestHandlers = new Map<string, JsonRpcRequestHandlerV1>();
     const notificationHandlers = new Map<string, JsonRpcNotificationHandlerV1>();
     const notificationSubscribers = new Set<(message: Readonly<{ method: string; params?: unknown }>) => void | Promise<void>>();
-    const maxFrameBytes = params.maxFrameBytes ?? 1024 * 1024;
+    const maxFrameBytes = params.maxFrameBytes ?? DEFAULT_JSON_RPC_MAX_FRAME_BYTES;
     let nextId = 1;
     let disposedError: Error | null = null;
     let detachLineReader: () => void = () => undefined;
