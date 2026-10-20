@@ -974,6 +974,71 @@ describe('Channels outward-delivery supervisor', () => {
     }
   });
 
+  it('parks non-retryable owner unavailability without dropping custody and resumes on Session or binding change', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const generation = new AbortController();
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await seedProjectionState(state);
+    let sessionChanged: (() => void) | undefined;
+    let bindingChanged: (() => void) | undefined;
+    let deliveryChanged: (() => void) | undefined;
+    Object.assign(state, { watch: (_query: unknown, listener: () => void) => {
+      bindingChanged = listener; return { dispose() {} };
+    } });
+    Object.assign(deliveries, { watch: (_query: unknown, listener: () => void) => {
+      deliveryChanged = listener; return { dispose() {} };
+    } });
+    let available = false;
+    let retryable = false;
+    const permissionReads: number[] = [];
+    const execute = vi.fn(async (action: string) => {
+      if (action === 'session.permission.remote.pending.list') {
+        permissionReads.push(Date.now());
+        if (!available) throw new PluginError({ code: 'ownerMachineUnavailable', message: 'Owner unavailable', retryable });
+        return emptyPendingPermissionPage();
+      }
+      return { ok: true, projection: 'externalShareableV1', sessionId: 'session-1',
+        scannedThroughSeq: 0, nextCursor: '0', hasMore: false, items: [] };
+    });
+    const context = { ...backgroundContext({ state, deliveries, execute,
+      executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn(),
+      watchSession: listener => { sessionChanged = listener; return { dispose() {} }; },
+    }), signal: generation.signal };
+    const store = createConversationOutwardDeliveryCollectionStore({ stateCollection: state as never,
+      deliveriesCollection: deliveries as never, signal: generation.signal });
+    const retained = await store.ensure(permissionWaitOutwardObligation());
+    if (retained.kind !== 'created') throw new Error('Expected retained permission custody');
+    const supervisor = createConversationOutwardDeliverySupervisor();
+    const running = supervisor.run(context);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(permissionReads).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(permissionReads).toHaveLength(1);
+      expect(deliveries.rows.get(retained.record.custodyId)?.value.payload).toMatchObject({ state: 'ready', attemptCount: 0 });
+      // Another delivery's activity cannot change this Session's owner.
+      deliveryChanged?.(); await vi.advanceTimersByTimeAsync(0);
+      expect(permissionReads).toHaveLength(1);
+      sessionChanged?.(); await vi.advanceTimersByTimeAsync(0);
+      expect(permissionReads).toHaveLength(2);
+      available = true;
+      bindingChanged?.(); await vi.advanceTimersByTimeAsync(0);
+      expect(permissionReads).toHaveLength(3);
+      // The successful complete negative read, not the prior failure, permits
+      // suppression of this never-attempted permission wait.
+      await vi.waitFor(() => expect(deliveries.rows.get(retained.record.custodyId)?.value.payload)
+        .toMatchObject({ state: 'suppressed' }), { interval: 0 });
+      available = false;
+      retryable = true;
+      bindingChanged?.(); await vi.advanceTimersByTimeAsync(0);
+      expect(permissionReads).toHaveLength(4);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(permissionReads).toHaveLength(5);
+    } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
+  });
+
   it('subscribes before the bound transcript read and wakes on Session changes without a timer', async () => {
     vi.useFakeTimers();
     const generation = new AbortController();
