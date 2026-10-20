@@ -101,11 +101,29 @@ const en = {
     unsupportedEntry: "Happier can't install this entry yet",
   },
   builtIn: {
-    callout: ({ name, agent }: Readonly<{ name: string; agent: string }>) =>
-      `Happier already includes ${name}, as ${agent}.`,
+    callout: ({ agent }: Readonly<{ name: string; agent: string }>) =>
+      `Happier already includes this agent, as ${agent}.`,
     calloutBody:
       'It is set up and updated by Happier on each machine, with nothing to add.',
     addSeparate: "Add the registry's version as a separate agent",
+    addSeparateBody: ({ agent }: Readonly<{ agent: string }>) =>
+      `It won't share ${agent}'s sign-in or settings.`,
+  },
+  plugin: {
+    addsBody: "From the plugin's manifest.",
+    trustBody:
+      'A plugin runs as trusted code inside Happier on that machine, not in a sandbox.',
+    installOn: 'Install on',
+    reviewAndInstall: 'Review and install',
+    footerNote: 'You review exactly what it can reach before it installs.',
+    listTrustNote:
+      'A plugin runs as trusted code on a machine. You review each one before it installs.',
+  },
+  pluginsEmpty: {
+    title: 'No agent plugins on npm yet',
+    body: "A Happier plugin can bring an agent with more than a command: its own settings, sign-in and tools. None that add an agent have been published so far.",
+    browseRegistry: 'Browse the ACP Registry',
+    publish: 'How to publish a plugin',
   },
   adding: {
     inYourAgents: ({ name }: Name) => `${name} is in your agents.`,

@@ -332,3 +332,115 @@ describe('the Adding details', () => {
     ).toHaveLength(0);
   });
 });
+
+const npmSource = {
+  id: 'marketplace:community-npm',
+  title: 'Community npm',
+  kind: 'community-npm' as const,
+  sourceUrl: 'https://registry.npmjs.org',
+};
+async function pluginItem() {
+  const { MarketplaceIndexEntryV1Schema } = await import('@happier-dev/protocol/marketplace');
+  const { RegistryItemV1Schema } = await import('@happier-dev/protocol/registries');
+  const listing = MarketplaceIndexEntryV1Schema.parse({
+    pluginId: 'halvard.aider',
+    publisher: { id: 'halvard-dev', displayName: 'halvard-dev' },
+    display: { title: 'Aider', description: 'Pair programming in your terminal.' },
+    distribution: {
+      kind: 'npm',
+      registryOrigin: 'https://registry.npmjs.org',
+      packageName: 'happier-plugin-aider',
+      version: '0.4.2',
+      integrity: `sha512-${'A'.repeat(86)}==`,
+    },
+    manifestDigest: `sha256:${'a'.repeat(64)}`,
+    compatibility: { platforms: ['darwin', 'linux'] },
+    summary: { contributions: ['agents', 'actions'], requiredHostAccess: [], optionalHostAccess: [], executableRealms: ['daemon'] },
+    review: { status: 'unreviewed', reviewedAt: null },
+    categories: [],
+    media: [],
+    updatePolicy: 'allowed',
+    links: {},
+  });
+  return RegistryItemV1Schema.parse({
+    summary: { sourceId: npmSource.id, kind: 'plugin', itemId: 'happier-plugin-aider', title: 'Aider', version: '0.4.2' },
+    payload: { kind: 'plugin', listing, source: npmSource },
+    fetchedAt: 1,
+  });
+}
+
+const pressable = (screen: Awaited<ReturnType<typeof renderScreen>>, testID: string) => {
+  const node = screen.findAll(
+    (candidate) => candidate.props?.testID === testID && typeof candidate.props?.onPress === 'function',
+  )[0];
+  if (!node) throw new Error(`${testID} is not pressable`);
+  return node;
+};
+
+describe('the alternate Add-an-agent branches', () => {
+  it('a plugin listing shows what it adds, the trusted-code facts and the machine it installs on', async () => {
+    const { AgentPluginDetail } = await import('./AgentRegistryDetail');
+    const { createMachineAdministrationTargetSelectionFixture } = await import('@/dev/testkit/mocks/machineAdministrationTargetSelection');
+    const item = await pluginItem();
+    const screen = await renderScreen(
+      <AgentPluginDetail
+        item={item}
+        sourceTitle="Community npm"
+        targetSelection={createMachineAdministrationTargetSelectionFixture({
+          machines: [{ machineId: 'mbp', displayName: 'MacBook Pro' }],
+        })}
+        testID="agents.add"
+      />,
+    );
+    const ids = new Set(screen.findAll((node) => typeof node.props?.testID === 'string').map((node) => node.props.testID));
+    expect(ids.has('agents.add.detail.plugin.adds')).toBe(true);
+    expect(ids.has('agents.add.detail.plugin.trust')).toBe(true);
+    expect(ids.has('agents.add.detail.plugin.target.current')).toBe(true);
+  });
+
+  it('a built-in agent offers the registry’s version as a separate agent', async () => {
+    const { AgentBuiltInDetail } = await import('./AgentRegistryDetail');
+    const onAddSeparate = vi.fn();
+    const screen = await renderScreen(
+      <AgentBuiltInDetail
+        row={{
+          key: 'k',
+          pick: false,
+          summary: { sourceId: ACP, kind: 'agent', itemId: 'claude-agent', title: 'Claude Agent', version: '0.89.1' },
+          status: null,
+        }}
+        entry={{ agentId: 'claude', title: 'Claude Code' } as never}
+        sourceTitle="ACP Registry"
+        onAddSeparate={onAddSeparate}
+        testID="agents.add"
+      />,
+    );
+    await act(async () => {
+      pressable(screen, 'agents.add.detail.addSeparate').props.onPress();
+    });
+    expect(onAddSeparate).toHaveBeenCalledTimes(1);
+  });
+
+  it('an empty plugin source leads to the ACP Registry and to publishing; a query keeps Clear', async () => {
+    const { AgentCatalogEmpty } = await import('./agentAddModalConfig');
+    const onBrowseRegistry = vi.fn();
+    const onClear = vi.fn();
+    const empty = await renderScreen(
+      <AgentCatalogEmpty query="" pluginSource onClear={onClear} onBrowseRegistry={onBrowseRegistry} />,
+    );
+    await act(async () => {
+      pressable(empty, 'agents.add.empty.browseRegistry').props.onPress();
+    });
+    expect(onBrowseRegistry).toHaveBeenCalledTimes(1);
+    expect(empty.findAll((node) => node.props?.testID === 'agents.add.empty.publish').length).toBeGreaterThan(0);
+
+    const searched = await renderScreen(
+      <AgentCatalogEmpty query="aid" pluginSource onClear={onClear} onBrowseRegistry={onBrowseRegistry} />,
+    );
+    expect(searched.findAll((node) => node.props?.testID === 'agents.add.empty.browseRegistry')).toHaveLength(0);
+    await act(async () => {
+      pressable(searched, 'agents.add.empty.clear').props.onPress();
+    });
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+});

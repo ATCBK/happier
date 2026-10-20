@@ -21,6 +21,7 @@ import { buildCapabilityCollectionAnatomy } from '@/components/capabilities/row/
 import { useAcpCatalogBackends } from '@/components/settings/acpCatalog/useAcpCatalogBackends';
 import { AcpAgentGlyph } from '@/components/settings/acpCatalog/CustomAcpAgentMark';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import type { CustomModalInjectedProps } from '@/modal/types';
@@ -31,6 +32,7 @@ import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProj
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 import { confirmAgentInstallChange } from '../install/agentInstallChangeConfirm';
 import { useAgentAdministrationCatalog } from '../collection/useAgentAdministrationCatalog';
@@ -64,6 +66,8 @@ export type OpenAgentAddModalParams = Readonly<{
 }>;
 
 const TEST_ID = 'agents.add';
+/** Where "How to publish a plugin" leads (the plugin docs' packaging and install page). */
+const PUBLISH_PLUGIN_DOCS_URL = 'https://docs.happier.dev/plugins/packaging';
 
 /**
  * Add an agent (P9 U9.4): the one capability Add modal over the agent registries. Add resolves with `then: 'stay'`,
@@ -232,6 +236,12 @@ export function AgentAddModal(
     testID: `${TEST_ID}.registries`,
   });
   const [query, setQuery] = React.useState(params.query ?? '');
+  const selectedFormat =
+    slot.selection === 'all'
+      ? null
+      : (allSources.find((source) => source.id === slot.selection)?.format ?? null);
+  const acpSourceId =
+    allSources.find((source) => source.format === 'acp-registry')?.id ?? null;
   const catalog = useRegistryItems({
     kind: 'agent',
     ...(slot.sourceIds ? { sourceIds: slot.sourceIds } : {}),
@@ -241,6 +251,9 @@ export function AgentAddModal(
   const [drafts, setDrafts] = React.useState<
     ReadonlyMap<string, AgentAddDraft>
   >(() => new Map());
+  // Built-in rows whose registry version the person chose to add as a separate agent (F5): they show the registry
+  // agent's own details and its confirmed Add.
+  const [separate, setSeparate] = React.useState<ReadonlySet<string>>(() => new Set());
   const [adds, setAdds] = React.useState<ReadonlyMap<string, AgentAddState | PluginAgentAddState>>(
     () => new Map(),
   );
@@ -379,24 +392,41 @@ export function AgentAddModal(
           ...failure,
           message: `${sourceTitle(failure.sourceId)} · ${failure.message}`,
         })),
-        empty: <CatalogEmpty query={query} onClear={() => setQuery('')} />,
+        empty: (
+          <AgentCatalogEmpty
+            query={query}
+            pluginSource={selectedFormat === 'happier-npm'}
+            onClear={() => setQuery('')}
+            {...(acpSourceId
+              ? {
+                  onBrowseRegistry: () => {
+                    setQuery('');
+                    slot.setSelection(acpSourceId);
+                  },
+                }
+              : {})}
+          />
+        ),
         footer: (
           <View style={styles.note} testID={`${TEST_ID}.trustNote`}>
             <Icon name="shield-check" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
             <Text variant="meta" style={styles.noteText}>
-              {t('capabilities.agentAdd.trustNote')}
+              {selectedFormat === 'happier-npm'
+                ? t('capabilities.agentAdd.plugin.listTrustNote')
+                : t('capabilities.agentAdd.trustNote')}
             </Text>
           </View>
         ),
       },
       renderDetail: (row, ctx) => {
         const added = ctx.added ? adds.get(row.key) : null;
-        return row.status?.kind === 'builtIn' ? (
+        return row.status?.kind === 'builtIn' && !separate.has(row.key) ? (
           <AgentBuiltInDetail
             key={row.key}
             row={row}
             entry={row.status.entry}
             sourceTitle={sourceTitle(row.summary.sourceId)}
+            onAddSeparate={() => setSeparate((previous) => new Set(previous).add(row.key))}
             testID={TEST_ID}
           />
         ) : (
@@ -410,6 +440,7 @@ export function AgentAddModal(
             existingDefinitionId={
               row.status?.kind === 'added' ? row.status.definitionId : null
             }
+            targetSelection={targetSelection}
             onDraft={draftSetter(row.key)}
             testID={TEST_ID}
           />
@@ -428,7 +459,7 @@ export function AgentAddModal(
             </Text>
           </View>
         );
-        if (row.status?.kind === 'builtIn') {
+        if (row.status?.kind === 'builtIn' && !separate.has(row.key)) {
           const entry = row.status.entry;
           return {
             primary: {
@@ -462,9 +493,17 @@ export function AgentAddModal(
           const target = scope && executionTarget && areServerProfileIdentifiersEquivalent(executionTarget.serverId, scope.serverId)
             && targetSelection.selectedTargetServerMatchesActiveAccount ? executionTarget : null;
           return {
+            provenance: (
+              <View style={styles.note}>
+                <Icon name="shield" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
+                <Text variant="meta" style={styles.noteText}>
+                  {t('capabilities.agentAdd.plugin.footerNote')}
+                </Text>
+              </View>
+            ),
             ...(adds.has(row.key) ? { afterAdd: {} } : {}),
             primary: {
-              label: t('settingsPlugins.installAndTrust'),
+              label: t('capabilities.agentAdd.plugin.reviewAndInstall'),
               ...(row.summary.problem ? { disabledReason: t('capabilities.agentAdd.detail.unsupportedEntry') }
                 : !target ? { disabledReason: targetSelection.state.kind === 'online'
                     ? t('settingsPlugins.targetSelection.unknown') : presentMachineAdministrationTargetState(targetSelection.state).title } : {}),
@@ -571,8 +610,11 @@ export function AgentAddModal(
       params,
       query,
       rows,
+      acpSourceId,
       scope,
-      slot.sources,
+      selectedFormat,
+      separate,
+      slot,
       sourceTitle,
       targetSelection,
       theme.colors.text.secondary,
@@ -582,9 +624,46 @@ export function AgentAddModal(
   return <CapabilityAddModalBody {...props} config={config} />;
 }
 
-function CatalogEmpty(props: Readonly<{ query: string; onClear: () => void }>) {
+/**
+ * The catalog with nothing in it. A search that matched nothing offers Clear. An empty Happier plugin source (P9 F6,
+ * lab aa H) says what a plugin agent is and why the list is empty, then leads to the ACP Registry and to publishing.
+ */
+export function AgentCatalogEmpty(
+  props: Readonly<{
+    query: string;
+    pluginSource: boolean;
+    onClear: () => void;
+    onBrowseRegistry?: () => void;
+  }>,
+) {
   const { theme } = useUnistyles();
   const query = props.query.trim();
+  if (!query && props.pluginSource) {
+    return (
+      <EmptyState
+        layout="centered"
+        size="pane"
+        scene="noPlugins"
+        title={t('capabilities.agentAdd.pluginsEmpty.title')}
+        subtitle={t('capabilities.agentAdd.pluginsEmpty.body')}
+        {...(props.onBrowseRegistry
+          ? {
+              primaryAction: {
+                label: t('capabilities.agentAdd.pluginsEmpty.browseRegistry'),
+                onPress: props.onBrowseRegistry,
+                testID: `${TEST_ID}.empty.browseRegistry`,
+              },
+            }
+          : {})}
+        secondaryAction={{
+          label: t('capabilities.agentAdd.pluginsEmpty.publish'),
+          onPress: () => openExternalUrl(PUBLISH_PLUGIN_DOCS_URL),
+          testID: `${TEST_ID}.empty.publish`,
+        }}
+        testID={`${TEST_ID}.empty.plugins`}
+      />
+    );
+  }
   return (
     <View style={styles.empty}>
       <Text variant="body" style={{ color: theme.colors.text.secondary }}>
@@ -598,6 +677,7 @@ function CatalogEmpty(props: Readonly<{ query: string; onClear: () => void }>) {
           display="inverted"
           title={t('capabilities.agentAdd.clear')}
           onPress={props.onClear}
+          testID={`${TEST_ID}.empty.clear`}
         />
       ) : null}
     </View>
