@@ -59,6 +59,8 @@ export type { ProtocolCollectionOpaqueCursorV1 } from './collectionCursor.js';
 export { ProtocolCollectionOpaqueCursorV1Schema } from './collectionCursor.js';
 /** Canonical Launch Profile V2 identity admission for feature Action references. */
 export { ProtocolLaunchProfileIdV2Schema } from './launchProfileId.js';
+/** Portable byte encoding; Protocol remains the single implementation owner. */
+export { encodeBase64, decodeBase64 } from './encoding.js';
 /** Minimal Task/entry identity and the single V1 identity/string grammar owner. */
 export type { TriageEntryRefV1 } from './triageEntryRef.js';
 export {

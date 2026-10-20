@@ -13,6 +13,7 @@ export { ProtocolCurrentUiContextSnapshotV1Schema } from './currentUiContext.js'
 export type { ProtocolJsonValue } from './protocolFacade.js';
 export type { ProtocolJsonValueOptions } from './protocolFacade.js';
 export { ProtocolLaunchProfileIdV2Schema } from './launchProfileId.js';
+export { encodeBase64, decodeBase64 } from './encoding.js';
 export type { ProtocolNumberOptions } from './protocolFacade.js';
 export type { ProtocolObjectEvolutionPolicy } from './protocolFacade.js';
 export type { ProtocolObjectOptions } from './protocolFacade.js';
