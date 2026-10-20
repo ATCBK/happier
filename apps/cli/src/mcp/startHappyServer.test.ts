@@ -6,6 +6,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 
 const daemonCatalogBoundary = vi.hoisted(() => ({ read: vi.fn() }));
 
@@ -24,6 +25,52 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 
 describe('startHappyServer notification stream', () => {
+    it('advertises the canonical Discussion reply through Session MCP without bypassing exposure policy', async () => {
+        daemonCatalogBoundary.read.mockReset();
+        daemonCatalogBoundary.read.mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+        let settings = accountSettingsParse({});
+        let features: CliServerFeaturesSnapshot = { status: 'ready', features: FeaturesResponseSchema.parse({
+            features: { sessions: { enabled: true, conversations: { enabled: true } },
+                sharing: { session: { enabled: true } } }, capabilities: {},
+        }) };
+        expect(resolveCliFeatureDecision({ featureId: 'sessions.conversations', env: process.env,
+            serverSnapshot: features }).state).toBe('enabled');
+        const session = Object.assign(createMutableApiSessionClientFixture({ sessionId: 'discussion-reply-mcp-session', overrides: {
+            getServerFeaturesSnapshot: () => features,
+        } }), {
+            getWorkDepth: () => 0,
+            getActiveTurnPermissionWitness: () => ({ turnId: 'discussion-reply-turn', workDepth: 0,
+                causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } } as const),
+        });
+        const server = await startHappyServer(session, {
+            sessionCredentials: { token: 'discussion-reply-fixture', encryption: null },
+            getAccountSettings: () => settings,
+        });
+        const client = new Client({ name: 'discussion-receiver', version: '1' });
+        try {
+            await client.connect(new StreamableHTTPClientTransport(new URL(server.url)));
+            const names = async () => (await client.listTools()).tools.map(tool => tool.name);
+            expect(await names()).toContain('discussion_reply');
+            settings = { ...settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'discussion.reply': { toolExposureModes: { agent: 'discoverable_only' } },
+            } }) };
+            expect(await names()).not.toContain('discussion_reply');
+            expect(await names()).toContain('action_execute');
+            const discovered = await client.callTool({ name: 'action_spec_get', arguments: { id: 'discussion.reply' } });
+            expect(discovered).toMatchObject({ isError: false, structuredContent: { actionSpec: { id: 'discussion.reply' } } });
+            settings = { ...settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'discussion.reply': { enabled: false },
+            } }) };
+            expect(await names()).not.toContain('discussion_reply');
+            settings = accountSettingsParse({});
+            features = { status: 'ready', features: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) };
+            expect(await names()).not.toContain('discussion_reply');
+        } finally {
+            await client.close();
+            server.stop();
+        }
+    });
+
     it.each(['turn', 'native runtime'] as const)('keeps MCP discovery available across %s retirement while tool calls keep their cancellation scope', async (retirement) => {
         daemonCatalogBoundary.read.mockReset();
         daemonCatalogBoundary.read.mockImplementation(async (options?: Readonly<{ signal?: AbortSignal }>) => {
