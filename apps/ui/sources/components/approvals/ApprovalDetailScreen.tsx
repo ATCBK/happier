@@ -285,6 +285,9 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     return subject.success ? subject.data : null;
   }, [parsed]);
   const requesterMayDecide = useApprovalRequesterViewer(requesterConfirmation);
+  const requesterOperationCredentialUses = React.useMemo(() => readApprovalOperationCredentialUses(
+    parsed?.kind === 'target' ? parsed.request.execution
+      : parsed?.kind === 'built_in' && parsed.request.v === 2 ? parsed.request.execution : undefined), [parsed]);
   // An agent's cleanup or stop proposal reads as the same card body as in the transcript (AGW-6).
   const proposal = useResourceProposalCheck(parsed?.kind === 'built_in' ? parsed.request : null, approvalServerId, props.artifactId);
   const proposalLabels = proposal ? resolveResourceProposalLabels(proposal) : null;
@@ -754,9 +757,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         <ApprovalRequesterConfirmationSection
           subject={requesterConfirmation}
           open={parsed.request.status === 'open' && !answeredWhileOpen}
-          operationCredentialUses={readApprovalOperationCredentialUses(
-            parsed.kind === 'target' || parsed.kind === 'built_in' && parsed.request.v === 2
-              ? parsed.request.execution : undefined)}
+          operationCredentialUses={requesterOperationCredentialUses}
           decision={parsed.request.decision
             ? { kind: parsed.request.decision.kind, decidingAccountId: 'decidingAccountId' in parsed.request.decision
               && typeof parsed.request.decision.decidingAccountId === 'string' ? parsed.request.decision.decidingAccountId : undefined }
