@@ -1,0 +1,6 @@
+[
+  { "name": "bom", "base64": "77u/aGVsbG8K", "sha256": "42c1e65b2c948bb754efb6ac171319d6e97ecb3d9afd4f20bd91b3ded25183c0", "text": "hello\n" },
+  { "name": "invalidUtf8", "base64": "wyg=", "sha256": "eddf68639913a3cb8331cdfe7f87559e0beccf2c289c0d90ac4d89b3204004f8", "text": null },
+  { "name": "crlf", "base64": "YQ0KYg0K", "sha256": "58055bdcc73787eb88c78d36f0b4939e9c5dc1c3ad17e25cc85a6833cf1a0cab", "text": "a\r\nb\r\n" },
+  { "name": "empty", "base64": "", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "text": "" }
+]
