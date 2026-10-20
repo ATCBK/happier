@@ -1,10 +1,10 @@
 import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
-type Previewed = Pick<SkillInstallPreviewV1, 'path' | 'siblingSkills'>;
+type Previewed = Pick<SkillInstallPreviewV1, 'path' | 'siblingSkills' | 'inLibrary'>;
 
-/** Everything previewed starts ticked: the person unticks what they do not want. */
+/** Everything previewed that is new starts ticked: the person unticks what they do not want. A held skill is never added again. */
 export function tickAllSkillPreviews(items: readonly Previewed[]): ReadonlySet<string> {
-  return new Set(items.map((item) => item.path));
+  return new Set(items.filter((item) => item.inLibrary === undefined).map((item) => item.path));
 }
 
 /**
@@ -19,8 +19,14 @@ export function toggleSkillPreview(
   const next = new Set(ticked);
   if (next.delete(path)) return next;
   next.add(path);
-  const listed = new Set(items.map((item) => item.path));
+  const listed = new Set(items.filter((item) => item.inLibrary === undefined).map((item) => item.path));
   for (const sibling of items.find((item) => item.path === path)?.siblingSkills ?? [])
     if (listed.has(sibling.path)) next.add(sibling.path);
   return next;
+}
+
+/** When every previewed skill is already in the library, the id the footer opens (the first); otherwise null and Add stays. */
+export function readOpenWhenAllHeld(items: readonly Pick<SkillInstallPreviewV1, 'inLibrary'>[]): string | null {
+  const first = items[0]?.inLibrary;
+  return first !== undefined && items.every((item) => item.inLibrary !== undefined) ? first : null;
 }

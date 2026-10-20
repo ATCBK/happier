@@ -181,3 +181,61 @@ describe('SkillLinkInput referenced siblings', () => {
     expect(installs).toEqual([expect.objectContaining({ selectPaths: ['skills/prisma-cli'] })]);
   });
 });
+
+describe('SkillLinkInput skills the library already holds', () => {
+  const held = { ...PREVIEW, inLibrary: 'skill-held' };
+  const fresh = { ...PREVIEW, path: 'skills/orm-setup', name: 'orm-setup', description: 'Set up the ORM.' };
+  const heldSibling = { ...fresh, inLibrary: 'skill-orm' };
+  // The Action drops a held sibling from `siblingSkills`, so its reference reads as outside unless the row covers it.
+  const referrer = {
+    ...PREVIEW,
+    path: 'skills/prisma-cli',
+    name: 'prisma-cli',
+    outsideReferences: ['../orm-setup/SKILL.md'],
+  };
+
+  async function renderFound(items: readonly Record<string, unknown>[]) {
+    const installs: unknown[] = [];
+    const opened: string[] = [];
+    const answer: MountedAuthoringActionExecute = async (_actionId, input) => {
+      if ((input as { dryRun?: boolean }).dryRun === true) return { ok: true, result: { items } };
+      installs.push(input);
+      return { ok: true, result: { skillIds: ['skill-new'], includedInSessionId: null } };
+    };
+    const { SkillLinkInput } = await import('./SkillLinkInput');
+    const screen = await renderScreen(<SkillLinkInput execute={answer} onAdded={(id) => opened.push(id)} testID="link" />);
+    await act(async () => {
+      screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills');
+    });
+    await screen.pressByTestIdAsync('link.find');
+    return { screen, installs, opened };
+  }
+
+  it('marks a held skill In your library and the footer opens it instead of adding it again', async () => {
+    const { screen, installs, opened } = await renderFound([held]);
+    expect(screen.findHostByTestId('link.item.grill-me.inLibrary')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('In your library');
+    expect(screen.getTextContent()).not.toContain('Add to library');
+    await screen.pressByTestIdAsync('link.add');
+    expect(installs).toEqual([]);
+    expect(opened).toEqual(['skill-held']);
+  });
+
+  it('shows a held sibling as held, not as an added dependency, and counts its reference as covered', async () => {
+    const { screen, installs } = await renderFound([referrer, heldSibling]);
+    expect(screen.findHostByTestId('link.item.orm-setup.inLibrary')).not.toBeNull();
+    expect(screen.getTextContent()).not.toContain('Also adds');
+    expect(screen.findHostByTestId('link.item.prisma-cli.outsideReferences')).toBeNull();
+    await screen.pressByTestIdAsync('link.add');
+    expect(installs).toEqual([expect.objectContaining({ selectPaths: ['skills/prisma-cli'] })]);
+  });
+
+  it('adds only the roots that are new when some are held, and opens a held one by its returned id', async () => {
+    const { screen, installs, opened } = await renderFound([held, fresh]);
+    expect(screen.getTextContent()).toContain('Add 1 skill');
+    await screen.pressByTestIdAsync('link.item.grill-me.open');
+    expect(opened).toEqual(['skill-held']);
+    await screen.pressByTestIdAsync('link.add');
+    expect(installs).toEqual([expect.objectContaining({ selectPaths: ['skills/orm-setup'] })]);
+  });
+});

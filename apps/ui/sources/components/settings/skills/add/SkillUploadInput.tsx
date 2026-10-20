@@ -24,7 +24,7 @@ import { nativePickFiles } from '@/utils/files/nativePickFiles';
 import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 
 import { SkillPreviewRows } from './SkillPreviewRows';
-import { tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
+import { readOpenWhenAllHeld, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
 import { installSkills, previewSkillInstall } from './skillInstall';
 
 function describeUploadError(error: SkillUploadError): string {
@@ -188,6 +188,7 @@ export function SkillUploadInput(
       items={items}
       ticked={ticks}
       onToggle={(path) => setTicked((previous) => toggleSkillPreview(items, previous, path))}
+      onOpen={props.onAdded}
       facts={(item) => ({
         presentation: 'row',
         source: { kind: 'you' },
@@ -214,9 +215,10 @@ export function SkillUploadInput(
     props.onAdded(outcome.skillIds[0]!);
   }, [props, state, ticked]);
 
+  const openWhenHeld = state.kind === 'ready' ? readOpenWhenAllHeld(state.items) : null;
   return (
     <View style={styles.fill}>
-      <ScrollView style={styles.fill} contentContainerStyle={styles.body}>
+      <ScrollView style={styles.fill} contentContainerStyle={[styles.body, edge]}>
         <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
           {t('capabilities.skillAdd.upload.body')}
         </Text>
@@ -303,7 +305,6 @@ export function SkillUploadInput(
 const styles = StyleSheet.create((theme) => ({
   fill: { flex: 1, minHeight: 0 },
   body: {
-    paddingHorizontal: theme.space.s24,
     paddingTop: theme.space.s16,
     paddingBottom: theme.space.s24,
     gap: theme.space.s16,

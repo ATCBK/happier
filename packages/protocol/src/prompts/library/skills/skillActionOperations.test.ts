@@ -451,24 +451,26 @@ describe('skill library Actions', () => {
     expect(install).toMatchObject({ skillIds: ['skill-1'] });
     expect(readSkillLockV1(h.artifacts.get('skill-1')!.header).provenance).toMatchObject({ kind: 'registry', registry: { itemId: '', ref: { commit: initial } } });
     expect(JSON.parse(h.artifacts.get('skill-1')!.body!).entries).toMatchObject(files);
+    // Start the link-update scenario in its own library; Add now reuses the registry identity above.
+    const linked = harness(registry);
     head = initial;
-    await h.execute('skills.install', { source: { kind: 'link', url: source.url } }, { surface: 'ui' });
-    await h.execute('skills.update', { skillId: 'skill-2', expectedRevision: '1:1', files: [{ kind: 'upsert', file: { ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64') } }] }, { surface: 'ui' });
-    const artifact = h.artifacts.get('skill-2')!, lock = readSkillLockV1(artifact.header);
+    await linked.execute('skills.install', { source: { kind: 'link', url: source.url } }, { surface: 'ui' });
+    await linked.execute('skills.update', { skillId: 'skill-1', expectedRevision: '1:1', files: [{ kind: 'upsert', file: { ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64') } }] }, { surface: 'ui' });
+    const artifact = linked.artifacts.get('skill-1')!, lock = readSkillLockV1(artifact.header);
     const newItem = await registry.readRegistryItem({ sourceId: 'repo', itemId: '', version: latest });
     if (newItem.payload.kind !== 'skill') throw new Error('Expected upstream skill');
-    h.artifacts.set('skill-2', { ...artifact, header: { ...artifact.header, skillLock: { ...lock, upstream: { state: 'update_available', latest: newItem.payload.skill.ref } } } });
-    expect(await h.execute('skills.updates.apply', { skillId: 'skill-2', expectedRevision: '2:2' }, { surface: 'ui' })).toMatchObject({ ok: false, code: 'choices_required' });
-    const diff = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.diff'].parse(await h.execute('skills.updates.diff', { skillId: 'skill-2' }, { surface: 'ui' }));
+    linked.artifacts.set('skill-1', { ...artifact, header: { ...artifact.header, skillLock: { ...lock, upstream: { state: 'update_available', latest: newItem.payload.skill.ref } } } });
+    expect(await linked.execute('skills.updates.apply', { skillId: 'skill-1', expectedRevision: '2:2' }, { surface: 'ui' })).toMatchObject({ ok: false, code: 'choices_required' });
+    const diff = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.diff'].parse(await linked.execute('skills.updates.diff', { skillId: 'skill-1' }, { surface: 'ui' }));
     expect(diff.files).toMatchObject([{ path: 'SKILL.md', changed: true }]);
-    const applied = await h.execute('skills.updates.apply', { skillId: 'skill-2', expectedRevision: '2:2', choices: { 'SKILL.md': 'mine' } }, { surface: 'ui' });
+    const applied = await linked.execute('skills.updates.apply', { skillId: 'skill-1', expectedRevision: '2:2', choices: { 'SKILL.md': 'mine' } }, { surface: 'ui' });
     expect(applied).toMatchObject({ provenance: { kind: 'link', ref: { commit: latest } } });
-    const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await h.execute('skills.list', {}, { surface: 'ui' }));
-    expect(listed.items.find(item => item.skillId === 'skill-2')).toMatchObject({ modified: true, upstream: { state: 'current' } });
-    expect(h.artifacts.get('skill-2')!.body).toContain(encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64'));
+    const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await linked.execute('skills.list', {}, { surface: 'ui' }));
+    expect(listed.items.find(item => item.skillId === 'skill-1')).toMatchObject({ modified: true, upstream: { state: 'current' } });
+    expect(linked.artifacts.get('skill-1')!.body).toContain(encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64'));
   });
   it('previews multiple uploaded skill folders and preserves acknowledged identities if a later content write fails', async () => {
-    const h = harness(), source = { kind: 'upload', files: [...files.map(file => ({ ...file, path: 'one/' + file.path })), ...files.map(file => ({ ...file, path: 'two/' + file.path }))] };
+    const h = harness(), source = { kind: 'upload', files: [...files.map(file => ({ ...file, path: 'one/' + file.path })), ...files.map(file => ({ ...file, path: 'two/' + file.path, contentBase64: encodeBase64(new TextEncoder().encode(markdown.replace('name: sample', 'name: other')), 'base64') }))] };
     expect(await h.execute('skills.install', { source, dryRun: true }, { surface: 'ui' })).toMatchObject({ items: [{ path: 'one' }, { path: 'two' }] });
     expect(h.creates()).toBe(0); h.failCreateAt(2);
     expect(await h.execute('skills.install', { source }, { surface: 'ui' })).toMatchObject({ ok: false, errorCode: 'quota_exceeded', details: { skillIds: ['skill-1'] } });
@@ -566,8 +568,50 @@ describe('skills that refer to a sibling skill in the same source tree', () => {
   it('adds exactly the selected skills, so an unticked sibling stays out', async () => {
     const h = harness();
     expect(await h.execute('skills.install', { source: upload('a', 'b', 'c'), selectPaths: ['a', 'b'] }, caller)).toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
-    expect(await h.execute('skills.install', { source: upload('a', 'b', 'c'), selectPaths: ['a'] }, caller)).toMatchObject({ skillIds: ['skill-3'] });
+    expect(await h.execute('skills.install', { source: upload('a', 'b', 'c'), selectPaths: ['a'] }, caller)).toMatchObject({ skillIds: ['skill-1'] });
+    expect(h.creates()).toBe(2);
+  });
+
+  it('reuses both upload identities and previews them as held without changing content or reach', async () => {
+    const h = harness();
+    const source = upload('a', 'b');
+    expect(await h.execute('skills.install', { source }, caller)).toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
+    const before = [...h.artifacts.values()];
+    const rules = h.rules();
+    const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(await h.execute('skills.install', { source, dryRun: true }, caller));
+    expect(result).toMatchObject({ items: [{ path: 'a', inLibrary: 'skill-1' }, { path: 'b', inLibrary: 'skill-2' }] });
+    if (!('items' in result)) throw new Error('Expected preview');
+    expect(result.items[0]).not.toHaveProperty('siblingSkills');
+    expect(await h.execute('skills.install', { source, where: { kind: 'replace', rules: [] } }, caller))
+      .toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
+    expect(h.creates()).toBe(2);
+    expect([...h.artifacts.values()]).toEqual(before);
+    expect(h.rules()).toEqual(rules);
+    // The same identity can still be explicitly added to an Agent's current Session.
+    expect(await h.execute('skills.install', { source }, { surface: 'agent', sessionId: 'session' }))
+      .toMatchObject({ skillIds: ['skill-1', 'skill-2'], includedInSessionId: 'session' });
+    expect(h.includes.get('session')).toEqual(['skill-1', 'skill-2']);
+    expect(h.creates()).toBe(2);
+  });
+
+  it('matches uploaded content by name and digest across roots, preserving the different-content name-conflict path', async () => {
+    const h = harness();
+    await h.execute('skills.create', { name: 'b', files: [utf8('SKILL.md', skillMd('b'))] }, caller);
+    expect(await h.execute('skills.install', { source: upload('a', 'b') }, caller))
+      .toMatchObject({ skillIds: ['skill-2', 'skill-1'] });
+    const relocated = { kind: 'upload', files: [utf8('other-root/SKILL.md', skillMd('b'))] };
+    expect(await h.execute('skills.install', { source: relocated }, caller)).toMatchObject({ skillIds: ['skill-1'] });
+    const changed = { kind: 'upload', files: [utf8('b/SKILL.md', skillMd('b', 'Different instructions.'))] };
+    expect(await h.execute('skills.install', { source: changed }, caller)).toMatchObject({ skillIds: ['skill-3'] });
     expect(h.creates()).toBe(3);
+    expect(h.artifacts.get('skill-1')?.body).not.toEqual(h.artifacts.get('skill-3')?.body);
+  });
+
+  it('does not create a second identity when two selected upload roots contain the same skill', async () => {
+    const h = harness();
+    const source = { kind: 'upload', files: [utf8('one/SKILL.md', skillMd('b')), utf8('two/SKILL.md', skillMd('b'))] };
+    expect(await h.execute('skills.install', { source }, caller)).toMatchObject({ skillIds: ['skill-1'] });
+    expect(h.creates()).toBe(1);
   });
 
   describe('from a registry item', () => {
@@ -612,16 +656,18 @@ describe('skills that refer to a sibling skill in the same source tree', () => {
       const link = { kind: 'link' as const, url: repo };
       const preview = itemsOf(await h.execute('skills.install', { source: link, dryRun: true }, caller));
       expect(preview.items.find(item => item.path === 'a')).not.toHaveProperty('siblingSkills');
-      expect(await h.execute('skills.install', { source: link }, caller)).toMatchObject({ skillIds: ['skill-2'] });
+      expect(preview.items.find(item => item.path === 'b')).toMatchObject({ inLibrary: 'skill-1' });
+      expect(await h.execute('skills.install', { source: link }, caller)).toMatchObject({ skillIds: ['skill-2', 'skill-1'] });
       expect(h.creates()).toBe(2);
     });
 
     it('does not add a sibling the library already holds', async () => {
       const h = harness(ports([]));
       await h.execute('skills.install', { source: pointer }, caller);
-      expect(itemsOf(await h.execute('skills.install', { source: pointer, dryRun: true }, caller)).items.map(item => item.path)).toEqual(['a']);
-      expect(await h.execute('skills.install', { source: pointer }, caller)).toMatchObject({ skillIds: ['skill-3'] });
-      expect(h.creates()).toBe(3);
+      expect(itemsOf(await h.execute('skills.install', { source: pointer, dryRun: true }, caller)).items[0])
+        .toMatchObject({ path: 'a', inLibrary: 'skill-1' });
+      expect(await h.execute('skills.install', { source: pointer }, caller)).toMatchObject({ skillIds: ['skill-1', 'skill-2'] });
+      expect(h.creates()).toBe(2);
     });
   });
 });

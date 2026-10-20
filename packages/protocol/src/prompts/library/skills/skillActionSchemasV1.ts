@@ -24,6 +24,8 @@ const batchCreateResult = lazyZodSchema(() => z.strictObject({ skillIds: z.array
   incomplete: z.optional(z.array(z.strictObject({ skillId, step: z.enum(['rules', 'session_include']) }))) }));
 export const SkillInstallPreviewV1Schema = lazyZodSchema(() => z.strictObject({ path: z.string(), name: z.string(), description: z.nullable(z.string()),
   files: z.array(SkillFileInputV1Schema), trust: SkillTrustV1Schema, cost: SkillCostV1Schema, provenance: SkillProvenanceV1Schema,
+  /** Existing library identity: Add opens/reuses it rather than creating another skill. */
+  inLibrary: z.optional(skillId),
   /** Advisory: relative files `SKILL.md` points at that this bundle will not contain; absent when there are none. */
   outsideReferences: z.optional(z.array(z.string())),
   /** Other previewed skills (by `path`) of the same source tree that `SKILL.md` refers to, with the `outsideReferences` each one covers; absent when there are none. */

@@ -13,7 +13,7 @@ import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourc
 import { t } from '@/text';
 
 import { previewRef, SkillPreviewRows } from './SkillPreviewRows';
-import { tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
+import { readOpenWhenAllHeld, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
 import { installSkills, previewSkillInstall } from './skillInstall';
 
 /**
@@ -87,11 +87,12 @@ export function SkillLinkInput(
   }, [props, state, ticked, url]);
 
   const found = state.kind === 'found' ? state.items : null;
+  const openWhenHeld = found ? readOpenWhenAllHeld(found) : null;
   return (
     <View style={styles.fill}>
       <ScrollView
         style={styles.fill}
-        contentContainerStyle={styles.body}
+        contentContainerStyle={[styles.body, edge]}
         keyboardShouldPersistTaps="handled"
       >
         <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
@@ -166,16 +167,25 @@ export function SkillLinkInput(
             ) : null
           }
         >
-          <RoundButton
-            size="normal"
-            title={t('capabilities.skillAdd.link.addSelected', {
-              count: ticked.size,
-            })}
-            loading={adding}
-            disabled={ticked.size === 0}
-            onPress={() => void add()}
-            testID={`${props.testID}.add`}
-          />
+          {openWhenHeld !== null ? (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.skillAdd.open')}
+              onPress={() => props.onAdded(openWhenHeld)}
+              testID={`${props.testID}.add`}
+            />
+          ) : (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.skillAdd.link.addSelected', {
+                count: ticked.size,
+              })}
+              loading={adding}
+              disabled={ticked.size === 0}
+              onPress={() => void add()}
+              testID={`${props.testID}.add`}
+            />
+          )}
         </CapabilityAddFooter>
       ) : null}
     </View>
@@ -185,7 +195,6 @@ export function SkillLinkInput(
 const styles = StyleSheet.create((theme) => ({
   fill: { flex: 1, minHeight: 0 },
   body: {
-    paddingHorizontal: theme.space.s24,
     paddingTop: theme.space.s16,
     paddingBottom: theme.space.s24,
     gap: theme.space.s16,

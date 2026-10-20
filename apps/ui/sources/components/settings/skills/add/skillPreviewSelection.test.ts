@@ -24,4 +24,10 @@ describe('skill preview selection', () => {
   it('leaves a skill alone that refers to nothing listed', () => {
     expect([...toggleSkillPreview(items, new Set(), 'c')]).toEqual(['c']);
   });
+
+  it('leaves a held skill out of the ticks: it is already in the library, so nothing of it is added', () => {
+    const held = [{ path: 'a', siblingSkills: [{ path: 'b', references: ['../b/SKILL.md'] }] }, { path: 'b', inLibrary: 'skill-b' }, { path: 'c' }];
+    expect([...tickAllSkillPreviews(held)]).toEqual(['a', 'c']);
+    expect([...toggleSkillPreview(held, new Set(), 'a')]).toEqual(['a']);
+  });
 });

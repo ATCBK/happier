@@ -7,10 +7,10 @@ import {
   type RegistryItemV1,
 } from '@happier-dev/protocol/registries';
 import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
-import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { findHeldSkillV1, type SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { deriveSkillTrustV1 } from '@happier-dev/protocol/prompts/library/skills/skillTrustV1';
 import { estimateSkillCostV1 } from '@happier-dev/protocol/prompts/library/skills/skillCostV1';
-import { readSiblingSkillPathsV1, readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
+import { readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
 import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
@@ -55,6 +55,7 @@ import { useSkillPlaces } from '../useSkillPlaces';
 import { installSkills, previewSkillInstall, retrySkillRules } from './skillInstall';
 import { SkillLinkInput } from './SkillLinkInput';
 import { SkillUploadInput } from './SkillUploadInput';
+import { heldSkillRowProps, SkillInLibraryMark } from './SkillPreviewRows';
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 
 export type SkillAddModeKey = 'browse' | 'link' | 'upload' | 'write';
@@ -97,14 +98,7 @@ function libraryMatch(
   items: readonly SkillListItemV1[],
   row: Row,
 ): SkillListItemV1 | null {
-  return (
-    items.find(
-      (item) =>
-        item.provenance.kind === 'registry' &&
-        item.provenance.registry.sourceId === row.sourceId &&
-        item.provenance.registry.itemId === row.itemId,
-    ) ?? null
-  );
+  return findHeldSkillV1(items, { registry: row });
 }
 /** A listing whose "description" is only its repository says nothing the facts line doesn't: no second copy. */
 function rowDescription(row: Row): string | null {
@@ -180,6 +174,16 @@ export function SkillAddModal(
   // What the details read (the pinned version the primary installs) and what the person picked for Where.
   const [reads, setReads] = React.useState<ReadonlyMap<string, RegistryItemV1>>(
     () => new Map(),
+  );
+  // What the install preview says about each detail's primary: the held skill's id, null when it is new, undefined
+  // until the preview has answered (the Action decides, including a Git identity from another source).
+  const [heldByPreview, setHeldByPreview] = React.useState<ReadonlyMap<string, string | null | undefined>>(
+    () => new Map(),
+  );
+  const onHeld = React.useCallback(
+    (key: string, held: string | null | undefined) =>
+      setHeldByPreview((previous) => (previous.get(key) === held && previous.has(key) ? previous : new Map(previous).set(key, held))),
+    [],
   );
   const wheres = React.useRef(
     new Map<string, ReachRulesChangeV1 | undefined>(),
@@ -309,21 +313,7 @@ export function SkillAddModal(
             state?.status === 'added' ||
             libraryMatch(library.items, row) !== null;
           if (!inLibrary) return null;
-          return (
-            <View style={styles.inLibrary}>
-              <Icon
-                name="check"
-                size={ICON_SIZE.xs}
-                color={theme.colors.text.secondary}
-              />
-              <Text
-                variant="meta"
-                style={{ color: theme.colors.text.secondary }}
-              >
-                {t('capabilities.skillAdd.inLibrary')}
-              </Text>
-            </View>
-          );
+          return <SkillInLibraryMark />;
         },
         facts: (row) => {
           const repo = repositoryLabel(row.links?.repository);
@@ -464,6 +454,11 @@ export function SkillAddModal(
           sourceTitle={sourceTitle(row.sourceId)}
           state={adds.get(rowKey(row)) ?? null}
           onRead={onRead}
+          onHeld={onHeld}
+          onOpenHeld={(skillId) => {
+            props.onClose();
+            params.onAdded?.(skillId);
+          }}
           execute={execute}
           onWhereChange={(key, where) => {
             wheres.current.set(key, where);
@@ -489,7 +484,10 @@ export function SkillAddModal(
       detailFooter: (row) => {
         const key = rowKey(row);
         const read = reads.get(key) ?? null;
-        const existing = libraryMatch(library.items, row);
+        // The preview after the item read is authoritative; the summary match only stands in until it answers.
+        const previewedHeld = heldByPreview.get(key);
+        const existingId =
+          previewedHeld !== undefined ? previewedHeld : (libraryMatch(library.items, row)?.skillId ?? null);
         const state = adds.get(key);
         const version = read?.summary.version;
         const provenance = version ? (
@@ -500,12 +498,12 @@ export function SkillAddModal(
           </Text>
         </View>
       ) : undefined;
-        if (existing !== null && state?.status !== 'added') {
+        if (existingId !== null && state?.status !== 'added') {
           return {
             ...(provenance ? { provenance } : {}),
             primary: {
               label: t('capabilities.skillAdd.open'),
-              onPress: async () => ({ itemId: existing.skillId }),
+              onPress: async () => ({ itemId: existingId }),
             },
           };
         }
@@ -521,7 +519,7 @@ export function SkillAddModal(
                     'capabilities.skillAdd.detail.problemUnsupported',
                   ),
                 }
-              : !version
+              : !version || previewedHeld === undefined
                 ? { disabledReason: t('capabilities.skillAdd.detail.loading') }
                 : {}),
             onPress: async () => {
@@ -549,6 +547,7 @@ export function SkillAddModal(
       catalog.sourceFailures,
       execute,
       groups,
+      heldByPreview,
       install,
       items,
       library,
@@ -601,6 +600,8 @@ function SkillAddDetail(
     state: AddState | null;
     execute: MountedAuthoringActionExecute;
     onRead: (key: string, item: RegistryItemV1) => void;
+    onHeld: (key: string, held: string | null | undefined) => void;
+    onOpenHeld: (skillId: string) => void;
     onWhereChange: (key: string, where: ReachRulesChangeV1 | undefined) => void;
     onSelectionChange: (key: string, selectPaths: readonly string[] | undefined) => void;
     onRetryRules: (
@@ -653,18 +654,26 @@ function SkillAddDetail(
         : [],
     [skill],
   );
-  // Sibling skills of the same repository that its instructions refer to: looked up once (a dry run, nothing written)
-  // and added with it unless unticked.
-  const { execute, onSelectionChange } = props;
+  // What adding this item would do, asked once the item is read (a dry run, nothing written): whether the library
+  // already holds it, and the sibling skills of the same repository that its instructions refer to (added with it
+  // unless unticked, or held already).
+  const { execute, onSelectionChange, onHeld } = props;
   const version = read.item?.summary.version;
-  const siblingKey = skill ? readSiblingSkillPathsV1(skill.ref.path, outsideReferences).join('\n') : '';
   const primaryPath = skill?.ref.path;
   const [offered, setOffered] = React.useState<Readonly<{ primary: SkillInstallPreviewV1; siblings: readonly SkillInstallPreviewV1[] }> | null>(null);
   const [unticked, setUnticked] = React.useState<ReadonlySet<string>>(() => new Set());
   React.useEffect(() => {
     setOffered(null);
     setUnticked(new Set());
-    if (!siblingKey || !version || primaryPath === undefined) return;
+    if (!version) {
+      onHeld(key, undefined);
+      return;
+    }
+    if (primaryPath === undefined) {
+      onHeld(key, null);
+      return;
+    }
+    onHeld(key, undefined);
     let current = true;
     void previewSkillInstall(execute, {
       kind: 'registry',
@@ -672,18 +681,28 @@ function SkillAddDetail(
       itemId: props.row.itemId,
       version,
     }).then((preview) => {
+      if (!current) return;
       const primary = preview.ok ? preview.items.find((item) => item.path === primaryPath) : undefined;
-      if (!current || !preview.ok || !primary) return;
+      // A preview that cannot answer leaves Add to the Action, which holds the same identity on commit.
+      onHeld(key, primary?.inLibrary ?? null);
+      if (!preview.ok || !primary) return;
       const siblings = preview.items.filter((item) => item.path !== primaryPath);
       if (siblings.length > 0) setOffered({ primary, siblings });
     });
     return () => {
       current = false;
     };
-  }, [execute, primaryPath, props.row.itemId, props.row.sourceId, siblingKey, version]);
+  }, [execute, key, onHeld, primaryPath, props.row.itemId, props.row.sourceId, version]);
+  const heldSiblings = React.useMemo(
+    () => new Set((offered?.siblings ?? []).filter((item) => item.inLibrary !== undefined).map((item) => item.path)),
+    [offered],
+  );
   const keptSiblings = React.useMemo(
-    () => new Set((offered?.siblings ?? []).map((item) => item.path).filter((path) => !unticked.has(path))),
-    [offered, unticked],
+    () =>
+      new Set(
+        (offered?.siblings ?? []).map((item) => item.path).filter((path) => !unticked.has(path) && !heldSiblings.has(path)),
+      ),
+    [heldSiblings, offered, unticked],
   );
   React.useEffect(() => {
     onSelectionChange(key, offered && primaryPath !== undefined ? [primaryPath, ...keptSiblings] : undefined);
@@ -691,9 +710,13 @@ function SkillAddDetail(
   const stillOutside = React.useMemo(
     () =>
       offered
-        ? remainingOutsideReferences({ outsideReferences, siblingSkills: offered.primary.siblingSkills }, keptSiblings)
+        ? remainingOutsideReferences(
+            { path: offered.primary.path, outsideReferences, siblingSkills: offered.primary.siblingSkills },
+            keptSiblings,
+            heldSiblings,
+          )
         : outsideReferences,
-    [keptSiblings, offered, outsideReferences],
+    [heldSiblings, keptSiblings, offered, outsideReferences],
   );
   const ref = skill
     ? skill.ref.commit.slice(0, 7)
@@ -886,7 +909,21 @@ function SkillAddDetail(
             })}
           />
         ) : null}
-        {offered?.siblings.map((sibling) => (
+        {offered?.siblings.map((sibling) =>
+          sibling.inLibrary !== undefined ? (
+            <CapabilityRow
+              key={sibling.path}
+              testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
+              title={sibling.name}
+              description={sibling.description}
+              facts={{
+                presentation: 'row',
+                trust: sibling.trust,
+                cost: { tokensWhenUsed: sibling.cost.bodyTokens },
+              }}
+              {...heldSkillRowProps(sibling.inLibrary, props.onOpenHeld, `${TEST_ID}.detail.sibling.${sibling.name}`)}
+            />
+          ) : (
           <CapabilityRow
             key={sibling.path}
             testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
@@ -915,7 +952,8 @@ function SkillAddDetail(
               })
             }
           />
-        ))}
+          ),
+        )}
       </ItemGroup>
       ) : null}
       <ItemGroup
@@ -963,11 +1001,6 @@ function SkillAddDetail(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  inLibrary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s4,
-  },
   provenance: {
     flexDirection: 'row',
     alignItems: 'center',

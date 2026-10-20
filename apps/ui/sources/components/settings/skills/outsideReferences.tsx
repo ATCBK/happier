@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { readSiblingSkillPathsV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
 import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -10,6 +11,7 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 const SHOWN = 3;
+const none: ReadonlySet<string> = new Set();
 
 /** The first few paths, then how many more: the list stays short however long the skill's references run. */
 function referencePaths(references: readonly string[]): string {
@@ -19,17 +21,25 @@ function referencePaths(references: readonly string[]): string {
     : references.join(', ');
 }
 
-/** The previewed skill's references that no kept sibling brings along: the only ones left to warn about. */
+/**
+ * The previewed skill's references that no sibling brings along: the only ones left to warn about. A sibling is
+ * covered when it is kept (`included`) or the library already holds it (`held`, previewed paths with `inLibrary`).
+ */
 export function remainingOutsideReferences(
-  item: Pick<SkillInstallPreviewV1, 'outsideReferences' | 'siblingSkills'>,
+  item: Pick<SkillInstallPreviewV1, 'path' | 'outsideReferences' | 'siblingSkills'>,
   included: ReadonlySet<string>,
+  held: ReadonlySet<string> = none,
 ): readonly string[] {
   const covered = new Set(
     (item.siblingSkills ?? [])
       .filter((sibling) => included.has(sibling.path))
       .flatMap((sibling) => sibling.references),
   );
-  return (item.outsideReferences ?? []).filter((reference) => !covered.has(reference));
+  return (item.outsideReferences ?? []).filter(
+    (reference) =>
+      !covered.has(reference) &&
+      !readSiblingSkillPathsV1(item.path, [reference]).some((path) => held.has(path)),
+  );
 }
 
 /**
@@ -38,13 +48,14 @@ export function remainingOutsideReferences(
  * lines under the facts, through `CapabilityRow` `note`.
  */
 export function skillReferencesNote(
-  item: Pick<SkillInstallPreviewV1, 'name' | 'outsideReferences' | 'siblingSkills'>,
+  item: Pick<SkillInstallPreviewV1, 'name' | 'path' | 'outsideReferences' | 'siblingSkills'>,
   included: ReadonlySet<string>,
   nameByPath: ReadonlyMap<string, string>,
   testID: string,
+  held: ReadonlySet<string> = none,
 ): React.ReactElement | undefined {
   const siblings = (item.siblingSkills ?? []).filter((sibling) => included.has(sibling.path));
-  const remaining = remainingOutsideReferences(item, included);
+  const remaining = remainingOutsideReferences(item, included, held);
   if (siblings.length === 0 && remaining.length === 0) return undefined;
   return (
     <View style={styles.notes}>

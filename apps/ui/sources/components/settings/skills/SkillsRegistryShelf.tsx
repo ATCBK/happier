@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { RegistryShelf, registryShelfCardKey } from '@/components/capabilities/add/RegistryShelf';
 import type { RegistryItemSummaryV1 } from '@happier-dev/protocol/registries';
-import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { findHeldSkillV1, type SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -28,12 +28,7 @@ function inLibrary(
   items: readonly SkillListItemV1[],
   card: ShelfCard,
 ): boolean {
-  return items.some(
-    (item) =>
-      item.provenance.kind === 'registry' &&
-      item.provenance.registry.sourceId === card.sourceId &&
-      item.provenance.registry.itemId === card.itemId,
-  );
+  return findHeldSkillV1(items, { registry: card }) !== null;
 }
 
 /**
