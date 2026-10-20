@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { createDeferred } from '@/dev/testkit';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import {
     ABSENT_SESSION_FOLLOW_FACTS_V1,
     NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1,
@@ -12,7 +13,9 @@ import {
     resolveSessionPersonalRelevanceV1,
 } from '@happier-dev/protocol';
 
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionByIdResponseFixture, createSessionFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import type { SessionListQueryHomeInput } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -86,9 +89,12 @@ describe('visible session-list retained attention through real state', () => {
     let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
     let serverId: string;
     let archiveResponse: (() => Promise<Response>) | undefined;
+    let snapshotResponse = createDeferred<void>();
+    let listedSessions: ReturnType<typeof createSessionFixture>[] = [];
 
     beforeEach(async () => {
         archiveResponse = undefined;
+        snapshotResponse = createDeferred<void>();
         await home.reset();
         projectManager.clear();
         const { storage } = await import('@/sync/domains/state/storage');
@@ -101,10 +107,27 @@ describe('visible session-list retained attention through real state', () => {
             sessionListSectionModeV1: 'single', sessionListActiveGroupingV1: 'date',
             sessionListInactiveGroupingV1: 'date', hideInactiveSessions: false, sessionFolderViewModeV1: 'off',
         } as const;
+        listedSessions = [completedSession(2, serverId), createSessionFixture({
+            id: 'quiet', serverId, owner: 'u1', seq: 1, lastViewedSessionSeq: 1,
+            viewer: currentViewer(1, 1), updatedAt: 100, active: false, presence: 0,
+        })];
         const http = createHomeHubArtifactHttpBoundary('u1');
         account = await restoreServerAccountForTest({ serverUrl: 'https://retained-attention.test', accountId: 'u1', request: async (input, init) => {
-            if (new URL(String(input)).pathname === '/v2/sessions/done/archive' && archiveResponse) return await archiveResponse();
+            if (/^\/v2\/sessions\/(done|quiet)\/archive$/.test(new URL(String(input)).pathname) && archiveResponse) return await archiveResponse();
+            if (new URL(String(input)).pathname === '/v2/sessions') {
+                await snapshotResponse.promise;
+                return Response.json(V2SessionListResponseSchema.parse({
+                    sessions: listedSessions.map(session => ({ ...createPlainSessionByIdResponseFixture(session).session,
+                        viewer: createSessionOwnerViewerFixture(session) })),
+                    nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+                }));
+            }
+            if (['/v2/sessions/active', '/v2/sessions/attention'].includes(new URL(String(input)).pathname)) {
+                return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+            }
             if (new URL(String(input)).pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: settings }, version: 1 });
+            const bootstrap = createEmptyAccountBootstrapHttpResponse(new URL(String(input)).pathname, init);
+            if (bootstrap) return bootstrap;
             return http.request(input, init);
         } });
         expect(account.home.id).toBe(serverId);
@@ -114,10 +137,7 @@ describe('visible session-list retained attention through real state', () => {
             schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: [], tags: [],
             tagAssignments: [], orderEntries: [], labels: [],
         }));
-        storage.getState().applySessions([
-            completedSession(2, serverId),
-            createSessionFixture({ id: 'quiet', serverId, owner: 'u1', seq: 1, lastViewedSessionSeq: 1, viewer: currentViewer(1, 1), updatedAt: 100, active: false, presence: 0 }),
-        ]);
+        storage.getState().applySessions(listedSessions);
         // Hydration is deliberately row-only. Ordinary admission belongs to the
         // server page producer, not to whichever Session was opened or updated.
         storage.getState().applyServerScopedSessionListRows(serverId, Object.values(storage.getState().sessionListRowsByServerId[serverId] ?? {}), {
@@ -128,7 +148,13 @@ describe('visible session-list retained attention through real state', () => {
     });
 
     afterEach(async () => {
+        snapshotResponse.resolve();
         await standardCleanup();
+        // Identity discovery advances the connection generation. This test
+        // still owns that Home, while the captured account disposer correctly
+        // refuses to retire a later generation on its caller's behalf.
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection();
         await account?.dispose();
         account = undefined;
         const { storage } = await import('@/sync/domains/state/storage');
@@ -137,26 +163,44 @@ describe('visible session-list retained attention through real state', () => {
         projectManager.clear();
     });
 
-    it('retains a pending archive row across authoritative membership settlement until its public operation finishes', async () => {
+    it.each(['ordinary', 'query', 'warm query'] as const)('retains multiple pending archive rows in the %s source until their public operations finish', async mode => {
         const { storage } = await import('@/sync/domains/state/storage');
         const { useVisibleSessionListViewState } = await import('./useVisibleSessionListViewState');
         const { stopSessionAndMaybeArchive } = await import('@/components/sessions/sessionStopArchiveFlow');
         const { sessionArchiveWithServerScope } = await import('@/sync/ops/sessions');
-const { projectManager } = await import('@/sync/runtime/orchestration/projectManager');
         const entered = createDeferred<void>();
         const response = createDeferred<Response>();
-        archiveResponse = async () => { entered.resolve(); return await response.promise; };
+        let enteredCount = 0;
+        archiveResponse = async () => {
+            if (++enteredCount === 2) entered.resolve();
+            return (await response.promise).clone();
+        };
         route.pathname = '/';
-        const hook = await renderHook(() => useVisibleSessionListViewState('all'));
+        if (mode !== 'warm query') {
+            snapshotResponse.resolve();
+            const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
+            await getSyncSingleton().refreshSessions({ awaitSessionListHydration: true });
+        }
+        let queryHomes: readonly SessionListQueryHomeInput[] | undefined = mode !== 'ordinary' ? [{ serverId,
+            query: { v: 1, scope: 'my_work', storage: 'active', includeInactive: true,
+                attention: 'any', audiences: [], tagIds: [] },
+            ordinaryAdapter: { path: '/v2/sessions', allowV1Fallback: true, membership: 'ordinary' },
+        } as const] : undefined;
+        const hook = await renderHook(() => useVisibleSessionListViewState('all', { queryHomes }));
         const visibleIds = () => hook.getCurrent()?.visibleSessionListIndex
             ?.flatMap(item => item.type === 'session' ? [item.sessionId] : []);
         expect(visibleIds()).toContain('done');
+        if (mode === 'warm query') expect(hook.getCurrent()?.query?.statesByServerId[serverId]?.appliedQueryKey).toBeNull();
         let settledVisibleIds: string[] | undefined;
-        const pending = stopSessionAndMaybeArchive({ address: { serverId, sessionId: 'done' },
-            hideInactiveSessions: false, isPinned: false, archiveAfterStop: 'always',
-            stopSession: async () => ({ success: true }),
-            archiveSession: () => sessionArchiveWithServerScope('done', { serverId }),
-            stopErrorMessage: 'Stop failed', archiveErrorMessage: 'Archive failed',
+        let pending: Promise<unknown> = Promise.resolve();
+        await act(async () => {
+            pending = Promise.all(['done', 'quiet'].map(sessionId => stopSessionAndMaybeArchive({
+                address: { serverId, sessionId },
+                hideInactiveSessions: false, isPinned: false, archiveAfterStop: 'always',
+                stopSession: async () => ({ success: true }),
+                archiveSession: () => sessionArchiveWithServerScope(sessionId, { serverId }),
+                stopErrorMessage: 'Stop failed', archiveErrorMessage: 'Archive failed',
+            })));
         });
         try {
             await entered.promise;
@@ -171,11 +215,20 @@ const { projectManager } = await import('@/sync/runtime/orchestration/projectMan
                 // response arrives. Exercise the same canonical row/membership writer.
                 storage.getState().applyServerScopedSessionListRowPatches(discoveredHome, [
                     { sessionId: 'done', patch: { archivedAt: 42 } },
+                    { sessionId: 'quiet', patch: { archivedAt: 42 } },
                 ]);
             });
             expect(storage.getState().ordinarySessionListMembershipByServerId[serverId]).not.toContain('done');
             expect(storage.getState().sessionArchiveOperations[serverId]?.done).toBeDefined();
-            expect(visibleIds()).toContain('done');
+            expect(storage.getState().sessionArchiveOperations[serverId]?.quiet).toBeDefined();
+            expect(visibleIds()).toEqual(expect.arrayContaining(['done', 'quiet']));
+            if (queryHomes) {
+                queryHomes = queryHomes.map(home => ({ ...home, query: { ...home.query, tagIds: ['different-tag'] } }));
+                await hook.rerender();
+                expect(visibleIds() ?? []).not.toContain('done');
+                expect(visibleIds() ?? []).not.toContain('quiet');
+                expect(readSessionArchivePending(storage.getState(), { serverId: discoveredHome, sessionId: 'done' })).toBe(true);
+            }
         } finally {
             await act(async () => {
                 response.resolve(Response.json({ success: true, archivedAt: 42 }));
@@ -185,7 +238,8 @@ const { projectManager } = await import('@/sync/runtime/orchestration/projectMan
             await hook.unmount();
         }
         expect(storage.getState().sessionArchiveOperations).toEqual({});
-        expect(settledVisibleIds).not.toContain('done');
+        expect(settledVisibleIds ?? []).not.toContain('done');
+        expect(settledVisibleIds ?? []).not.toContain('quiet');
     });
 
     it('uses a retained foreground pathname when retaining selected attention after remount', async () => {

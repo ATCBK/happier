@@ -1068,16 +1068,6 @@ function normalizeSelectedSessionListServerIds(serverIds: ReadonlyArray<string> 
   return out;
 }
 
-function resolveEquivalentSessionListIndexServerId(
-  indexByServerId: Readonly<Record<string, ReadonlyArray<SessionListIndexItem> | null | undefined>>,
-  requestedServerId: string,
-): string | null {
-  if (Object.prototype.hasOwnProperty.call(indexByServerId, requestedServerId)) return requestedServerId;
-  return Object.keys(indexByServerId).find((storedServerId) => (
-    areServerProfileIdentifiersEquivalent(storedServerId, requestedServerId)
-  )) ?? null;
-}
-
 export function useSessionListIndexByServerId(
   serverIds?: ReadonlyArray<string>,
 ): Readonly<Record<string, ReadonlyArray<SessionListIndexItem> | null | undefined>> {
@@ -1094,7 +1084,7 @@ export function useSessionListIndexByServerId(
     if (selectedServerIds.length === 0) return EMPTY_SESSION_LIST_INDEX_BY_SERVER_ID;
     const selected: Record<string, ReadonlyArray<SessionListIndexItem> | null | undefined> = {};
     for (const serverId of selectedServerIds) {
-      const resolvedServerId = resolveEquivalentSessionListIndexServerId(indexByServerId, serverId);
+      const resolvedServerId = resolveSessionListHomeKey(indexByServerId, serverId);
       if (!resolvedServerId) continue;
       selected[resolvedServerId] = indexByServerId[resolvedServerId] ?? null;
     }
@@ -1118,23 +1108,30 @@ export function useSessionListIndexByServerId(
   return React.useMemo(() => {
     if (retained.length === 0) return source;
     const state = getStorage().getState();
-    let result: Record<string, ReadonlyArray<SessionListIndexItem> | null | undefined> | null = null;
+    const retainedByServerId = new Map<string, SessionListRenderableSession[]>();
     for (let index = 0; index < retained.length; index += 1) {
       const operation = retained[index];
       const retainedRow = retainedRows[index];
       if (!retainedRow) continue;
       const serverId = resolveSessionListHomeKey(source, operation.serverId)
         ?? resolveServerProfileScopeIdForIdentifier(operation.serverId);
-      const previousIndex = (result ?? source)[serverId] ?? [];
+      const previousIndex = source[serverId] ?? [];
       if (previousIndex.some(item => item.type === 'session' && item.sessionId === operation.sessionId)) continue;
+      const rows = retainedByServerId.get(serverId) ?? [];
+      rows.push(retainedRow);
+      retainedByServerId.set(serverId, rows);
+    }
+    if (retainedByServerId.size === 0) return source;
+    const result = { ...source };
+    for (const [serverId, rows] of retainedByServerId) {
+      const previousIndex = source[serverId] ?? [];
       const candidates: Record<string, SessionListRenderableSession> = {};
       for (const item of previousIndex) {
         if (item.type !== 'session') continue;
         const row = readSessionListRowForServerId(state.sessionListRowsByServerId, serverId, item.sessionId);
         if (row) candidates[item.sessionId] = row;
       }
-      candidates[operation.sessionId] = projectSessionArchiveRow(retainedRow, true)!;
-      result ??= { ...source };
+      for (const row of rows) candidates[row.id] = projectSessionArchiveRow(row, true)!;
       const machineKey = resolveSessionListHomeKey(state.machineListByServerId, serverId) ?? serverId;
       result[serverId] = buildSessionListIndexWithServerScope({
         sessions: candidates,
@@ -1143,7 +1140,7 @@ export function useSessionListIndexByServerId(
         serverScope: { serverId, serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId) },
       });
     }
-    return result ?? source;
+    return result;
     // Raw index changes own ordinary structural invalidation. Retained rows and
     // Home machine inputs add only the missing pending candidates above.
   }, [source, retained, retainedRows, retainedMachines, activeGroupingV1, inactiveGroupingV1, sectionModeV1]);

@@ -4,6 +4,7 @@ import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 import { subscribeHomeAccountChange } from './homeAccountChange';
 import * as routes from '@/sync/domains/transfers/runtime/transferRouteCache';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
@@ -27,6 +28,26 @@ function machineUpdate() { h.socket().trigger('update', { body: { t: 'update-mac
 function offline() { h.pool.reportServerUnreachable(h.homeB.serverUrl, new Error('Home unreachable'), h.homeB.token); }
 
 describe('concurrent session cache supervised sockets', () => {
+    it('retains the same managed Home and its rows while canonical identity discovery rereads its credentials', async () => {
+        h.setSessions(h.homeB, [h.session({ id: 'retained-across-discovery' })]);
+        await h.start(); await h.ready();
+        const previousRows = rows();
+        const previousSocket = h.socket().socket;
+        const credentialRead = h.holdCredentialRead();
+        const canonicalId = 'srv_cache_supervised_discovered';
+        try {
+            await h.profiles.setServerProfileIdentityForUrl(h.homeB.serverUrl, canonicalId);
+            await vi.waitFor(() => expect(credentialRead.started).toBe(true));
+            expect(readSessionListRowsForServerId(h.storage.getState().sessionListRowsByServerId, canonicalId)).toBe(previousRows);
+            expect(previousSocket.connected).toBe(true);
+        } finally {
+            credentialRead.release();
+        }
+        await vi.waitFor(() => expect(h.readConcurrentOrdinarySessionListLifecycle(canonicalId).hasFetchedSnapshot).toBe(true));
+        expect(h.socket().socket).toBe(previousSocket);
+        expect(readSessionListRowsForServerId(h.storage.getState().sessionListRowsByServerId, canonicalId)?.['retained-across-discovery']).toBeDefined();
+    });
+
     it.each(['matching', 'other'] as const)('applies activation authorization changes only to the %s Home of an open Session', async home => {
         const waiting = { requestId: 'retained-input', requestedAt: 1, status: 'waiting' as const };
         h.setSessions(h.homeB, [h.session({ id: 'session-b' })]);

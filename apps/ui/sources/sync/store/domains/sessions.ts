@@ -133,6 +133,7 @@ import {
 } from '../sessionListIndex/buildSessionListIndexWithServerScope';
 import {
     areServerProfileIdentifiersEquivalent,
+    resolveServerProfileScopeIdForIdentifier,
     getServerProfileById,
 } from '../../domains/server/serverProfiles';
 import { normalizeTrimmedString } from '@/sync/domains/session/listing/normalizeTrimmedString';
@@ -254,6 +255,21 @@ function resolveSessionListIndexRebuildSettings(
         inactiveGroupingV1: settings.sessionListInactiveGroupingV1,
         sectionModeV1: settings.sessionListSectionModeV1,
     };
+}
+
+/** A real Home publication replaces its aliases; readers retain legacy fallback until then. */
+function publishSessionListHomeValue<T>(
+    values: Readonly<Record<string, T>>,
+    serverId: string,
+    value: T | undefined,
+): Readonly<Record<string, T>> {
+    const keys = Object.keys(values).filter(key => areServerProfileIdentifiersEquivalent(key, serverId));
+    if (value === undefined && keys.length === 0) return values;
+    if (value !== undefined && keys.length === 1 && keys[0] === serverId && values[serverId] === value) return values;
+    const next = { ...values };
+    for (const key of keys) delete next[key];
+    if (value !== undefined) next[serverId] = value;
+    return next;
 }
 
 export function resolveSessionListMachineDisplaysForServer(
@@ -895,33 +911,23 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
 
     const clearServerScopedSessionListRows = (serverIdRaw: string): void => set((state) => {
         const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
-        const trimmedServerId = serverIdRaw.trim();
-        const serverId = activeServerId
-            && areServerProfileIdentifiersEquivalent(trimmedServerId, activeServerId)
-            ? activeServerId
-            : trimmedServerId;
+        const serverId = resolveServerProfileScopeIdForIdentifier(serverIdRaw.trim());
         const retainedQueryMemberships = Object.entries(state.sessionListQueryMembershipByKey)
             .filter(([, membership]) => membership && !areServerProfileIdentifiersEquivalent(membership.serverId, serverId));
         const didRemoveQueryMembership = retainedQueryMemberships.length
             !== Object.keys(state.sessionListQueryMembershipByKey).length;
-        if (!serverId || (
-            !state.sessionListRowsByServerId[serverId]
-            && state.sessionListIndexByServerId[serverId] == null
-            && !Object.prototype.hasOwnProperty.call(state.ordinarySessionListMembershipByServerId, serverId)
-            && !Object.prototype.hasOwnProperty.call(state.archivedSessionListMembershipByServerId, serverId)
-            && !didRemoveQueryMembership
-        )) {
-            return state;
-        }
-        const nextRowsByServerId = { ...state.sessionListRowsByServerId };
-        const nextOrdinaryMembershipByServerId = { ...state.ordinarySessionListMembershipByServerId };
-        const nextArchivedMembershipByServerId = { ...state.archivedSessionListMembershipByServerId };
-        const nextIndexByServerId = { ...state.sessionListIndexByServerId };
-        delete nextRowsByServerId[serverId];
-        delete nextOrdinaryMembershipByServerId[serverId];
-        delete nextArchivedMembershipByServerId[serverId];
-        delete nextIndexByServerId[serverId];
-        const removedSessionIds = state.ordinarySessionListMembershipByServerId[serverId] ?? [];
+        if (!serverId) return state;
+        const nextRowsByServerId = publishSessionListHomeValue(state.sessionListRowsByServerId, serverId, undefined);
+        const nextOrdinaryMembershipByServerId = publishSessionListHomeValue(state.ordinarySessionListMembershipByServerId, serverId, undefined);
+        const nextArchivedMembershipByServerId = publishSessionListHomeValue(state.archivedSessionListMembershipByServerId, serverId, undefined);
+        const nextIndexByServerId = publishSessionListHomeValue(state.sessionListIndexByServerId, serverId, undefined);
+        if (nextRowsByServerId === state.sessionListRowsByServerId
+            && nextOrdinaryMembershipByServerId === state.ordinarySessionListMembershipByServerId
+            && nextArchivedMembershipByServerId === state.archivedSessionListMembershipByServerId
+            && nextIndexByServerId === state.sessionListIndexByServerId
+            && !didRemoveQueryMembership) return state;
+        const removedSessionIds = [...new Set(Object.entries(state.ordinarySessionListMembershipByServerId)
+            .flatMap(([key, ids]) => areServerProfileIdentifiersEquivalent(key, serverId) ? ids ?? [] : []))];
         const nextStateBase = {
             ...state,
             sessionListRowsByServerId: nextRowsByServerId,
@@ -935,7 +941,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         return finalizeSessionListRenderablePublication(
             state,
             nextStateBase,
-            state.sessionListIndexByServerId[serverId] != null,
+            nextIndexByServerId !== state.sessionListIndexByServerId,
             serverId === activeServerId && removedSessionIds.length > 0,
             false,
             { warmCacheEventName: 'sync.store.sessions.renderables.clear.warmCache' },
@@ -1228,11 +1234,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 const previousSession = state.sessions[incomingSession.id];
                 const orderedSession = resolveOrderedSessionApply(previousSession, incomingSession);
                 const declaredOwnerServerId = normalizeTrimmedString(orderedSession.serverId);
-                const ownerServerId = declaredOwnerServerId && activeServerId
-                    && areServerProfileIdentifiersEquivalent(declaredOwnerServerId, activeServerId)
-                    ? activeServerId
-                    : declaredOwnerServerId ?? activeServerId;
-                const ownerRows = ownerServerId ? mergedRowsByServerId[ownerServerId] ?? {} : {};
+                const ownerServerId = resolveServerProfileScopeIdForIdentifier(declaredOwnerServerId ?? activeServerId);
+                const ownerRowsKey = resolveSessionListHomeKey(mergedRowsByServerId, ownerServerId);
+                const ownerRows = ownerRowsKey ? mergedRowsByServerId[ownerRowsKey] : {};
                 const previousRenderable = ownerRows[incomingSession.id];
                 const session = reconcileSessionLifecycleProjection(previousRenderable, orderedSession);
                 // Use centralized resolver for consistent state management
@@ -1452,8 +1456,18 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     }
                     if (ownerServerId) {
                         const nextOwnerRows = { ...ownerRows, [session.id]: mergedRenderable };
-                        mergedRowsByServerId = { ...mergedRowsByServerId, [ownerServerId]: nextOwnerRows };
+                        mergedRowsByServerId = publishSessionListHomeValue(mergedRowsByServerId, ownerServerId, nextOwnerRows);
                         if (isActiveOwner) mergedRenderables = nextOwnerRows;
+                        const ordinaryKey = resolveSessionListHomeKey(mergedOrdinaryMembershipByServerId, ownerServerId);
+                        const archivedKey = resolveSessionListHomeKey(mergedArchivedMembershipByServerId, ownerServerId);
+                        mergedOrdinaryMembershipByServerId = publishSessionListHomeValue(mergedOrdinaryMembershipByServerId,
+                            ownerServerId, ordinaryKey ? mergedOrdinaryMembershipByServerId[ordinaryKey] : undefined);
+                        mergedArchivedMembershipByServerId = publishSessionListHomeValue(mergedArchivedMembershipByServerId,
+                            ownerServerId, archivedKey ? mergedArchivedMembershipByServerId[archivedKey] : undefined);
+                        if (ownerRowsKey !== ownerServerId && ordinaryKey) {
+                            if (isActiveOwner) needsSessionListIndexRebuild = true;
+                            else inactiveOwnerServerIdsNeedingIndexRebuild.add(ownerServerId);
+                        }
                         const didArchivalStateChange = (previousRenderable?.archivedAt ?? null)
                             !== (mergedRenderable.archivedAt ?? null);
                         if (didArchivalStateChange) {
@@ -1733,7 +1747,8 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                         return row ? [[sessionId, row] as const] : [];
                     }),
                 );
-                const previousIndex = mergedSessionListIndexByServerId[serverId] ?? null;
+                const previousIndexKey = resolveSessionListHomeKey(mergedSessionListIndexByServerId, serverId);
+                const previousIndex = previousIndexKey ? mergedSessionListIndexByServerId[previousIndexKey] ?? null : null;
                 const nextIndex = buildSessionListIndexWithServerScope({
                     sessions: ordinaryRows,
                     machines: resolveSessionListMachineDisplaysForServer(state, serverId),
@@ -1747,10 +1762,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     },
                 });
                 if (nextIndex === previousIndex) continue;
-                mergedSessionListIndexByServerId = {
-                    ...mergedSessionListIndexByServerId,
-                    [serverId]: nextIndex,
-                };
+                mergedSessionListIndexByServerId = publishSessionListHomeValue(mergedSessionListIndexByServerId, serverId, nextIndex);
             }
 
             const nextStateBase = {
@@ -1833,14 +1845,18 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         ),
         applyServerScopedSessionListRows: (serverIdRaw, sessions, options) => set((state) => {
             const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
-            const trimmedServerId = serverIdRaw.trim();
-            const serverId = activeServerId
-                && areServerProfileIdentifiersEquivalent(trimmedServerId, activeServerId)
-                ? activeServerId
-                : trimmedServerId;
+            const serverId = resolveServerProfileScopeIdForIdentifier(serverIdRaw.trim());
             if (!serverId) return state;
             const previousRowsByServerId = state.sessionListRowsByServerId ?? {};
-            const previousRows = previousRowsByServerId[serverId] ?? {};
+            const previousRowsKey = resolveSessionListHomeKey(previousRowsByServerId, serverId);
+            const previousRows = previousRowsKey ? previousRowsByServerId[previousRowsKey] : {};
+            const previousOrdinaryKey = resolveSessionListHomeKey(state.ordinarySessionListMembershipByServerId, serverId);
+            const previousArchivedKey = resolveSessionListHomeKey(state.archivedSessionListMembershipByServerId, serverId);
+            const previousIndexKey = resolveSessionListHomeKey(state.sessionListIndexByServerId, serverId);
+            const previousIndex = previousIndexKey ? state.sessionListIndexByServerId[previousIndexKey] : undefined;
+            const hasScopeAliases = [previousRowsByServerId, state.ordinarySessionListMembershipByServerId,
+                state.archivedSessionListMembershipByServerId, state.sessionListIndexByServerId].some(values =>
+                Object.keys(values).some(key => key !== serverId && areServerProfileIdentifiersEquivalent(key, serverId)));
             let nextRows = previousRows as Record<string, SessionListRenderableSession>;
             const changedSessionIds: string[] = [];
             const changedRows: Array<Readonly<{
@@ -1862,9 +1878,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 changedRows.push({ previous, next });
             }
 
-            const previousOrdinaryMembershipValue = state.ordinarySessionListMembershipByServerId?.[serverId];
+            const previousOrdinaryMembershipValue = previousOrdinaryKey ? state.ordinarySessionListMembershipByServerId[previousOrdinaryKey] : undefined;
             const previousOrdinaryMembership = previousOrdinaryMembershipValue ?? [];
-            const previousArchivedMembershipValue = state.archivedSessionListMembershipByServerId?.[serverId];
+            const previousArchivedMembershipValue = previousArchivedKey ? state.archivedSessionListMembershipByServerId[previousArchivedKey] : undefined;
             const previousArchivedMembership = previousArchivedMembershipValue ?? [];
             const incomingOrdinaryIds = sessions
                 .filter((session) => session.archivedAt == null)
@@ -1923,7 +1939,8 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             let didAnyImmediateWarmCacheRelevantRenderableChange = addedOrdinarySessionIds.length > 0
                 || removedOrdinarySessionIds.length > 0;
             let didAnyDeferredWarmCacheRelevantRenderableChange = false;
-            let needsOrdinaryIndexRebuild = nextOrdinaryMembership !== previousOrdinaryMembership;
+            let needsOrdinaryIndexRebuild = nextOrdinaryMembership !== previousOrdinaryMembership
+                || (previousIndex != null && previousIndexKey !== serverId);
             for (const { previous, next } of changedRows) {
                 if (!previousOrdinaryMembershipSet.has(next.id) && !nextOrdinaryMembershipSet.has(next.id)) continue;
                 const impact = resolveSessionListRenderableChangeImpact(previous, next, {
@@ -1958,7 +1975,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const eventName = `sync.store.sessions.renderables.${eventKind}`;
             const didMembershipChange = nextOrdinaryMembership !== previousOrdinaryMembership
                 || nextArchivedMembership !== previousArchivedMembership;
-            if (nextRows === previousRows && !didMembershipChange && !needsOrdinaryIndexRebuild) {
+            if (nextRows === previousRows && !didMembershipChange && !needsOrdinaryIndexRebuild && !hasScopeAliases) {
                 syncPerformanceTelemetry.count(eventName, {
                     incoming: sessions.length,
                     previous: Object.keys(previousRows).length,
@@ -1988,16 +2005,14 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     activeGroupingV1: settings.activeGroupingV1,
                     inactiveGroupingV1: settings.inactiveGroupingV1,
                     sectionModeV1: settings.sectionModeV1,
-                    previousIndex: state.sessionListIndexByServerId[serverId] ?? null,
+                    previousIndex: previousIndex ?? null,
                     serverScope: {
                         serverId,
                         serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                     },
                 });
             };
-            const nextRowsByServerId = nextRows === previousRows
-                ? previousRowsByServerId
-                : { ...previousRowsByServerId, [serverId]: nextRows };
+            const nextRowsByServerId = publishSessionListHomeValue(previousRowsByServerId, serverId, nextRows);
             const nextIndex = needsOrdinaryIndexRebuild
                 ? measureSessionApplyPhase(
                     `${eventName}.indexRebuild`,
@@ -2010,28 +2025,21 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     }),
                     buildOrdinaryIndex,
                 )
-                : state.sessionListIndexByServerId[serverId];
+                : previousIndex;
             const nextStateBase = {
                 ...state,
                 sessionListRowsByServerId: nextRowsByServerId,
-                ...(nextOrdinaryMembership !== previousOrdinaryMembership ? {
-                    ordinarySessionListMembershipByServerId: {
-                        ...state.ordinarySessionListMembershipByServerId,
-                        [serverId]: nextOrdinaryMembership,
-                    },
-                } : {}),
-                ...(nextArchivedMembership !== previousArchivedMembership ? {
-                    archivedSessionListMembershipByServerId: {
-                        ...state.archivedSessionListMembershipByServerId,
-                        [serverId]: nextArchivedMembership,
-                    },
-                } : {}),
-                ...(needsOrdinaryIndexRebuild ? {
-                    sessionListIndexByServerId: {
-                        ...state.sessionListIndexByServerId,
-                        [serverId]: nextIndex,
-                    },
-                } : {}),
+                ordinarySessionListMembershipByServerId: publishSessionListHomeValue(
+                    state.ordinarySessionListMembershipByServerId, serverId,
+                    previousOrdinaryMembershipValue !== undefined || nextOrdinaryMembership !== previousOrdinaryMembership
+                        ? nextOrdinaryMembership : undefined,
+                ),
+                archivedSessionListMembershipByServerId: publishSessionListHomeValue(
+                    state.archivedSessionListMembershipByServerId, serverId,
+                    previousArchivedMembershipValue !== undefined || nextArchivedMembership !== previousArchivedMembership
+                        ? nextArchivedMembership : undefined,
+                ),
+                sessionListIndexByServerId: publishSessionListHomeValue(state.sessionListIndexByServerId, serverId, nextIndex),
             };
 
             syncPerformanceTelemetry.count(eventName, {
@@ -2250,15 +2258,15 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         }),
         reconcileSessionListRowsForServerScope: (serverIdRaw, sessions, baseline) => set((state) => {
             const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
-            const trimmedServerId = serverIdRaw.trim();
-            const serverId = activeServerId
-                && areServerProfileIdentifiersEquivalent(trimmedServerId, activeServerId)
-                ? activeServerId
-                : trimmedServerId;
+            const serverId = resolveServerProfileScopeIdForIdentifier(serverIdRaw.trim());
             if (!serverId) return state;
             const previousRowsByServerId = state.sessionListRowsByServerId;
-            const previousRows = previousRowsByServerId[serverId] ?? {};
-            const previousMembership = state.ordinarySessionListMembershipByServerId?.[serverId] ?? [];
+            const previousRowsKey = resolveSessionListHomeKey(previousRowsByServerId, serverId);
+            const previousRows = previousRowsKey ? previousRowsByServerId[previousRowsKey] : {};
+            const previousMembershipKey = resolveSessionListHomeKey(state.ordinarySessionListMembershipByServerId, serverId);
+            const previousIndexKey = resolveSessionListHomeKey(state.sessionListIndexByServerId, serverId);
+            const archivedKey = resolveSessionListHomeKey(state.archivedSessionListMembershipByServerId, serverId);
+            const previousMembership = previousMembershipKey ? state.ordinarySessionListMembershipByServerId[previousMembershipKey] ?? [] : [];
             const previousOrdinaryMembership = new Set(previousMembership);
             const nextRows: Record<string, SessionListRenderableSession> = {};
             const incomingById = new Map(sessions.map((session) => [session.id, session]));
@@ -2292,7 +2300,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const incomingMembershipSet = new Set(incomingMembership);
             const nextMembership = [
                 ...incomingMembership,
-                ...(state.ordinarySessionListMembershipByServerId?.[serverId] ?? []).filter((sessionId) => (
+                ...previousMembership.filter((sessionId) => (
                     !incomingMembershipSet.has(sessionId)
                     && previousRows[sessionId] !== baseline[sessionId]
                     && nextRows[sessionId] != null
@@ -2311,16 +2319,13 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 activeGroupingV1: settings.activeGroupingV1,
                 inactiveGroupingV1: settings.inactiveGroupingV1,
                 sectionModeV1: settings.sectionModeV1,
-                previousIndex: state.sessionListIndexByServerId[serverId] ?? null,
+                previousIndex: previousIndexKey ? state.sessionListIndexByServerId[previousIndexKey] ?? null : null,
                 serverScope: {
                     serverId,
                     serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                 },
             });
-            const nextRowsByServerId = {
-                ...previousRowsByServerId,
-                [serverId]: nextRows,
-            };
+            const nextRowsByServerId = publishSessionListHomeValue(previousRowsByServerId, serverId, nextRows);
             const nextMembershipSet = new Set(nextMembership);
             const changedSessionIds = nextMembership.filter((sessionId) => (
                 !previousOrdinaryMembership.has(sessionId)
@@ -2331,14 +2336,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const nextStateBase = {
                 ...state,
                 sessionListRowsByServerId: nextRowsByServerId,
-                ordinarySessionListMembershipByServerId: {
-                    ...state.ordinarySessionListMembershipByServerId,
-                    [serverId]: nextMembership,
-                },
-                sessionListIndexByServerId: {
-                    ...state.sessionListIndexByServerId,
-                    [serverId]: nextIndex,
-                },
+                ordinarySessionListMembershipByServerId: publishSessionListHomeValue(state.ordinarySessionListMembershipByServerId, serverId, nextMembership),
+                archivedSessionListMembershipByServerId: publishSessionListHomeValue(state.archivedSessionListMembershipByServerId,
+                    serverId, archivedKey ? state.archivedSessionListMembershipByServerId[archivedKey] : undefined),
+                sessionListIndexByServerId: publishSessionListHomeValue(state.sessionListIndexByServerId, serverId, nextIndex),
             };
             return finalizeSessionListRenderablePublication(
                 state,
@@ -2356,21 +2357,21 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         }),
         mergeSessionListRowsForServerScope: (serverIdRaw, sessions) => set((state) => {
             const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
-            const trimmedServerId = serverIdRaw.trim();
-            const serverId = activeServerId
-                && areServerProfileIdentifiersEquivalent(trimmedServerId, activeServerId)
-                ? activeServerId
-                : trimmedServerId;
+            const serverId = resolveServerProfileScopeIdForIdentifier(serverIdRaw.trim());
             if (!serverId || sessions.length === 0) return state;
             const previousRowsByServerId = state.sessionListRowsByServerId;
-            const previousRows = previousRowsByServerId[serverId] ?? {};
+            const previousRowsKey = resolveSessionListHomeKey(previousRowsByServerId, serverId);
+            const previousRows = previousRowsKey ? previousRowsByServerId[previousRowsKey] : {};
+            const previousMembershipKey = resolveSessionListHomeKey(state.ordinarySessionListMembershipByServerId, serverId);
+            const previousIndexKey = resolveSessionListHomeKey(state.sessionListIndexByServerId, serverId);
+            const archivedKey = resolveSessionListHomeKey(state.archivedSessionListMembershipByServerId, serverId);
             const nextRows = { ...previousRows };
             for (const incoming of sessions) {
                 const previous = previousRows[incoming.id];
                 const withStaleFields = preserveSessionListRenderableStaleFields(previous, incoming);
                 nextRows[incoming.id] = preserveSessionListRenderableTransientState(previous, withStaleFields);
             }
-            const previousMembership = state.ordinarySessionListMembershipByServerId?.[serverId] ?? [];
+            const previousMembership = previousMembershipKey ? state.ordinarySessionListMembershipByServerId[previousMembershipKey] ?? [] : [];
             const previousMembershipSet = new Set(previousMembership);
             const nextMembership = [...new Set([
                 ...previousMembership,
@@ -2389,16 +2390,13 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 activeGroupingV1: settings.activeGroupingV1,
                 inactiveGroupingV1: settings.inactiveGroupingV1,
                 sectionModeV1: settings.sectionModeV1,
-                previousIndex: state.sessionListIndexByServerId[serverId] ?? null,
+                previousIndex: previousIndexKey ? state.sessionListIndexByServerId[previousIndexKey] ?? null : null,
                 serverScope: {
                     serverId,
                     serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
                 },
             });
-            const nextRowsByServerId = {
-                ...previousRowsByServerId,
-                [serverId]: nextRows,
-            };
+            const nextRowsByServerId = publishSessionListHomeValue(previousRowsByServerId, serverId, nextRows);
             const changedSessionIds = sessions.flatMap((session) => (
                 !previousMembershipSet.has(session.id)
                 || !areSessionListRenderablesEqual(previousRows[session.id], nextRows[session.id])
@@ -2409,14 +2407,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             const nextStateBase = {
                 ...state,
                 sessionListRowsByServerId: nextRowsByServerId,
-                ordinarySessionListMembershipByServerId: {
-                    ...state.ordinarySessionListMembershipByServerId,
-                    [serverId]: nextMembership,
-                },
-                sessionListIndexByServerId: {
-                    ...state.sessionListIndexByServerId,
-                    [serverId]: nextIndex,
-                },
+                ordinarySessionListMembershipByServerId: publishSessionListHomeValue(state.ordinarySessionListMembershipByServerId, serverId, nextMembership),
+                archivedSessionListMembershipByServerId: publishSessionListHomeValue(state.archivedSessionListMembershipByServerId,
+                    serverId, archivedKey ? state.archivedSessionListMembershipByServerId[archivedKey] : undefined),
+                sessionListIndexByServerId: publishSessionListHomeValue(state.sessionListIndexByServerId, serverId, nextIndex),
             };
             return finalizeSessionListRenderablePublication(
                 state,

@@ -181,6 +181,9 @@ describe('Sync workspace readiness', () => {
         const { storage } = await import('./domains/state/storage');
         const { syncSwitchServer } = await import('./sync');
         await syncSwitchServer(null);
+        const archiveOperation = supersede ? storage.getState().beginSessionArchive({
+            serverId: home.id, sessionId: 'archive-during-real-home-switch',
+        }) : null;
         let readyAt: number | null = null;
         let readyBeforePeripheral = false;
         let readyProfileId: string | null = null;
@@ -210,6 +213,8 @@ describe('Sync workspace readiness', () => {
                 release = setTimeout(() => peripheral.resolve(), 1500);
                 oldProfile.resolve();
                 await secondRestore;
+                expect(storage.getState().sessionArchiveOperations[home.id]?.[archiveOperation!.sessionId]).toBe(archiveOperation);
+                expect(storage.getState().beginSessionArchive({ serverId: home.id, sessionId: archiveOperation!.sessionId })).toBeNull();
             } else await firstRestore;
             await vi.waitFor(() => expect(storage.getState().isDataReady).toBe(true), { timeout: holdSessions ? 2000 : 30_000 });
             if (holdSessions) {
@@ -258,6 +263,7 @@ describe('Sync workspace readiness', () => {
             retry.resolve();
             oldProfile.resolve();
             unsubscribe();
+            if (archiveOperation) storage.getState().finishSessionArchive(archiveOperation);
             await disconnectActiveServerConnection();
             await network.dispose();
             vi.restoreAllMocks();

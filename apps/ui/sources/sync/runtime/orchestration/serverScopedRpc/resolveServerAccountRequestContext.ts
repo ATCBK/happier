@@ -152,7 +152,9 @@ async function settleScopedContext(
     if (onAbort) options.signal?.removeEventListener('abort', onAbort);
     if (abandoned) {
       pending.then(
-        (context) => { void context.release?.().catch(() => undefined); },
+        (context) => { void context.release?.().catch(() => {
+          console.warn('Failed to release an abandoned Home request carrier');
+        }); },
         () => undefined,
       );
     }

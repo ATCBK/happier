@@ -48,6 +48,7 @@ import {
     retrySessionListQueryHome,
 } from './sessionListQueryRuntime';
 import { buildSessionListQueryKey } from './sessionListQueryKey';
+import { resolveSessionListHomeKey } from './sessionListRowStateLookup';
 import { subscribeSessionListQueryHomeInvalidation } from './sessionListQueryInvalidation';
 import { isSessionListQueryHomeCoverageComplete } from './sessionListHomeObservation';
 
@@ -702,6 +703,24 @@ export function useSessionListQuerySourceState(input: SessionListQueryInput): Se
             let membership = layer.renderMembershipByServerId[home.serverId];
             const homeRows = rowsByServerId[home.serverId];
             const state = layer.statesByServerId[home.serverId];
+            const previousIndexKey = resolveSessionListHomeKey(previous.byServerId, home.serverId);
+            const previousIndex = previousIndexKey ? previous.byServerId[previousIndexKey] : undefined;
+            const previousStateKey = resolveSessionListHomeKey(previous.result?.statesByServerId, home.serverId);
+            const previousState = previousStateKey ? previous.result?.statesByServerId[previousStateKey] : undefined;
+            // A committed archive can remove membership before its caller settles.
+            // Retain only candidates already admitted by this identical query; a
+            // new scope/tag/audience selection never inherits another corpus's rows.
+            if (home.query.storage === 'active' && previousStateKey
+                && (previousState?.appliedQueryKey ?? previousState?.requestedQueryKey) === buildSessionListQueryKey(previousStateKey, home.query)) {
+                const knownIds = new Set(membership?.addresses.map(address => address.sessionId));
+                const pendingAddresses = (previousIndex ?? []).flatMap(item => item.type === 'session'
+                    && !knownIds.has(item.sessionId) && homeRows?.[item.sessionId]?.archiving === true
+                    ? [{ serverId: home.serverId, sessionId: item.sessionId }] : []);
+                if (pendingAddresses.length > 0) membership = {
+                    addresses: [...(membership?.addresses ?? []), ...pendingAddresses],
+                    retained: membership?.retained ?? true,
+                };
+            }
             // A secondary Bot roster never publishes membership. Until its candidates finish
             // paging, render this Home's held rows through the same Bot selector downstream.
             // This display-only retention neither advances cursors nor certifies coverage.
@@ -722,7 +741,6 @@ export function useSessionListQuerySourceState(input: SessionListQueryInput): Se
                 nextByServerId[home.serverId] = null;
                 continue;
             }
-            const previousIndex = previous.byServerId[home.serverId];
             // Retained rows show only what this device still holds; a retained id with
             // no row (retired meanwhile) is not a loading placeholder.
             const addresses = membership.retained

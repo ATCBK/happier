@@ -19,6 +19,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { adoptHomeProfile, resolveServerProfileScopeIdForIdentifier, setServerProfileIdentityForUrl, setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '../../domains/session/listing/sessionListRenderable';
+import { readSessionListRowForServerId, readSessionListRowsForServerId } from '../../domains/session/listing/sessionListRowStateLookup';
 import { buildSessionListIndexFromViewData } from '../../domains/sessionList/sessionListIndex';
 import type { SessionListIndexItem } from '../../domains/sessionList/sessionListIndex';
 import { getSessionStorageKind } from '../../domains/session/sessionStorageKind';
@@ -29,6 +30,10 @@ import { createDemoOpenCodeSessionFixture } from '@/demoMode/world/sessions';
 vi.mock('socket.io-client', async (importOriginal) => (
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal)
 ));
+
+// The composed alias-convergence case uses real Sync. Compile its graph during
+// collection rather than spending the response-ordering test's budget importing it.
+const syncModule = await import('@/sync/sync');
 
 beforeAll(async () => { await warmCachePersistence.prepareWarmCacheStorage(); });
 
@@ -120,6 +125,85 @@ function readSessionListIndexSessionIds(
 }
 
 describe('sessions domain: sessionListIndex rebuild gating', () => {
+    it('publishes a nonfocused promoted Home refresh into its canonical row and membership projection', async () => {
+        const remote = await upsertServerProfile({ serverUrl: 'https://promoted-row-publication.test' });
+        const { domain, get, getSetCalls } = createHarness();
+        const initial = buildSessionListRenderableFromSession(currentSession({ id: 'remote-row', serverId: remote.id, archivedAt: null }));
+        domain.applyServerScopedSessionListRows(remote.id, [initial], { source: 'ordinary', mode: 'replace' });
+        domain.applyServerScopedSessionListRows('srv_unrelated', [
+            buildSessionListRenderableFromSession(currentSession({ id: 'other-row', serverId: 'srv_unrelated' })),
+        ], { source: 'ordinary', mode: 'replace' });
+        const otherRows = get().sessionListRowsByServerId.srv_unrelated;
+        const otherIndex = get().sessionListIndexByServerId.srv_unrelated;
+        const otherMembership = get().ordinarySessionListMembershipByServerId.srv_unrelated;
+        const canonicalId = 'srv_promoted_row_publication';
+        await setServerProfileIdentityForUrl(remote.serverUrl, canonicalId);
+        domain.applyServerScopedSessionListRows(canonicalId, [{ ...initial, archivedAt: 42 }], { source: 'archived', mode: 'replace' });
+
+        const refreshed = { ...initial, updatedAt: 43 };
+        domain.applyServerScopedSessionListRows(remote.id, [refreshed], { source: 'ordinary', mode: 'replace' });
+
+        expect(readSessionListRowForServerId(get().sessionListRowsByServerId, canonicalId, initial.id)?.archivedAt).toBeNull();
+        expect(get().sessionListRowsByServerId[remote.id]).toBeUndefined();
+        expect(get().ordinarySessionListMembershipByServerId[canonicalId]).toContain(initial.id);
+        expect(get().archivedSessionListMembershipByServerId[canonicalId]).not.toContain(initial.id);
+        expect(get().sessionListRowsByServerId.srv_unrelated).toBe(otherRows);
+        expect(get().sessionListIndexByServerId.srv_unrelated).toBe(otherIndex);
+        expect(get().ordinarySessionListMembershipByServerId.srv_unrelated).toBe(otherMembership);
+        const publishedRows = get().sessionListRowsByServerId[canonicalId];
+        const notifications = getSetCalls();
+        domain.applyServerScopedSessionListRows(remote.id, [refreshed], { source: 'ordinary', mode: 'replace' });
+        expect(get().sessionListRowsByServerId[canonicalId]).toBe(publishedRows);
+        expect(getSetCalls()).toBe(notifications);
+    });
+
+    it.each(['hydration', 'merge', 'reconcile'] as const)('publishes a captured alias through the real %s row owner after Home promotion', async mode => {
+        const remote = await upsertServerProfile({ serverUrl: `https://promoted-row-${mode}.test` });
+        const { domain, get } = createHarness();
+        const session = currentSession({ id: 'captured-alias-row', serverId: remote.id, updatedAt: 1 });
+        domain.applyServerScopedSessionListRows(remote.id, [buildSessionListRenderableFromSession(session)], { source: 'ordinary', mode: 'replace' });
+        const canonicalId = `srv_promoted_row_${mode}`;
+        await setServerProfileIdentityForUrl(remote.serverUrl, canonicalId);
+        domain.applyServerScopedSessionListRows(canonicalId, [buildSessionListRenderableFromSession({ ...session, updatedAt: 2 })], { source: 'ordinary', mode: 'replace' });
+        const baseline = get().sessionListRowsByServerId[canonicalId];
+        const refreshed = { ...session, updatedAt: 43 };
+        const row = buildSessionListRenderableFromSession(refreshed);
+
+        if (mode === 'hydration') domain.applySessions([refreshed]);
+        else if (mode === 'merge') domain.mergeSessionListRowsForServerScope(remote.id, [row]);
+        else domain.reconcileSessionListRowsForServerScope(remote.id, [row], baseline);
+
+        expect(readSessionListRowForServerId(get().sessionListRowsByServerId, canonicalId, session.id)?.updatedAt).toBe(43);
+        expect(get().sessionListRowsByServerId[remote.id]).toBeUndefined();
+        expect(get().ordinarySessionListMembershipByServerId[canonicalId]).toContain(session.id);
+    });
+
+    it('clears every retained row and membership alias of a promoted Home without reviving a fallback', async () => {
+        const remote = await upsertServerProfile({ serverUrl: 'https://promoted-row-clear.test' });
+        const { domain, get } = createHarness();
+        const row = buildSessionListRenderableFromSession(currentSession({ id: 'cleared-remote-row', serverId: remote.id }));
+        domain.applyServerScopedSessionListRows(remote.id, [row], { source: 'ordinary', mode: 'replace' });
+        domain.applyServerScopedSessionListRows('srv_unrelated', [
+            buildSessionListRenderableFromSession(currentSession({ id: 'retained-other-row', serverId: 'srv_unrelated' })),
+        ], { source: 'ordinary', mode: 'replace' });
+        const otherRows = get().sessionListRowsByServerId.srv_unrelated;
+        const otherIndex = get().sessionListIndexByServerId.srv_unrelated;
+        const canonicalId = 'srv_promoted_row_clear';
+        await setServerProfileIdentityForUrl(remote.serverUrl, canonicalId);
+
+        domain.clearSessionListRowsForServerScope(canonicalId);
+
+        expect(readSessionListRowsForServerId(get().sessionListRowsByServerId, canonicalId)).toBeNull();
+        for (const id of [remote.id, canonicalId]) {
+            expect(get().sessionListRowsByServerId[id]).toBeUndefined();
+            expect(get().sessionListIndexByServerId[id]).toBeUndefined();
+            expect(get().ordinarySessionListMembershipByServerId[id]).toBeUndefined();
+            expect(get().archivedSessionListMembershipByServerId[id]).toBeUndefined();
+        }
+        expect(get().sessionListRowsByServerId.srv_unrelated).toBe(otherRows);
+        expect(get().sessionListIndexByServerId.srv_unrelated).toBe(otherIndex);
+    });
+
     it('keeps linked-session storage and qualified identity through compact row and index projection', () => {
         const session = createDemoOpenCodeSessionFixture({ serverId: 'srv_active' });
         const link = readExternalSessionLink(session.metadata);
@@ -1451,7 +1535,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             connection = await restoreServerAccountForTest({
                 serverUrl, accountId: 'account_a', request: http.request, configureSocket: configureConnectedServerSocketBoundary,
             });
-            const { sync } = await import('@/sync/sync');
+            const { sync } = syncModule;
             await sync.refreshSessions({ awaitSessionListHydration: true });
             const domain = storage.getState();
             const get = storage.getState;

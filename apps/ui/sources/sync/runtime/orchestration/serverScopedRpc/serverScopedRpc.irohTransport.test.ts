@@ -26,6 +26,10 @@ import { machineRpcWithServerScope } from './serverScopedMachineRpc';
 import { resetScopedMachineTransportCacheForTests } from './serverScopedRpcPool';
 import { serverScopedRpcSocketPool } from './serverScopedRpcSocketPool';
 import { sessionRpcWithServerScope } from './serverScopedSessionRpc';
+import { sessionArchiveWithServerScope } from '@/sync/ops/sessions';
+import { archiveSessionWithPendingState, isSessionArchivePending } from '@/components/sessions/sessionStopArchiveFlow';
+import { storage } from '@/sync/domains/state/storage';
+import { getAppliedActiveServerSnapshot, publishAppliedActiveServerSnapshot } from '../appliedActiveServerRuntime';
 
 /**
  * Composed transport authority gate: a non-focused Iroh-only Home must serve scoped
@@ -268,8 +272,10 @@ describe('scoped transport authority for non-focused Iroh Homes', () => {
         expect(releaseHomeTunnel).toHaveBeenCalledTimes(1);
     });
 
-    it('releases the Iroh lease when machine preparation fails before socket acquisition', async () => {
+    it('does not issue a machine RPC when content preparation fails and releases carrier custody', async () => {
         await prepareHome();
+        const { socket } = createSocketIoBoundaryStub();
+        ioSpy.mockReturnValue(socket);
         operationFetch.mockImplementation(async (url) => {
             if (url === `${LEASE_RUNTIME_ORIGIN}/v1/machines/machine-1`) return jsonResponse({ machine: null });
             throw new Error(`Unexpected machine request: ${url}`);
@@ -279,8 +285,11 @@ describe('scoped transport authority for non-focused Iroh Homes', () => {
             serverId: HOME_B_ID, machineId: 'machine-1', method: 'machine.test', payload: {}, timeoutMs: 5_000, onIssued,
         })).rejects.toThrow('Machine encryption not found');
         expectHomeAudience();
-        expect(ioSpy).not.toHaveBeenCalled();
         expect(onIssued).not.toHaveBeenCalled();
+        expect(socket.emitWithAck).not.toHaveBeenCalled();
+        // Machine content and socket readiness prepare in parallel. No RPC is
+        // issued; the physical pool remains the owner of a transferred lease.
+        await serverScopedRpcSocketPool.stopAll();
         expect(releaseHomeTunnel).toHaveBeenCalledTimes(1);
     });
 
@@ -311,5 +320,113 @@ describe('scoped transport authority for non-focused Iroh Homes', () => {
         expect(ioSpy).not.toHaveBeenCalled();
         expect(onIssued).not.toHaveBeenCalled();
         expect(releaseHomeTunnel).toHaveBeenCalledTimes(1);
+    });
+
+    it('settles archive admission at its deadline while native Iroh acquisition is still pending', async () => {
+        await prepareHome();
+        let allocationEntered!: () => void;
+        const entered = new Promise<void>((resolve) => { allocationEntered = resolve; });
+        let completeAllocation!: (lease: ReturnType<typeof nativeLease>) => void;
+        const allocated = new Promise<ReturnType<typeof nativeLease>>((resolve) => { completeAllocation = resolve; });
+        let released!: () => void;
+        const releaseCompleted = new Promise<void>((resolve) => { released = resolve; });
+        ensureHomeTunnel.mockImplementation(async () => { allocationEntered(); return await allocated; });
+        releaseHomeTunnel.mockImplementation(async () => { released(); });
+        const address = { serverId: HOME_B_ID, sessionId: 'session-archive-native' };
+        let settled = false;
+        vi.useFakeTimers();
+        const pending = archiveSessionWithPendingState(address, () => sessionArchiveWithServerScope(address.sessionId, {
+            serverId: address.serverId,
+        })).then((result) => { settled = true; return result; });
+        try {
+            await entered;
+            expect(isSessionArchivePending(address)).toBe(true);
+            await vi.advanceTimersByTimeAsync(75_000);
+            expect(settled).toBe(true);
+            await expect(pending).resolves.toEqual({ success: false, code: 'session_archive_timeout' });
+            expect(isSessionArchivePending(address)).toBe(false);
+            expect(operationFetch).not.toHaveBeenCalled();
+        } finally {
+            // The shared native dial is not cancelled globally. Its eventual
+            // context must still return its lease after this caller has left.
+            completeAllocation(nativeLease());
+            await pending;
+            await releaseCompleted;
+            vi.useRealTimers();
+        }
+        expect(releaseHomeTunnel).toHaveBeenCalledTimes(1);
+        expect(operationFetch).not.toHaveBeenCalled();
+    });
+
+    it('does not acquire a native carrier for an already cancelled context', async () => {
+        await prepareHome();
+        const controller = new AbortController();
+        const reason = new Error('Caller left the operation');
+        controller.abort(reason);
+        await expect(resolveServerAccountRequestContext({ serverId: HOME_B_ID, signal: controller.signal }))
+            .rejects.toBe(reason);
+        expect(ensureHomeTunnel).not.toHaveBeenCalled();
+        expect(httpRequests).toEqual([]);
+    });
+
+    it('reports a late native carrier release failure after caller cancellation', async () => {
+        await prepareHome();
+        let allocationEntered!: () => void;
+        const entered = new Promise<void>((resolve) => { allocationEntered = resolve; });
+        let completeAllocation!: (lease: ReturnType<typeof nativeLease>) => void;
+        const allocated = new Promise<ReturnType<typeof nativeLease>>((resolve) => { completeAllocation = resolve; });
+        ensureHomeTunnel.mockImplementation(async () => { allocationEntered(); return await allocated; });
+        releaseHomeTunnel.mockRejectedValueOnce(new Error('Native carrier release failed'));
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const controller = new AbortController();
+        const reason = new Error('Caller left the operation');
+        const pending = resolveServerAccountRequestContext({ serverId: HOME_B_ID, signal: controller.signal });
+        const outcome = expect(pending).rejects.toBe(reason);
+        try {
+            await entered;
+            controller.abort(reason);
+            await outcome;
+            completeAllocation(nativeLease());
+            await vi.waitFor(() => expect(warning).toHaveBeenCalled());
+            // The warning is observable without publishing native errors,
+            // which may contain private endpoint or credential information.
+            expect(warning).toHaveBeenCalledWith(expect.any(String));
+            expect(operationFetch).not.toHaveBeenCalled();
+        } finally {
+            completeAllocation(nativeLease());
+            await pending.catch(() => undefined);
+            warning.mockRestore();
+        }
+    });
+
+    it.each(['focused', 'remote'] as const)('settles a cancelled %s context before a native dial rejects late', async (focus) => {
+        await prepareHome();
+        const previousApplied = getAppliedActiveServerSnapshot();
+        if (focus === 'focused') {
+            storage.getState().resetEndpointConnectivity();
+            publishAppliedActiveServerSnapshot({ serverId: HOME_B_ID, serverUrl: HOME_B_URL, generation: previousApplied.generation + 1 }, false);
+        }
+        const controller = new AbortController();
+        const reason = new Error('Caller left the operation');
+        let allocationEntered!: () => void;
+        const entered = new Promise<void>((resolve) => { allocationEntered = resolve; });
+        let failAllocation!: (error: Error) => void;
+        const allocated = new Promise<ReturnType<typeof nativeLease>>((_, reject) => { failAllocation = reject; });
+        ensureHomeTunnel.mockImplementation(async () => { allocationEntered(); return await allocated; });
+        const pending = resolveServerAccountRequestContext({ serverId: HOME_B_ID, preferScoped: true, signal: controller.signal });
+        const outcome = expect(pending).rejects.toBe(reason);
+        try {
+            await entered;
+            controller.abort(reason);
+            await outcome;
+        } finally {
+            // The late rejection remains observed by context settlement rather
+            // than becoming an unhandled rejection after caller cancellation.
+            failAllocation(new IrohError('unavailable', 'Late native dial failure'));
+            await allocated.catch(() => undefined);
+            publishAppliedActiveServerSnapshot(previousApplied, false);
+        }
+        expect(operationFetch).not.toHaveBeenCalled();
+        expect(releaseHomeTunnel).not.toHaveBeenCalled();
     });
 });

@@ -36,6 +36,7 @@ import {
     areServerProfileIdentifiersEquivalent,
     listServerProfiles,
     resolveServerProfileScopeId,
+    resolveServerProfileScopeIdForIdentifier,
     subscribeServerProfiles,
 } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -197,6 +198,13 @@ function readRefreshIntervalMs(): number {
 
 const managedServers = new Map<string, ManagedConcurrentServer>();
 
+/** Identity discovery changes a Home's routing label, not its existing Account runtime. */
+function getManagedServer(serverId: string): ManagedConcurrentServer | undefined {
+    const canonicalId = resolveServerProfileScopeIdForIdentifier(serverId);
+    return managedServers.get(canonicalId) ?? managedServers.get(serverId)
+        ?? [...managedServers.values()].find(entry => areServerProfileIdentifiersEquivalent(entry.id, canonicalId));
+}
+
 /** Pending acquisitions and focused transfers can retain a projection without a transport. */
 function readConcurrentHomeIds(): ReadonlySet<string> {
     return new Set([
@@ -227,7 +235,7 @@ function readFocusedHomeLocalRowsAccountId(serverId: string): string | null {
 
 /** Retained rows are trusted only while an existing runtime (or Account-keyed local restore) proves their Account. */
 function retireReplacedSessionListAccount(serverId: string, accountId: string | null): boolean {
-    const entry = managedServers.get(serverId);
+    const entry = getManagedServer(serverId);
     const activeScope = entry ? null : getActiveServerAccountScope();
     const existingAccountId = entry
         ? readCredentialAccountId(entry.credentials)
@@ -921,7 +929,7 @@ function retireConcurrentSession(entry: ManagedConcurrentServer, sessionId: stri
  */
 export function isConcurrentOrdinarySessionListHome(serverIdRaw: string): boolean {
     const serverId = normalizeServerId(serverIdRaw);
-    return serverId.length > 0 && managedServers.has(serverId);
+    return serverId.length > 0 && getManagedServer(serverId) !== undefined;
 }
 
 /** This Home's ordinary list lifecycle, in the shape its single projector reads. */
@@ -929,7 +937,7 @@ export function readConcurrentOrdinarySessionListLifecycle(
     serverIdRaw: string,
 ): OrdinarySessionListLifecycle {
     const serverId = normalizeServerId(serverIdRaw);
-    const entry = managedServers.get(serverId);
+    const entry = getManagedServer(serverId);
     if (!entry) {
         return {
             serverId: serverId || null,
@@ -941,7 +949,7 @@ export function readConcurrentOrdinarySessionListLifecycle(
     }
     // The list can finish before the same refresh's machine inventory tail.
     // Its published observation, not that shared promise, owns list readiness.
-    const phase = storage.getState().concurrentSessionListCacheByServerId?.[serverId]?.listObservation?.phase;
+    const phase = storage.getState().concurrentSessionListCacheByServerId?.[entry.id]?.listObservation?.phase;
     const inFlight = entry.refreshInFlight !== null && (phase === 'loading' || phase === 'refreshing');
     return {
         serverId,
@@ -954,7 +962,7 @@ export function readConcurrentOrdinarySessionListLifecycle(
 
 /** Advance this Home's incumbent ordinary frontier. There is no second cursor. */
 export async function loadNextConcurrentOrdinarySessionListPage(serverIdRaw: string): Promise<void> {
-    const entry = managedServers.get(normalizeServerId(serverIdRaw));
+    const entry = getManagedServer(serverIdRaw);
     if (!entry) return;
     if (entry.refreshInFlight) return entry.refreshInFlight;
     if (!resolveOrdinarySessionListContinuation(entry.sessionListFrontier)) return;
@@ -963,14 +971,14 @@ export async function loadNextConcurrentOrdinarySessionListPage(serverIdRaw: str
 
 /** Replace this Home's ordinary corpus from page one. */
 export async function refreshConcurrentOrdinarySessionList(serverIdRaw: string): Promise<void> {
-    const entry = managedServers.get(normalizeServerId(serverIdRaw));
+    const entry = getManagedServer(serverIdRaw);
     if (!entry) return;
     await runRefresh(entry, 'other', 'replace');
 }
 
 /** Manual inventory refresh uses this Home's incumbent Machine fetch/apply lifecycle. */
 export async function refreshConcurrentMachineList(serverIdRaw: string): Promise<boolean> {
-    const entry = managedServers.get(normalizeServerId(serverIdRaw));
+    const entry = getManagedServer(serverIdRaw);
     if (!entry) return false;
     await runRefresh(entry, 'other', 'machines');
     return true;
@@ -978,7 +986,7 @@ export async function refreshConcurrentMachineList(serverIdRaw: string): Promise
 
 export function isConcurrentSessionListQueryHomeOnline(serverIdRaw: string): boolean {
     const serverId = normalizeServerId(serverIdRaw);
-    const entry = managedServers.get(serverId);
+    const entry = getManagedServer(serverId);
     return Boolean(entry && entry.reachabilityState.phase === 'online');
 }
 
@@ -993,7 +1001,7 @@ export function getConcurrentSessionListQueryHomeAvailability(
     serverIdRaw: string,
 ): ConcurrentSessionListQueryHomeAvailability {
     const serverId = normalizeServerId(serverIdRaw);
-    const entry = managedServers.get(serverId);
+    const entry = getManagedServer(serverId);
     if (entry) {
         if (entry.reachabilityState.phase === 'online') return 'online';
         if (entry.reachabilityState.phase === 'idle' || entry.reachabilityState.phase === 'connecting') {
@@ -1017,7 +1025,7 @@ export function getConcurrentSessionListQueryHomeAvailability(
 export async function retryConcurrentSessionListQueryHome(serverIdRaw: string): Promise<void> {
     const serverId = normalizeServerId(serverIdRaw);
     if (!serverId) return;
-    const entry = managedServers.get(serverId);
+    const entry = getManagedServer(serverId);
     if (entry) {
         await invalidateServerReachabilitySupervisor({
             serverUrl: entry.serverUrl,
@@ -1035,7 +1043,7 @@ export async function fetchConcurrentSessionListQueryPage(
     page: SessionListQueryPageRequest,
 ) {
     const serverId = normalizeServerId(serverIdRaw);
-    const entry = managedServers.get(serverId);
+    const entry = getManagedServer(serverId);
     if (!entry || entry.reachabilityState.phase !== 'online') {
         throw new HappyError('Selected Home query runtime is unavailable', true, {
             kind: 'network',
@@ -1050,7 +1058,7 @@ export async function fetchConcurrentSessionListQueryPage(
     }, page.signal);
     const shouldContinue = () => (
         !page.signal.aborted
-        && managedServers.get(serverId) === entry
+        && managedServers.get(entry.id) === entry
         && entry.reachabilityState.phase === 'online'
     );
     return fetchAndApplySessions({
@@ -1260,7 +1268,7 @@ async function disposeManagedServer(entry: ManagedConcurrentServer): Promise<voi
 }
 
 function stopManagedServer(serverId: string): void {
-    const entry = managedServers.get(serverId);
+    const entry = getManagedServer(serverId);
     if (!entry) return;
     void disposeManagedServer(entry);
 }
@@ -1613,7 +1621,7 @@ async function reconcileConcurrentServers(requestRevision: number): Promise<void
     const targets = resolveDesiredConcurrentTargets();
 
     for (const target of targets) {
-        if (!managedServers.has(target.id)) {
+        if (!getManagedServer(target.id)) {
             publishConcurrentSessionListTargetObservation({ target, phase: 'loading' });
         }
     }
@@ -1621,7 +1629,8 @@ async function reconcileConcurrentServers(requestRevision: number): Promise<void
     const desiredById = new Map(targets.map((target) => [target.id, target]));
 
     for (const existingId of readConcurrentHomeIds()) {
-        if (!desiredById.has(existingId)) {
+        if (!desiredById.has(existingId)
+            && !targets.some(target => areServerProfileIdentifiersEquivalent(target.id, existingId))) {
             stopManagedServer(existingId);
             clearConcurrentSessionListCache(existingId);
             clearConcurrentMachineListCache(existingId);
@@ -1647,7 +1656,7 @@ async function reconcileConcurrentServers(requestRevision: number): Promise<void
         }
 
         retireReplacedSessionListAccount(target.id, readCredentialAccountId(credentials));
-        const existing = managedServers.get(target.id);
+        const existing = getManagedServer(target.id);
         if (
             existing
             && existing.serverUrl === target.serverUrl
@@ -1657,10 +1666,10 @@ async function reconcileConcurrentServers(requestRevision: number): Promise<void
         ) {
             if (existing.serverName !== target.serverName) {
                 existing.serverName = target.serverName;
-                const cached = storage.getState().concurrentSessionListCacheByServerId?.[target.id] ?? null;
+                const cached = storage.getState().concurrentSessionListCacheByServerId?.[existing.id] ?? null;
                 if (cached) {
                     updateConcurrentSessionListCache({
-                        serverId: target.id,
+                        serverId: existing.id,
                         entry: {
                             ...cached,
                             serverName: target.serverName,
@@ -1811,7 +1820,7 @@ export function startConcurrentSessionCacheSync(): void {
         applyingActiveServerId = normalizeServerId(nextServerId);
         releaseFocusedSecondaryOwnership(nextServerId, false);
         for (const target of resolveDesiredConcurrentTargets()) {
-            if (!managedServers.has(target.id)) {
+            if (!getManagedServer(target.id)) {
                 publishConcurrentSessionListTargetObservation({ target, phase: 'loading' });
             }
         }
