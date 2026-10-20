@@ -1494,8 +1494,11 @@ export function DeclarativePluginSurface(props: Readonly<{
         && !rootCollectionListOwnsScrollViewport;
 
     if (!visible || !root) return null;
-    const documentSourceNotice = props.documentSourcePresentation?.presentation.contentNotice ?? null;
     const documentSourceState = props.documentSourcePresentation?.presentation.state;
+    // A refresh keeps the last body and says nothing; only a failed or stale source speaks.
+    const documentSourceNotice = documentSourceState === 'refreshing'
+        ? null
+        : props.documentSourcePresentation?.presentation.contentNotice ?? null;
     const documentSourceFailed = documentSourceState === 'stale'
         || documentSourceState === 'offline'
         || documentSourceState === 'unavailable'
