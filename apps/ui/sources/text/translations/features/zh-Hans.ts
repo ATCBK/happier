@@ -13462,7 +13462,7 @@ const widgetAddTranslations = { 'zh-Hans': {
         panesHint: '以链接形式添加，在详情中打开',
         builtIn: '内置',
         sessionDetails: '会话详情',
-        prompts: { project: '哪个项目？', projects: '哪些项目？', session: '哪个会话？', workspace: '哪个工作区？', machine: '哪台机器？' },
+        prompts: { project: '哪个项目？', projects: '哪些项目？', session: '哪个会话？', workspace: '哪个工作区？', checkout: '哪个工作区？', machine: '哪台机器？' },
         inputLabels: { session: '会话', metric: '指标', breakdown: '细分', groupBy: '分组依据', apiEquivalent: 'API 等价', agent: '代理', model: '模型', project: '项目', workspace: '工作区', backendMode: '后端模式', source: '来源', machine: '机器' },
         nativeDescriptions: {
             session_summary: '查看所选会话的活动和后续步骤。',
@@ -13509,6 +13509,7 @@ const widgetAddTranslations = { 'zh-Hans': {
         noChoices: '暂时没有可选项',
         optionsLoading: '正在加载选项…',
         optionsFailed: '无法加载选项',
+        widgetLoadFailed: '无法加载此小组件',
         invalidValue: '未找到',
         inputsInvalid: '请检查此小组件的输入',
         inputsUnavailable: '所选输入不可用',

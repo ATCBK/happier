@@ -23,7 +23,7 @@ export type WidgetAddTranslation = Readonly<{
     panesHint: string;
     builtIn: string;
     sessionDetails: string;
-    prompts: Readonly<{ project: string; projects: string; session: string; workspace: string; machine: string }>;
+    prompts: Readonly<{ project: string; projects: string; session: string; workspace: string; checkout: string; machine: string }>;
     inputLabels: Readonly<Record<'session' | 'metric' | 'breakdown' | 'groupBy' | 'apiEquivalent' | 'agent' | 'model' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine', string>>;
     nativeDescriptions: Readonly<{
         session_summary: string;
@@ -72,6 +72,7 @@ export type WidgetAddTranslation = Readonly<{
     noChoices: string;
     optionsLoading: string;
     optionsFailed: string;
+    widgetLoadFailed: string;
     invalidValue: string;
     invalidReason: string;
     inputsInvalid: string;
@@ -166,7 +167,7 @@ export const widgetAddTranslationsEnglish = { en: {
         panesHint: 'added as a link that opens in Details',
         builtIn: 'Built in',
         sessionDetails: 'Session details',
-        prompts: { project: 'Which project?', projects: 'Which projects?', session: 'Which session?', workspace: 'Which workspace?', machine: 'Which machine?' },
+        prompts: { project: 'Which project?', projects: 'Which projects?', session: 'Which session?', workspace: 'Which workspace?', checkout: 'Which checkout?', machine: 'Which machine?' },
         inputLabels: { session: 'Session', metric: 'Metric', breakdown: 'Breakdown', groupBy: 'Group by', apiEquivalent: 'API equivalent', agent: 'Agent', model: 'Model', project: 'Project', workspace: 'Workspace', backendMode: 'Backend mode', source: 'Source', machine: 'Machine' },
         nativeDescriptions: {
             session_summary: 'Activity and next steps for the session you choose.',
@@ -213,6 +214,7 @@ export const widgetAddTranslationsEnglish = { en: {
         noChoices: 'Nothing to choose here yet',
         optionsLoading: 'Loading choices…',
         optionsFailed: 'Couldn’t load the choices',
+        widgetLoadFailed: 'Couldn’t load this widget',
         invalidValue: 'not found',
         inputsInvalid: 'Review this widget’s inputs',
         inputsUnavailable: 'A selected input is unavailable',

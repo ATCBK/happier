@@ -13479,7 +13479,7 @@ const widgetAddTranslations = { it: {
         panesHint: 'aggiunto come link che si apre in Dettagli',
         builtIn: 'Integrato',
         sessionDetails: 'Dettagli della sessione',
-        prompts: { project: 'Quale progetto?', projects: 'Quali progetti?', session: 'Quale sessione?', workspace: 'Quale spazio di lavoro?', machine: 'Quale macchina?' },
+        prompts: { project: 'Quale progetto?', projects: 'Quali progetti?', session: 'Quale sessione?', workspace: 'Quale spazio di lavoro?', checkout: 'Quale spazio di lavoro?', machine: 'Quale macchina?' },
         inputLabels: { session: 'Sessione', metric: 'Metrica', breakdown: 'Suddivisione', groupBy: 'Raggruppa per', apiEquivalent: 'Equivalente API', agent: 'Agente', model: 'Modello', project: 'Progetto', workspace: 'Spazio di lavoro', backendMode: 'Modalità backend', source: 'Fonte', machine: 'Macchina' },
         nativeDescriptions: {
             session_summary: 'Attività e prossimi passi della sessione scelta.',
@@ -13526,6 +13526,7 @@ const widgetAddTranslations = { it: {
         noChoices: 'Ancora niente da scegliere',
         optionsLoading: 'Caricamento delle scelte…',
         optionsFailed: 'Impossibile caricare le scelte',
+        widgetLoadFailed: 'Impossibile caricare questo widget',
         invalidValue: 'non trovato',
         inputsInvalid: 'Controlla gli input di questo widget',
         inputsUnavailable: 'Un input selezionato non è disponibile',

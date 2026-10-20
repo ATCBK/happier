@@ -13498,7 +13498,7 @@ const widgetAddTranslations = { pt: {
         previewLiveData: 'Ao vivo, com seus dados',
         addsAtSize: ({ size }) => `Adiciona no tamanho ${size}. Você pode mudar depois.`,
         backToWidgets: 'Widgets',
-        prompts: { project: 'Qual projeto?', projects: 'Quais projetos?', session: 'Qual sessão?', workspace: 'Qual espaço de trabalho?', machine: 'Qual máquina?' },
+        prompts: { project: 'Qual projeto?', projects: 'Quais projetos?', session: 'Qual sessão?', workspace: 'Qual espaço de trabalho?', checkout: 'Qual espaço de trabalho?', machine: 'Qual máquina?' },
         inputLabels: { session: 'Sessão', metric: 'Métrica', breakdown: 'Detalhamento', groupBy: 'Agrupar por', apiEquivalent: 'Equivalente de API', agent: 'Agente', model: 'Modelo', project: 'Projeto', workspace: 'Espaço de trabalho', backendMode: 'Modo de backend', source: 'Fonte', machine: 'Máquina' },
         nativeDescriptions: {
             session_summary: 'Atividade e próximos passos da sessão escolhida.',
@@ -13526,6 +13526,7 @@ const widgetAddTranslations = { pt: {
         noChoices: 'Ainda não há nada para escolher',
         optionsLoading: 'Carregando opções…',
         optionsFailed: 'Não foi possível carregar as opções',
+        widgetLoadFailed: 'Não foi possível carregar este widget',
         invalidValue: 'não encontrado',
         inputsInvalid: 'Revise as entradas deste widget',
         inputsUnavailable: 'Uma entrada selecionada está indisponível',

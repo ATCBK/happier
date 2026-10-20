@@ -13498,7 +13498,7 @@ const widgetAddTranslations = { pl: {
         panesHint: 'dodane jako link otwierany w Szczegółach',
         builtIn: 'Wbudowane',
         sessionDetails: 'Szczegóły sesji',
-        prompts: { project: 'Który projekt?', projects: 'Które projekty?', session: 'Która sesja?', workspace: 'Który obszar roboczy?', machine: 'Która maszyna?' },
+        prompts: { project: 'Który projekt?', projects: 'Które projekty?', session: 'Która sesja?', workspace: 'Który obszar roboczy?', checkout: 'Który obszar roboczy?', machine: 'Która maszyna?' },
         inputLabels: { session: 'Sesja', metric: 'Miara', breakdown: 'Podział', groupBy: 'Grupuj według', apiEquivalent: 'Odpowiednik API', agent: 'Agent', model: 'Model', project: 'Projekt', workspace: 'Obszar roboczy', backendMode: 'Tryb backendu', source: 'Źródło', machine: 'Maszyna' },
         nativeDescriptions: {
             session_summary: 'Aktywność i kolejne kroki wybranej sesji.',
@@ -13545,6 +13545,7 @@ const widgetAddTranslations = { pl: {
         noChoices: 'Na razie nie ma czego wybrać',
         optionsLoading: 'Wczytywanie opcji…',
         optionsFailed: 'Nie udało się wczytać opcji',
+        widgetLoadFailed: 'Nie udało się wczytać tego widżetu',
         invalidValue: 'nie znaleziono',
         inputsInvalid: 'Sprawdź dane wejściowe tego widżetu',
         inputsUnavailable: 'Wybrane dane wejściowe są niedostępne',

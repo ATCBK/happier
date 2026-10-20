@@ -13510,7 +13510,7 @@ const widgetAddTranslations = { ru: {
         panesHint: 'добавляется как ссылка, открывающаяся в «Подробностях»',
         builtIn: 'Встроенное',
         sessionDetails: 'Сведения о сеансе',
-        prompts: { project: 'Какой проект?', projects: 'Какие проекты?', session: 'Какой сеанс?', workspace: 'Какое рабочее пространство?', machine: 'Какая машина?' },
+        prompts: { project: 'Какой проект?', projects: 'Какие проекты?', session: 'Какой сеанс?', workspace: 'Какое рабочее пространство?', checkout: 'Какое рабочее пространство?', machine: 'Какая машина?' },
         inputLabels: { session: 'Сеанс', metric: 'Метрика', breakdown: 'Разбивка', groupBy: 'Группировать по', apiEquivalent: 'Эквивалент API', agent: 'Агент', model: 'Модель', project: 'Проект', workspace: 'Рабочее пространство', backendMode: 'Режим бэкенда', source: 'Источник', machine: 'Машина' },
         nativeDescriptions: {
             session_summary: 'Активность и следующие шаги выбранной сессии.',
@@ -13557,6 +13557,7 @@ const widgetAddTranslations = { ru: {
         noChoices: 'Пока не из чего выбрать',
         optionsLoading: 'Загрузка вариантов…',
         optionsFailed: 'Не удалось загрузить варианты',
+        widgetLoadFailed: 'Не удалось загрузить этот виджет',
         invalidValue: 'не найдено',
         inputsInvalid: 'Проверьте входные данные этого виджета',
         inputsUnavailable: 'Выбранные входные данные недоступны',

@@ -13462,7 +13462,7 @@ const widgetAddTranslations = { 'zh-Hant': {
         panesHint: '以連結形式新增，在詳細資訊中開啟',
         builtIn: '內建',
         sessionDetails: '工作階段詳細資料',
-        prompts: { project: '哪個專案？', projects: '哪些專案？', session: '哪個工作階段？', workspace: '哪個工作區？', machine: '哪部機器？' },
+        prompts: { project: '哪個專案？', projects: '哪些專案？', session: '哪個工作階段？', workspace: '哪個工作區？', checkout: '哪個工作區？', machine: '哪部機器？' },
         inputLabels: { session: '工作階段', metric: '指標', breakdown: '細分', groupBy: '分組依據', apiEquivalent: 'API 等值', agent: '代理', model: '模型', project: '專案', workspace: '工作區', backendMode: '後端模式', source: '來源', machine: '機器' },
         nativeDescriptions: {
             session_summary: '查看所選工作階段的活動與後續步驟。',
@@ -13509,6 +13509,7 @@ const widgetAddTranslations = { 'zh-Hant': {
         noChoices: '目前沒有可選項',
         optionsLoading: '正在載入選項…',
         optionsFailed: '無法載入選項',
+        widgetLoadFailed: '無法載入此小工具',
         invalidValue: '找不到',
         inputsInvalid: '請檢查此小工具的輸入',
         inputsUnavailable: '所選輸入無法使用',

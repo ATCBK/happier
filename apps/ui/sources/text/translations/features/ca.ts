@@ -13502,7 +13502,7 @@ const widgetAddTranslations = { ca: {
         panesHint: 's’afegeix com un enllaç que s’obre a Detalls',
         builtIn: 'Integrat',
         sessionDetails: 'Detalls de la sessió',
-        prompts: { project: 'Quin projecte?', projects: 'Quins projectes?', session: 'Quina sessió?', workspace: 'Quin espai de treball?', machine: 'Quina màquina?' },
+        prompts: { project: 'Quin projecte?', projects: 'Quins projectes?', session: 'Quina sessió?', workspace: 'Quin espai de treball?', checkout: 'Quin espai de treball?', machine: 'Quina màquina?' },
         inputLabels: { session: 'Sessió', metric: 'Mètrica', breakdown: 'Desglossament', groupBy: 'Agrupa per', apiEquivalent: 'Equivalent d’API', agent: 'Agent', model: 'Model', project: 'Projecte', workspace: 'Espai de treball', backendMode: 'Mode de backend', source: 'Font', machine: 'Màquina' },
         nativeDescriptions: {
             session_summary: 'Activitat i propers passos de la sessió que triïs.',
@@ -13549,6 +13549,7 @@ const widgetAddTranslations = { ca: {
         noChoices: 'Encara no hi ha res per triar',
         optionsLoading: 'Carregant opcions…',
         optionsFailed: 'No s’han pogut carregar les opcions',
+        widgetLoadFailed: 'No s’ha pogut carregar aquest widget',
         invalidValue: 'no trobat',
         inputsInvalid: 'Revisa les entrades d’aquest giny',
         inputsUnavailable: 'Una entrada seleccionada no està disponible',

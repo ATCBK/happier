@@ -13466,7 +13466,7 @@ const widgetAddTranslations = { ja: {
         panesHint: '詳細で開くリンクとして追加',
         builtIn: '組み込み',
         sessionDetails: 'セッションの詳細',
-        prompts: { project: 'どのプロジェクトですか？', projects: 'どのプロジェクトですか？', session: 'どのセッションですか？', workspace: 'どのワークスペースですか？', machine: 'どのマシンですか？' },
+        prompts: { project: 'どのプロジェクトですか？', projects: 'どのプロジェクトですか？', session: 'どのセッションですか？', workspace: 'どのワークスペースですか？', checkout: 'どのワークスペースですか？', machine: 'どのマシンですか？' },
         inputLabels: { session: 'セッション', metric: '指標', breakdown: '内訳', groupBy: 'グループ化', apiEquivalent: 'API換算', agent: 'エージェント', model: 'モデル', project: 'プロジェクト', workspace: 'ワークスペース', backendMode: 'バックエンドモード', source: 'ソース', machine: 'マシン' },
         nativeDescriptions: {
             session_summary: '選んだセッションの活動と次のステップを確認します。',
@@ -13513,6 +13513,7 @@ const widgetAddTranslations = { ja: {
         noChoices: 'まだ選べるものがありません',
         optionsLoading: '候補を読み込み中…',
         optionsFailed: '候補を読み込めませんでした',
+        widgetLoadFailed: 'このウィジェットを読み込めませんでした',
         invalidValue: '見つかりません',
         inputsInvalid: 'このウィジェットの入力を確認してください',
         inputsUnavailable: '選択した入力を利用できません',
