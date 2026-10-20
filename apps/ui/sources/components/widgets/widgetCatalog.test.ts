@@ -52,7 +52,7 @@ describe('Widget Add candidates', () => {
         expect(candidate.authoredDefinition).toBeUndefined();
     });
     it('gives a built-in with no purpose of its own no description, instead of its title repeated', () => {
-        const checkouts = selectBuiltinWidgetCandidates().find(candidate => candidate.definition.kind === 'builtin' && candidate.definition.id === 'project_checkouts');
+        const checkouts = selectBuiltinWidgetCandidates().find(candidate => candidate.definition?.kind === 'builtin' && candidate.definition.id === 'project_checkouts');
         expect(checkouts?.title).toBeTruthy();
         expect(checkouts?.description).toBeUndefined();
     });
@@ -112,7 +112,7 @@ describe('Widget Add candidates', () => {
             sourceDefinition: { kind: 'installed', surface: { pluginId: 'acme.review', localId: 'review-status-widget' } } } as unknown as Parameters<typeof describeWidgetDefinitionSummaryV1>[0]);
         expect(readWidgetSourcePluginName(projection, saved)).toBe('Review Assistant');
         const plain = describeWidgetDefinitionSummaryV1({ artifactId: 'plain', name: 'Checks', sizeDeclaration: { sizes: [...WIDGET_SIZE_POLICY_V1.home.sizes], defaultSize: WIDGET_SIZE_POLICY_V1.home.defaultSize },
-            bodyKind: 'declarative', resources: [] });
+            inputs: { fields: [] }, inputSchema: { type: 'object', properties: {} }, bodyKind: 'declarative', resources: [] });
         expect(readWidgetSourcePluginName(projection, plain)).toBe('Checks');
     });
 
