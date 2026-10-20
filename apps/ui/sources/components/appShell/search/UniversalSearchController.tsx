@@ -69,6 +69,7 @@ import { searchWorkspaceFileContents } from '@/sync/domains/workspaces/files/wor
 import { useWorkspaceReplace, type WorkspaceReplaceMatcher } from '@/sync/domains/workspaces/files/workspaceFileReplace';
 import { unsavedWorkspaceFilePaths } from '@/components/appShell/panes/details/workspace/detailsTabChrome';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
+import { useReplaceUndoOnClose } from './replace/useReplaceUndoOnClose';
 import { buildReplaceReviewSections, REPLACE_OPTION_PREFIX, ReplaceField, ReplaceFooterAction, ReplaceResultSummary } from './replace/replaceReview';
 import { boundedReplyHints } from './searchBoundedReplyHints';
 import { parseSearchFileTarget } from '@/utils/url/sessionFileDeepLink';
@@ -650,7 +651,9 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const symbolsSource = React.useMemo<UniversalSearchSource>(() => symbolsInput
         ? createWorkspaceSymbolSearchSource(symbolsInput)
         : { status: 'unavailable', resolverKey: `${workspaceResolverKey}|${activeFilePath ?? ''}`,
-            hint: activeFilePath ? t('common.unavailable') : t('universalSearch.quickOpen.symbolsNeedFile') },
+            // Until the file's language services answer, the line says so for that file (never a bare "Unavailable").
+            hint: activeFilePath ? t('universalSearch.quickOpen.symbolsUnavailable', { file: activeFilePath.split('/').at(-1) ?? activeFilePath })
+                : t('universalSearch.quickOpen.symbolsNeedFile') },
     [activeFilePath, symbolsInput, workspaceResolverKey]);
     const quickOpenSources = useQuickOpenFileSources({ scope: workspaceScope, sessionId: activeSession?.id, activeFilePath });
     const recentFileResults = React.useMemo(() => workspaceScope && scope.accountId ? buildUniversalSearchWorkspaceFileResults({
@@ -808,6 +811,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         accountLifetime: selectedCredentialIsCurrent ? selectedCredentialBinding : null,
         matcher: replaceMatcher, unsavedPaths,
     });
+    useReplaceUndoOnClose(replaceModel, machineLabel);
     const reviewActive = replaceMatcher !== null;
     const commits = React.useMemo<UniversalSearchSource>(() => {
         // An offline folder is said once, under Text in files (lab ST "Machine offline"); this group steps aside.
@@ -983,8 +987,9 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     }, [activeSession?.id, matchCase, query, regex, selectedCredentialBinding, workspaceRef?.id, workspaceScope]);
     const replaceSections = React.useMemo(() => replaceMatcher ? buildReplaceReviewSections({
         model: replaceModel, matcher: replaceMatcher, scopeLabel: fileContentFolderLabel ?? t('universalSearch.content.textInFiles'),
-        machineLabel, reachable: workspaceScopeReachable, commitOpen: commitReplaceOpen,
-    }) : null, [commitReplaceOpen, fileContentFolderLabel, machineLabel, replaceMatcher, replaceModel, workspaceScopeReachable]);
+        machineLabel, available: Boolean(workspaceScope && workspaceSearchAvailable && selectedCredentialBinding),
+        reachable: workspaceScopeReachable, commitOpen: commitReplaceOpen,
+    }) : null, [commitReplaceOpen, fileContentFolderLabel, machineLabel, replaceMatcher, replaceModel, selectedCredentialBinding, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable]);
     const searchSections = React.useMemo(() => buildUniversalSearchSections({
         query,
         commands: props.commands,
@@ -996,6 +1001,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         files,
         recentFiles: recentFileResults,
         changedFiles: changedFileResults,
+        changedFilesScope: activeSession ? 'session' : 'folder',
         ...(workspaceScope && workspaceScopeUnreachable ? { filesStatusHint: t('universalSearch.quickOpen.offline', { machine: machineLabel }) } : {}),
         ...(source === 'files' && fileContentFolderLabel ? { filesNoMatch: { scopeLabel: fileContentFolderLabel, onSearchEverything: searchEverything } } : {}),
         symbols: symbolsSource,
@@ -1019,7 +1025,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             },
         } : {}),
         onCommitResult: (result) => { committedResultRef.current = result; },
-    }), [activeFilePath, searchEverything, fileContentFolderLabel, beginExternalConversationSearch, canonicalScopeServerId, changedFileResults, commits, conversationMachineId, fileContent, fileContentFolders, fileContentScopeLabel, files, machineNameById, pluginAccount.lifetime, pluginSections, projects, props.commands, query, recentFileResults, scanAvailability.result, scope.accountId, scope.machineScope, searchSettingsPages, selectedCredentialIsCurrent, sessionEntities, sessionInventoryStatus, showAllFileMatches, source, symbolsSource, transcript, workspaceResolverKey]);
+    }), [activeFilePath, activeSession, searchEverything, fileContentFolderLabel, beginExternalConversationSearch, canonicalScopeServerId, changedFileResults, commits, conversationMachineId, fileContent, fileContentFolders, fileContentScopeLabel, files, machineNameById, pluginAccount.lifetime, pluginSections, projects, props.commands, query, recentFileResults, scanAvailability.result, scope.accountId, scope.machineScope, searchSettingsPages, selectedCredentialIsCurrent, sessionEntities, sessionInventoryStatus, showAllFileMatches, source, symbolsSource, transcript, workspaceResolverKey]);
     const sections = replaceSections ?? searchSections;
     const rootStep = React.useMemo<SelectionListStep>(() => ({
         id: 'universal-search',
@@ -1293,7 +1299,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         // Return in the field never applies (a danger write); ⌥⌘↵ or the button does, after the review.
         ? <ReplaceField value={replacement} onChangeText={setReplacement} onHide={() => setReplaceOpen(false)} autoFocus={replaceToggledOpen.current} />
         : null;
-    const replaceFooter = reviewActive
+    // Until a preview is on screen the list itself says why (first preview, error): no action to offer yet.
+    const replaceFooter = reviewActive && (replaceModel.preview || replaceModel.applying || replaceModel.results)
         ? <ReplaceFooterAction model={replaceModel} compact={deviceType === 'phone'} onDone={requestClose} />
         : null;
     const replaceSummary = reviewActive ? <ReplaceResultSummary model={replaceModel} machineLabel={machineLabel} /> : null;
@@ -1328,7 +1335,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         />;
     }
     if (Platform.OS !== 'web' && props.presentation === 'route') {
-        return <UniversalSearchNativeHost rootStep={activeRootStep} query={query} onChangeQuery={changeQuery} onSelect={activeSelect} onCommandSelect={terminalJump ? handleTerminalJumpDetails : handleCommandSelect} onRequestClose={requestClose} selectedOptionId={selectedOptionId} listAccessibilityLabel={listAccessibilityLabel} filters={activeFilters} inputSuffix={inputSuffix} inputBehavior={terminalJump ? terminalScopeChrome.inputBehavior : sourceInputBehavior} dynamicSectionCache={dynamicSectionCache} />;
+        return <UniversalSearchNativeHost rootStep={activeRootStep} query={query} onChangeQuery={changeQuery} onSelect={activeSelect} onCommandSelect={terminalJump ? handleTerminalJumpDetails : handleCommandSelect} onRequestClose={requestClose} selectedOptionId={selectedOptionId} listAccessibilityLabel={listAccessibilityLabel} filters={activeFilters} inputSuffix={inputSuffix} inputAccessoryRow={replaceField} bodyHeader={replaceSummary} footerAction={replaceFooter} inputBehavior={terminalJump ? terminalScopeChrome.inputBehavior : sourceInputBehavior} dynamicSectionCache={dynamicSectionCache} />;
     }
     return (
         <View style={styles.root} testID="universal-search-host">

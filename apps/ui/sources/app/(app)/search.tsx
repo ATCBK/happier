@@ -32,11 +32,12 @@ const styles = StyleSheet.create((theme) => ({
 
 export default function UniversalSearchRoute(): React.ReactElement {
     const router = useRouter();
-    const params = useGlobalSearchParams<{ q?: string | string[]; source?: string | string[]; sessionId?: string | string[]; accountId?: string | string[]; serverId?: string | string[]; machineId?: string | string[]; rootPath?: string | string[]; [TERMINAL_JUMP_ROUTE_PARAM]?: string | string[] }>();
+    const params = useGlobalSearchParams<{ q?: string | string[]; source?: string | string[]; sessionId?: string | string[]; accountId?: string | string[]; serverId?: string | string[]; machineId?: string | string[]; rootPath?: string | string[]; replace?: string | string[]; [TERMINAL_JUMP_ROUTE_PARAM]?: string | string[] }>();
     const runtime = useUniversalSearchRuntime();
     const symbols = runtime.routeSymbols;
     const initialQuery = typeof params.q === 'string' ? params.q : '';
     const initialSource = params.source === 'fileContent' || params.source === 'files' || params.source === 'symbols' ? params.source : undefined;
+    const initialReplace = params.replace === '1' && initialSource === 'fileContent';
     const activeSessionId = typeof params.sessionId === 'string' ? params.sessionId : null;
     const initialScope = React.useMemo(() => resolveUniversalSearchRouteInitialScope(params), [params]);
     const terminalScopeId = params[TERMINAL_JUMP_ROUTE_PARAM];
@@ -58,6 +59,7 @@ export default function UniversalSearchRoute(): React.ReactElement {
             symbols={symbols}
             initialQuery={initialQuery}
             initialSource={initialSource}
+            initialReplace={initialReplace}
             activeSessionId={activeSessionId}
             initialScope={initialScope}
             terminalJump={terminalJump}

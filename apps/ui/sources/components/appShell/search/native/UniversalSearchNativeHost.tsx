@@ -74,6 +74,10 @@ export type UniversalSearchNativeHostProps = Readonly<{
     /** The controller's scope filters (the Home chip), shown the same way as on the web palette. */
     filters?: ReadonlyArray<SelectionListFilter>;
     inputSuffix?: React.ReactNode;
+    /** Rows under the query (the Replace field), the result summary above the list, and the list's one action. */
+    inputAccessoryRow?: React.ReactNode;
+    bodyHeader?: React.ReactNode;
+    footerAction?: React.ReactNode;
     inputBehavior?: SelectionListInputBehavior;
     testID?: string;
     dynamicSectionCache: SelectionListDynamicSectionCache;
@@ -221,6 +225,9 @@ export function UniversalSearchNativeHost(props: UniversalSearchNativeHostProps)
                         onRequestClose={requestClose}
                         dynamicSectionCache={props.dynamicSectionCache}
                         filters={props.filters}
+                        inputAccessoryRow={props.inputAccessoryRow}
+                        bodyHeader={props.bodyHeader}
+                        footerAction={props.footerAction}
                         inputBehavior={props.inputBehavior}
                         inputSuffix={<View style={{ flexDirection: 'row' }}>{props.inputSuffix}{props.query.length > 0 ? (
                             <IconButton

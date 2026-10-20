@@ -8977,6 +8977,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
             skippedSection: "Пропущены",
             replacedTitle: ({ matches, files }: { matches: number; files: number }) => `Заменено совпадений: ${matches} · файлов: ${files}`,
             undoneTitle: "Отменено. Файлы снова такие, как были.",
+            undoFailed: ({ machine }: { machine: string }) => `Не удалось отменить замену на ${machine}.`,
+            undoneExceptChanged: ({ count }: { count: number }) => `Отменено, кроме ${count === 1 ? '1 файла' : `${count} файлов`}, изменённых после замены: их не трогали.`,
             nothingReplaced: "Ничего не заменено",
             summaryChanged: ({ count }: { count: number }) => `Файлов изменено после предпросмотра и не тронуто: ${count}.`,
             summaryFailed: ({ count }: { count: number }) => `Не удалось записать файлов: ${count}.`,

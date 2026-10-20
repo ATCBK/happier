@@ -283,6 +283,13 @@ type Preview = Readonly<{
   coverage: 'complete' | 'partial';
 }>;
 
+export type WorkspaceReplaceUndoOutcome = Readonly<{
+  restored: number;
+  /** Files whose bytes moved since the replace; Undo left them alone. */
+  changed: number;
+  error: WorkspaceReplaceErrorCode | null;
+}>;
+
 export type WorkspaceReplaceModel = Readonly<{
   /** The preview on screen; it stays while a newer one loads. */
   preview: Preview | null;
@@ -313,7 +320,8 @@ export type WorkspaceReplaceModel = Readonly<{
   loadMore: () => void;
   apply: () => Promise<void>;
   cancelApply: () => void;
-  undo: (path?: string) => Promise<void>;
+  /** Resolves with what Undo did, or null when there was nothing to undo; usable after the surface closed. */
+  undo: (path?: string) => Promise<WorkspaceReplaceUndoOutcome | null>;
   /** Back to the review (Review again / Done). */
   resetResults: () => void;
   retry: () => void;
@@ -629,11 +637,11 @@ export function useWorkspaceReplace(
   const canUndo = undoable.length > 0 && !undoing && !applying;
   const undo = React.useCallback(
     async (path?: string) => {
-      if (!canUndo || !scope || !options) return;
+      if (!canUndo || !scope || !options) return null;
       const targets = undoable.filter(
         (result) => path === undefined || result.path === path,
       );
-      if (!targets.length) return;
+      if (!targets.length) return null;
       setUndoing(true);
       try {
         const response = await machineWorkspaceFileReplaceApply(
@@ -652,12 +660,26 @@ export function useWorkspaceReplace(
           options,
         );
         if (!response.ok) {
-          setApplyError('errorCode' in response ? 'outcome_unknown' : 'failed');
-          return;
+          const error = 'errorCode' in response ? 'outcome_unknown' : 'failed';
+          setApplyError(error);
+          return { restored: 0, changed: 0, error };
         }
         const outcome = new Map(
           response.results.map((result) => [result.path, result]),
         );
+        let restoredCount = 0;
+        let changedCount = 0;
+        let failedCount = 0;
+        for (const restored of response.results) {
+          if (restored.status === 'restored') restoredCount += 1;
+          else if (restored.status === 'changed') changedCount += 1;
+          else failedCount += 1;
+        }
+        const counted: WorkspaceReplaceUndoOutcome = {
+          restored: restoredCount,
+          changed: changedCount,
+          error: failedCount > 0 ? 'failed' : null,
+        };
         setResults(
           (previous) =>
             previous?.map((result) => {
@@ -678,8 +700,10 @@ export function useWorkspaceReplace(
               return { ...result, reason: restored.reason ?? result.reason };
             }) ?? previous,
         );
+        return counted;
       } catch {
         setApplyError('outcome_unknown');
+        return { restored: 0, changed: 0, error: 'outcome_unknown' };
       } finally {
         setUndoing(false);
       }

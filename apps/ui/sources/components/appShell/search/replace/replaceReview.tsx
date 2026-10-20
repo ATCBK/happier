@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -370,14 +370,17 @@ function ReplaceFileDetail({
           >{`  · ${headline}`}</Text>
         </Text>
       </View>
-      <DiffViewer
-        mode="unified"
-        unifiedDiff={patch}
-        filePath={file.path}
-        wrapLines
-        showPrefix
-        presentationStyleOverride="unified"
-      />
+      {/* The column's one scroll owner: a long diff scrolls under its headline, the note stays below it. */}
+      <ScrollView style={{ flex: 1, minHeight: 0 }} testID="replace-file-detail-scroll">
+        <DiffViewer
+          mode="unified"
+          unifiedDiff={patch}
+          filePath={file.path}
+          wrapLines
+          showPrefix
+          presentationStyleOverride="unified"
+        />
+      </ScrollView>
       <Text
         style={[
           Typography.variant('meta'),
@@ -400,6 +403,8 @@ export type ReplaceReviewContext = Readonly<{
   /** "happier" in "No text in happier matches …". */
   scopeLabel: string;
   machineLabel: string;
+  /** A folder is in scope and its Account is current (otherwise Text in files is unavailable too). */
+  available: boolean;
   /** The Machine holding the folder answers. */
   reachable: boolean;
   /** Commits the open-at-line result for a row, so the list's activation opens it. */
@@ -433,6 +438,10 @@ function reviewSections(
 ): SelectionListSectionDescriptor[] {
   const { model, matcher } = context;
   const preview = model.preview;
+  if (!context.available) {
+    const label = t('universalSearch.content.unavailable');
+    return [{ kind: 'static', id: 'replace:state', options: [staticLine('unavailable', label, <QuietLine icon="info" label={label} />)] }];
+  }
   if (!context.reachable) {
     return [
       {

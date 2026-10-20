@@ -8899,6 +8899,8 @@ localTailscale: {
             skippedSection: "スキップ",
             replacedTitle: ({ matches, files }: { matches: number; files: number }) => `${files} 個のファイルで ${matches} 件を置換しました`,
             undoneTitle: "元に戻しました。ファイルは元の状態です。",
+            undoFailed: ({ machine }: { machine: string }) => `${machine} で置換を元に戻せませんでした。`,
+            undoneExceptChanged: ({ count }: { count: number }) => `元に戻しました。置換後に変更された ${count} 件のファイルはそのままです。`,
             nothingReplaced: "何も置換されませんでした",
             summaryChanged: ({ count }: { count: number }) => `${count} 個のファイルはプレビュー後に変更されたため、そのままにしました。`,
             summaryFailed: ({ count }: { count: number }) => `${count} 個のファイルに書き込めませんでした。`,

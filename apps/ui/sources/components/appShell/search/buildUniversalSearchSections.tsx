@@ -200,6 +200,8 @@ export type BuildUniversalSearchSectionsInput = Readonly<{
     symbols?: UniversalSearchSource;
     recentFiles?: readonly UniversalSearchResult[];
     changedFiles?: readonly UniversalSearchResult[];
+    /** `folder`: no Session in scope, so Changed is the folder's own uncommitted changes. */
+    changedFilesScope?: 'session' | 'folder';
     filesStatusHint?: string;
     /**
      * Quick open typed with no file matching (lab FB2n): one quiet line with the way out, then Recent so the
@@ -716,7 +718,8 @@ export function buildUniversalSearchSections(
         if (!query) {
             const groups = [
                 { id: 'files:recent', title: t('universalSearch.quickOpen.recent'), results: input.recentFiles },
-                { id: 'files:changed', title: t('universalSearch.quickOpen.changed'), results: input.changedFiles?.filter(result => !recentIds.has(buildUniversalSearchOptionId(result.sourceId, result.scopeKey, result.id))) },
+                // A Session lists what it changed; a project (no Session) lists the folder's uncommitted changes.
+                { id: 'files:changed', title: input.changedFilesScope === 'folder' ? t('universalSearch.quickOpen.changedInFolder') : t('universalSearch.quickOpen.changed'), results: input.changedFiles?.filter(result => !recentIds.has(buildUniversalSearchOptionId(result.sourceId, result.scopeKey, result.id))) },
             ].flatMap(({ id, title, results }): SelectionListSectionDescriptor[] => results?.length ? [{
                 kind: 'static', id, title, options: results.map(result => toOption(result, 'file', onCommit)),
             }] : []);

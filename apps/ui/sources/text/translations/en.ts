@@ -10214,6 +10214,8 @@ const enUniversalSearch = {
       skippedSection: "Skipped",
       replacedTitle: ({ matches, files }: { matches: number; files: number }) => `Replaced ${matches} ${matches === 1 ? 'match' : 'matches'} in ${files} ${files === 1 ? 'file' : 'files'}`,
       undoneTitle: "Undone. The files are back as they were.",
+      undoFailed: ({ machine }: { machine: string }) => `Couldn’t undo the replace on ${machine}.`,
+      undoneExceptChanged: ({ count }: { count: number }) => `Undone, except ${count === 1 ? '1 file' : `${count} files`} changed since the replace and left alone.`,
       nothingReplaced: "Nothing was replaced",
       summaryChanged: ({ count }: { count: number }) => `${count === 1 ? '1 file' : `${count} files`} changed after the preview and ${count === 1 ? 'was' : 'were'} left alone.`,
       summaryFailed: ({ count }: { count: number }) => `${count === 1 ? '1 file' : `${count} files`} couldn’t be written.`,

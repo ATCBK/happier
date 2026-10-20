@@ -8267,6 +8267,8 @@ const zhHansValues = {
             skippedSection: "已跳过",
             replacedTitle: ({ matches, files }: { matches: number; files: number }) => `已在 ${files} 个文件中替换 ${matches} 处`,
             undoneTitle: "已撤销。文件已恢复原样。",
+            undoFailed: ({ machine }: { machine: string }) => `无法在 ${machine} 上撤销替换。`,
+            undoneExceptChanged: ({ count }: { count: number }) => `已撤销，但替换后被修改的 ${count} 个文件保持不变。`,
             nothingReplaced: "没有替换任何内容",
             summaryChanged: ({ count }: { count: number }) => `${count} 个文件在预览后已更改，未改动。`,
             summaryFailed: ({ count }: { count: number }) => `${count} 个文件无法写入。`,

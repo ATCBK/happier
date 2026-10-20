@@ -7143,6 +7143,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             skippedSection: "已略過",
             replacedTitle: ({ matches, files }: { matches: number; files: number }) => `已在 ${files} 個檔案中取代 ${matches} 處`,
             undoneTitle: "已復原。檔案已恢復原樣。",
+            undoFailed: ({ machine }: { machine: string }) => `無法在 ${machine} 上復原取代。`,
+            undoneExceptChanged: ({ count }: { count: number }) => `已復原，但取代後被修改的 ${count} 個檔案保持不變。`,
             nothingReplaced: "沒有取代任何內容",
             summaryChanged: ({ count }: { count: number }) => `${count} 個檔案在預覽後已變更，未改動。`,
             summaryFailed: ({ count }: { count: number }) => `${count} 個檔案無法寫入。`,
