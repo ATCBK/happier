@@ -43,9 +43,15 @@ export type SessionListFilterV1 = Readonly<{
 
 export type SessionListFilterDefaultsInputV1 = Partial<SessionListFilterV1>;
 
-/** Session identity/relations cannot select Runs; consumers need no Run reader for a known-empty kind. */
-export function canSessionListFilterIncludeRunsV1(filter: Pick<SessionListFilterV1, 'show' | 'bot' | 'coordinator'>): boolean {
-    return filter.show !== 'sessions' && filter.bot === undefined && filter.coordinator === undefined;
+/**
+ * Session identity/relations, Project and status cannot select Runs (a Run's destination is not its owner Session's
+ * Project or status); consumers need no Run reader for a known-empty kind.
+ */
+export function canSessionListFilterIncludeRunsV1(
+    filter: Pick<SessionListFilterV1, 'show' | 'bot' | 'coordinator' | 'projects' | 'statuses'>,
+): boolean {
+    return filter.show !== 'sessions' && filter.bot === undefined && filter.coordinator === undefined
+        && !filter.statuses?.length && !filter.projects?.include.length && !filter.projects?.exclude.length;
 }
 
 export type SessionListFilterMatchV1 = 'match' | 'miss' | 'unavailable';

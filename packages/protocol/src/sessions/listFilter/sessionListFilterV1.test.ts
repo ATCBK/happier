@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ScopeActionInputSchemas } from '../../actions/scopeActionFamily.js';
-import { matchSessionBotFilterV1, matchSessionProjectFilterV1, matchSessionListFilterV1, normalizeSessionListFilterV1, readSessionListStartedByV1, SessionListFilterV1Schema } from './sessionListFilterV1.js';
+import { canSessionListFilterIncludeRunsV1, matchSessionBotFilterV1, matchSessionProjectFilterV1, matchSessionListFilterV1, normalizeSessionListFilterV1, readSessionListStartedByV1, SessionListFilterV1Schema } from './sessionListFilterV1.js';
 
 describe('SessionListFilterV1', () => {
     it('never uses list attention promotion as proof that a Run matches the selected starter', () => {
@@ -187,5 +187,20 @@ describe('SessionListFilterV1', () => {
             ...filters, audiences: [{ serverId: 'home-a', kind: 'team', teamId: 'team-a', access: 'admin' }],
         }).success).toBe(false);
         expect(SessionListFilterV1Schema.safeParse({ ...filters, source: 'unknown' }).success).toBe(false);
+    });
+
+    it('treats Project and status as Session facts, so they select no Runs instead of an unavailable Run corpus', () => {
+        const filter = normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home'], startedBy: ['you', 'agents', 'triggers'], show: 'both' });
+        const run = { serverId: 'home', kind: 'run' as const, startedBy: 'you' as const, attentionRequired: false };
+        expect(canSessionListFilterIncludeRunsV1(filter)).toBe(true);
+        expect(matchSessionListFilterV1(filter, run)).toBe('match');
+        const failing = { ...filter, statuses: ['failed' as const] };
+        const inPayments = { ...filter, projects: { include: [{ serverId: 'home', projectKey: 'payments' }], exclude: [] } };
+        for (const sessionOnly of [failing, inPayments]) {
+            expect(canSessionListFilterIncludeRunsV1(sessionOnly)).toBe(false);
+            expect(matchSessionListFilterV1(sessionOnly, run)).toBe('miss');
+        }
+        // An emptied facet narrows nothing and keeps Runs in the corpus.
+        expect(canSessionListFilterIncludeRunsV1({ ...filter, statuses: [], projects: { include: [], exclude: [] } })).toBe(true);
     });
 });
