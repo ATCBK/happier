@@ -204,15 +204,13 @@ async function insertAdmittedLayout1SessionInTx(
     };
 }
 
-/** Empty authoring fields add no predicate beyond the fenced Session audience. */
-function hasOnlyCursorFencedCreationAdmission(prepared: PreparedLayout1SessionCreate): boolean {
+/** Placement deletion takes exclusive Account admission; birth holds content admission. */
+function hasOnlyFencedCreationAdmission(prepared: PreparedLayout1SessionCreate): boolean {
     return (prepared.initialAccess?.grants.length ?? 0) === 0
         && (prepared.initialTriggers?.length ?? 0) === 0
         && prepared.primaryTeamId == null
         && (prepared.teamCredentialBindings?.length ?? 0) === 0
-        && prepared.discussionParticipant === undefined
-        && (prepared.organizationPlacement === undefined
-            || (prepared.organizationPlacement.folderId === null && prepared.organizationPlacement.tagIds.length === 0));
+        && prepared.discussionParticipant === undefined;
 }
 
 /**
@@ -227,7 +225,7 @@ function hasOnlyAccountLocalCreationAdmission(
     authentication: SessionAccessAuthentication,
     authorization: SessionCreationExecutionAuthorization | undefined,
 ): boolean {
-    return hasOnlyCursorFencedCreationAdmission(prepared)
+    return hasOnlyFencedCreationAdmission(prepared)
         && authorization === undefined
         && authentication.sessionRuntimePrincipal === undefined
         && authentication.apiTokenGrant === undefined
@@ -298,9 +296,10 @@ export async function createOrRejoinLayout1SessionByTag(
     sessionCreationAuthorization?: SessionCreationExecutionAuthorization,
 ): Promise<Layout1SessionCreateOutcome> {
     // The cursor fence covers ordinary birth/rejoin and manager publication.
-    // Nonempty grants, Team resources, Discussion slots, trigger definitions and
-    // collection placement also depend on predicates beyond that audience.
-    const isolationLevel = hasOnlyCursorFencedCreationAdmission(prepared) ? undefined : "Serializable";
+    // Nonempty grants, Team resources, Discussion slots and trigger definitions
+    // still depend on predicates beyond those fences. Placement's active-resource
+    // checks are protected by the organization deletion owner's exclusive admission.
+    const isolationLevel = hasOnlyFencedCreationAdmission(prepared) ? undefined : "Serializable";
     try {
         const fresh = hasOnlyAccountLocalCreationAdmission(prepared, authentication, sessionCreationAuthorization)
             ? await inTx(tx => tryCreateAccountLocalSessionInTx(tx, prepared, authentication), {

@@ -3,6 +3,7 @@ import { type CreateOrUpdateSessionOrganizationFolderRequest, type CreateOrUpdat
 import { type SetSessionAttentionStandingRequest } from '@happier-dev/protocol/sessions/organization/standings';
 
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
+import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { applyViewerReadCursorOperationInTx } from "@/app/session/personal/readState";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
@@ -683,6 +684,9 @@ export async function deleteSessionOrganizationFolder(params: Readonly<{
     request: DeleteSessionOrganizationFolderRequest;
 }>) {
     return await inTx(async (tx) => {
+        // Exclude admitted births before reading the tree and its assignments.
+        // Birth placement can then use current reads without certifying cursor writes.
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
         const folders = await tx.sessionOrganizationFolder.findMany({
             where: { accountId: params.accountId, archivedAt: null },
             select: { id: true, folderKey: true, parentKey: true },
@@ -1066,6 +1070,9 @@ export async function deleteSessionOrganizationTag(params: Readonly<{
     request: DeleteSessionOrganizationTagRequest;
 }>) {
     return await inTx(async (tx) => {
+        // The same admission as Folder deletion covers birth's active-tag check
+        // through assignment commit, including assignments absent at delete entry.
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
         const removedAssignments = await tx.sessionTagAssignment.deleteMany({
             where: { accountId: params.accountId, tagId: params.request.tagId },
         });
