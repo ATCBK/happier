@@ -77,7 +77,7 @@ export type RequesterSessionRuntimeContext = Readonly<{
   materializeRequestAuthBearer: DaemonConnectedAccountPurposeBindingRuntime['materializeRequestAuthBearer'];
   resolveCurrentSessionPurposeBindingSnapshot: DaemonConnectedAccountPurposeBindingRuntime['resolveCurrentSessionPurposeBindingSnapshot'];
   daemonSessionMutationCustody: DaemonSessionMutationCustody;
-  refreshAccountSettings(minSettingsVersion?: number): Promise<boolean>;
+  refreshAccountSettings(minSettingsVersion?: number, signal?: AbortSignal): Promise<boolean>;
   activeServerDir: string;
   connectedServicesMaterializationBaseDir: string;
   connectedServiceRuntimeQuotaSnapshots: ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore;

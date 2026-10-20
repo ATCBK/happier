@@ -81,10 +81,10 @@ export function createRequesterAccountSettingsPublication(input: Readonly<{
     ensureCurrent,
     async refresh(minSettingsVersion?: number, signal?: AbortSignal): Promise<boolean> {
       const minimum = normalizeAccountSettingsVersionHint(minSettingsVersion) ?? 0;
-      if (await ensureCurrent(signal).catch(() => false) && (context.readSnapshot()?.settingsVersion ?? -1) >= minimum) return true;
+      if (await ensureCurrent(signal) && (context.readSnapshot()?.settingsVersion ?? -1) >= minimum) return true;
       if (signal?.aborted || retirement.signal.aborted || !context.readSnapshot()) return false;
       observe({ kind: 'hint', version: Math.max(highestVersion, minimum) }, true);
-      return await ensureCurrent(signal).catch(() => false);
+      return await ensureCurrent(signal);
     },
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     dispose() { retirement.abort(); invalidate(); unsubscribe(); listeners.clear(); },

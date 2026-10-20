@@ -116,6 +116,7 @@ import type { DaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import { resolveRequesterLaunchAdmissionFailure } from '../lifecycle/requesterWorkAttribution';
 import type { RequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
 import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
+import { readRequesterHomeWithinActionLifetime } from '../sessionEncryption/requesterCurrentness';
 
 type SpawnCredentials = NonNullable<Parameters<typeof resolveSpawnBackendIdentity>[0]['credentials']>;
 type SpawnApi = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['api'];
@@ -203,10 +204,11 @@ export async function executeSpawnSessionRequest(
     };
     recordPreparationPhase('entered');
     let options = params.options;
+    const preparationSignal = options.projectSetupOperation?.signal;
     const requesterRuntime = options.requesterSessionBootstrap ? params.requesterSessionRuntimeContext : undefined;
     if (options.requesterSessionBootstrap) {
         if (!requesterRuntime || requesterRuntime.bootstrap !== options.requesterSessionBootstrap
-            || !await requesterRuntime.isCurrent()) {
+            || !await readRequesterHomeWithinActionLifetime(() => requesterRuntime.isCurrent(preparationSignal), preparationSignal)) {
             return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                 errorMessage: 'Requester Account runtime unavailable' };
         }
@@ -239,7 +241,12 @@ export async function executeSpawnSessionRequest(
         // A profile id is stable Account intent. Refresh before resolving it so
         // the daemon, rather than an Action/UI caller, owns the profile overlay.
         if (requesterRuntime) {
-            if (!await requesterRuntime.refreshAccountSettings(options.accountSettingsVersionHint)) return {
+            // Retry only Account preparation under the original accepted
+            // startup's cancellation lifetime. Native launch is never replayed.
+            const settingsCurrent = await readRequesterHomeWithinActionLifetime(
+                () => requesterRuntime.refreshAccountSettings(options.accountSettingsVersionHint, preparationSignal), preparationSignal);
+            preparationSignal?.throwIfAborted();
+            if (!settingsCurrent) return {
                 type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                 errorMessage: 'Requester Account settings unavailable' };
         } else await refreshAccountSettingsForSpawn(params);

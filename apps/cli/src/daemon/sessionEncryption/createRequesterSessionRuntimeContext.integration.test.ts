@@ -15,6 +15,10 @@ import { registerExecutionRunConnectedServicesTarget } from '../connectedService
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
 import { admitRequesterSessionBootstrap, assertRequesterSessionAccountContextCurrent, createRequesterSessionCredentialCustody, createRequesterSessionRuntimeContextResolver, listRequesterSessionCredentialBindings } from './requesterSessionCredentials';
 import { createRequesterSessionRuntimeContext } from './createRequesterSessionRuntimeContext';
+import { executeSpawnSessionRequest } from '../startup/executeSpawnSessionRequest';
+import { createHostActionOperationRuntime } from '../actionOperations/createHostActionOperationRuntime';
+import { ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
+import { createSessionStartupProjectSpawn } from '@/session/actions/lifecycle/sessionStartupProjectOperation';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
@@ -191,7 +195,7 @@ let openedRunPluginRuntime = false;
 beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
 afterEach(async () => { await channel.close(); });
 afterAll(async () => { if (openedRunPluginRuntime) await runPluginRuntimeController.shutdown(); });
-it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
+it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'startup-settings-cancel', 'startup-settings-forbidden', 'startup-settings-unbound', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
   const actionPolicySurface = surface === 'action-policy' || surface === 'action-home-recovery' || surface === 'authorization-observations';
   const runSurface = surface === 'run-home-recovery' || surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
   const runPurposeSurface = surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
@@ -450,6 +454,118 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
     }
     runtime = await runtimeConstruction;
     if (!runtime) throw new Error('Missing real requester runtime');
+    if (surface === 'settings-refresh-failure' || surface.startsWith('startup-settings-')) {
+      const homeGet = get.getMockImplementation()!;
+      get.mockRestore();
+      const http = fastify();
+      let unavailable = true;
+      let failedReads = 0;
+      http.get('/*', async (request, reply) => {
+        if (request.url === '/v2/account/settings' && unavailable) {
+          failedReads++;
+          return reply.code(surface === 'startup-settings-forbidden' ? 403 : 503).send({ error: 'home_unavailable' });
+        }
+        const response = await homeGet(new URL(request.url, 'https://bob-home.test').href,
+          { headers: { Authorization: request.headers.authorization } });
+        if (!response || typeof response !== 'object' || !('status' in response) || typeof response.status !== 'number'
+          || !('data' in response)) throw new Error('Invalid Home HTTP fixture response');
+        return reply.code(response.status).send(response.data);
+      });
+      await http.ready();
+      const restoreHttp = installAxiosFastifyAdapter({ app: http, origin: 'https://bob-home.test' });
+      const snapshot = runtime.readAccountSettingsSnapshot();
+      const operations = createHostActionOperationRuntime({ serverId: 'bob-home', machineId: 'machine',
+        resolveAccountId: async () => 'bob', supportsCoreCancellation: () => true });
+      let operationId = '';
+      let pending: Promise<unknown> | undefined;
+      try {
+        if (surface === 'settings-refresh-failure') {
+          await expect(runtime.bootstrap.refreshAccountSettings(2)).rejects.toMatchObject({ response: { status: 503 } });
+          expect(runtime.readAccountSettingsSnapshot()).toBe(snapshot);
+          // A previously failed socket hint enters refresh through its first
+          // readiness read, rather than the explicit minimum's final read.
+          await channel.hintSettings(2);
+          await expect(runtime.bootstrap.refreshAccountSettings(2)).rejects.toMatchObject({ response: { status: 503 } });
+          expect(runtime.readAccountSettingsSnapshot()).toBe(snapshot);
+          unavailable = false;
+          settingsVersion = 2;
+          expect(await runtime.bootstrap.refreshAccountSettings(2)).toBe(true);
+          expect(runtime.readAccountSettingsSnapshot().settingsVersion).toBe(2);
+          return;
+        }
+        const input = { creationKey: `fix138-${surface}`, directory, machineId: 'machine' };
+        pending = operations.observeExecution({ actionId: 'session.spawn_new', input,
+          actionRequestId: input.creationKey, onOperation: operation => { operationId = operation.operationId; },
+          execute: async operation => {
+            const spawn = createSessionStartupProjectSpawn({ context: { signal: operation.signal,
+              ...(surface === 'startup-settings-unbound' ? {} : { localActionContext: operation }) },
+              awaitAgentSessionOpen: async () => { throw new Error('Unexpected runner'); },
+              spawnSession: options => executeSpawnSessionRequest({ options,
+              requesterSessionRuntimeContext: runtime!, credentials: runtime!.bootstrap.credentials, api: runtime!.api,
+              connectedServicesMaterializationBaseDir: directory,
+              connectedServiceRefreshCoordinator: null, connectedServiceQuotasCoordinator: null,
+              connectedServiceRuntimeRegistry: registry, pidToTrackedSession: trackedSessions,
+              pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+              spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+              resolveCanonicalTrackedSessionId: () => { throw new Error('Unexpected runner'); },
+              onChildExited: () => { throw new Error('Unexpected runner'); },
+              }),
+            });
+            // Invalid directory is the no-effect neighbor after Settings:
+            // recovery must reach request validation, never launch a runner.
+            const result = await spawn({ directory: '', accountSettingsVersionHint: 2,
+              requesterSessionBootstrap: admitted.admitted }).catch(error => {
+              // Match the installed Workflow startup callback's operation
+              // cancellation projection; native launch remains unreachable.
+              if (operation.signal.aborted) return { type: 'error' as const, errorCode: 'cancelled', errorMessage: 'cancelled' };
+              throw error;
+            });
+            return result.type === 'error' ? { ok: false, errorCode: result.errorCode, error: result.errorMessage }
+              : { ok: true, result };
+          } });
+        // Consume rejection immediately; an unbound transient must remain
+        // retryable rather than becoming an unhandled exception in the harness.
+        const settled = pending.then(result => ({ result }), error => ({ error: error as unknown }));
+        if (surface === 'startup-settings-unbound') {
+          expect(await settled).toMatchObject({ error: { code: 'project_requester_home_unavailable', retryable: true } });
+          expect(runtime.readAccountSettingsSnapshot()).toBe(snapshot);
+          return;
+        }
+        if (surface === 'startup-settings-forbidden') {
+          expect(await settled).toMatchObject({ error: { response: { status: 403 } } });
+          expect(failedReads).toBe(1);
+          expect(ActionOperationGetV1ResponseSchema.parse(await operations.handlers.get({ operationId })))
+            .toMatchObject({ kind: 'found', operation: { state: 'failed' } });
+          expect(runtime.readAccountSettingsSnapshot()).toBe(snapshot);
+          return;
+        }
+        await vi.waitFor(() => expect(failedReads).toBeGreaterThan(0));
+        const readOperation = () => operations.handlers.get({ operationId });
+        expect(ActionOperationGetV1ResponseSchema.parse(await readOperation())).toMatchObject({ kind: 'found', operation: { state: 'running' } });
+        expect(runtime.readAccountSettingsSnapshot()).toBe(snapshot);
+        if (surface === 'startup-settings-cancel') {
+          expect(await operations.handlers.cancel({ operationId })).toMatchObject({ kind: 'requested' });
+          await settled;
+          expect(ActionOperationGetV1ResponseSchema.parse(await readOperation())).toMatchObject({ kind: 'found', operation: { state: 'cancelled' } });
+          expect(runtime.readAccountSettingsSnapshot().settingsVersion).toBe(1);
+        } else {
+          unavailable = false;
+          settingsVersion = 2;
+          expect(await settled).toMatchObject({ result: { ok: false, errorCode: 'INVALID_REQUEST' } });
+          expect(runtime.readAccountSettingsSnapshot().settingsVersion).toBe(2);
+          expect(ActionOperationGetV1ResponseSchema.parse(await readOperation())).toMatchObject({ kind: 'found', operation: {
+            state: 'failed', error: { errorCode: 'INVALID_REQUEST' },
+          } });
+        }
+        expect(getActiveAccountSettingsSnapshot()).toBe(alice);
+      } finally {
+        unavailable = false;
+        if (operationId) await operations.handlers.cancel({ operationId });
+        await pending?.catch(() => undefined);
+        restoreHttp(); await http.close();
+      }
+      return;
+    }
     if (surface === 'background-home-failure') {
       // Coordinator inventory reads carry cancellation, not an accepted Action
       // lifetime. A Home failure must reach the existing coordinator backoff.

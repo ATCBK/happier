@@ -125,11 +125,11 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   });
   const profileStore = createCliProfileStoreForOperation({ operationContext: savedSecrets });
   let profileProjection: Awaited<ReturnType<typeof profileStore.readCatalog>> | null = null;
-  const refreshAccountSettings = async (minSettingsVersion?: number) => {
+  const refreshAccountSettings = async (minSettingsVersion?: number, signal?: AbortSignal) => {
     // Catalog readers and commits consume one refresh's requester observation.
     // Keep publication outside it so Home revocation during a read still wins.
     const refreshed = await runWithRequesterSessionCurrentnessCheckpoint(async () => {
-      if (disposed || !await bootstrap.refreshAccountSettings(minSettingsVersion) || !await isCurrent()) return false;
+      if (disposed || !await bootstrap.refreshAccountSettings(minSettingsVersion, signal) || !await isCurrent(signal)) return false;
       const snapshot = readSnapshot();
       try {
         const projection = await profileStore.readCatalog();
@@ -153,8 +153,8 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
           key: 'configurations', operationContext: savedSecrets })] : []),
       ]);
       return true;
-    });
-    if (!refreshed || !await isCurrent()) return false;
+    }).catch(error => { rethrowRequesterHomeReadFailure(error); throw error; });
+    if (!refreshed || !await isCurrent(signal)) return false;
     for (const listener of listeners) listener();
     return true;
   };
