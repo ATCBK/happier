@@ -664,6 +664,13 @@ consumers admit them. Ordinary Pool member changes and access-token refresh do n
 change this static compatibility confirmation. A changed target or compatibility
 fingerprint requires its own confirmation.
 
+**Development completion gap:** a recipient's confirmation is not yet carried
+through the source custodian's model projection. That projection currently
+reads the custodian's Provider settings. A successful confirmation in the
+recipient's Account therefore does not by itself establish a selectable
+cross-Account Team model. Do not infer a working launch from confirmation or
+an unqualified entitlement read alone.
+
 Resource access has two intentionally different privacy contracts:
 
 - **Brokered** access keeps usable credential material on one exact broker Machine. A custodian
@@ -729,11 +736,17 @@ Readiness and failures use the typed Team-credential result unions; clients must
 reported recovery action and must not silently fall back to a personal connection or from direct
 to brokered delivery.
 
-The development readiness owner may attach `application_unavailable` or
-`model_unavailable` to `broker_unavailable` when every evaluated candidate reports
-that same typed refusal. Empty, mixed, and transport-failed observations remain
-generic. This diagnostic carries no model, account, or credential details and
-does not change admission or recovery authority.
+The development readiness owner preserves typed source-projection failures.
+An application-qualified catalog read distinguishes an unavailable transport,
+an invalid response, missing source authorization, incompatible rows and a
+current empty catalog with bounded `broker_unavailable.reason` values. These
+failures do not become an unexplained empty model list reported as available.
+Usable rows from another evaluated candidate retain their availability; a
+configured usage limit or structural resource failure still takes precedence.
+Administration reports a broker target as `not_verified` until presence has
+actually been observed. None of these presentation facts grants access or
+replaces the existing recovery action. Diagnostics carry no model, account or
+credential details.
 
 The development Temporary-computer flow resolves its Team credential before a Session exists. It
 authorizes the named resource through the planned-Session admission owner before it discovers any
