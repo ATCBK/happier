@@ -441,8 +441,10 @@ const workspaceNodeModulesBlockList = new RegExp([
 // redundant work and frequently hits transient ENOENTs in hoisted/symlinked dependency layouts. React Native's own
 // `@react-native/*` packages are an exception: Yarn intentionally keeps packages such as virtualized-lists private to
 // React Native, and narrowed Metro runs must still crawl the resolved source files.
+// Pierre also declares an ESM-only private theming package. Retain that exact
+// subtree (and its scope directory) so Metro can apply its public exports.
 const nestedDependencyNodeModulesBlockList =
-  /[\\/]node_modules[\\/](?!react-native[\\/]node_modules[\\/]@react-native[\\/])(?:@[^\\/]+[\\/])?[^\\/]+[\\/]node_modules[\\/]/;
+  /[\\/]node_modules[\\/](?!react-native[\\/]node_modules[\\/]@react-native[\\/]|@pierre[\\/]diffs[\\/]node_modules[\\/]@pierre(?:[\\/]theming(?:[\\/]|$)|$))(?:@[^\\/]+[\\/])?[^\\/]+[\\/]node_modules[\\/]/;
 const existingBlockList = config.resolver.blockList;
   config.resolver.blockList = Array.isArray(existingBlockList)
   ? [...existingBlockList, testModuleBlockList, projectArtifactsBlockList, nextBuildArtifactsBlockList, hstackWebArtifactExportBlockList, packTransientPublicationBlockList, repositoryMetadataBlockList, cliRunnerSnapshotsBlockList, typescriptPackageBuildCacheBlockList, packageManagerBinBlockList, workspaceNodeModulesBlockList, nestedDependencyNodeModulesBlockList, ...internalWorkspaceDistBlockList]
@@ -883,6 +885,18 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   // Hoisted dependencies must not introduce their own React or native renderers.
   if (/^(react|react-dom|react-native)(?:\/|$)/u.test(moduleName)) {
     context = { ...context, originModulePath: workspaceEntryPoint };
+  }
+  // Narrowed exports disable hierarchical lookup to preserve app runtime peers.
+  // Only Pierre's own theming imports need its private dependency directory;
+  // leave export conditions and every other package's lookup policy to Metro.
+  const pierrePackageRoot = getBarePackageName(moduleName) === "@pierre/theming"
+    ? context?.originModulePath?.match(/^(.*[\\/]node_modules[\\/]@pierre[\\/]diffs)[\\/]/u)?.[1]
+    : null;
+  if (pierrePackageRoot) {
+    context = {
+      ...context,
+      nodeModulesPaths: [path.join(pierrePackageRoot, "node_modules"), ...(context.nodeModulesPaths ?? [])],
+    };
   }
   // Expo CLI normally projects this platform fact before delegating to Metro,
   // but other legitimate consumers of the canonical config (release/proof
