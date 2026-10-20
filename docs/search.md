@@ -560,6 +560,16 @@ Standalone MCP reaches this same machine operation through
 `createCliActionDeps`'s `hostExternalSessionActionTransport`, after canonical
 admission/approval and exact-machine target reconciliation.
 
+In 0.3 development, native discovery, `sessions.external.link.ensure` and
+`sessions.external.transcript.page` are callable from Agent, MCP and CLI
+surfaces. Transcript paging uses the native source's explicit Machine; no
+linked Happier Session is required. Linking keeps its danger approval default.
+Machine-only approval currentness uses the same implicit Machine target as
+execution replay; a contextual Session such as standalone MCP's `cli-global`
+does not replace that target. Explicit signed targets remain unchanged.
+The low-level Follow leases and secure read-after refresh remain host-owned
+RPC contracts; initial/older/newer transcript pages provide the Agent read flow.
+
 The conversation-search owner preserves failed native sources alongside successful
 hits as optional `failures` coverage: `{ machineId, agentId, sourceKey, errorCode,
 retryable }`. `search.conversations` returns that same coverage through its strict
@@ -611,6 +621,12 @@ then uses the transcript jump host and ephemeral Find seed. Source ordinals
 are never treated as Happier sequence numbers. If the target cannot resolve,
 Find can still open on the query. Query/options remain in memory, outside
 URLs, settings and logs.
+The shared chat handoff awaits the existing unsaved-changes navigation guard
+and the opener before staging the seed. A retained copy of the same Session
+must not consume the new launch while departure is pending; cancelled
+navigation stages nothing. Account authority is checked again before the
+admitted navigation callback and before publication. Transcript hydration then
+uses the existing destination consumer and Find model, not a second seed path.
 
 ## Next and client Actions (0.3 development)
 

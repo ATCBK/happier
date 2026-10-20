@@ -211,8 +211,17 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
       if (origin.accountId !== undefined && origin.accountId !== input.accountId) return stale('account_changed');
       if (origin.machineId !== undefined && origin.machineId !== input.machineId) return stale('machine_changed');
 
+      const operands = request?.actionArgs ?? actionInput;
+      const hasSessionOperand = operands !== null && typeof operands === 'object' && 'sessionId' in operands
+        && typeof operands.sessionId === 'string' && operands.sessionId.trim().length > 0;
+      const machineEffect = request?.v === 2
+        && resolveActionExecutionPlacementForInput(getActionSpec(request.actionId), operands) === 'machine';
       const target = origin.target
-        ?? (origin.sessionId
+        // Machine-only effects replay on the recorded Machine. A contextual
+        // Session is not their target; explicit Session operands still recheck locality.
+        ?? (machineEffect && !hasSessionOperand && origin.machineId
+          ? { kind: 'machine' as const, machineId: origin.machineId }
+          : origin.sessionId
           ? { kind: 'session' as const, sessionId: origin.sessionId }
           : origin.machineId
             ? { kind: 'machine' as const, machineId: origin.machineId }
