@@ -257,6 +257,21 @@ describe('SessionItem activity time', () => {
         storageModule.storage.setState(previousStorageState, true);
     });
 
+    it('shows shared archive progress on an already mounted row and clears it when the operation settles', async () => {
+        const { act } = await import('react-test-renderer');
+        const SessionItem = await importSessionItem();
+        const screen = await renderScreen(<SessionItem session={createSession('archiving-row')}
+            serverId="server_a" pinned={false} selected={false} isFirst isLast isSingle
+            variant="default" compact={false} />);
+        const textBefore = screen.getTextContent();
+        let operation: ReturnType<typeof storageModule.storage.getState>['sessionArchiveOperations'][string][string] | null = null;
+        await act(async () => { operation = storageModule.storage.getState().beginSessionArchive('archiving-row', 'server_a'); });
+        expect(screen.getTextContent()).toContain('status.archiving');
+        expect(screen.findByTestId('session-list-item-archiving-row')?.props.accessibilityLabel).toContain('status.archiving');
+        await act(async () => { storageModule.storage.getState().finishSessionArchive(operation!); });
+        expect(screen.getTextContent()).toBe(textBefore);
+    });
+
     it('renders the meaningful activity timestamp instead of the raw session updatedAt', async () => {
         const SessionItem = await importSessionItem();
 

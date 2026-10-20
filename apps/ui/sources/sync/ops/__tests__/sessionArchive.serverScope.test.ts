@@ -160,6 +160,35 @@ describe('archive routing from canonical session-list rows', () => {
     await boundary?.dispose();
   });
 
+  it.each(['archive', 'unarchive'] as const)('projects a remote %s only into the captured Home, including list-only rows', async action => {
+    const owner = await boundary.addHome('https://projection-owner.example', 'projection-owner');
+    const other = await boundary.addHome('https://projection-other.example', 'projection-other');
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { createSessionFixture, createSessionListRenderableSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+    const { sessionArchiveWithServerScope, sessionUnarchiveWithServerScope } = await import('../sessions');
+    storage.setState(storage.getInitialState(), true);
+    const before = action === 'archive' ? null : 10;
+    const after = action === 'archive' ? 42 : null;
+    const active = createSessionFixture({ id: 'same-session', serverId: other.id, archivedAt: before });
+    storage.setState({ sessions: { [active.id]: active } });
+    storage.getState().applyServerScopedSessionListRows(owner.id, [
+      createSessionListRenderableSessionFixture({ id: active.id, archivedAt: before }),
+    ], { source: action === 'archive' ? 'ordinary' : 'archived', mode: 'replace' });
+    storage.getState().applyServerScopedSessionListRows(other.id, [
+      createSessionListRenderableSessionFixture({ id: active.id, archivedAt: before }),
+    ], { source: 'ordinary', mode: 'replace' });
+    const unrelated = storage.getState().sessionListRowsByServerId[other.id];
+    boundary.setHttpResponder(async input => new URL(String(input)).pathname === `/v2/sessions/${active.id}/${action}`
+      ? Response.json({ success: true, archivedAt: after }) : null);
+    const run = action === 'archive' ? sessionArchiveWithServerScope : sessionUnarchiveWithServerScope;
+    await expect(run(active.id, { serverId: owner.id })).resolves.toMatchObject({ success: true });
+    expect(storage.getState().sessions[active.id]).toBe(active);
+    expect(storage.getState().sessionListRowsByServerId[other.id]).toBe(unrelated);
+    expect(storage.getState().sessionListRowsByServerId[owner.id]?.[active.id]?.archivedAt).toBe(after);
+    expect(action === 'archive' ? storage.getState().archivedSessionListMembershipByServerId[owner.id]
+      : storage.getState().ordinarySessionListMembershipByServerId[owner.id]).toContain(active.id);
+  });
+
   it('defaults a null serverId to the preferred owner Home from its canonical local list', async () => {
     const owner = await boundary.addHome('https://archive-owner.example', 'archive-account');
     const { storage } = await import('@/sync/domains/state/storage');
