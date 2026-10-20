@@ -21,7 +21,7 @@ describe('Linear source through provider HTTP', () => {
         labelIds: ['label-1'], projectId: 'project-1', priority: 2, dueDate: '2026-10-25', estimate: 3, parent: { entryId: 'parent-1' } } });
   });
   it('discovers one workspace through the exact listed account', async () => {
-    const h = host(() => ({ organization: { id: 'workspace-1', name: 'Engineering workspace' } }));
+    const h = host(() => ({ viewer: { organization: { id: 'workspace-1', name: 'Engineering workspace' } } }));
     const result = TriageListInstancesResultV1Schema.parse(await listLinearInstances({ v: 1 }, h.context));
     expect(result.kind).toBe('complete');
     if (result.kind === 'failed') throw new Error('discovery failed');
