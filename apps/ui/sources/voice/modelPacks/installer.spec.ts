@@ -199,6 +199,68 @@ describe('modelPacks installer (native)', () => {
       expect(Buffer.from(fs.files.get(`${PACK_URI}/downloaded.bin`) ?? []).equals(Buffer.from(downloaded))).toBe(true);
     });
 
+    it('reports verification progress while a downloaded file is hashed', async () => {
+      const bytes = multiChunkBytes(3);
+      const fs = createFs();
+      useNativeDownloads(fs, () => bytes);
+      const progress: Array<{ verified: number; filesDone: number }> = [];
+      await ensureModelPackInstalled({
+        ...installOptions, signal: new AbortController().signal,
+        onProgress: (p) => progress.push({ verified: p.verified, filesDone: p.filesDone }),
+      }, {
+        fs, fetch: fetchManifest(manifest([
+          { path: 'model.onnx', url: 'https://example.com/model.onnx', sha256: await sha256Hex(bytes), sizeBytes: bytes.length },
+        ])),
+      });
+      expect(progress.some((p) => p.filesDone === 0 && p.verified > 0 && p.verified < bytes.length)).toBe(true);
+      expect(progress.at(-1)).toEqual({ verified: bytes.length, filesDone: 1 });
+    });
+
+    it('advances progress while checking files an interrupted install left on disk', async () => {
+      const kept = multiChunkBytes(4);
+      const stale = multiChunkBytes(5);
+      const fresh = multiChunkBytes(6);
+      const fs = createFs(new Map([[`${PACK_URI}/kept.bin`, kept], [`${PACK_URI}/stale.bin`, stale]]));
+      useNativeDownloads(fs, () => fresh);
+      const progress: Array<{ loaded: number; total: number; filesDone: number }> = [];
+      await ensureModelPackInstalled({
+        ...installOptions, signal: new AbortController().signal,
+        onProgress: (p) => progress.push({ loaded: p.loaded, total: p.total, filesDone: p.filesDone }),
+      }, {
+        fs, fetch: fetchManifest(manifest([
+          { path: 'kept.bin', url: 'https://example.com/kept.bin', sha256: await sha256Hex(kept), sizeBytes: kept.length },
+          { path: 'stale.bin', url: 'https://example.com/stale.bin', sha256: await sha256Hex(fresh), sizeBytes: fresh.length },
+        ])),
+      });
+      // Checking a kept file moves the bar instead of leaving it frozen until the whole file is hashed.
+      expect(progress.some((p) => p.filesDone === 0 && p.loaded > 0 && p.loaded < kept.length)).toBe(true);
+      // A rejected file's checked bytes are withdrawn, so its redownload is not counted twice.
+      expect(progress.every((p) => p.loaded <= p.total)).toBe(true);
+      expect(progress.at(-1)).toEqual({ loaded: kept.length + fresh.length, total: kept.length + fresh.length, filesDone: 2 });
+    });
+
+    it('starts the largest files first so they transfer alongside the small ones', async () => {
+      const small = new Uint8Array([1]);
+      const medium = new Uint8Array(16).fill(2);
+      const large = new Uint8Array(64).fill(3);
+      const byUrl = new Map([['https://example.com/large', large], ['https://example.com/medium', medium]]);
+      const fs = createFs();
+      const requested: string[] = [];
+      useNativeDownloads(fs, (url) => byUrl.get(url) ?? small, requested);
+      const smallEntries = await Promise.all(Array.from({ length: 8 }, async (_, i) => ({
+        path: `espeak-ng-data/f${i}`, url: `https://example.com/f${i}`, sha256: await sha256Hex(small), sizeBytes: small.length,
+      })));
+      await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+        fs, fetch: fetchManifest(manifest([
+          ...smallEntries,
+          { path: 'model.onnx', url: 'https://example.com/large', sha256: await sha256Hex(large), sizeBytes: large.length },
+          { path: 'voices.bin', url: 'https://example.com/medium', sha256: await sha256Hex(medium), sizeBytes: medium.length },
+        ])),
+      });
+      expect(requested.slice(0, 2)).toEqual(['https://example.com/large', 'https://example.com/medium']);
+      expect(requested).toHaveLength(10);
+    });
+
     it('rejects and removes a downloaded file whose SHA-256 does not match', async () => {
       const fs = createFs();
       useNativeDownloads(fs, () => new Uint8Array([4, 5, 6, 7]));
@@ -351,7 +413,7 @@ describe('modelPacks installer (native)', () => {
       useInstallerFakeClock();
       const { bytes, manifest: remote } = await packOf(2);
       const fs = createFs();
-      const progress: Array<{ ratio: number; filesDone: number }> = [];
+      const progress: Array<{ ratio: number; verified: number; filesDone: number }> = [];
       // A 500 error page is far larger than a tiny espeak-ng asset.
       useNativeDownloads(fs, () => bytes, [], {
         status: (url) => (url === 'https://example.com/f0' ? 500 : 200),
@@ -359,12 +421,12 @@ describe('modelPacks installer (native)', () => {
       });
       await settleWithFakeClock(ensureModelPackInstalled({
         ...installOptions, signal: new AbortController().signal,
-        onProgress: (p) => progress.push({ ratio: p.loaded / p.total, filesDone: p.filesDone }),
+        onProgress: (p) => progress.push({ ratio: p.loaded / p.total, verified: p.verified, filesDone: p.filesDone }),
       }, { fs, fetch: fetchManifest(remote) }));
       expect(Math.max(...progress.map((p) => p.ratio))).toBe(1);
       // A retried attempt re-reporting bytes already counted adds no report of its own.
-      expect(new Set(progress.map((p) => `${p.ratio}:${p.filesDone}`)).size).toBe(progress.length);
-      expect(progress.at(-1)).toEqual({ ratio: 1, filesDone: 2 });
+      expect(new Set(progress.map((p) => `${p.ratio}:${p.verified}:${p.filesDone}`)).size).toBe(progress.length);
+      expect(progress.at(-1)).toEqual({ ratio: 1, verified: bytes.length * 2, filesDone: 2 });
     });
 
     it('removes update leftovers once a fresh install completes', async () => {

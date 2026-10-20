@@ -9316,6 +9316,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
         progressAccessibilityLabel: "Ход загрузки",
+        verifyingDetail: "Проверка",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Проверено ${verified} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
+        verifyingAccessibilityLabel: "Ход проверки",
         failedDetail: "Ошибка",
         failedSubtitle: "Не удалось подготовить модель. Нажмите, чтобы повторить.",
         failedResumableSubtitle: ({ size }: { size: string }) => `Загрузка не завершилась. ${size} сохранено — нажмите, чтобы продолжить.`,

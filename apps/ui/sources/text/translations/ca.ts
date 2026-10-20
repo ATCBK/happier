@@ -8793,6 +8793,10 @@ settingsSession: {
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'fitxer' : 'fitxers'}`,
                 progressAccessibilityLabel: "Progrés de la descàrrega",
+                verifyingDetail: "Verificant",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `Verificat ${verified} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'fitxer' : 'fitxers'}`,
+                verifyingAccessibilityLabel: "Progrés de la verificació",
                 failedDetail: "Ha fallat",
                 failedSubtitle: "No s'ha pogut preparar el model. Toca per tornar-ho a provar.",
                 failedResumableSubtitle: ({ size }: { size: string }) => `La descàrrega no s'ha completat. Es conserven ${size}; toca per reprendre-la.`,

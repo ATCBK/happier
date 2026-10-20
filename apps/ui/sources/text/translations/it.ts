@@ -9665,6 +9665,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} di ${total} · ${filesDone} di ${filesTotal} file`,
         progressAccessibilityLabel: "Avanzamento del download",
+        verifyingDetail: "Verifica in corso",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Verificati ${verified} di ${total} · ${filesDone} di ${filesTotal} file`,
+        verifyingAccessibilityLabel: "Avanzamento della verifica",
         failedDetail: "Non riuscito",
         failedSubtitle: "Impossibile preparare il modello. Tocca per riprovare.",
         failedResumableSubtitle: ({ size }: { size: string }) => `Il download non è stato completato. ${size} sono stati conservati: tocca per riprendere.`,

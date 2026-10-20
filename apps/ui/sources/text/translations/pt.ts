@@ -9453,6 +9453,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'arquivo' : 'arquivos'}`,
         progressAccessibilityLabel: "Progresso do download",
+        verifyingDetail: "Verificando",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Verificado ${verified} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'arquivo' : 'arquivos'}`,
+        verifyingAccessibilityLabel: "Progresso da verificação",
         failedDetail: "Falhou",
         failedSubtitle: "Não foi possível preparar o modelo. Toque para tentar novamente.",
         failedResumableSubtitle: ({ size }: { size: string }) => `O download não terminou. ${size} foram mantidos; toque para retomar.`,
