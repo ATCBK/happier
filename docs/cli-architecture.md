@@ -69,6 +69,17 @@ admission: the default and its slot intents are resolved together before Session
 creation, and explicit slot choices win. These are 0.3 development semantics;
 the wire retains its existing distinction between omitted and explicit bindings.
 
+## Requester native home retention (0.3 development)
+
+Foreign requester Sessions keep their materialized Agent homes beneath
+`daemon/connected-services/materialized/requester-accounts/account-<encoded Account id>`.
+The retained Session materialization identity selects the same home on initial
+launch and inactive Pending resume. The daemon's custodian Account sweep excludes
+the `requester-accounts` namespace: its own Session inventory cannot prove that
+another Account's homes are unreferenced. Restarting before requester recovery
+therefore does not authorize deleting that namespace. Ordinary custodian identity
+and staging-attempt cleanup retain their existing retention rules.
+
 ## Compose service prerequisites (0.3 development)
 
 Declared Compose Services use the native Compose lifecycle under the daemon's
@@ -225,11 +236,19 @@ native home is never used as a substitute capability root or removed on release.
 Run rematerialization reads its native conversation identity from the existing
 sealed Run record, including after Stop and Session resume. If isolated home
 preparation detaches a borrowed state link, the catalog verifier selects only
-that conversation before detachment and the existing importer retains it in the
-prepared home. Other conversations stay with their original owner. Agents that
+the authorized retained conversations before detachment and the existing
+importer retains their exact files in the prepared home. The sealed records
+must belong to the same Session or requester scope, and recorded Connected
+Account selections must resolve to this native home. Another Account's records
+cannot authorize importing its history. An incomplete retained-record read
+refuses preparation before detaching the source. Agents that
 declare a local resume verifier are checked against the prepared home before
 native launch; Agents without that declaration retain their native continuation
-contract. Credential-failure recovery uses the same preparation path.
+contract. A definite missing conversation retains the typed continuity cause
+through the daemon transport and becomes the existing permanent
+`execution_run_provider_state_missing` outcome, with restoration or a new
+conversation from the saved result as recovery. Other materialization failures
+remain indeterminate. Credential-failure recovery uses the same preparation path.
 
 A `linked` entry whose native source is missing remains local. The descriptor
 must explicitly declare `createIfMissing: 'directory'` to create a native
