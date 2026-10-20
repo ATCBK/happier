@@ -174,12 +174,8 @@ describe('external memory transcript ingestion', () => {
       expect(traversal.getIndexSources?.(db)).toEqual([{ source: { type: 'external_transcript', agentId: 'claude', sourceKey: 'local' }, state: 'indexing' }]);
       await syncExternalMemoryTranscriptsBatch({ ...operation, candidates: [healthy], onSourceResult: traversal.noteSyncResult });
       expect(traversal.getIndexSources?.(db)[0]?.state).toBe('ready');
-      const pendingStates: string[] = [];
-      await syncExternalMemoryTranscriptsBatch({ ...operation, candidates: [healthy], onSourceResult: (source, state) => {
-        traversal.noteSyncResult(source, state);
-        pendingStates.push(traversal.getIndexSources(db)[0]!.state);
-      } });
-      expect(pendingStates).toEqual(['indexing', 'ready']);
+      await syncExternalMemoryTranscriptsBatch({ ...operation, candidates: [healthy], onSourceResult: traversal.noteSyncResult });
+      expect(traversal.getIndexSources(db)[0]!.state).toBe('ready');
       const hits = db.search({ query: 'quartz', scope: { type: 'global' }, maxResults: 10, includeExternal: true });
       expect(hits).toHaveLength(1);
       expect(hits[0]?.source).toEqual(healthy.source);

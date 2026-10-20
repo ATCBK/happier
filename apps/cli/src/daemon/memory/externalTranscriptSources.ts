@@ -30,41 +30,55 @@ type NativeInventory = {
   seen: Set<string>;
   needsInventory: boolean;
   failed: boolean;
+  initialInventoryComplete: boolean;
 };
 
-/** The incumbent source inventory owns its one in-memory traversal position. */
+/** One ordered work list shares the existing allowance between refresh and backfill. */
 export function createMemoryExternalTranscriptTraversal() {
-  let candidates: readonly MemoryExternalTranscriptCandidate[] = [];
-  let candidateIndex = 0;
-  const results = new Map<string, 'current' | 'more' | 'removed' | 'error'>();
+  type Entry = { candidate: MemoryExternalTranscriptCandidate; state?: 'current' | 'more' | 'removed' | 'error'; refresh: boolean };
+  const candidates = new Map<string, Entry>();
+  let preferRefresh = true;
   return {
     replace(next: readonly MemoryExternalTranscriptCandidate[]) {
-      const upcoming = candidates.length ? candidates[candidateIndex % candidates.length] : undefined;
-      const upcomingId = upcoming ? externalMemoryStorageId(upcoming.source) : null;
-      const retainedIndex = upcomingId === null ? -1
-        : next.findIndex(candidate => externalMemoryStorageId(candidate.source) === upcomingId);
       const retainedIds = new Set(next.map(candidate => externalMemoryStorageId(candidate.source)));
-      for (const id of results.keys()) if (!retainedIds.has(id)) results.delete(id);
-      candidates = next;
-      candidateIndex = next.length ? retainedIndex >= 0 ? retainedIndex : candidateIndex % next.length : 0;
+      for (const id of candidates.keys()) if (!retainedIds.has(id)) candidates.delete(id);
+      for (const candidate of next) {
+        const id = externalMemoryStorageId(candidate.source);
+        const existing = candidates.get(id);
+        if (existing) existing.candidate = candidate;
+        else candidates.set(id, { candidate, refresh: false });
+      }
     },
-    size() { return candidates.length; },
+    size() { return candidates.size; },
     invalidate(agentId?: string, sourceKey?: string) {
-      for (const candidate of candidates) {
+      for (const entry of candidates.values()) {
+        const candidate = entry.candidate;
         if ((agentId === undefined || candidate.source.agentId === agentId)
-          && (sourceKey === undefined || candidate.source.sourceKey === sourceKey)) results.delete(externalMemoryStorageId(candidate.source));
+          && (sourceKey === undefined || candidate.source.sourceKey === sourceKey)) entry.state = undefined;
+      }
+    },
+    changed(agentId: string, sourceKey: string, nativeSessionIds?: readonly string[]) {
+      for (const entry of candidates.values()) {
+        const source = entry.candidate.source;
+        if (source.agentId === agentId && source.sourceKey === sourceKey
+          && (nativeSessionIds ? nativeSessionIds.includes(source.nativeSessionId) : entry.state === 'current')) entry.refresh = true;
       }
     },
     noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error') {
-      results.set(externalMemoryStorageId(source), state);
+      const entry = candidates.get(externalMemoryStorageId(source));
+      if (entry) entry.state = state;
     },
     getIndexSources(db: Pick<DeepIndexDbHandle, 'getExternalSourceState'> | null): MemoryIndexSourceStatusV1[] {
       const groups = new Map<string, MemoryIndexSourceStatusV1>();
-      for (const candidate of candidates) {
+      for (const { candidate, state: result } of candidates.values()) {
         const { agentId, sourceKey } = candidate.source;
         const id = externalMemoryStorageId(candidate.source);
-        const result = results.get(id);
-        const state = result === 'error' ? 'error' : result === 'current' && db?.getExternalSourceState({ sessionId: id })?.coverageComplete === true ? 'ready' : 'indexing';
+        const retained = result === 'current' || result === 'more' ? db?.getExternalSourceState({ sessionId: id }) : null;
+        // An append may have several tail pages; it does not reopen completed
+        // initial history. Replacement deletes this persisted frontier.
+        const initialComplete = retained?.coverageComplete === true && (result === 'current' || (retained.cursor
+          && (JSON.parse(retained.cursor) as { type?: unknown }).type === 'tail'));
+        const state = result === 'error' ? 'error' : result !== undefined && initialComplete ? 'ready' : 'indexing';
         const key = JSON.stringify([agentId, sourceKey]);
         const previous = groups.get(key);
         if (!previous || state === 'error' || (previous.state !== 'error' && state !== 'ready')) {
@@ -75,9 +89,29 @@ export function createMemoryExternalTranscriptTraversal() {
     },
     take(count: number) {
       const result: MemoryExternalTranscriptCandidate[] = [];
-      for (let i = 0; i < Math.min(count, candidates.length); i++) {
-        result.push(candidates[candidateIndex]!);
-        candidateIndex = (candidateIndex + 1) % candidates.length;
+      const selected = new Set<string>();
+      for (let i = 0; i < Math.min(count, candidates.size); i++) {
+        let first: [string, Entry] | undefined;
+        let refresh: [string, Entry] | undefined;
+        let backfill: [string, Entry] | undefined;
+        for (const pair of candidates) {
+          if (selected.has(pair[0])) continue;
+          first ??= pair;
+          if (pair[1].refresh) refresh ??= pair;
+          if (pair[1].state !== 'current') backfill ??= pair;
+          if (refresh && backfill) break;
+        }
+        const next = preferRefresh ? refresh ?? backfill ?? first : backfill ?? refresh ?? first;
+        if (!next) break;
+        const [id, entry] = next;
+        selected.add(id);
+        entry.refresh = false;
+        candidates.delete(id);
+        candidates.set(id, entry);
+        result.push(entry.candidate);
+        // A continuously active conversation cannot starve initial backfill,
+        // even when the user selects one source per tick.
+        preferRefresh = !preferRefresh;
       }
       return result;
     },
@@ -205,12 +239,12 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
             retirementSignal: AbortSignal.any([lifetime.signal, boundary.retirementSignal]) },
           source: resolved.descriptor.source, changeObservation: sourceObservation.changeObservation,
           ...(sourceObservation.watchFileChanges ? { watchFileChanges: sourceObservation.watchFileChanges } : {}),
-          onChange: ({ reason }) => {
+          onChange: ({ reason, changedNativeSessionIds }) => {
             // Known-file changes go through the retained transcript frontier.
             // Only structural/source changes need a fresh source-wide file set.
             const refreshSources = reason !== 'file_changed';
             if (refreshSources) invalidateInventory(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey);
-            traversal.invalidate(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey);
+            traversal.changed(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey, changedNativeSessionIds);
             input.onChange(refreshSources);
           },
         }) : null;
@@ -231,7 +265,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       // A replaced reader or physical source does require fresh absence proof.
       if (previous?.native.reader === native.reader
         && JSON.stringify(previous.native.source) === JSON.stringify(native.source)) continue;
-      inventories.set(key, { native, candidates: new Map(), pending: null, seen: new Set(), needsInventory: true, failed: false });
+      inventories.set(key, { native, candidates: new Map(), pending: null, seen: new Set(), needsInventory: true, failed: false, initialInventoryComplete: false });
       inventoryChanged = true;
       completeSources.delete(key);
     }
@@ -298,6 +332,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           if (!state.needsInventory && !page.value.searchIncomplete) {
             state.candidates = state.pending;
             completeSources.add(key);
+            state.initialInventoryComplete = true;
           } else {
             // Changes during a crawl or an incomplete page cannot prove absence.
             state.candidates = new Map([...state.candidates, ...state.pending]);
@@ -343,7 +378,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         const inventory = inventories.get(key);
         return { source: { type: 'external_transcript', agentId, sourceKey },
           state: !db ? 'indexing' : inventory?.failed ? 'error'
-            : !completeSources.has(key) ? 'indexing' : groups.get(key)?.state ?? 'ready' };
+            : !inventory?.initialInventoryComplete ? 'indexing' : groups.get(key)?.state ?? 'ready' };
       });
     },
     getReadySourceCount: traversal.size,

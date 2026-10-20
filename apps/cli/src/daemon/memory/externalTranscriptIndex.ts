@@ -47,7 +47,6 @@ export async function syncExternalMemoryTranscriptsBatch(input: Readonly<
   const { candidates, onSourceResult, ...operation } = input;
   const errors: unknown[] = [];
   operation.signal.throwIfAborted();
-  for (const candidate of candidates) onSourceResult?.(candidate.source, 'more');
   for (const candidate of candidates) {
     operation.signal.throwIfAborted();
     try {
