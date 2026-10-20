@@ -74,6 +74,7 @@ export const APPEARANCE_PAGE_SETTINGS = defineSettingsPage({
                 avatarStyle: {},
                 agentIcons: {},
                 alwaysShowContextSize: {},
+                contextGaugeStyle: {},
             },
         },
         tabBar: {
@@ -180,6 +181,12 @@ export const APPEARANCE_MOTION_SETTINGS = defineSettingsPage({
     pageId: 'appearance',
     subpage: movedRows('motion', SETTINGS_ROUTES.appearanceMotion, 'settingsAppearance.visualEffects.title'),
     sections: {
+        visualEffects: { settings: { visualEffectsLevel: {}, animatedNumbers: {} } },
+        feedback: {
+            titleKey: 'settingsAppearance.feedback',
+            host: settingsHosts.native,
+            settings: { haptics: {} },
+        },
         loadingIndicator: {
             titleKey: 'settingsAppearance.loadingIndicator',
             settings: {

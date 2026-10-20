@@ -199,6 +199,12 @@ const localSettingInputs = {
         description: 'Flips true the first time the user reaches an authenticated state on this device. Never cleared on logout, so the welcome screen can greet returning users with a warmer copy variant ("Good to have you back").',
         storageScope: 'local',
     },
+    hapticsEnabled: {
+        schema: z.catch(z.boolean(), true),
+        default: true,
+        description: 'Enable haptic feedback on this device',
+        storageScope: 'local',
+    },
     themePreference: {
         schema: z.enum(['light', 'dark', 'adaptive']),
         default: 'adaptive',

@@ -19,6 +19,7 @@ vi.mock('../motion/useMotionPreferences', async (importOriginal) => {
         useMotionPreferences: () => actual.resolveMotionPreferences({
             visualEffectsLevel: motionState.level,
             animatedNumbers: true,
+            hapticsEnabled: true,
             contextGaugeStyle: 'gauge',
             osReduceMotion: false,
             isWeb: false,

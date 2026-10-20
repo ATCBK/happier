@@ -11,7 +11,7 @@ import type { ActivityAttentionSource } from '@/activity/source/activityAttentio
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { storage } from '@/sync/domains/state/storageStore';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
@@ -176,8 +176,8 @@ const initialStorageState = storage.getState();
 function seedPetsStorage(runtimeStorage = storage) {
     const source = activitySourceState.source;
     runtimeStorage.setState({
-        settings: { ...settingsDefaults, ...settingsState.account,
-            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } },
+        settings: settingsParse({ ...settingsDefaults, ...settingsState.account,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }),
         localSettings: { ...localSettingsDefaults, ...settingsState.local },
         isDataReady: source.isDataReady,
         sessions: source.sessionsById,
@@ -316,6 +316,17 @@ describe('PetAppShellCompanionMount.native', () => {
 
         expect(hapticsSpy).toHaveBeenCalledWith('light');
         expect(screen.findByTestId('pet-companion-state')?.props['data-pet-state']).toBe('jumping');
+
+        const { getStorage } = await import('@/sync/domains/state/storageStore');
+        getStorage().getState().applyLocalSettings({ hapticsEnabled: false });
+        hapticsSpy.mockClear();
+        try {
+            await screen.pressByTestIdAsync('pet-app-shell-companion-hitbox');
+            expect(hapticsSpy).not.toHaveBeenCalled();
+            expect(screen.findByTestId('pet-companion-state')?.props['data-pet-state']).toBe('jumping');
+        } finally {
+            getStorage().getState().applyLocalSettings({ hapticsEnabled: true });
+        }
     });
 
     it('can enable the native companion after an initially disabled render', async () => {

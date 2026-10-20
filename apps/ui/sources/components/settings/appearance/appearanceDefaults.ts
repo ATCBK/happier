@@ -18,6 +18,7 @@ const APPEARANCE_LOCAL_KEYS = [
     'detailsPaneTabsBehavior',
     'settingsNavSidebarEnabled',
     'titleStripThemeToggleVisible',
+    'hapticsEnabled',
     'loadingIndicatorStyle',
     'loadingIndicatorSpeed',
     'loadingIndicatorPause',

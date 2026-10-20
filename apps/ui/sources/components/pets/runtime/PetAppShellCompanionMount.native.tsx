@@ -1,4 +1,4 @@
-import * as Haptics from 'expo-haptics';
+import { hapticsLight } from '@/components/ui/theme/haptics';
 import * as React from 'react';
 import { Pressable, View, useWindowDimensions, type GestureResponderEvent, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -9,7 +9,6 @@ import { type PetAnimationStateV1 } from '@happier-dev/protocol';
 
 import {
     PET_TAP_REACTION_DURATION_MS,
-    PET_TAP_REACTION_HAPTIC,
 } from '@/components/pets/animation/petAnimationPlaybackConfig';
 import {
     usePetCompanionActivityModel,
@@ -56,9 +55,6 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
 const PET_TAP_REACTION_STATE = 'jumping' satisfies PetAnimationStateV1;
-const PET_TAP_REACTION_HAPTIC_STYLE: Record<typeof PET_TAP_REACTION_HAPTIC, Haptics.ImpactFeedbackStyle> = {
-    light: Haptics.ImpactFeedbackStyle.Light,
-};
 const NATIVE_PET_TRAY_GAP_PX = 18;
 
 function useTapReactionState(): Readonly<{
@@ -88,7 +84,7 @@ function useTapReactionState(): Readonly<{
             reactionTimeoutRef.current = null;
             setReactionState(null);
         }, PET_TAP_REACTION_DURATION_MS);
-        void Haptics.impactAsync(PET_TAP_REACTION_HAPTIC_STYLE[PET_TAP_REACTION_HAPTIC]).catch(() => {});
+        void hapticsLight();
     }, []);
 
     return { reactionState, triggerTapReaction };
