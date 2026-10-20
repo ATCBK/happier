@@ -17,6 +17,8 @@ import { sameTriageFilterValueV1, type TriageSurfaceStateV1 } from '../state/sur
 import {
   TriageListCollisionScopeV1Schema,
   TriageListKindIdV1Schema,
+  TriageListSourceFilterValueV1Schema,
+  TriageListScopeFilterValueV1Schema,
 } from '../../actions/listEntriesProtocol.js';
 
 /**
@@ -209,9 +211,22 @@ export function parseTriageRouteSubPathV1(subPath: string | undefined): TriageRo
       if (tuple !== undefined) smartPolicy = Object.freeze({ v: 1, precedence: tuple });
       continue;
     }
-    if (key === 'fs' && components.length === 2) {
+    if (key === 'fs' && (components.length === 2 || components.length === 3)) {
       const source = readSourceIdentity(components);
-      if (source !== null) admitFacetValue(facets, 'sources', { source });
+      const parsed = TriageListSourceFilterValueV1Schema.safeParse({ source,
+        ...(components.length === 3 ? { sourceInstanceId: decode(components[2] ?? '') } : {}),
+      });
+      if (parsed.success) admitFacetValue(facets, 'sources', parsed.data);
+      continue;
+    }
+    if ((key === 'fu' && (components.length === 4 || components.length === 5))
+      || (key === 'fi' && components.length === 3)) {
+      const parsed = TriageListScopeFilterValueV1Schema.safeParse({
+        source: readSourceIdentity(components), sourceInstanceId: decode(components[2] ?? ''),
+        ...(key === 'fu' ? { unitId: decode(components[3] ?? '') } : {}),
+        ...(components.length === 5 ? { collisionScope: decode(components[4] ?? '') } : {}),
+      });
+      if (parsed.success) admitFacetValue(facets, 'scopes', parsed.data);
       continue;
     }
     if (key === 'ft' && components.length === 3) {
@@ -223,12 +238,15 @@ export function parseTriageRouteSubPathV1(subPath: string | undefined): TriageRo
       }
       continue;
     }
-    if (key === 'fp' && components.length === 3) {
+    if (key === 'fp' && (components.length === 3 || components.length === 4)) {
       const source = readSourceIdentity(components);
       const collisionScope = decode(components[2] ?? '');
       const parsedScope = TriageListCollisionScopeV1Schema.safeParse(collisionScope);
       if (source !== null && parsedScope.success) {
-        admitFacetValue(facets, 'scopes', { source, collisionScope: parsedScope.data });
+        const parsed = TriageListScopeFilterValueV1Schema.safeParse({ source, collisionScope: parsedScope.data,
+          ...(components.length === 4 ? { sourceInstanceId: decode(components[3] ?? '') } : {}),
+        });
+        if (parsed.success) admitFacetValue(facets, 'scopes', parsed.data);
       }
       continue;
     }
@@ -279,13 +297,23 @@ export function buildTriageRouteSubPathV1(lens: TriageRouteLensV1): string {
     segments.push(`sp,${encode(lens.smartPolicy.precedence[0])}`);
   }
   for (const value of lens.filters.sources) {
-    segments.push(`fs,${encode(value.source.pluginId)},${encode(value.source.localId)}`);
+    segments.push(['fs', value.source.pluginId, value.source.localId,
+      ...(value.sourceInstanceId === undefined ? [] : [value.sourceInstanceId])].map(encode).join(','));
   }
   for (const value of lens.filters.types) {
     segments.push(`ft,${encode(value.source.pluginId)},${encode(value.source.localId)},${encode(value.kindId)}`);
   }
   for (const value of lens.filters.scopes) {
-    segments.push(`fp,${encode(value.source.pluginId)},${encode(value.source.localId)},${encode(value.collisionScope)}`);
+    const source = [value.source.pluginId, value.source.localId];
+    if (value.unitId !== undefined) {
+      segments.push(['fu', ...source, value.sourceInstanceId, value.unitId,
+        ...(value.collisionScope === undefined ? [] : [value.collisionScope])].map(encode).join(','));
+    } else if (value.collisionScope !== undefined) {
+      segments.push(['fp', ...source, value.collisionScope,
+        ...(value.sourceInstanceId === undefined ? [] : [value.sourceInstanceId])].map(encode).join(','));
+    } else {
+      segments.push(['fi', ...source, value.sourceInstanceId].map(encode).join(','));
+    }
   }
   if (lens.filters.states.length > 0) {
     segments.push(['fst', ...lens.filters.states.map(encode)].join(','));

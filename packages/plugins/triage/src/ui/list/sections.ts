@@ -1,4 +1,4 @@
-import type { TriageEntryLocatorV1, TriageEntryRelationsV1, TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
+import type { TriageEntryLocatorV1, TriageEntryRelationsV1, TriageSourceWorkflowSubjectV1, TriageTaskCapabilitiesV1 } from '@happier-dev/triage-protocol/v1';
 import { projectTriageDetailFieldsV1, projectTriageDetailFieldTextV1, triageTaskStatusCategoryV1 } from '@happier-dev/triage-protocol/v1';
 
 import { CORPUS_LANE } from '../../corpus/fold/lane.js';
@@ -65,15 +65,29 @@ export type TriageListTaskFactsV1 = Readonly<{
   /** The source's own word ("In Review", "Open"); `null` when the source names none. */
   statusLabel: string | null;
   relations: TriageEntryRelationsV1 | null;
+  /** Source facts only; an omitted timestamp is unknown. */
+  dueDate?: string;
+  completedAtMs?: number;
+  /** Names an offered completed transition; activation uses the existing transition role. */
+  completingTransitionId?: string;
 }>;
 
-function readTaskFacts(row: TriageListRowV1 | null): TriageListTaskFactsV1 | null {
+function readTaskFacts(row: TriageListRowV1 | null, declared?: TriageTaskCapabilitiesV1): TriageListTaskFactsV1 | null {
   const snapshot = row?.content?.outcome.snapshot;
   if (snapshot === undefined) return null;
+  // Display content may come from a different connection. A write affordance
+  // uses only the exact selected connection's workflow, as the detail does.
+  const selected = row === null ? null : readTriageSelectedObservationV1(row);
+  const capabilities = selected === null ? undefined : selected.observation.snapshot.taskCapabilities ?? declared;
+  const completing = capabilities?.transitions?.find(transition => transition.id === capabilities.completingTransitionId
+    && triageTaskStatusCategoryV1(transition.state) === 'completed');
   return Object.freeze({
     category: triageTaskStatusCategoryV1(snapshot.state),
     statusLabel: snapshot.state.nativeLabel ?? null,
     relations: snapshot.relations ?? null,
+    ...(snapshot.dueDate === undefined ? {} : { dueDate: snapshot.dueDate }),
+    ...(snapshot.completedAtMs === undefined ? {} : { completedAtMs: snapshot.completedAtMs }),
+    ...(completing === undefined ? {} : { completingTransitionId: completing.id }),
   });
 }
 
@@ -138,6 +152,9 @@ export function planTriageListItemsV1(input: Readonly<{
     audience: 'mine' | 'agents' | 'everyone';
     isTask: (entryRef: TriageListRowV1['entryRef']) => boolean;
     hasSessions: (key: string) => boolean;
+    capabilitiesOf?: (entryRef: TriageListRowV1['entryRef']) => TriageTaskCapabilitiesV1 | undefined;
+    /** Caller supplies its calendar boundary. Unknown completion times cannot claim membership. */
+    completedSinceMs?: number;
   }>;
 }>, previous: readonly TriageListItemV1[] = []): readonly TriageListItemV1[] {
   const pinIndex = indexTriagePinsByEntry(input.pins);
@@ -148,10 +165,14 @@ export function planTriageListItemsV1(input: Readonly<{
   const included = (ref: TriageListRowV1['entryRef'], row: TriageListRowV1 | null): boolean => {
     if (input.tasks === undefined) return true;
     if (!input.tasks.isTask(ref)) return false;
+    const snapshot = row?.content?.outcome.snapshot;
+    if (input.tasks.completedSinceMs !== undefined && snapshot !== undefined
+      && triageTaskStatusCategoryV1(snapshot.state) === 'completed'
+      && (snapshot.completedAtMs === undefined || snapshot.completedAtMs < input.tasks.completedSinceMs)) return false;
     if (input.tasks.audience === 'everyone') return true;
     if (input.tasks.audience === 'agents') return input.tasks.hasSessions(triageEntryRowKey(ref));
     return row?.observations.some((observation) => observation.outcome.kind === 'present'
-      && observation.outcome.viewer.involvement.length > 0) ?? false;
+      && observation.outcome.viewer.involvement.some(role => role === 'assignee' || role === 'author')) ?? false;
   };
   const items: TriageListItemV1[] = input.pins.filter((pin) => included(pin.entryRef,
     projectedByKey.get(triageEntryRowKey(pin.entryRef)) ?? null)).map((pin) => {
@@ -165,7 +186,7 @@ export function planTriageListItemsV1(input: Readonly<{
       signal: readSignal(projected, input.locale ?? 'en'),
       agent: readTriageEntryAgentStatusV1(agentStatesOf(row.key)),
       locator: projected === null ? null : readTriageSelectedObservationV1(projected)?.observation.locator ?? null,
-      ...(input.tasks === undefined ? {} : { task: readTaskFacts(projected) }),
+      ...(input.tasks === undefined ? {} : { task: readTaskFacts(projected, input.tasks.capabilitiesOf?.(pin.entryRef)) }),
     });
   });
   for (const windowRow of input.rows) {
@@ -186,7 +207,7 @@ export function planTriageListItemsV1(input: Readonly<{
       signal: readSignal(windowRow, input.locale ?? 'en'),
       agent: readTriageEntryAgentStatusV1(agentStatesOf(row.key)),
       locator: readTriageSelectedObservationV1(windowRow)?.observation.locator ?? null,
-      ...(input.tasks === undefined ? {} : { task: readTaskFacts(windowRow) }),
+      ...(input.tasks === undefined ? {} : { task: readTaskFacts(windowRow, input.tasks.capabilitiesOf?.(windowRow.entryRef)) }),
     }));
   }
   // A Session transition changes its own item/group, not every unchanged

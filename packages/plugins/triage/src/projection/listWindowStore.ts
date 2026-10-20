@@ -26,6 +26,8 @@ import {
 } from '../actions/listEntriesProtocol.js';
 import {
     TRIAGE_LIST_DEFAULT_LENS_V1,
+    triageSourceFilterKeyV1,
+    triageScopeFilterKeyV1,
     foldTriageListWindow,
     triageEntryRowKey,
     MAX_TRIAGE_LIST_WINDOW_ROWS_V1,
@@ -278,14 +280,13 @@ function sameFilterSelection(
     // a new paging generation. Duplicate values are rejected by the reducer
     // and saved-view owner before a lens reaches this store.
     return left.tasks === right.tasks && sameMemberSet(left.sources, right.sources, (a, b) => (
-        sameTriageSourceIdentity(a.source, b.source)
+        triageSourceFilterKeyV1(a) === triageSourceFilterKeyV1(b)
     ))
         && sameMemberSet(left.types, right.types, (a, b) => (
             a.kindId === b.kindId && sameTriageSourceIdentity(a.source, b.source)
         ))
         && sameMemberSet(left.scopes, right.scopes, (a, b) => (
-            a.collisionScope === b.collisionScope
-            && sameTriageSourceIdentity(a.source, b.source)
+            triageScopeFilterKeyV1(a) === triageScopeFilterKeyV1(b)
         ))
         && sameMemberSet(left.states, right.states, (a, b) => a === b)
         && sameMemberSet(left.attention, right.attention, (a, b) => a === b);

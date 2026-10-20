@@ -187,6 +187,24 @@ Optional parent, children summary and blocked-by facts use the existing complete
 entry reference. External sources materialize these relationships live; the
 contract adds no provider mirror, task store or relationship writer.
 
+Optional snapshot `dueDate` retains a source's ISO calendar date or datetime;
+personal tasks project their existing deadline as an ISO datetime. Optional
+`completedAtMs` is the source's completion time, never its general update time.
+Absent facts remain unknown. The Tasks row projection exposes both and accepts
+an explicit `completedSinceMs` calendar boundary for a recently completed band;
+entries without completion evidence cannot claim membership in that band.
+This projection does not expand a source's scan coverage.
+
+A source can declare `taskCapabilities.completingTransitionId` to name an
+offered native completed transition for one-step completion. Dynamic sources use
+the public `triageTaskTransitionCapabilitiesV1` projection: a workflow with zero
+or several completing transitions omits the quick choice. The existing
+transition role and approval policy own the write. Runtime entry capabilities
+replace the kind declaration, and an unoffered or non-completing id supplies no
+quick completion. Mine includes source-declared assignee or author involvement;
+mentions, subscriptions and participation alone do not qualify. Everyone and
+Agents retain their existing task-kind and linked-Session meanings.
+
 Sources whose own domain record owns task-to-Session relationships may bind the
 optional `linkSession` and `readSessionLinks` roles. Both use the exact admitted
 configured instance and source-local entry reference. The write role retains

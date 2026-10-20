@@ -179,15 +179,29 @@ export type TriageListWindowV1 = Readonly<{
  * are alternatives; non-empty facets compose by conjunction, and selecting one
  * facet never clears or weakens another.
  */
-export type CorpusSourceFilterValueV1 = Readonly<{ source: PluginContributionIdentity }>;
+export type CorpusSourceFilterValueV1 = Readonly<{ source: PluginContributionIdentity; sourceInstanceId?: string }>;
 export type CorpusTypeFilterValueV1 = Readonly<{ source: PluginContributionIdentity; kindId: string }>;
-export type CorpusScopeFilterValueV1 = Readonly<{ source: PluginContributionIdentity; collisionScope: string }>;
+export type CorpusScopeFilterValueV1 =
+    | Readonly<{ source: PluginContributionIdentity; sourceInstanceId?: string; collisionScope: string; unitId?: never }>
+    | Readonly<{ source: PluginContributionIdentity; sourceInstanceId: string; unitId: string; collisionScope?: string }>
+    | Readonly<{ source: PluginContributionIdentity; sourceInstanceId: string; unitId?: never; collisionScope?: never }>;
 export type CorpusStateFilterValueV1 = 'open' | 'done' | 'absent' | 'unresolved';
 export type CorpusAttentionFilterValueV1 = 'required' | 'suggested' | 'none';
 
 /** The key one Scope value is named under in `TriageListFacetCensusV1.scopeNames`. */
 export function triageFacetScopeKeyV1(source: PluginContributionIdentity, collisionScope: string): string {
     return JSON.stringify([source.pluginId, source.localId, collisionScope]);
+}
+
+/** Instance-less values are retained lenses from before per-connection filtering. */
+export function triageSourceFilterKeyV1(value: CorpusSourceFilterValueV1): string {
+    return JSON.stringify([value.source.pluginId, value.source.localId, value.sourceInstanceId ?? null]);
+}
+
+/** A unit's collision scope is a source-authored fallback join, not another unit identity. */
+export function triageScopeFilterKeyV1(value: CorpusScopeFilterValueV1): string {
+    return JSON.stringify([value.source.pluginId, value.source.localId, value.sourceInstanceId ?? null,
+        value.unitId === undefined ? ['scope', value.collisionScope ?? null] : ['unit', value.unitId]]);
 }
 
 export type TriageListFacetCensusV1 = Readonly<{
@@ -350,7 +364,9 @@ function matchesAttention(
 
 function matchesFilters(row: TriageListRowV1, filters: SurfaceFilterSelectionV1): boolean {
     if (filters.sources.length > 0
-        && !filters.sources.some((value) => sameTriageSourceIdentity(value.source, row.entryRef.source))) {
+        && !filters.sources.some((value) => sameTriageSourceIdentity(value.source, row.entryRef.source)
+            && (value.sourceInstanceId === undefined
+                || row.observations.some((observation) => observation.sourceInstanceId === value.sourceInstanceId)))) {
         return false;
     }
     if (filters.types.length > 0 && !filters.types.some(
@@ -360,7 +376,16 @@ function matchesFilters(row: TriageListRowV1, filters: SurfaceFilterSelectionV1)
     }
     if (filters.scopes.length > 0 && !filters.scopes.some(
         (value) => sameTriageSourceIdentity(value.source, row.entryRef.source)
-            && value.collisionScope === row.entryRef.collisionScope,
+            && row.observations.some((observation) => {
+                if (value.sourceInstanceId !== undefined && value.sourceInstanceId !== observation.sourceInstanceId) return false;
+                if (value.unitId !== undefined) {
+                    const unitId = observation.outcome.kind === 'present' ? observation.outcome.snapshot.scopeUnitId : undefined;
+                    return unitId === undefined
+                        ? value.collisionScope !== undefined && value.collisionScope === row.entryRef.collisionScope
+                        : unitId === value.unitId;
+                }
+                return value.collisionScope === undefined || value.collisionScope === row.entryRef.collisionScope;
+            }),
     )) {
         return false;
     }
@@ -551,10 +576,16 @@ export function foldTriageListWindow(input: Readonly<{
             source: row.entryRef.source,
             kindId: row.entryRef.kindId,
         }));
-        scopeValues.set(`${sourceKey}:${JSON.stringify(row.entryRef.collisionScope)}`, Object.freeze({
-            source: row.entryRef.source,
-            collisionScope: row.entryRef.collisionScope,
-        }));
+        for (const observation of row.observations) {
+            const snapshot = observation.outcome.kind === 'present' ? observation.outcome.snapshot : undefined;
+            const scope: CorpusScopeFilterValueV1 = snapshot?.scopeUnitId === undefined
+                ? { source: row.entryRef.source, collisionScope: row.entryRef.collisionScope }
+                : { source: row.entryRef.source, sourceInstanceId: observation.sourceInstanceId, unitId: snapshot.scopeUnitId };
+            const key = triageScopeFilterKeyV1(scope);
+            scopeValues.set(key, Object.freeze(scope));
+            const name = snapshot?.scopeDisplayName ?? snapshot?.scopeLabel;
+            if (name) scopeNames[key] ??= name;
+        }
     }
     const facetCensus: TriageListFacetCensusV1 = Object.freeze({
         types: Object.freeze([...typeValues.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)

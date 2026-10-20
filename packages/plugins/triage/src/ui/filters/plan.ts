@@ -1,6 +1,8 @@
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 
-import { triageFacetScopeKeyV1, type SurfaceFilterSelectionV1, type TriageListFacetCensusV1 } from '../../projection/listWindow.js';
+import { triageFacetScopeKeyV1, triageScopeFilterKeyV1, triageSourceFilterKeyV1,
+  type CorpusScopeFilterValueV1, type CorpusSourceFilterValueV1,
+  type SurfaceFilterSelectionV1, type TriageListFacetCensusV1 } from '../../projection/listWindow.js';
 import type { TriageListWindowSnapshotV1 } from '../../projection/listWindowStore.js';
 import { sameTriageFilterValueV1, type TriageFilterFacetValueV1 } from '../state/surface.js';
 import type { TriageTextResolverV1 } from '../shell/windowState.js';
@@ -16,8 +18,8 @@ import type { TriageTextResolverV1 } from '../shell/windowState.js';
  * carries, which is the same unfiltered fact the health strip names connections
  * from.
  *
- * Type and Scope come only from the window owner's pre-filter census, under the
- * census's disclosed coverage. The shell never rediscovers them from filtered
+ * Type comes from the window owner's pre-filter census. Scope combines the
+ * source-owned configured selection with that census. The shell never rediscovers them from filtered
  * rows. Active route values are retained beside that census so a constraint
  * remains removable after its source disappears, exactly like Source below.
  *
@@ -66,22 +68,11 @@ function sameSource(left: PluginContributionIdentity, right: PluginContributionI
 }
 
 /** Injective over the ordered components, like every other Triage identity key. */
-function sourceOptionKey(source: PluginContributionIdentity): string {
-  return `sources:${JSON.stringify([source.pluginId, source.localId])}`;
+function sourceOptionKey(value: CorpusSourceFilterValueV1): string {
+  return `sources:${triageSourceFilterKeyV1(value)}`;
 }
 
-/**
- * The name to show for one source facet value.
- *
- * A facet value names a source **contribution**, while a `displayLabel` names one
- * configured **connection**. Borrowing a label when several connections share the
- * source would tell the reader this option filters to that one connection, so the
- * qualified contribution id answers instead — the same fallback the health strip
- * already uses. The source's own declared display name is not available to this
- * plan: it lives in the contributor's descriptor, which the detail read carries
- * per *entry* because thirty-two descriptors do not fit under the aggregate list
- * Action's byte gate (`actions/entryDetailProtocol.ts`).
- */
+/** Contribution-wide Type and retained older filters have no one connection label. */
 function sourceLabel(
   source: PluginContributionIdentity,
   configuredSources: TriageListWindowSnapshotV1['configuredSources'],
@@ -92,6 +83,16 @@ function sourceLabel(
     .filter((label): label is string => label !== undefined && label.length > 0));
   const only = labels.size === 1 ? [...labels][0] : undefined;
   return only ?? `${source.pluginId}/${source.localId}`;
+}
+
+function instanceLabel(value: CorpusSourceFilterValueV1, configuredSources: TriageListWindowSnapshotV1['configuredSources']): string {
+  if (value.sourceInstanceId === undefined) return sourceLabel(value.source, configuredSources);
+  const summary = configuredSources.find((summary) => summary.sourceInstanceId === value.sourceInstanceId
+    && sameSource(summary.source, value.source));
+  const label = summary?.displayLabel || `${value.source.pluginId}/${value.source.localId}`;
+  const ambiguous = configuredSources.some((candidate) => candidate.sourceInstanceId !== value.sourceInstanceId
+    && (candidate.displayLabel || `${candidate.source.pluginId}/${candidate.source.localId}`) === label);
+  return summary === undefined || ambiguous ? `${label} · ${value.sourceInstanceId}` : label;
 }
 
 function selectedIn(
@@ -112,27 +113,28 @@ function planSourceFacet(
   }>,
   text: TriageTextResolverV1,
 ): TriageFilterFacetPlanV1 {
-  const sources: PluginContributionIdentity[] = [];
+  const sources: CorpusSourceFilterValueV1[] = [];
   for (const summary of input.configuredSources) {
-    if (sources.some((seen) => sameSource(seen, summary.source))) continue;
-    sources.push(summary.source);
+    const value = { source: summary.source, sourceInstanceId: summary.sourceInstanceId };
+    if (sources.some((seen) => triageSourceFilterKeyV1(seen) === triageSourceFilterKeyV1(value))) continue;
+    sources.push(value);
   }
   // A selected source the reader has since unconfigured keeps its option: the
   // constraint is still applied, so removing the only control that clears it
   // would leave a filter with no visible cause (`settings/effectiveView.ts`
   // records the same degradation for a saved view).
   for (const value of input.filters.sources) {
-    if (sources.some((seen) => sameSource(seen, value.source))) continue;
-    sources.push(value.source);
+    if (sources.some((seen) => triageSourceFilterKeyV1(seen) === triageSourceFilterKeyV1(value))) continue;
+    sources.push(value);
   }
   return Object.freeze({
     facet: 'sources',
     label: text('plugins.triage.surface.filters.source', 'Source'),
-    options: Object.freeze(sources.map((source) => {
-      const selection = { facet: 'sources', value: { source } } as const;
+    options: Object.freeze(sources.map((value) => {
+      const selection = { facet: 'sources', value } as const;
       return Object.freeze({
-        key: sourceOptionKey(source),
-        label: sourceLabel(source, input.configuredSources),
+        key: sourceOptionKey(value),
+        label: instanceLabel(value, input.configuredSources),
         selected: selectedIn(input.filters, selection),
         selection,
       });
@@ -140,8 +142,59 @@ function planSourceFacet(
   });
 }
 
+/** Configuration is available before rows; seen facts widen All without another directory read. */
+function planScopeFacet(input: Readonly<{
+  configuredSources: TriageListWindowSnapshotV1['configuredSources'];
+  facetCensus?: TriageListFacetCensusV1;
+  filters: SurfaceFilterSelectionV1;
+}>, text: TriageTextResolverV1): TriageFilterFacetPlanV1 {
+  const values = new Map<string, Readonly<{ value: CorpusScopeFilterValueV1; label: string }>>();
+  const add = (value: CorpusScopeFilterValueV1, label: string) => {
+    const key = triageScopeFilterKeyV1(value);
+    if (!values.has(key)) values.set(key, { value, label });
+  };
+  for (const summary of input.configuredSources) {
+    const projection = summary.scope?.projection;
+    if (projection?.kind !== 'page') continue;
+    const base = { source: summary.source, sourceInstanceId: summary.sourceInstanceId };
+    if (projection.selection.kind === 'all') {
+      add(base, text('plugins.triage.surface.filters.allUnits', 'All {units}')
+        .replace('{units}', summary.scope?.unit.pluralLabel ?? ''));
+    } else {
+      for (const unitId of projection.selection.unitIds) {
+        const unit = projection.units.find((unit) => unit.id === unitId);
+        add({ ...base, unitId, ...(unit?.collisionScope === undefined ? {} : { collisionScope: unit.collisionScope }) },
+          unit?.label ?? unitId);
+      }
+    }
+  }
+  for (const seen of input.facetCensus?.scopes ?? []) {
+    // An older source may emit only entry collision identity. A configured
+    // source-authored join already offers that same scope under its unit name.
+    if (seen.unitId === undefined && seen.collisionScope !== undefined && [...values.values()].some(({ value }) =>
+      sameSource(value.source, seen.source) && value.collisionScope === seen.collisionScope
+      && (seen.sourceInstanceId === undefined || value.sourceInstanceId === seen.sourceInstanceId))) continue;
+    add(seen, input.facetCensus?.scopeNames[triageScopeFilterKeyV1(seen)]
+      ?? (seen.collisionScope === undefined ? undefined
+        : input.facetCensus?.scopeNames[triageFacetScopeKeyV1(seen.source, seen.collisionScope)])
+      ?? seen.unitId ?? seen.collisionScope ?? instanceLabel(seen, input.configuredSources));
+  }
+  for (const active of input.filters.scopes) {
+    add(active, active.unitId ?? active.collisionScope ?? instanceLabel(active, input.configuredSources));
+  }
+  const qualify = new Set([...values.values()].map(({ value }) => triageSourceFilterKeyV1(value))).size > 1;
+  return Object.freeze({ facet: 'scopes', label: text('plugins.triage.surface.filters.scope', 'Scope'),
+    options: Object.freeze([...values.entries()].map(([key, { value, label }]) => {
+      const selection = { facet: 'scopes', value } as const;
+      return Object.freeze({ key: `scopes:${key}`,
+        label: qualify ? `${label} — ${instanceLabel(value, input.configuredSources)}` : label,
+        selected: selectedIn(input.filters, selection), selection });
+    })),
+  });
+}
+
 /**
- * One Type or Scope facet, planned from the window owner's pre-filter census.
+ * Type choices from the window owner's pre-filter census.
  *
  * The census supplies every value observed under its disclosed coverage, so a
  * selected value cannot erase the alternatives that would widen the lens. A
@@ -244,16 +297,7 @@ export function planTriageFilterFacetsV1(
       input,
       text,
     ),
-    planCensusFacet(
-      'scopes',
-      'plugins.triage.surface.filters.scope',
-      'Scope',
-      (value) => value.collisionScope,
-      (value) => input.facetCensus?.scopeNames[triageFacetScopeKeyV1(value.source, value.collisionScope)]
-        ?? value.collisionScope,
-      input,
-      text,
-    ),
+    planScopeFacet(input, text),
     planClosedFacet(
       'states',
       'plugins.triage.surface.filters.state',

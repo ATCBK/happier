@@ -115,6 +115,21 @@ function fold(input: Readonly<{
 }
 
 describe('the content winner of one folded entry', () => {
+    it('uses an explicit source-authored collision join only when a unit fact is unavailable', () => {
+        const observations = [
+            present({ sourceInstanceId: INSTANCE[0], entryId: 'old-shape', collisionScope: 'repository:1' }),
+            present({ sourceInstanceId: INSTANCE[0], entryId: 'different-unit', collisionScope: 'repository:1', scopeUnitId: '2' }),
+        ];
+        const selected = fold({ observations, lens: { filters: { ...TRIAGE_LIST_NO_FILTERS_V1,
+            scopes: [{ source: TRIAGE_TESTKIT_SOURCE, sourceInstanceId: INSTANCE[0], unitId: '1', collisionScope: 'repository:1' }],
+        } } });
+        expect(selected.rows.map((row) => row.entryRef.entryId)).toEqual(['old-shape']);
+        const all = fold({ observations, lens: { filters: { ...TRIAGE_LIST_NO_FILTERS_V1,
+            scopes: [{ source: TRIAGE_TESTKIT_SOURCE, sourceInstanceId: INSTANCE[0] }],
+        } } });
+        expect(all.rows).toHaveLength(2);
+    });
+
     it('filters source-owned unit ids within a deployment-wide collision scope', () => {
         const observations = [
             present({ sourceInstanceId: INSTANCE[0], entryId: 'project-a', scopeUnitId: 'a' }),

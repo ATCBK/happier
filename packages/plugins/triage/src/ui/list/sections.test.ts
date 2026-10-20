@@ -76,6 +76,49 @@ function byGroup(items: readonly TriageListItemV1[]): Readonly<Record<string, re
 }
 
 describe('the PRs & Issues grouping axis', () => {
+  it('takes the completing capability from the selected connection, with runtime capabilities replacing the kind defaults', () => {
+    const capabilities = (id: string) => ({ completingTransitionId: id,
+      transitions: [{ id, label: 'Done', state: { presentation: 'resolved' as const } }] });
+    const base = row('selected');
+    const projected = { ...base, content: { ...base.content!, outcome: { ...base.content!.outcome,
+      snapshot: { ...base.content!.outcome.snapshot, taskCapabilities: capabilities('other-connection') } } },
+      observations: [{ ...base.observations[0]!, outcome: { ...base.content!.outcome,
+        snapshot: { ...base.content!.outcome.snapshot, taskCapabilities: capabilities('selected-connection') } } }] };
+    const input = { rows: [projected], pins: [], workflowSubjectOf: pullRequests,
+      tasks: { audience: 'everyone' as const, isTask: () => true, hasSessions: () => false, capabilitiesOf: () => capabilities('kind-default') } };
+    expect(planTriageListItemsV1(input)[0]?.task?.completingTransitionId).toBe('selected-connection');
+    const refined = { ...projected, observations: [{ ...projected.observations[0]!, outcome: { ...base.content!.outcome,
+      snapshot: { ...base.content!.outcome.snapshot, taskCapabilities: { transitions: [] } } } }] };
+    expect(planTriageListItemsV1({ ...input, rows: [refined] })[0]?.task).not.toHaveProperty('completingTransitionId');
+  });
+  it('limits Mine to assignment or source-declared authorship, while Everyone and Agents keep their meaning', () => {
+    const rows = [row('assigned', { involvement: ['assignee'] }), row('authored', { involvement: ['author'] }),
+      row('mentioned', { involvement: ['mentioned'] }), row('subscribed', { involvement: ['subscribed'] }),
+      row('participating', { involvement: ['participating'] }), row('review', { involvement: ['reviewRequested'] })];
+    const input = { rows, pins: [], workflowSubjectOf: pullRequests,
+      tasks: { audience: 'mine' as const, isTask: () => true,
+        hasSessions: (key: string) => key === triageEntryRowKey(rows[2]!.entryRef) } };
+    expect(planTriageListItemsV1(input).map(item => item.row.entryRef.entryId)).toEqual(['assigned', 'authored']);
+    expect(planTriageListItemsV1({ ...input, tasks: { ...input.tasks, audience: 'everyone' } })).toHaveLength(6);
+    expect(planTriageListItemsV1({ ...input, tasks: { ...input.tasks, audience: 'agents' } })
+      .map(item => item.row.entryRef.entryId)).toEqual(['mentioned']);
+  });
+  it('exposes due/completion facts and limits the completed band by source completion time, never update time', () => {
+    const task = (id: string, completedAtMs?: number) => {
+      const base = row(id, { involvement: ['assignee'] });
+      return { ...base, content: { ...base.content!, outcome: { ...base.content!.outcome, snapshot: {
+        ...base.content!.outcome.snapshot, dueDate: '2026-10-25', ...(completedAtMs === undefined ? {} : { completedAtMs }),
+        state: { presentation: 'resolved' as const },
+      } } } };
+    };
+    const rows = [task('recent', 100), task('old', 99), task('unknown'), row('open', { involvement: ['assignee'] })];
+    const tasks = { audience: 'everyone' as const, isTask: () => true, hasSessions: () => false, completedSinceMs: 100 };
+    const items = planTriageListItemsV1({ rows, pins: [], workflowSubjectOf: pullRequests, tasks });
+    expect(items.map(item => item.row.entryRef.entryId)).toEqual(['recent', 'open']);
+    expect(items[0]?.task).toMatchObject({ dueDate: '2026-10-25', completedAtMs: 100 });
+    expect(planTriageListItemsV1({ rows, pins: [], workflowSubjectOf: pullRequests,
+      tasks: { audience: 'everyone', isTask: () => true, hasSessions: () => false } })).toHaveLength(4);
+  });
   it('uses declared task kinds, involvement and links for Tasks audiences, and the protocol category for groups', () => {
     const assigned = row('assigned', { kindId: 'issue', involvement: ['assignee'] });
     const authored = row('authored', { kindId: 'issue', involvement: ['author'] });
@@ -99,8 +142,11 @@ describe('the PRs & Issues grouping axis', () => {
       state: { presentation: 'active' as const, stage: 'started' as const, nativeLabel: 'In Review' },
       relations: { children: { total: 5, completed: 3 } },
     } } } };
-    const tasks = { audience: 'mine' as const, isTask: () => true, hasSessions: () => false };
+    const capabilities = { completingTransitionId: 'done', transitions: [{ id: 'done', label: 'Done',
+      state: { presentation: 'resolved' as const } }] };
+    const tasks = { audience: 'mine' as const, isTask: () => true, hasSessions: () => false, capabilitiesOf: () => capabilities };
     const [item] = planTriageListItemsV1({ rows: [task], pins: [], workflowSubjectOf: pullRequests, tasks });
+    expect(item?.task).toMatchObject({ completingTransitionId: 'done' });
     expect(item!.task).toEqual({ category: 'started', statusLabel: 'In Review', relations: { children: { total: 5, completed: 3 } } });
     const [plain] = planTriageListItemsV1({ rows: [task], pins: [], workflowSubjectOf: pullRequests });
     expect(plain!.task).toBeUndefined();

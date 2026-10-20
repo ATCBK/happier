@@ -12,6 +12,7 @@ import {
     MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1,
     MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1,
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
+    MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1,
     TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1,
     TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
     TriageEntryLocatorV1Schema,
@@ -23,6 +24,8 @@ import {
     TriageScanContinuationV1Schema,
     TriageSourceScanEvidenceV1Schema,
     TriageSourceViewerFactsV1Schema,
+    TriageSourceScopeUnitDescriptorV1Schema,
+    TriageListScopeUnitsResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 
 import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../projection/listWindow.js';
@@ -105,6 +108,31 @@ const facetArray = <TSchema extends Parameters<typeof defineProtocolArray>[0]>(s
     defineProtocolArray(schema)
 );
 
+export const TriageListSourceFilterValueV1Schema = defineProtocolObject({
+    source: PluginContributionIdentityV1Schema,
+    sourceInstanceId: TriageSourceInstanceIdV1Schema.optional(),
+}, { policy: 'closed' });
+const scopeUnitId = defineProtocolUtf8String({
+    maxUtf8Bytes: MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1, minLength: 1, pattern: TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
+});
+export const TriageListScopeFilterValueV1Schema = defineProtocolUnion([
+    defineProtocolObject({
+        source: PluginContributionIdentityV1Schema,
+        sourceInstanceId: TriageSourceInstanceIdV1Schema.optional(),
+        collisionScope: triageCollisionScope,
+    }, { policy: 'closed' }),
+    defineProtocolObject({
+        source: PluginContributionIdentityV1Schema,
+        sourceInstanceId: TriageSourceInstanceIdV1Schema,
+        unitId: scopeUnitId,
+        collisionScope: triageCollisionScope.optional(),
+    }, { policy: 'closed' }),
+    defineProtocolObject({
+        source: PluginContributionIdentityV1Schema,
+        sourceInstanceId: TriageSourceInstanceIdV1Schema,
+    }, { policy: 'closed' }),
+]);
+
 /**
  * The one source-neutral filter vocabulary on the wire.
  *
@@ -113,17 +141,12 @@ const facetArray = <TSchema extends Parameters<typeof defineProtocolArray>[0]>(s
  * live lens start to disagree.
  */
 const listFilterFields = {
-    sources: facetArray(defineProtocolObject({
-        source: PluginContributionIdentityV1Schema,
-    }, { policy: 'closed' })),
+    sources: facetArray(TriageListSourceFilterValueV1Schema),
     types: facetArray(defineProtocolObject({
         source: PluginContributionIdentityV1Schema,
         kindId: triageIdentifier,
     }, { policy: 'closed' })),
-    scopes: facetArray(defineProtocolObject({
-        source: PluginContributionIdentityV1Schema,
-        collisionScope: triageCollisionScope,
-    }, { policy: 'closed' })),
+    scopes: facetArray(TriageListScopeFilterValueV1Schema),
     states: facetArray(defineProtocolUnion([
         defineProtocolLiteral('open'),
         defineProtocolLiteral('done'),
@@ -446,6 +469,10 @@ const TriageConfiguredSourceSummaryV1Schema = defineProtocolObject({
      */
     configurationRevision: defineProtocolNumber({ integer: true, minimum: 1 }).optional(),
     displayLabel: triageText.optional(),
+    scope: defineProtocolObject({
+        unit: TriageSourceScopeUnitDescriptorV1Schema,
+        projection: TriageListScopeUnitsResultV1Schema,
+    }, { policy: 'closed' }).optional(),
     /** Whether an admitted V1 source contribution can currently be invoked for it. */
     available: defineProtocolUnion([
         defineProtocolLiteral(true),

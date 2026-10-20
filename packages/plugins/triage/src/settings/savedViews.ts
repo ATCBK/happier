@@ -1,6 +1,5 @@
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
-import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 import { PLUGIN_ACCOUNT_STORAGE_LIMITS_V1 } from '@happier-dev/plugin-sdk/storage';
 import { createProtocolStoredReadSchema } from '@happier-dev/plugin-sdk/protocol';
 import {
@@ -12,9 +11,16 @@ import {
     parseCorpusSmartPolicy,
     type CorpusSmartPolicyV1,
 } from '../corpus/query/smartPolicy.js';
-import type {
-    SurfaceFilterSelectionV1,
-    TriageListOrderV1,
+import {
+    triageSourceFilterKeyV1,
+    triageScopeFilterKeyV1,
+    type CorpusSourceFilterValueV1,
+    type CorpusScopeFilterValueV1,
+    type CorpusTypeFilterValueV1,
+    type CorpusStateFilterValueV1,
+    type CorpusAttentionFilterValueV1,
+    type SurfaceFilterSelectionV1,
+    type TriageListOrderV1,
 } from '../projection/listWindow.js';
 import {
     TriageSurfaceFilterSelectionV1Schema,
@@ -189,22 +195,10 @@ function readSingleLineString(value: unknown): string | null {
  * representable inside `collisionScope`: a delimiter join would make two
  * contract-valid distinct scopes compare equal and silently drop one of them.
  */
-function facetIdentity(value: unknown): string {
-    if (typeof value === 'string') return JSON.stringify([value]);
-    const candidate = value as Readonly<Record<string, unknown>>;
-    const source = candidate.source as PluginContributionIdentity | undefined;
-    return JSON.stringify([
-        source?.pluginId ?? null,
-        source?.localId ?? null,
-        candidate.kindId ?? null,
-        candidate.collisionScope ?? null,
-    ]);
-}
-
-function hasDuplicateFacetValue(values: readonly unknown[]): boolean {
+function hasDuplicateFacetValue<T>(values: readonly T[], key: (value: T) => string): boolean {
     const seen = new Set<string>();
     for (const value of values) {
-        const identity = facetIdentity(value);
+        const identity = key(value);
         if (seen.has(identity)) return true;
         seen.add(identity);
     }
@@ -227,11 +221,11 @@ function readFilters(raw: unknown): FiltersOutcome {
     const parsed = TriageSurfaceFilterSelectionV1Schema.safeParse(raw);
     if (!parsed.success) return { ok: false, reason: 'filterValue' };
     const filters = parsed.data;
-    if (hasDuplicateFacetValue(filters.sources)
-        || hasDuplicateFacetValue(filters.types)
-        || hasDuplicateFacetValue(filters.scopes)
-        || hasDuplicateFacetValue(filters.states)
-        || hasDuplicateFacetValue(filters.attention)) {
+    if (hasDuplicateFacetValue<CorpusSourceFilterValueV1>(filters.sources, triageSourceFilterKeyV1)
+        || hasDuplicateFacetValue<CorpusTypeFilterValueV1>(filters.types, (value) => JSON.stringify([value.source.pluginId, value.source.localId, value.kindId]))
+        || hasDuplicateFacetValue<CorpusScopeFilterValueV1>(filters.scopes, triageScopeFilterKeyV1)
+        || hasDuplicateFacetValue<CorpusStateFilterValueV1>(filters.states, (value) => value)
+        || hasDuplicateFacetValue<CorpusAttentionFilterValueV1>(filters.attention, (value) => value)) {
         return { ok: false, reason: 'duplicateFacetValue' };
     }
     return { ok: true, filters };
@@ -350,14 +344,18 @@ function toStoredValue(value: CorpusSavedViewsCatalogV1): JsonValue {
             query: view.query,
             filters: {
                 ...(view.filters.tasks === undefined ? {} : { tasks: view.filters.tasks }),
-                sources: view.filters.sources.map((entry) => ({ source: { ...entry.source } })),
+                sources: view.filters.sources.map((entry) => ({ source: { ...entry.source },
+                    ...(entry.sourceInstanceId === undefined ? {} : { sourceInstanceId: entry.sourceInstanceId }),
+                })),
                 types: view.filters.types.map((entry) => ({
                     source: { ...entry.source },
                     kindId: entry.kindId,
                 })),
                 scopes: view.filters.scopes.map((entry) => ({
                     source: { ...entry.source },
-                    collisionScope: entry.collisionScope,
+                    ...(entry.sourceInstanceId === undefined ? {} : { sourceInstanceId: entry.sourceInstanceId }),
+                    ...(entry.unitId === undefined ? {} : { unitId: entry.unitId }),
+                    ...(entry.collisionScope === undefined ? {} : { collisionScope: entry.collisionScope }),
                 })),
                 states: [...view.filters.states],
                 attention: [...view.filters.attention],

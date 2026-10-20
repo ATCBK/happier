@@ -27,7 +27,8 @@ const secondInstanceId = 'ba9752ad-48f8-4a4c-9054-a9ff99a1fc12';
 const protocol = TriageSourcesContributionProtocolV1;
 const base = TriageGetResultV1Schema.parse(fixture.getResult);
 if (base.kind !== 'present') throw new Error('The public fixture must provide a present entry');
-const initialTask = { ...base, localRef: { ...base.localRef, kindId: 'issue', entryId: 'task-1' } };
+const initialTask = { ...base, localRef: { ...base.localRef, kindId: 'issue', entryId: 'task-1' },
+    snapshot: { ...base.snapshot, dueDate: '2026-10-25' } };
 const entryRef = { source, ...initialTask.localRef };
 
 /** A separately authored source: no aggregate imports or bundled source implementation. */
@@ -49,7 +50,9 @@ async function withExternalTaskSource(
             id: 'issue', workflowSubject: 'issue', displayName: 'Issue', task: true,
             taskCapabilities: {
                 createFields: ['title'], editFields: ['title'],
-                transitions: [{ id: 'begin', label: 'Begin', state: { presentation: 'active', nativeLabel: 'Started', stage: 'started' } }],
+                completingTransitionId: 'finish',
+                transitions: [{ id: 'begin', label: 'Begin', state: { presentation: 'active', nativeLabel: 'Started', stage: 'started' } },
+                    { id: 'finish', label: 'Finish', state: { presentation: 'resolved', completionReason: 'completed' } }],
             },
         }],
     });
@@ -91,7 +94,7 @@ async function withExternalTaskSource(
                 resultSchema: protocol.operations.get.declaration.resultSchema,
                 run: async () => { readRequests.push('get'); return task; } },
             ...(options.scopeSelection ? {
-                listScopeUnits: { title: 'List teams', surfaces: protocol.operations.listScopeUnits.declaration.surfaces,
+                scopes: { title: 'List teams', surfaces: protocol.operations.listScopeUnits.declaration.surfaces,
                     dangerLevel: protocol.operations.listScopeUnits.declaration.dangerLevel,
                     inputSchema: protocol.operations.listScopeUnits.declaration.input.schema,
                     resultSchema: protocol.operations.listScopeUnits.declaration.resultSchema,
@@ -135,7 +138,9 @@ async function withExternalTaskSource(
                         writes.push({ role: 'transition', input });
                         if (writeResult) return writeResult;
                         task = { ...task, snapshot: { ...task.snapshot,
-                            state: { presentation: 'active', nativeLabel: input.transitionId, stage: 'started' } } };
+                            ...(input.transitionId === 'finish' ? { completedAtMs: 100 } : {}),
+                            state: input.transitionId === 'finish' ? { presentation: 'resolved', completionReason: 'completed' }
+                                : { presentation: 'active', nativeLabel: input.transitionId, stage: 'started' } } };
                         return { kind: 'applied', observation: task };
                     } },
             } : {}),
@@ -147,7 +152,7 @@ async function withExternalTaskSource(
                 listInstances: protocol.operations.listInstances.bind('discover'),
                 scan: protocol.operations.scan.bind('scan'),
                 get: protocol.operations.get.bind('get'),
-                ...(options.scopeSelection ? { listScopeUnits: protocol.operations.listScopeUnits.bind('listScopeUnits') } : {}),
+                ...(options.scopeSelection ? { listScopeUnits: protocol.operations.listScopeUnits.bind('scopes') } : {}),
                 ...(!options.readOnly ? {
                     create: protocol.operations.create.bind('create'),
                     edit: protocol.operations.edit.bind('edit'),
@@ -223,6 +228,21 @@ async function withExternalTaskSource(
 }
 
 describe('Tasks through a separately authored source and registered aggregate Actions', () => {
+    it('completes once through the declared role and rereads due/completion facts through the same strict list consumer', async () => {
+        await withExternalTaskSource(async ({ aggregate, writes }) => {
+            const result = TriageTaskWriteResultV1Schema.parse(await aggregate.invokeAction('tasks/transition-v1', {
+                v: 1, entryRef, sourceInstanceId: instanceId, transitionId: 'finish',
+            }, { surface: 'agent' }));
+            expect(result).toMatchObject({ kind: 'applied', observation: { snapshot: {
+                state: { presentation: 'resolved', completionReason: 'completed' }, dueDate: '2026-10-25', completedAtMs: 100,
+            } } });
+            const read = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {
+                v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest',
+            }, { surface: 'agent' }));
+            expect(read.window.rows[0]?.content?.outcome.snapshot).toMatchObject({ dueDate: '2026-10-25', completedAtMs: 100 });
+            expect(writes.map(write => write.role)).toEqual(['transition']);
+        }, { initialTaskPage: true });
+    });
     it('projects configured scope choices before scanning and applies the same unit filter through agent admission', async () => {
         await withExternalTaskSource(async ({ aggregate, readRequests }) => {
             const input = { v: 1, sources: { kind: 'allConfigured' }, limit: 0, order: 'newest' };

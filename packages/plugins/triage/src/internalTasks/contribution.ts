@@ -15,7 +15,7 @@ const fields = ['title', 'body', 'assigneeIds', 'labelIds', 'dueDate', 'parent',
 export const INTERNAL_TASK_DESCRIPTOR_V1 = TriageSourceDescriptorV1Schema.parse({
   v: 1, purpose: 'tasks', displayName: 'Happier tasks', settingsPageId: 'internal-tasks',
   kinds: [{ id: 'task', workflowSubject: 'issue', displayName: 'Task', pluralDisplayName: 'Tasks', task: true,
-    taskCapabilities: { createFields: fields, editFields: fields,
+    taskCapabilities: { createFields: fields, editFields: fields, completingTransitionId: 'completed',
       transitions: INTERNAL_TASK_STATES_V1.map(id => ({ id, label: internalTaskStateV1(id).nativeLabel, state: internalTaskStateV1(id) })) } }],
 });
 const surfaces = ['plugin', 'ui', 'agent', 'mcp', 'cli'] as const;

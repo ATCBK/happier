@@ -7,6 +7,8 @@ import {
 } from '../../corpus/query/smartPolicy.js';
 import {
   TRIAGE_LIST_NO_FILTERS_V1,
+  triageSourceFilterKeyV1,
+  triageScopeFilterKeyV1,
   type CorpusAttentionFilterValueV1,
   type CorpusScopeFilterValueV1,
   type CorpusSourceFilterValueV1,
@@ -271,9 +273,9 @@ export function sameTriageFilterValueV1(
     return left.value.kindId === (right.value as CorpusTypeFilterValueV1).kindId;
   }
   if (left.facet === 'scopes') {
-    return left.value.collisionScope === (right.value as CorpusScopeFilterValueV1).collisionScope;
+    return triageScopeFilterKeyV1(left.value) === triageScopeFilterKeyV1(right.value as CorpusScopeFilterValueV1);
   }
-  return true;
+  return triageSourceFilterKeyV1(left.value) === triageSourceFilterKeyV1(other);
 }
 
 /**

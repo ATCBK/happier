@@ -576,6 +576,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
             audience: taskAudience,
             isTask: (entryRef) => resolveTriageSourceDescriptorV1(surfaceContext.targetedContributions, entryRef.source)
               ?.kinds.some((kind) => kind.id === entryRef.kindId && kind.task === true) === true,
+            capabilitiesOf: (entryRef) => resolveTriageSourceDescriptorV1(surfaceContext.targetedContributions, entryRef.source)
+              ?.kinds.find((kind) => kind.id === entryRef.kindId)?.taskCapabilities,
             hasSessions: (key) => (sessionActivity.linkedSessions.get(key)?.length ?? 0) > 0,
           } }),
           }, previousItems.current)
