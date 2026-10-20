@@ -113,6 +113,11 @@ export type CollectionField<Item> = Readonly<{
   /** Lower drops first when the table is narrow. */
   priority: number;
   align?: 'start' | 'end';
+  /**
+   * The column stands right after the title, before the anatomy's slot columns (a task's status word before its
+   * Where). Otherwise field columns follow the slots, and the table's trailing Age (and title meta) stay last.
+   */
+  leading?: boolean;
   /** The column title is a sort button (`CollectionProps.sort`); the caller orders the items. */
   sortable?: boolean;
   /**
@@ -170,6 +175,12 @@ export type CollectionAnatomy<Item> = Readonly<{
    * pressing it never opens the item. Keep non-interactive content in `titleSuffix`/`byline`.
    */
   titleControls?: (item: Item) => ReactNode;
+  /**
+   * A control in the glyph's place, at the row's start (a checklist's checkbox: tick it without opening the item).
+   * Like `titleControls` it is drawn beside the row's press target as its own press and focus target, so pressing
+   * the row still opens the item. It takes the glyph's column; the item's `glyph` is not drawn beside it.
+   */
+  leadingControl?: (item: Item) => ReactNode;
   /** Where the item lives ("payments-api"): the table's Where column. */
   where?: (item: Item) => ReactNode;
   /**
@@ -479,6 +490,7 @@ const SLOT_COLUMNS = Object.freeze({
 });
 type SlotKey = keyof typeof SLOT_COLUMNS;
 const SLOT_KEYS: readonly SlotKey[] = ['where', 'reason', 'signal', 'agent', 'titleMeta', 'age'];
+const TRAILING_SLOT_KEYS: ReadonlySet<SlotKey> = new Set(['titleMeta', 'age']);
 
 type ResolvedColumn<Item> = HappierCollectionTableColumn & Readonly<{
   title: string;
@@ -625,9 +637,22 @@ function resolveColumns<Item>(
     fieldKey: null,
     sortable: false,
   }];
-  for (const slot of SLOT_KEYS) {
+  const fieldColumn = (field: CollectionField<Item>): ResolvedColumn<Item> => ({
+    key: `field:${field.key}`,
+    title: field.title,
+    minWidth: field.minWidth * textScale,
+    priority: field.priority,
+    align: field.align ?? 'start',
+    render: field.render,
+    fieldKey: field.key,
+    sortable: field.sortable === true,
+    ...(field.spanRest === undefined ? {} : { spanRest: field.spanRest }),
+  });
+  const fields = anatomy.fields ?? [];
+  for (const field of fields) if (field.leading === true) declared.push(fieldColumn(field));
+  const slotColumn = (slot: SlotKey) => {
     const render = anatomy[slot];
-    if (render === undefined) continue;
+    if (render === undefined) return;
     const column = SLOT_COLUMNS[slot];
     declared.push({
       key: slot,
@@ -640,20 +665,11 @@ function resolveColumns<Item>(
       fieldKey: null,
       sortable: false,
     });
-  }
-  for (const field of anatomy.fields ?? []) {
-    declared.push({
-      key: `field:${field.key}`,
-      title: field.title,
-      minWidth: field.minWidth * textScale,
-      priority: field.priority,
-      align: field.align ?? 'start',
-      render: field.render,
-      fieldKey: field.key,
-      sortable: field.sortable === true,
-      ...(field.spanRest === undefined ? {} : { spanRest: field.spanRest }),
-    });
-  }
+  };
+  // The end-aligned trailing slots (title meta, Age) close the row after every field column.
+  for (const slot of SLOT_KEYS) if (!TRAILING_SLOT_KEYS.has(slot)) slotColumn(slot);
+  for (const field of fields) if (field.leading !== true) declared.push(fieldColumn(field));
+  for (const slot of SLOT_KEYS) if (TRAILING_SLOT_KEYS.has(slot)) slotColumn(slot);
   const available = width - TABLE.insetStart - TABLE.insetEnd - TABLE.glyphWidth - TABLE.gap - rowAccessoryWidth - leadingWidth;
   return resolveHappierCollectionTableColumns({ columns: declared, availableWidth: available, gap: TABLE.gap });
 }
@@ -882,7 +898,11 @@ function TableCells<Item>(props: Readonly<{
       {props.leading === undefined || props.leading === null ? null : (
         <View pointerEvents={layer?.control} style={[treeLeadingStyle, { width: props.leading.width }]}>{props.leading.content}</View>
       )}
-      <View pointerEvents={layer?.leaf} style={glyphStyle}>{item === null || !props.withTitle ? null : anatomy.glyph(item)}</View>
+      {item !== null && props.withTitle && anatomy.leadingControl !== undefined ? (
+        <View pointerEvents={layer?.control} style={glyphStyle}>{anatomy.leadingControl(item)}</View>
+      ) : (
+        <View pointerEvents={layer?.leaf} style={glyphStyle}>{item === null || !props.withTitle ? null : anatomy.glyph(item)}</View>
+      )}
       {renderTableRowCells(item, props.columns, (column, spanWidth) => (
         <View key={column.key} pointerEvents={column.render === null ? layer?.content : layer?.leaf}
           style={spanWidth === null ? cellStyle(column as ResolvedColumn<unknown>) : [cellStyle(column as ResolvedColumn<unknown>), { width: spanWidth }]}>
@@ -1019,7 +1039,10 @@ function rowLayerPointerEvents<Item>(anatomy: CollectionAnatomy<Item>): Readonly
   leaf: 'none';
   control: typeof HAPPIER_ROW_CONTROL_POINTER_EVENTS;
 }> | null {
-  return anatomy.titleControls === undefined ? null : ROW_LAYER_POINTER_EVENTS;
+  return hasRowControls(anatomy) ? ROW_LAYER_POINTER_EVENTS : null;
+}
+function hasRowControls<Item>(anatomy: CollectionAnatomy<Item>): boolean {
+  return anatomy.titleControls !== undefined || anatomy.leadingControl !== undefined;
 }
 const ROW_LAYER_POINTER_EVENTS = {
   content: HAPPIER_ROW_CONTENT_POINTER_EVENTS,
@@ -1059,7 +1082,8 @@ function ListCells<Item>(props: Readonly<{
   const meta = titleMeta === undefined || titleMeta === null || titleMeta === false ? null : titleMeta;
   const badge = anatomy.glyphBadge?.(item) ?? null;
   // An item with no mark (a skill) draws no glyph column in the list; its text starts at the row's inset.
-  const glyph = anatomy.glyph(item) ?? null;
+  const leadingControl = anatomy.leadingControl?.(item) ?? null;
+  const glyph = leadingControl === null ? (anatomy.glyph(item) ?? null) : null;
   const [metaPlacement, setMetaPlacement] = useState<'inline' | 'beneath'>('inline');
   const measured = useRef({ row: 0, meta: 0 });
   const titleMinWidth = TABLE.titleMinWidth * useHappierUiAccessibility().textScale * LIST_TITLE_MIN_SHARE;
@@ -1102,6 +1126,11 @@ function ListCells<Item>(props: Readonly<{
       props.wrapTitle && !page ? (props.ruledInsetPx !== null
         ? ruledStyle
         : (props.ownsTrailingInset ? restingListTrailingStyle : restingListContentStyle)) : null]}>
+      {leadingControl === null ? null : (
+        <View pointerEvents={layer?.control} style={[glyphStyle, { justifyContent: 'flex-start' }, page ? pageRowGlyphStyle : null]}>
+          {leadingControl}
+        </View>
+      )}
       {glyph === null && badge === null ? null : (
         <View pointerEvents={layer?.leaf} style={[glyphStyle, { justifyContent: 'flex-start' }, page ? pageRowGlyphStyle : null]}>
           {badge === null ? glyph : (
@@ -1307,7 +1336,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
       {...(actions.busy === undefined ? {} : { busy: actions.busy })}
       {...(actions.accessoryWraps === undefined ? {} : { accessoryWraps: actions.accessoryWraps })}
       {...(accessory === null ? {} : { accessory })}
-      {...(anatomy.titleControls === undefined ? {} : { contentBesidePressable: true })}
+      {...(hasRowControls(anatomy) ? { contentBesidePressable: true } : {})}
       secondaryActions={secondaryActions}
       onSecondaryAction={onSecondaryAction}
       {...(actions.secondaryActionAccessibilityLabel === undefined
@@ -1326,7 +1355,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
       {...(actions.busy === undefined ? {} : { busy: actions.busy })}
       {...(actions.accessoryWraps === undefined ? {} : { accessoryWraps: actions.accessoryWraps })}
       {...(accessory === null ? {} : { accessory })}
-      {...(anatomy.titleControls === undefined ? {} : { contentBesidePressable: true })}
+      {...(hasRowControls(anatomy) ? { contentBesidePressable: true } : {})}
     >
       {rowContents}
     </List.Item>

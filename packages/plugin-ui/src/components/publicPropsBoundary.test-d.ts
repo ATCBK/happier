@@ -55,7 +55,7 @@ type _AuthorCollectionKeysAreCurated = Assert<IsEqual<keyof CollectionProps<unkn
   | 'sort' | 'summaryRows'
 >>;
 type _AuthorCollectionAnatomyKeysAreCurated = Assert<IsEqual<keyof CollectionAnatomy<unknown>,
-  | 'boardContent' | 'cardContent' | 'destination' | 'wrapItem' | 'glyph' | 'glyphBadge' | 'title' | 'titleSuffix' | 'titleControls' | 'where' | 'byline'
+  | 'boardContent' | 'cardContent' | 'destination' | 'wrapItem' | 'glyph' | 'glyphBadge' | 'title' | 'titleSuffix' | 'titleControls' | 'leadingControl' | 'where' | 'byline'
   | 'reason' | 'signal'
   | 'agent' | 'age' | 'titleMeta'
   | 'fields' | 'peek' | 'preview' | 'description' | 'action' | 'accessibilityLabel' | 'accessibilityHint'

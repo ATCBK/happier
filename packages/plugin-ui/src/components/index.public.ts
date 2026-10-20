@@ -26,6 +26,7 @@ export {
 export { Avatar, type AvatarProps } from './Avatar.js';
 export { DetailsPane, DetailsPaneFooter, type DetailsPaneProps } from './DetailsPane.js';
 export { DiffStat, type DiffStatProps } from './DiffStat.js';
+export { TaskStatusGlyph, type TaskStatusCategory, type TaskStatusGlyphProps } from './TaskStatusGlyph.js';
 export { PaneHeaderContent, type PaneHeaderContentProps, type PaneHeaderContentLineSegment } from './PaneHeaderContent.js';
 export {
   type PluginUiFocusTarget,

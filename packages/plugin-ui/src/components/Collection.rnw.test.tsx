@@ -2029,6 +2029,23 @@ describe('Collection table', () => {
     view.unmount();
   });
 
+  it('stands a leading field right after the title and keeps Age the last column after every other field', () => {
+    const view = mount({
+      anatomy: {
+        ...anatomy,
+        reason: undefined,
+        fields: [
+          { key: 'progress', title: 'Progress', minWidth: 90, priority: 1, render: () => '1 of 2' },
+          { key: 'status', title: 'Status', minWidth: 90, priority: 1, leading: true, render: () => 'Open' },
+        ],
+        columnTitles: { title: 'Task', where: 'Where', age: 'Age' },
+      },
+    });
+    view.measure(1440);
+    expect(headerTitles(view.container)).toEqual(['Task', 'Status', 'Where', 'Progress', 'Age']);
+    view.unmount();
+  });
+
   it('groups rows by the one axis, with each group naming what its rows share', () => {
     const view = mount();
     view.measure(1440);
@@ -4881,6 +4898,7 @@ describe('the Collection toolbar', () => {
           ],
           onChange: (value) => calls.push(`view:${value}`),
         }}
+        primary={{ label: 'New task', onPress: () => calls.push('primary') }}
         testID="toolbar"
       />
     );
@@ -4911,6 +4929,13 @@ describe('the Collection toolbar', () => {
     expect(
       toolbar.querySelector('[role="radiogroup"], [role="tablist"]'),
     ).not.toBeNull();
+    // The page's one primary action ends the row, in words.
+    const primary = button(toolbar, 'New task')!;
+    expect(primary.textContent).toBe('New task');
+    act(() => {
+      primary.click();
+    });
+    expect(calls).toEqual(['primary']);
     view.unmount();
   });
 
@@ -4932,6 +4957,8 @@ describe('the Collection toolbar', () => {
     // Healthy freshness is quiet on a phone; the refresh icon leaves the row.
     expect(toolbar.textContent).not.toContain('Up to date');
     expect(button(toolbar, 'Refresh')).toBeNull();
+    // On a phone the primary action is a round "+" beside Filters and ⋯, still named by its words.
+    expect(button(toolbar, 'New task')!.textContent).toBe('');
 
     // The folded Filters: a named, counted button that opens the shared bottom sheet of the wide menu's rows.
     const filters = button(toolbar, 'Filters: 2')!;

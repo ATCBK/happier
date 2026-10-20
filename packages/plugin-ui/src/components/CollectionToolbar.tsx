@@ -67,6 +67,11 @@ export type CollectionToolbarProps = Readonly<{
   }>;
   /** A transient page control beside the lens ("Done" while organizing). */
   accessory?: ReactNode;
+  /**
+   * The page's one primary action ("New task"). On a wide page it is the primary button that ends the row, after the
+   * page's own controls and Run on; on a phone it is a round "+" beside Filters and ⋯, named by `label`.
+   */
+  primary?: Readonly<{ label: string; onPress: () => unknown; testID?: string }>;
   freshness?: CollectionToolbarFreshness | null;
   refresh?: Readonly<{
     label: string;
@@ -151,6 +156,10 @@ function WideToolbar(props: CollectionToolbarProps): ReactElement {
         <MoreMenu {...props} folded={false} />
         <Views views={props.views} compact={false} />
         {slots?.pageActions ?? null}
+        {props.primary === undefined ? null : (
+          <Button title={props.primary.label} variant="primary" onPress={props.primary.onPress}
+            {...(props.primary.testID === undefined ? {} : { testID: props.primary.testID })} />
+        )}
       </Row>
     </Row>
   );
@@ -195,6 +204,10 @@ function CompactToolbar(props: CollectionToolbarProps): ReactElement {
     <>
       {filters}
       <MoreMenu {...props} folded />
+      {props.primary === undefined ? null : (
+        <IconButton icon={<Icon name="add" />} accessibilityLabel={props.primary.label} onPress={props.primary.onPress}
+          {...(props.primary.testID === undefined ? {} : { testID: props.primary.testID })} />
+      )}
     </>
   );
   // Healthy is quiet here: the words stay one tap away, under Refresh in ⋯.
