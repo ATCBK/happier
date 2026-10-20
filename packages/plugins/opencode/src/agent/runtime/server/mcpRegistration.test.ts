@@ -285,7 +285,7 @@ describe('registerOpenCodeMcpServers', () => {
     );
   });
 
-  it('reports missing required Happier configuration as a settled failure', async () => {
+  it('does not require an omitted optional Happier MCP configuration', async () => {
     const harness = createRegistrationHarness();
 
     await expect(registerOpenCodeMcpServers({
@@ -293,14 +293,19 @@ describe('registerOpenCodeMcpServers', () => {
       client: harness.client,
       directory: '/repo',
       mcpProjection: projection(undefined),
-    })).resolves.toMatchObject({
-      requiredHappier: {
-        status: 'failed',
-        error: expect.objectContaining({
-          message: 'required Happier MCP server configuration is missing',
-        }),
-      },
-    });
+    })).resolves.toMatchObject({ requiredHappier: { status: 'not_required' } });
+    expect(harness.mcpAdd).not.toHaveBeenCalled();
+  });
+
+  it.each(['happier', ' happier '])('fails closed when declared MCP %j has no command', async (name) => {
+    const harness = createRegistrationHarness();
+
+    await expect(registerOpenCodeMcpServers({
+      ctx: harness.ctx,
+      client: harness.client,
+      directory: '/repo',
+      mcpProjection: projection({ [name]: {} }),
+    })).resolves.toMatchObject({ requiredHappier: { status: 'failed' } });
     expect(harness.mcpAdd).not.toHaveBeenCalled();
   });
 });

@@ -30,6 +30,57 @@ afterEach(() => {
 });
 
 describe('OpenCode server managed-service assembly', () => {
+  it.each(['omitted', 'custom', 'malformed', 'refused'] as const)(
+    'admits detached prompts only after their declared MCP dependencies settle (%s)', async (configuration) => {
+      const registrations: string[] = [];
+      let promptDispatched = false;
+      const ctx = createContextFixture({
+        managedServerBaseUrl: 'http://127.0.0.1:49213',
+        managedServerRequest: async (input) => {
+          const path = input.pathAndQuery.split('?')[0]!;
+          if (path === '/event') return {
+            ok: true, status: 200, headers: { 'content-type': 'text/event-stream' },
+            body: new ReadableStream<Uint8Array>({ start(controller) {
+              controller.enqueue(new TextEncoder().encode('data: {"type":"server.connected","properties":{}}\n\n'));
+              input.signal?.addEventListener('abort', () => controller.close(), { once: true });
+            } }),
+          };
+          const posted = input.body === undefined ? {} : JSON.parse(new TextDecoder().decode(input.body));
+          if (path === '/mcp') registrations.push(posted.name);
+          if (path.endsWith('/message') && input.method === 'POST') promptDispatched = true;
+          const body = path === '/session' ? { id: 'oc-optional-mcp' }
+            : path === '/mcp' ? { [posted.name]: configuration === 'refused'
+              ? { status: 'failed', error: 'bridge unavailable' } : { status: 'connected' } }
+              : path.endsWith('/message') ? { id: 'native-optional-mcp-input' } : {};
+          return { ok: true, status: 200, headers: { 'content-type': 'application/json' },
+            body: new Response(JSON.stringify(body)).body };
+        },
+      });
+      const mcpServers = configuration === 'omitted' ? undefined
+        : configuration === 'custom' ? { docs: { command: '/fixture/docs-mcp' } }
+          : configuration === 'malformed' ? { ' happier ': {} }
+            : { happier: { command: '/fixture/happier-mcp' } };
+      const assembly = await createOpenCodeServerRuntimeAssembly({
+        ctx, directory: '/repo', executionRunId: 'run-optional-mcp',
+        endpoint: { mode: 'managed-spawn' }, mcpServers,
+        request: { kind: 'create', runId: 'run-optional-mcp', cwd: '/repo', input: { text: 'Produce a plan' },
+          profile: { pluginId: 'happier.agent.opencode', localId: 'opencode' } },
+      });
+      try {
+        const admission = await assembly.runtime.send({ inputIds: ['optional-mcp-input'], input: { text: 'Produce a plan' },
+          delivery: { kind: 'newTurn', turnId: 'optional-mcp-turn' } });
+        const admitted = configuration === 'omitted' || configuration === 'custom';
+        expect(admission).toMatchObject({ status: admitted ? 'admitted' : 'rejected' });
+        expect(promptDispatched).toBe(admitted);
+        const expectedRegistrations = buildOpenCodeSessionMcpProjection('run-optional-mcp', mcpServers)
+          .registrations.map(registration => registration.projectedName);
+        expect(registrations).toEqual(expectedRegistrations);
+      } finally {
+        await assembly.dispose();
+      }
+    },
+  );
+
   it.each(['session', 'execution_run'] as const)('launches normalized no-tools without native or MCP tools through %s', async scope => {
     const requests: string[] = [];
     let prompt: Record<string, unknown> | undefined;

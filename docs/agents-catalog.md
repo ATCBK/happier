@@ -776,6 +776,14 @@ or execution; a launch-time tool policy is not a complete name inventory.
 Uniquely recoverable names still reach the live host policy owner, and built-in
 Happier binding names remain governed by the Action owner.
 
+In 0.3 development source, OpenCode's server runtime requires the Happier MCP
+bridge only when the Session or Run open request supplies it. Detached Runs may
+omit the bridge while retaining native tools and any selected user MCP servers.
+A supplied bridge with a missing command or refused registration blocks prompt
+admission before a native prompt is sent. Explicit no-tools opens have no MCP
+dependency. Servers without dynamic MCP registration retain the existing
+warning-only unsupported path.
+
 In 0.3 development source, Pi receives user MCP servers through its existing
 native tools extension for Sessions and detached Runs, including MCP-only launches
 without the built-in Happier bridge. The host's shared MCP resolver selects and

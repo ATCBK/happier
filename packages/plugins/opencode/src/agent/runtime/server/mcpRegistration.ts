@@ -65,7 +65,7 @@ function projectOpenCodeMcpName(runtimeIdentity: string, originalName: string): 
 export type OpenCodeMcpRegistrationResult = Readonly<{
   requiredHappier: Readonly<
     | { status: 'ready' }
-    | { status: 'not_required' } // An explicit no-tools Run has no MCP dependency.
+    | { status: 'not_required' } // No-tools Runs and callers without a Happier bridge have no dependency.
     | { status: 'failed'; error: unknown }
     | { status: 'unsupported'; reason: string }
   >;
@@ -149,7 +149,7 @@ export function buildOpenCodeSessionMcpProjection(
     requiredHappierServerName:
       registrations.find(({ originalName }) => originalName === 'happier')?.projectedName ?? null,
     requiredHappierConfigurationPresent:
-      Object.prototype.hasOwnProperty.call(asRecord(raw) ?? {}, 'happier'),
+      Object.keys(asRecord(raw) ?? {}).some((name) => normalizeString(name) === 'happier'),
   });
 }
 
@@ -206,14 +206,12 @@ export async function registerOpenCodeMcpServers(params: Readonly<{
   }
   const registrations = params.mcpProjection.registrations;
   const registeredServers: OpenCodeRegisteredMcpServer[] = [];
-  let requiredHappier: OpenCodeMcpRegistrationResult['requiredHappier'] = {
-    status: 'failed',
-    error: new Error(
-      params.mcpProjection.requiredHappierConfigurationPresent
-        ? 'required Happier MCP server command is missing'
-        : 'required Happier MCP server configuration is missing',
-    ),
-  };
+  // The open-request MCP record is optional, including for detached Runs.
+  // Only an explicitly supplied Happier bridge establishes this dependency.
+  let requiredHappier: OpenCodeMcpRegistrationResult['requiredHappier'] =
+    params.mcpProjection.requiredHappierConfigurationPresent
+      ? { status: 'failed', error: new Error('required Happier MCP server command is missing') }
+      : { status: 'not_required' };
   for (const registration of registrations) {
     try {
       const registrationStatus = await params.client.mcpAdd({
