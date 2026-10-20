@@ -1,0 +1,10 @@
+{
+  "id": "J1",
+  "intent": "Cold document startup and dev Account restore through authenticated Home; warm mode measures authenticated reload.",
+  "prepare": [],
+  "steps": [
+    { "op": "open" },
+    { "op": "restore", "when": "cold" },
+    { "op": "home" }
+  ]
+}

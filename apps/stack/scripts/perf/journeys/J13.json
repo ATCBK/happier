@@ -1,0 +1,6 @@
+{
+  "id": "J13",
+  "intent": "Authenticated foreground Home with no interaction for five minutes; count background traffic and process work without changing freshness.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [{ "op": "idle", "ms": 300000 }]
+}

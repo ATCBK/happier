@@ -733,10 +733,11 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-async function createCdpConnection(webSocketDebuggerUrl) {
+export async function createCdpConnection(webSocketDebuggerUrl) {
   const ws = new WebSocket(webSocketDebuggerUrl);
   let nextId = 1;
   const pending = new Map();
+  const listeners = new Map();
   let closed = false;
 
   const rejectAll = (error) => {
@@ -770,7 +771,10 @@ async function createCdpConnection(webSocketDebuggerUrl) {
     } catch {
       return;
     }
-    if (typeof message?.id !== 'number') return;
+    if (typeof message?.id !== 'number') {
+      for (const listener of listeners.get(message.method) ?? []) listener(message.params);
+      return;
+    }
     const entry = pending.get(message.id);
     if (!entry) return;
     pending.delete(message.id);
@@ -785,6 +789,11 @@ async function createCdpConnection(webSocketDebuggerUrl) {
   ws.addEventListener('error', () => rejectAll(new Error('CDP WebSocket error')));
 
   return {
+    on(method, listener) {
+      const methods = listeners.get(method) ?? new Set();
+      methods.add(listener);
+      listeners.set(method, methods);
+    },
     send(method, params = {}, options = {}) {
       if (closed) return Promise.reject(new Error('CDP WebSocket is closed'));
       const id = nextId++;
@@ -1936,6 +1945,11 @@ function buildRunSummary(results) {
 }
 
 async function main(argv) {
+  if (argv[0] === 'journey' || argv[0] === 'compare') {
+    const { runPerformanceCli } = await import('../../../stack/scripts/perf/perf.mjs');
+    await runPerformanceCli(argv);
+    return;
+  }
   const args = parsePerfAuditArgs(argv);
   if (args.help) {
     process.stdout.write(usage());
