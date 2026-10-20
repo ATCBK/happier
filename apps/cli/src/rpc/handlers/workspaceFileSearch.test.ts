@@ -7,7 +7,8 @@ import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { RPC_METHODS, resolveSocketRpcSessionAuthorization } from '@happier-dev/protocol/rpc';
 import { DaemonWorkspaceFileSearchResponseSchema, WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES } from '@happier-dev/protocol';
 import { registerWorkspaceFileSearchHandler } from './workspaceFileSearch';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { DaemonWorkspaceFileSearchRequest } from '@happier-dev/protocol/machines/workspaceFiles';
 
@@ -30,10 +31,10 @@ describe('workspace file content search through the registered daemon owner', ()
         await mkdir(join(root, 'src'));
         await writeFile(join(root, 'src', 'a.ts'), 'export function greet() {}\ngreet(); greet();\nconst greeting = 1;\n');
         await writeFile(join(root, 'far.ts'), 'export function greet() {}\n');
-        const executor = createActionExecutor({ languageIntelligenceQuery: async () => ({ status: 'unavailable', reason: 'no_capable_server' }), workspaceFilesSearch: async ({ machineId, ...request }, context) => {
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), languageIntelligenceQuery: async () => ({ status: 'unavailable', reason: 'no_capable_server' }), workspaceFilesSearch: async ({ machineId, ...request }, context) => {
             expect(machineId).toBe('machine');
-            return DaemonWorkspaceFileSearchResponseSchema.parse(await handler(request, { signal: context.signal }));
-        } } satisfies Pick<ActionExecutorDeps, 'workspaceFilesSearch' | 'languageIntelligenceQuery'> as unknown as ActionExecutorDeps);
+            return DaemonWorkspaceFileSearchResponseSchema.parse(await handler(request, { signal: context.signal ?? lifetime.signal }));
+        } });
         const input = { machineId: 'machine', rootPath: root, path: 'src/a.ts', line: 2, symbol: 'greet', languageId: 'typescript' };
         const definition = await executor.execute('code.definition.get', input, { surface: 'agent' });
         expect(definition).toMatchObject({ ok: true, result: { source: 'text_matches', coverage: 'complete', hasMore: false,

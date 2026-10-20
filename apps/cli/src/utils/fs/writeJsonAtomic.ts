@@ -26,9 +26,11 @@ async function renameWithWindowsRetries(
   sourcePath: string,
   destinationPath: string,
   beforeAttempt?: () => void,
+  prepareAttempt?: () => Promise<void>,
 ): Promise<void> {
   for (let attempt = 1; attempt <= WINDOWS_RENAME_MAX_ATTEMPTS; attempt += 1) {
     try {
+      if (prepareAttempt) await prepareAttempt();
       beforeAttempt?.();
       await rename(sourcePath, destinationPath);
       return;
@@ -46,6 +48,8 @@ export async function writeFileAtomically(input: Readonly<{
   writeTemporaryFile: (temporaryPath: string) => Promise<void>;
   /** Synchronous currentness fence immediately before the final rename. */
   beforeCommit?: () => void;
+  /** Await caller authority after staging, before the synchronous publication fence. */
+  prepareCommit?: () => Promise<void>;
   /** Workspace replacements retain permission bits; durable private stores stay 0600. */
   mode?: 'preserve';
   /** Flush staged bytes before the currentness fence and publication. */
@@ -73,7 +77,7 @@ export async function writeFileAtomically(input: Readonly<{
     } finally {
       await staged?.close();
     }
-    await renameWithWindowsRetries(tmpPath, path, input.beforeCommit);
+    await renameWithWindowsRetries(tmpPath, path, input.beforeCommit, input.prepareCommit);
     if (input.mode !== 'preserve') await bestEffortChmod0600(path);
   } catch (error) {
     await unlink(tmpPath).catch(() => {});

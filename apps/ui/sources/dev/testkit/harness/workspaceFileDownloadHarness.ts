@@ -3,7 +3,7 @@ import { DirectRouteGrantRequestV2Schema, SignedDirectRouteGrantV2Schema } from 
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { FilesystemDownloadInputSchema, FilesystemUploadInputSchema, FilesystemUploadOutputSchema, type FilesystemUploadInput } from '@happier-dev/protocol/actions/filesystemActionFamily';
-import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
+import { createTargetedActionRpcRequestV1, TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { PreparedTransferRpcRequestV1Schema, PreparedTransferRpcResponseV1Schema, resolvePreparedTransferRpcPhaseV1 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
@@ -14,6 +14,7 @@ import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '../fixtures/machineFixtures';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from './serverAccountConnectionHarness';
 import { encodeBase64 } from '@/encryption/base64';
+import { createExternalActionAccountHttpBoundary } from './externalActionAccountHttpBoundary';
 
 type WorkspaceStatFileResponse = Awaited<ReturnType<typeof import('@/sync/domains/transfers/runtime/transferRuntime').callDaemonWorkspaceStatFileRpc>>;
 
@@ -73,7 +74,7 @@ export async function createWorkspaceFileDownloadHarness(options: Readonly<{
     const accountId = 'workspace-download-account';
     const homes = createHomeGovernanceHarness();
     const serverId = await homes.addHome({ name: 'Workspace download', serverUrl: 'https://workspace-download.example.test',
-        accountId, currentAccount: true });
+        serverIdentityId: 'srv_workspace_download', accountId, currentAccount: true });
     const scope = { serverId, machineId: 'workspace-download-machine', rootPath: '/repo' };
     const features = createRootLayoutFeaturesResponse();
     for (const id of ['machines.transfer', 'machines.transfer.directPeer', 'machines.peerMediation'] as const) {
@@ -288,10 +289,25 @@ export async function createWorkspaceFileDownloadHarness(options: Readonly<{
             throw new Error(`Unexpected machine RPC: ${method}`);
         },
     };
+    const actionBoundaries = await Promise.all((['daemon.filesystem.upload', 'daemon.filesystem.download'] as const).map(actionId =>
+        createExternalActionAccountHttpBoundary({ serverUrl: 'https://workspace-download.example.test',
+            serverIdentityId: 'srv_workspace_download', accountId, machineId: machine.id, actionId, tokenEpoch: 0,
+            execute: (input, { target }) => owner.machineRPC(machine.id, actionId, createTargetedActionRpcRequestV1(input, target)),
+        })));
+    const admittedMachineRow = { ...machineRow, installationPublicKey: actionBoundaries[0]!.machine.installationPublicKey };
+    homes.answer(serverId, `/v1/machines/${machine.id}`, { body: { machine: admittedMachineRow } });
+    homes.answer(serverId, '/v1/machines', { body: [admittedMachineRow] });
+    homes.answer(serverId, '/v1/machines?includeRevoked=true', { body: [admittedMachineRow] });
     installed.current = owner;
     setRuntimeFetch(async (input, init) => {
         const url = new URL(String(input));
         requests.push({ method: (init?.method ?? 'GET').toUpperCase(), url: url.toString(), signal: init?.signal });
+        if (url.pathname.startsWith('/v1/actions/')) {
+            for (const boundary of actionBoundaries) {
+                const response = await boundary.handle(url, init);
+                if (response) return response;
+            }
+        }
         if (url.pathname === '/v1/machines/peer/mediation/route-grants') {
             const request = DirectRouteGrantRequestV2Schema.parse(JSON.parse(String(init?.body)));
             const issuedAt = Date.now();

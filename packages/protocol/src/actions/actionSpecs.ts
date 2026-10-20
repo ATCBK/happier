@@ -12443,7 +12443,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     ] },
   },
   {
-    id: 'daemon.filesystem.upload', approvalPolicy: { rpcConfirmation: true }, approval: {result: 'required'},
+    id: 'daemon.filesystem.upload', approvalPolicy: { rpcConfirmation: true, uiConfirmation: 'direct' }, approval: {result: 'required'},
     title: 'Upload file',
     description: 'Upload actual bytes from the prepared source into the admitted workspace root.',
     approvalResultCustody: 'live_only',
@@ -12461,7 +12461,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     ] },
   },
   {
-    id: 'daemon.filesystem.download', approvalPolicy: { rpcConfirmation: true }, approval: {result: 'required'},
+    id: 'daemon.filesystem.download', approvalPolicy: { rpcConfirmation: true, uiConfirmation: 'direct' }, approval: {result: 'required'},
     title: 'Download file',
     description: 'Download actual bytes into the admitted destination and acknowledge successful destination close.',
     approvalResultCustody: 'live_only',

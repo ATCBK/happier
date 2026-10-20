@@ -16,6 +16,19 @@ async function fixture() {
 }
 
 describe('commitGuardedFileReplace', () => {
+  it('checks the hash after asynchronous authority preparation and before publication', async () => {
+    const { path } = await fixture();
+    await writeFile(path, 'before');
+    const result = await commitGuardedFileReplace({
+      destPath: path,
+      expectation: hash('before'),
+      source: { kind: 'bytes', bytes: Buffer.from('mine') },
+      prepareCommit: async () => { await writeFile(path, 'agent changed this'); },
+    });
+    expect(result).toMatchObject({ success: false, errorCode: 'hash_mismatch' });
+    expect(await readFile(path, 'utf8')).toBe('agent changed this');
+  });
+
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('preserves OS refusal to overwrite an existing read-only file', async () => {
     const { root, path } = await fixture();
     await writeFile(path, 'before');
@@ -69,6 +82,7 @@ describe('commitGuardedFileReplace', () => {
     const { root, path } = await fixture();
     const link = join(root, 'link');
     await writeFile(path, 'before', { mode: 0o751 });
+    await chmod(path, 0o751);
     await symlink(path, link);
     expect(await commitGuardedFileReplace({ destPath: link, expectation: hash('before'),
       source: { kind: 'bytes', bytes: Buffer.from('mine') } })).toEqual({ success: true, hash: hash('mine') });

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ describe('writeJsonAtomic', () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-preserve-mode-'));
     const path = join(dir, 'executable');
     await writeFile(path, 'before', { mode });
+    if (process.platform !== 'win32') await chmod(path, mode);
     await writeFileAtomically({ path, mode: 'preserve', fsync: true,
       writeTemporaryFile: temporaryPath => writeFile(temporaryPath, 'after') });
     expect(await readFile(path, 'utf8')).toBe('after');

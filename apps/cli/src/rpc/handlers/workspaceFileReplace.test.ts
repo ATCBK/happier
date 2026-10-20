@@ -12,6 +12,12 @@ import type { RpcHandler } from '@/api/rpc/types';
 import { registerWorkspaceFileReplaceHandlers } from './workspaceFileReplace';
 import { registerSessionHandlers } from './registerSessionHandlers';
 
+// Keep the filesystem real while exposing its write boundary as a configurable spy.
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return { ...actual, writeFile: vi.fn(actual.writeFile) };
+});
+
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 describe('registered workspace replace transport', () => {
   let root: string;
@@ -19,12 +25,16 @@ describe('registered workspace replace transport', () => {
   let dispose: (() => Promise<void>) | undefined;
   const matcher = { query: 'old', replacement: 'new', matchCase: true, regex: false };
   beforeEach(async () => {
+    vi.mocked(filesystem.writeFile).mockImplementation((await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).writeFile);
     root = await mkdtemp(join(tmpdir(), 'happier-replace-'));
     handlers = new Map();
     dispose = undefined;
     registerWorkspaceFileReplaceHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root);
   });
-  afterEach(async () => { vi.restoreAllMocks(); await dispose?.(); await rm(root, { recursive: true, force: true }); });
+  afterEach(async () => {
+    vi.mocked(filesystem.writeFile).mockImplementation((await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).writeFile);
+    vi.restoreAllMocks(); await dispose?.(); await rm(root, { recursive: true, force: true });
+  });
   const preview = async (extra = {}) => DaemonWorkspaceFileReplacePreviewResponseSchema.parse(await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW)!({ rootPath: root, ...matcher, ...extra }));
   const apply = async (operation: unknown, signal?: AbortSignal) => DaemonWorkspaceFileReplaceApplyResponseSchema.parse(await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY)!({ rootPath: root, operation }, signal ? { signal } : undefined));
 
@@ -86,10 +96,10 @@ describe('registered workspace replace transport', () => {
   it('maps an agent write during staging to changed through the real guarded writer', async () => {
     const dest = join(root, 'a.txt');
     await writeFile(dest, 'old');
-    const write = filesystem.writeFile;
+    const { writeFile: write } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
     // The filesystem is the boundary. The actual guarded writer and final
     // before-rename hash check both remain real.
-    vi.spyOn(filesystem, 'writeFile').mockImplementation(async (path, data, options) => {
+    vi.mocked(filesystem.writeFile).mockImplementation(async (path, data, options) => {
       await write(path, data, options);
       if (path !== dest) await write(dest, 'agent changed');
     });
@@ -118,8 +128,8 @@ describe('registered workspace replace transport', () => {
     for (const path of ['a.txt', 'b.txt']) await writeFile(join(root, path), bytes);
     const controller = new AbortController();
     const remote = new AbortController();
-    const write = filesystem.writeFile;
-    vi.spyOn(filesystem, 'writeFile').mockImplementation(async (path, data, options) => {
+    const { writeFile: write } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(filesystem.writeFile).mockImplementation(async (path, data, options) => {
       await write(path, data, options);
       controller.abort();
     });

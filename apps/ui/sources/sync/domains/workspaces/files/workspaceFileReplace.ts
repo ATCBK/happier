@@ -636,7 +636,7 @@ export function useWorkspaceReplace(
   );
   const canUndo = undoable.length > 0 && !undoing && !applying;
   const undo = React.useCallback(
-    async (path?: string) => {
+    async (path?: string): Promise<WorkspaceReplaceUndoOutcome | null> => {
       if (!canUndo || !scope || !options) return null;
       const targets = undoable.filter(
         (result) => path === undefined || result.path === path,

@@ -28,7 +28,7 @@ import {
 } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE, MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease';
 import { invokeWorkspaceFileSystemAction } from './actionInvocation';
-import { createUiFilesystemAction } from '@/sync/ops/actions/filesystemActionDeps';
+import { callAdmittedFilesystemActionRpc } from '@/sync/ops/actions/filesystemActionDeps';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 const WORKSPACE_FILE_INLINE_MAX_BYTES_ENV_KEY = 'EXPO_PUBLIC_HAPPIER_SESSION_FILE_INLINE_MAX_BYTES';
@@ -138,12 +138,13 @@ export async function workspaceReadFile(
             context.signal?.throwIfAborted();
             if (typeof sizeBytes === 'number' && Number.isFinite(sizeBytes)
                 && sizeBytes >= 0 && sizeBytes <= inlineMaxBytes) {
-                return await createUiFilesystemAction()({ actionId, input, context });
+                return await callAdmittedFilesystemActionRpc({ actionId, input, context, machineId: target.machineId,
+                    serverId: context.serverId, accountId: context.runtimeAccountId, requestId: context.actionRequestId ?? undefined });
             }
             const read = await downloadDaemonWorkspaceFileToBase64({ machineId: target.machineId,
                 serverId: context.serverId, rootPath: target.rootPath, agentRootPath: target.agentRootPath,
                 path, maxBytes, signal: context.signal,
-                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId ?? undefined }),
+                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, context, requestId: context.actionRequestId ?? undefined }),
             });
             return read.ok ? { success: true, content: read.contentBase64 }
                 : { success: false, error: read.error };
@@ -242,7 +243,7 @@ export async function workspaceWriteFile(
                     readBytes: async (offset, length) => contentBytes.slice(offset, offset + length),
                     close: async () => {},
                 },
-                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId ?? undefined }),
+                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, context, requestId: context.actionRequestId ?? undefined }),
                 request: {
                     path,
                     sizeBytes: contentBytes.byteLength,

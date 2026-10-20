@@ -10,6 +10,8 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import { installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import type { ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -26,9 +28,8 @@ const filesystem = vi.hoisted(() => ({ paths: new Set<string>(), calls: [] as un
     readGate: null as Promise<void> | null }));
 // The finite carrier is the byte-network boundary. Real encryption, manifest
 // verification, buffering, bounds and destination completion stay in the driver.
-vi.mock('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease', () => ({
-    MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR: 'The direct machine connection was interrupted. Retry the transfer.',
-    MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE: 'machine_carrier_transport_failed',
+vi.mock('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease')>(),
     resolveMachineCarrierRoute: async (_machineId: string, serverId: string) => filesystem.carrierUnavailable
         ? { kind: 'unavailable', error: 'Finite carrier unavailable', errorCode: 'machine_carrier_unavailable' }
         : ({
@@ -58,11 +59,14 @@ vi.mock('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrie
     }),
     rebaseMachineCarrierHttpEndpoint: () => { throw new Error('Browser stream must retain its carrier'); },
 }));
-// The machine filesystem is a genuine cross-process boundary; policy, schemas,
-// captured Account custody and approval Artifact replay remain real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: async (request: { method: string; requestId?: string; serverId?: string; accountId?: string;
-        machineId: string; payload: { path?: string; from?: string; to?: string; input?: { destination?: { destinationId: string } } } }) => {
+type FilesystemBoundaryRequest = { method: string; requestId?: string; serverId?: string; accountId?: string;
+    machineId: string; signal?: AbortSignal | null;
+    payload: { path?: string; from?: string; to?: string; destination?: { destinationId: string };
+        input?: { destination?: { destinationId: string } } } };
+
+// The physical Machine filesystem remains the boundary for authenticated HTTP
+// delivery, ordinary metadata RPCs and approved daemon replay.
+async function receiveFilesystemRequest(request: FilesystemBoundaryRequest, invocation?: ExternalActionRequesterInvocationV1) {
         filesystem.calls.push(request);
         if (filesystem.error) throw filesystem.error;
         if (request.method === 'daemon.filesystem.writeFile' || request.method === 'daemon.filesystem.createDirectory') await filesystem.mutationGate;
@@ -78,7 +82,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
             if (request.method === 'daemon.filesystem.download') {
                 const hash = Buffer.from(await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer)).toString('hex');
                 const expiresAt = Date.now() + 60_000;
-                return { success: true, status: 'accepted', operationId: 'bounded-read', destinationId: request.payload.input?.destination?.destinationId,
+                return { success: true, status: 'accepted', operationId: 'bounded-read',
+                    destinationId: (request.payload.destination ?? request.payload.input?.destination)?.destinationId,
                     prepared: { transferId: 'bounded-read', name: 'file', sizeBytes: bytes.length, manifestHash: `sha256:${hash}`, expiresAt,
                         endpointCandidates: [{ kind: 'http', url: 'http://127.0.0.1:46001/machine-transfers/direct/Ym91bmRlZC1yZWFk', expiresAt }] } };
             }
@@ -89,7 +94,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
             const { buildApprovalExecutionOriginV1 } = await import('@happier-dev/protocol/actions/actionExecutor');
             const { ActionIdSchema } = await import('@happier-dev/protocol/actions/actionIds');
             const origin = buildApprovalExecutionOriginV1({ actionId: ActionIdSchema.parse(request.method), input: request.payload,
-                targetSessionId: null, context: { surface: 'rpc', authority: 'present_user', serverId: request.serverId,
+                targetSessionId: null, context: { surface: invocation?.surface ?? 'rpc', authority: invocation?.authority ?? 'present_user', serverId: request.serverId,
+                    ...(invocation ? { actionCaller: invocation.caller } : {}),
                     runtimeAccountId: request.accountId, actionRequestId: request.requestId,
                     externalActionTarget: { kind: 'machine', machineId: request.machineId } } });
             return origin ? { kind: 'approval_request_created', artifactId: 'native-approval', actionId: request.method }
@@ -101,7 +107,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
         }
         if (request.method === 'daemon.filesystem.delete' && request.payload.path) filesystem.paths.delete(request.payload.path);
         return filesystem.response;
-    },
+}
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: (request: FilesystemBoundaryRequest) => receiveFilesystemRequest(request),
 }));
 const { storage } = await import('@/sync/domains/state/storage');
 const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/actionSettings');
@@ -123,6 +131,29 @@ beforeEach(async () => {
     serverId = await homes.addHome({ name: 'Filesystem Home', serverUrl: 'https://filesystem-action.test',
         serverIdentityId: 'srv_filesystem_action', accountId: 'account-a', currentAccount: true });
     await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId, accountId: 'account-a', machineId: 'machine-a' });
+    const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
+    for (const actionId of ['daemon.filesystem.readFile', 'daemon.filesystem.writeFile', 'daemon.filesystem.createDirectory',
+        'daemon.filesystem.rename', 'daemon.filesystem.delete', 'daemon.filesystem.listDirectory',
+        'daemon.filesystem.getDirectoryTree', 'daemon.filesystem.upload', 'daemon.filesystem.download'] as const) {
+        const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://filesystem-action.test',
+            serverIdentityId: 'srv_filesystem_action', accountId: 'account-a', machineId: 'machine-a', actionId, tokenEpoch: 0,
+            execute: async (input, context) => {
+                expect(context.invocation).toMatchObject({ surface: 'ui', authority: 'present_user', caller: { kind: 'host' } });
+                return await receiveFilesystemRequest({ method: getActionSpec(actionId).bindings!.rpcMethod!,
+                    requestId: context.requestId, serverId, accountId: 'account-a', machineId: 'machine-a',
+                    signal: context.signal, payload: input as FilesystemBoundaryRequest['payload'] }, context.invocation);
+            },
+        });
+        homes.answer(serverId, '/v1/machines', { body: [boundary.machine] });
+        homes.answer(serverId, 'GET /v1/machines/machine-a', { body: { machine: boundary.machine } });
+        for (const path of [`/v1/actions/${actionId}/execution-authorization`, `/v1/actions/${actionId}`]) {
+            homes.answer(serverId, path, { select: async (_input, request) => {
+                const response = await boundary.handle(new URL(request.url), request.init);
+                if (!response) throw new Error(`Unhandled filesystem HTTP boundary: ${request.url}`);
+                return { status: response.status, body: await response.json() };
+            } });
+        }
+    }
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     await restoreConnectionToActiveServer({ token: homes.findByServerUrl('https://filesystem-action.test')!.token! });
     const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');

@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import tweetnacl from 'tweetnacl';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
-import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
-import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
@@ -34,7 +29,6 @@ const { callAdmittedFilesystemTransferActionRpc } = await import('@/sync/domains
 let account: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | null = null;
 let serverId: string;
 let misbound = false;
-const installation = tweetnacl.sign.keyPair();
 const hash = 'a'.repeat(64);
 
 beforeEach(async () => {
@@ -42,35 +36,29 @@ beforeEach(async () => {
     misbound = false;
     serverId = await homes.addHome({ name: 'Filesystem origin', serverUrl: 'https://filesystem-origin.test',
         serverIdentityId: 'srv_filesystem_origin', accountId: 'owner', currentAccount: true, active: false });
-    const machine = { ...createPlainMachineRowFixture({ id: 'machine', accountId: 'owner' }), installationId: 'installation',
-        installationPublicKey: encodeBase64(installation.publicKey, 'base64'),
-        access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
-    homes.answer(serverId, '/v1/machines', { body: [machine] });
-    homes.answer(serverId, 'GET /v1/machines/machine', { body: { machine } });
     for (const actionId of ['daemon.filesystem.writeFile', 'daemon.filesystem.download'] as const) {
-        homes.answer(serverId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
-            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
-            return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'fixture-root', binding: {
-                accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'srv_filesystem_origin',
-                machineId: 'machine', installationId: 'installation', custodianAccountId: 'owner',
-                accountEncryptionMode: 'plain', actionId, requestId: request.envelope.requestId, target: request.envelope.target,
-                requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
-            } }) };
-        } });
-        homes.answer(serverId, `/v1/actions/${actionId}`, { select: body => {
-            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
-            if (!request.executionAuthorization) throw new Error('Missing authenticated invocation');
-            const opened = openExternalActionRequesterAccountContextV1({ authorization: request.executionAuthorization,
-                installationPrivateKey: installation.secretKey, machineId: 'machine', installationId: 'installation',
-                serverIdentityId: 'srv_filesystem_origin', purpose: { kind: 'external_action' }, includeInvocation: true });
-            expect(opened?.invocation).toMatchObject({ surface: 'ui', authority: 'present_user', caller: { kind: 'host' } });
-            expect(request.envelope.target).toEqual({ kind: 'machine', machineId: 'machine' });
-            expect(isApprovalRequiredByActionsSettings(actionId, { v: 1, actions: {} }, opened?.invocation)).toBe(false);
-            return { body: { v: 1, actionId: misbound ? 'daemon.filesystem.rename' : actionId,
-                requestId: request.envelope.requestId, execution: { ok: true,
-                    result: actionId === 'daemon.filesystem.writeFile' ? { success: true, hash }
-                        : { success: false, errorCode: 'source_missing', error: 'Fixture source is absent' } } } };
-        } });
+        const boundary = await createExternalActionAccountHttpBoundary({
+            serverUrl: 'https://filesystem-origin.test', serverIdentityId: 'srv_filesystem_origin',
+            accountId: 'owner', machineId: 'machine', actionId, tokenEpoch: 0,
+            execute: (_input, { target, invocation }) => {
+                expect(invocation).toMatchObject({ surface: 'ui', authority: 'present_user', caller: { kind: 'host' } });
+                expect(target).toEqual({ kind: 'machine', machineId: 'machine' });
+                expect(isApprovalRequiredByActionsSettings(actionId, { v: 1, actions: {} }, invocation)).toBe(false);
+                return actionId === 'daemon.filesystem.writeFile' ? { success: true, hash }
+                    : { success: false, errorCode: 'source_missing', error: 'Fixture source is absent' };
+            },
+        });
+        homes.answer(serverId, '/v1/machines', { body: [boundary.machine] });
+        homes.answer(serverId, 'GET /v1/machines/machine', { body: { machine: boundary.machine } });
+        for (const path of [`/v1/actions/${actionId}/execution-authorization`, `/v1/actions/${actionId}`]) {
+            homes.answer(serverId, path, { select: async (_body, request) => {
+                const response = await boundary.handle(new URL(request.url), request.init);
+                if (!response) throw new Error('Unexpected filesystem Action request');
+                const body = await response.json();
+                return { body: misbound && path === `/v1/actions/${actionId}`
+                    ? { ...body, actionId: 'daemon.filesystem.rename' } : body };
+            } });
+        }
     }
     account = await captureLazyActionAccountContext(serverId);
 });

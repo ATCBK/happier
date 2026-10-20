@@ -12,7 +12,9 @@ import {
   type UploadTransferFinalizeResult,
 } from '@happier-dev/transfers/node';
 
-export type WorkspaceFileFinalizeOperations = MoveFileOperations;
+export type WorkspaceFileFinalizeOperations = MoveFileOperations & Readonly<{
+  prepareCommit?: () => Promise<void>;
+}>;
 
 function mapCrossDeviceRecoveryFailure(
   error: CrossDeviceMoveSourceCleanupError,
@@ -45,7 +47,8 @@ export async function finalizeWorkspaceFileUpload(input: Readonly<{
 }>): Promise<UploadTransferFinalizeResult> {
   if (input.overwrite || input.expectedHash !== undefined) {
     const result = await commitGuardedFileReplace({ destPath: input.destPath, expectation: input.expectedHash,
-      source: { kind: 'staged', path: input.tempPath, sha256: input.sha256 }, fileOperations: input.fileOperations ?? undefined });
+      source: { kind: 'staged', path: input.tempPath, sha256: input.sha256 }, fileOperations: input.fileOperations ?? undefined,
+      prepareCommit: input.fileOperations?.prepareCommit });
     if (result.success) return { success: true, path: input.destDisplayPath, sizeBytes: input.sizeBytes };
     const retainedSource = await stat(input.tempPath).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;

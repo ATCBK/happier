@@ -17,6 +17,7 @@ type GuardedFileReplaceOptions = Readonly<{
   expectation?: string | null;
   /** Transfer authorization and OS-boundary adapters apply to staging, never replacement of the destination. */
   fileOperations?: MoveFileOperations;
+  prepareCommit?: () => Promise<void>;
 }>;
 
 class FileWriteGuardError extends Error {
@@ -59,6 +60,7 @@ export async function commitGuardedFileReplace(input: GuardedFileReplaceOptions 
     if (input.source.kind === 'absent') {
       // Added-file Discard removes the directory entry (a symlink's target stays intact).
       // There is no staged content to publish: unlink is the atomic filesystem operation.
+      if (input.prepareCommit) await input.prepareCommit();
       checkExpectation(input.destPath, input.expectation);
       unlinkSync(input.destPath);
       return { success: true, hash: null };
@@ -85,6 +87,7 @@ export async function commitGuardedFileReplace(input: GuardedFileReplaceOptions 
         }
       },
       beforeCommit: () => checkExpectation(destPath, input.expectation),
+      prepareCommit: input.prepareCommit,
     });
     return { success: true, hash };
   } catch (error) {
