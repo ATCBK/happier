@@ -15,11 +15,14 @@ import { WrapLinesToggleButton } from '@/components/ui/code/WrapLinesToggleButto
 import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
-import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
+import { SurfaceStateSizeProvider, useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
+import { createTwoFilesPatch } from 'diff';
+import { buildEditorChangeMarkers } from '@/components/ui/code/editor/editorChangeMarkers';
+import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import { FileEditorPanel } from '@/components/workspaces/files/file/editor/FileEditorPanel';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { FileActionToolbar } from '@/components/workspaces/files/file/FileActionToolbar';
+import { FilePageHeader } from '@/components/workspaces/files/file/FilePageHeader';
 import { ScmCommitDetailsHeader } from '@/components/workspaces/scm/history/ScmCommitDetailsHeader';
 import { ScmStashDetailsCore } from '@/components/workspaces/scm/stash/ScmStashDetailsCore';
 import type { ScmStashDetailsAdapter } from '@/components/workspaces/scm/stash/scmStashAdapter';
@@ -30,7 +33,10 @@ import type { SessionAttributedFile } from '@/scm/scmAttribution';
 import { t } from '@/text';
 import { useUnistyles } from 'react-native-unistyles';
 import { useCodeLinesSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
-import { showTextComparison } from '@/components/ui/code/diff/TextComparisonModal';
+import type { WorkspaceFileEditorHeaderModel } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorHeaderModel';
+import { useWorkspaceFileEditorComparison } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorComparison';
+import { FileEditorNoticeLine } from '@/components/workspaces/files/file/editor/FileEditorNoticeLine';
+import { FileEditorCompareBody } from '@/components/workspaces/files/file/editor/FileEditorCompareBody';
 import { ScmCommitSelectionCheckGlyph } from '@/components/sessions/sourceControl/commitSelection/ScmCommitSelectionToggleButton';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 
@@ -155,20 +161,60 @@ const STASH_ADAPTER: ScmStashDetailsAdapter = {
     apply: async () => ({ success: true }),
 };
 
-function FileFrame(props: Readonly<{ editing?: boolean }>) {
-    const { theme } = useUnistyles();
+type SpecimenEditorState = 'clean' | 'dirty' | 'conflict' | 'offline' | 'back' | 'compare';
+
+function specimenEditor(state: SpecimenEditorState): WorkspaceFileEditorHeaderModel {
+    return {
+        status: state === 'clean' ? 'clean' : state === 'conflict' || state === 'compare' ? 'conflict' : 'dirty',
+        saved: false, savedAtMs: null,
+        refusal: state === 'offline' || state === 'back' ? { kind: 'unreachable' } : null,
+        conflict: state === 'conflict' || state === 'compare' ? { theirsText: HOOK_TEXT, theirsHash: 'disk' } : null,
+        canSave: state === 'dirty', shortcutLabel: '⌥S', draftPersistenceFailed: false, lineEndingNormalization: null,
+        onSave: NOOP, onDone: NOOP, onCancel: NOOP, onStart: NOOP, onCompare: NOOP, onResolve: NOOP,
+    };
+}
+
+/** Compare runs the real per-place owner over the fixture texts. */
+function SpecimenCompare() {
+    const controller = useWorkspaceFileEditorComparison({ ownerKey: 'specimen', onAccept: NOOP });
+    React.useEffect(() => {
+        const mine = HOOK_TEXT.replace('never when the window resizes', 'only when the route changes');
+        controller.startComparison({ baseText: null, mineText: mine, theirsText: HOOK_TEXT.replace("return 'root';", "return 'home';"), theirsHash: 'disk' });
+    }, []);
+    return controller.comparison ? <FileEditorCompareBody comparison={controller.comparison} agentName="Claude" filePath="useSettingsRouteKey.ts"
+        showLineNumbers onUsePlaceMine={controller.usePlaceMine} onUsePlaceTheirs={controller.usePlaceTheirs}
+        onUseAllMine={controller.useAllMine} onUseAllTheirs={controller.useAllTheirs} onBackToEditing={NOOP} /> : null;
+}
+
+/** Two minutes before the specimen renders: the facts line reads "by Claude 2m ago". */
+const SPECIMEN_UPDATED_AT = Date.now() - 2 * 60_000;
+
+const HOOK_BEFORE = HOOK_TEXT.replace("return 'root';", "return route.path;").replace(' * never when the window resizes, so the modal keeps its draft and scroll.\n', '');
+const HOOK_CHANGE_MARKERS = { key: 'specimen', items: buildEditorChangeMarkers('useSettingsRouteKey.ts', null,
+    createTwoFilesPatch('useSettingsRouteKey.ts', 'useSettingsRouteKey.ts', HOOK_BEFORE + '\n', HOOK_TEXT + '\n', '', '', { context: 3 })) };
+
+/** The real editor region (engine, gutter marks, peek, phone key row) over fixture text. */
+function SpecimenEditor(props: Readonly<{ phone: boolean }>) {
+    const editorRef = React.useRef<TextEditorHandle | null>(null);
+    return <FileEditorPanel resetKey="specimen" value={HOOK_TEXT} language="typescript" onChange={NOOP} editorRef={editorRef}
+        filePath="useSettingsRouteKey.ts" showLineNumbers changeMarkers={HOOK_CHANGE_MARKERS}
+        peek={{ dirty: true, attribution: 'Claude' }}
+        accessory={props.phone ? { save: { visible: true, enabled: true, tone: 'primary', onPress: NOOP } } : null} />;
+}
+
+function FileFrame(props: Readonly<{ editing?: boolean; editorState?: SpecimenEditorState }>) {
     const syntaxHighlighting = useCodeLinesSyntaxHighlighting('useSettingsRouteKey.ts');
+    const phone = useSurfaceStateSize() === 'phone';
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
-            <FileActionToolbar
-                theme={theme}
+            <FilePageHeader
                 fileName={props.editing ? 'useSettingsRouteKey.ts' : 'SettingsModal.tsx'}
-                filePathDir="apps/ui/…/settings"
+                filePath={props.editing ? 'apps/ui/sources/components/settings/useSettingsRouteKey.ts' : 'apps/ui/sources/components/settings/SettingsModal.tsx'}
                 displayMode={props.editing ? 'file' : 'diff'}
                 onDisplayMode={NOOP}
-                showDiffToggle={!props.editing}
-                showFileToggle
-                showWrapLinesToggle
+                modes={[{ id: 'view', displayMode: 'file' }, { id: 'changes', displayMode: 'diff' }]}
+                find={{ onOpen: NOOP }}
+                attribution={{ agentName: 'Claude', requesterName: null, updatedAt: SPECIMEN_UPDATED_AT }}
                 diffMode="pending"
                 onDiffMode={NOOP}
                 hasPendingDelta={!props.editing}
@@ -189,18 +235,19 @@ function FileFrame(props: Readonly<{ editing?: boolean }>) {
                 onClearSelection={NOOP}
                 fileEditorEnabled
                 isEditingFile={props.editing === true}
-                fileEditorDirty={props.editing === true}
+                editor={props.editing ? specimenEditor(props.editorState ?? 'dirty') : undefined}
                 onStartEditingFile={NOOP}
                 onCancelEditingFile={NOOP}
                 onSaveEditingFile={NOOP}
                 statusLabel={props.editing ? null : t('detailsSurface.file.statusModified')}
                 diffStat={props.editing ? null : { added: 4, removed: 2 }}
-                notice={props.editing ? (
-                    <SurfaceFreshnessLine tone="warning" reason={t('files.externalFileChange')} action={{ label: t('detailsSurface.file.compare'), onPress: () => showTextComparison({ oldText: HOOK_TEXT.replace('never when the window resizes', 'only when the route changes'), newText: HOOK_TEXT, filePath: 'useSettingsRouteKey.ts', subtitle: t('files.externalFileChange') }) }} />
+                notice={props.editing && props.editorState !== 'compare' ? (
+                    <FileEditorNoticeLine editor={specimenEditor(props.editorState ?? 'dirty')} editing agentName="Claude"
+                        reachability={{ unreachable: props.editorState === 'offline', machineName: 'MacBook Pro' }} />
                 ) : null}
             />
             <View style={{ flex: 1, minHeight: 0 }}>
-                {props.editing ? (
+                {props.editorState === 'compare' ? <SpecimenCompare /> : props.editorState === 'dirty' ? <SpecimenEditor phone={phone} /> : props.editing ? (
                     <CodeLinesView lines={HOOK_LINES} showLineNumbers wrapLines={false} syntaxHighlighting={syntaxHighlighting} />
                 ) : (
                     <DiffViewer mode="unified" unifiedDiff={SETTINGS_MODAL_DIFF} filePath="apps/ui/sources/components/settings/SettingsModal.tsx" showLineNumbers showPrefix wrapLines={false} />
@@ -321,6 +368,13 @@ const FRAMES: ReadonlyArray<Readonly<{ id: string; title: string; render: () => 
             <DetailsTabGroupPanel pane={PANE} group={group([HOOK_TAB, REVIEW_TAB], HOOK_TAB.key)} renderTabContent={() => <FileFrame editing />} />
         ),
     },
+    ...(['clean', 'dirty', 'conflict', 'offline', 'back', 'compare'] as const).map((editorState) => ({
+        id: `F3-${editorState}`,
+        title: `F3 · file edit, ${editorState}`,
+        render: () => (
+            <DetailsTabGroupPanel pane={PANE} group={group([HOOK_TAB, REVIEW_TAB], HOOK_TAB.key)} renderTabContent={() => <FileFrame editing editorState={editorState} />} />
+        ),
+    })),
     {
         id: 'R1',
         title: 'R1 · Review',

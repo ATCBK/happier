@@ -7,6 +7,16 @@ export type WorkspaceFileTextDecoding =
     | Readonly<{ kind: 'notUtf8'; hash: string }>
     | Readonly<{ kind: 'binary' }>;
 
+/** Reconstruct an already-held complete text read for a byte-preserving export. */
+export function reconstructWorkspaceFileTextBytes(input: Readonly<{
+    text: string;
+    complete: boolean;
+    encoding?: Readonly<{ hasBom: boolean; editable: boolean; reason?: 'notUtf8' }>;
+}>): Uint8Array | null {
+    if (!input.complete) return null;
+    return new TextEncoder().encode(input.text);
+}
+
 export async function decodeWorkspaceFileText(base64: string): Promise<WorkspaceFileTextDecoding> {
     const bytes = decodeBase64(base64);
     const hash = Array.from(await digest('SHA-256', bytes))

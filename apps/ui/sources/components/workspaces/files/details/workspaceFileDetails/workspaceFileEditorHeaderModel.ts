@@ -4,6 +4,8 @@ import type { WorkspaceFileEditorState } from './useWorkspaceFileEditorState';
 export type WorkspaceFileEditorHeaderModel = Readonly<{
     status: WorkspaceFileEditorState['editorStatus'];
     saved: boolean;
+    /** When the last save landed; the header's Saved moment reads its own 2 s presentation from it. */
+    savedAtMs: number | null;
     refusal: WorkspaceFileEditorState['refusal'];
     conflict: WorkspaceFileEditorState['conflict'];
     canSave: boolean;

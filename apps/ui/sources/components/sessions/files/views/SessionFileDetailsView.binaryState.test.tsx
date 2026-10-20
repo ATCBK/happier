@@ -30,32 +30,39 @@ beforeEach(async () => {
 });
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
 
+/** The page's `⋯` (one item list, `fileMenus.ts`): what it offers and choosing one. */
+function fileMenu(screen: { tree: { root: { findAll: (predicate: (node: any) => boolean) => any[] } } }) {
+    return screen.tree.root.findAll((node: any) => node.props?.testID === 'file-details-header.menu' && Array.isArray(node.props?.items))[0];
+}
+
 describe('SessionFileDetailsView (binary)', () => {
     it('keeps the download action available when the workspace scope is available', async () => {
         // A dormant Session still has an exact, reachable Workspace owner.
         fixture.storage.getState().applySessions([{ ...fixture.session, active: false }]);
         const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
-        const { FileActionToolbar } = await import('@/components/workspaces/files/file/FileActionToolbar');
+        const { FilePageHeader } = await import('@/components/workspaces/files/file/FilePageHeader');
         const screen = await fixture.render(<SessionFileDetailsView serverId={fixture.home.id} sessionId="s1" scopeId="session:s1" filePath={filePath} />);
         await vi.waitFor(() => expect(screen.findByTestId('file-action-toolbar')).not.toBeNull());
-        expect(screen.tree.root.findAllByType(FileActionToolbar)).toHaveLength(1);
-        expect(screen.findHostByTestId('file-header-download')).not.toBeNull();
+        expect(screen.tree.root.findAllByType(FilePageHeader)).toHaveLength(1);
+        expect(fileMenu(screen)?.props.items.map((item: { id: string }) => item.id)).toContain('download');
     });
 
     it('renders header actions even when file content is binary', async () => {
         const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
-        const { FileActionToolbar } = await import('@/components/workspaces/files/file/FileActionToolbar');
-        const { FileBinaryState, FileErrorState } = await import('@/components/workspaces/files/file/FileScreenState');
+        const { FilePageHeader } = await import('@/components/workspaces/files/file/FilePageHeader');
+        const { FileErrorState } = await import('@/components/workspaces/files/file/FileScreenState');
+        const { FileViewerBody } = await import('@/components/workspaces/files/file/FileViewerBody');
         const screen = await fixture.render(<SessionFileDetailsView serverId={fixture.home.id} sessionId="s1" scopeId="session:s1" filePath={filePath} />);
         await vi.waitFor(() => expect(screen.findByTestId('file-action-toolbar')).not.toBeNull());
-        const toolbar = screen.tree.root.findAllByType(FileActionToolbar);
+        const toolbar = screen.tree.root.findAllByType(FilePageHeader);
         expect(toolbar).toHaveLength(1);
-        expect(toolbar[0]!.props.showWrapLinesToggle).toBe(false);
-        expect(screen.findAllHostsByTestId('scm-discard-bin.dat')).toHaveLength(1);
-        expect(screen.findHostByTestId('file-header-download')).not.toBeNull();
-        expect(screen.tree.root.findAllByType(FileBinaryState)).toHaveLength(1);
+        const items = fileMenu(screen)?.props.items.map((item: { id: string }) => item.id) ?? [];
+        // A binary file has no wrap; Discard and Download stay on the page's one menu.
+        expect(items).not.toContain('wrap');
+        expect(items).toEqual(expect.arrayContaining(['download', 'discard']));
+        expect(screen.tree.root.findAllByType(FileViewerBody)).toHaveLength(1);
         expect(fixture.requests.some((request) => request.method === 'statFile')).toBe(true);
-        await act(async () => { await screen.pressByTestIdAsync('file-header-download'); });
+        await act(async () => { await fileMenu(screen)?.props.onSelect('download'); });
         expect(fixture.requests).toEqual(expect.arrayContaining([expect.objectContaining({
             targetId: 'm1',
             method: getActionSpec('daemon.filesystem.download').bindings?.rpcMethod,

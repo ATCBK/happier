@@ -6,7 +6,7 @@ import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTyp
 import { createAdvancedDebounce } from '@/utils/timing/debounce';
 import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { readWorkspaceFileEditorDraft, type WorkspaceFileEditorDraft } from './workspaceFileEditorDraft';
-import type { FileDisplayMode } from '@/components/workspaces/files/file/FileActionToolbar';
+import type { FileDisplayMode } from '@/components/workspaces/files/file/filePageModel';
 import { deriveWorkspaceFileEditorConflict, type WorkspaceFileEditorConflict } from './workspaceFileEditorConflict';
 import { publishPresentationNotice, readPresentationNotice, retirePresentationNotice, subscribePresentationNotices } from '@/components/sessions/presentation/presentationNotices';
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
@@ -32,6 +32,8 @@ type Input = Readonly<{
     refreshAll(): Promise<void>; publishSavedFile?(value: { text: string; hash: string }): void;
     persistedDraft?: WorkspaceFileEditorDraft | null; persistDraft?(draft: WorkspaceFileEditorDraft | null): void;
     panePersistenceFailed?: boolean;
+    /** The writing agent's display name, for the Undo notice's words only. */
+    agentName?: string | null;
     requestApproval?(registration: ActionApprovalRegistration): void;
 }>;
 
@@ -337,7 +339,10 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
             const encoding = latest.current.encoding; if (!await saveEdits(false, { hash: shown.theirsHash, encoding })) return;
             setAside.current = { kind: 'disk', text: shown.theirsText, hash: baseRef.current.hash!, encoding };
         }
-        publishPresentationNotice({ key: noticeKey, severity: 'info', message: t('common.done'), sticky: true,
+        const agentName = latest.current.agentName;
+        publishPresentationNotice({ key: noticeKey, severity: 'info', sticky: true,
+            message: choice === 'useTheirs' ? t('files.editing.editsSetAside')
+                : agentName ? t('files.editing.agentVersionReplaced', { agent: agentName }) : t('files.editing.diskVersionReplaced'),
             undo: { label: t('common.undo'), run: () => { void undoSetAside(); } } });
     }, [backToEditing, conflictNow, isCurrentOwner, noticeKey, persist, reseed, retireUndo, saveEdits, undoSetAside, updateBase]);
     const cancelEditingFile = React.useCallback(() => {

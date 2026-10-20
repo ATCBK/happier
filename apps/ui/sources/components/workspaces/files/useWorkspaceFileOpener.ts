@@ -21,6 +21,7 @@ export type WorkspaceFileOpenOrigin = Readonly<{
 }>;
 export type WorkspaceFileOpenOptions = Readonly<Pick<WorkspaceFileOpenInput, 'anchor' | 'anchorSource' | 'view' | 'blame' | 'changesScope'> & {
     intent?: 'preview' | 'pinned' | 'beside';
+    present?: boolean;
     find?: z.infer<typeof WorkspaceFindSeedSchema>;
     signal?: AbortSignal;
     origin?: WorkspaceFileOpenOrigin;
@@ -52,6 +53,8 @@ export function useWorkspaceFileOpener() {
                 ...(options?.changesScope ? { changesScope: options.changesScope } : {}),
             },
             mode: options?.intent === 'beside' ? 'splitRight' : options?.intent === 'pinned' ? 'newTab' : 'preview',
+            ...(options?.present === undefined ? {} : { present: options.present }),
+            ...(options?.present === false && instanceKey ? { tabId: instanceKey } : {}),
             ...(options?.find ? { find: options.find } : {}),
         }, ...(options?.signal ? { signal: options.signal } : {}) }, openApproval);
         const opened = result.ok && !ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success;
@@ -59,7 +62,7 @@ export function useWorkspaceFileOpener() {
         const transcript = origin?.transcript;
         // A transcript knows its exact retained instance. Cross-session/project callers
         // do not invent an instance or attach their focus to an unrelated destination.
-        if (opened && origin && target.kind === 'session' && transcript?.sessionAddress
+        if (opened && options?.present !== false && origin && target.kind === 'session' && transcript?.sessionAddress
             && areSessionAddressesEqual(transcript.sessionAddress, normalizeSessionAddress(target.serverId, target.sessionId))) {
             const scopeId = createSessionPaneScopeId(target.sessionId, target.serverId, instanceKey);
             focusReturnOwner?.recordDetailsTabOrigin(scopeId, `file:${path}`, {

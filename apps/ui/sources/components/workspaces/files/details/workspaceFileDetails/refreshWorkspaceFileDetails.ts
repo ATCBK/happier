@@ -5,7 +5,7 @@ import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite'
 import { isBinaryContent, resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { decodeBase64 } from '@/encryption/base64';
 import type { ScmDiffArea } from '@happier-dev/protocol';
-import type { FileDiffMode } from '@/components/workspaces/files/file/FileActionToolbar';
+import type { FileDiffMode } from '@/components/workspaces/files/file/filePageModel';
 import type { ScmEntryKind } from '@/sync/domains/state/storageTypes';
 import { decodeWorkspaceFileText } from '@/sync/ops/workspaceFileSystem/workspaceFileTextDecoding';
 import { decodeUtf8Base64 } from '@/scm/diff/fallbackUnifiedDiff';

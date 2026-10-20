@@ -1,6 +1,6 @@
 import type { FileChangesScope } from '@happier-dev/protocol/scm';
 import { readFileChangesScope } from '@/components/workspaces/files/file/changes/fileChangesScope';
-import type { FileDisplayMode } from '@/components/workspaces/files/file/FileActionToolbar';
+import type { FileDisplayMode } from '@/components/workspaces/files/file/filePageModel';
 
 export type WorkspaceFileView = Readonly<{
     mode?: FileDisplayMode;

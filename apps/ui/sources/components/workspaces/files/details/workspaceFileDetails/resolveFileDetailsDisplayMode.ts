@@ -1,4 +1,4 @@
-import type { FileDisplayMode } from '@/components/workspaces/files/file/FileActionToolbar';
+import type { FileDisplayMode } from '@/components/workspaces/files/file/filePageModel';
 import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 
 export function resolveFileDetailsDisplayMode(input: Readonly<{

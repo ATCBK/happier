@@ -43,10 +43,10 @@ vi.mock('react-native-unistyles', async () => {
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons', Octicons: 'Octicons' }));
 
 const fileActionToolbarProps = vi.hoisted(() => ({ current: null as any }));
-vi.mock('@/components/workspaces/files/file/FileActionToolbar', () => ({
-    FileActionToolbar: (props: any) => {
+vi.mock('@/components/workspaces/files/file/FilePageHeader', () => ({
+    FilePageHeader: (props: any) => {
         fileActionToolbarProps.current = props;
-        return React.createElement('FileActionToolbar', props, props.rightElement ?? null);
+        return React.createElement('FilePageHeader', props, props.rightElement ?? null);
     },
 }));
 
@@ -111,7 +111,6 @@ vi.mock('react-native-webview', async () => {
 vi.mock('@/components/workspaces/files/file/FileScreenState', () => ({
     FileLoadingState: (props: any) => React.createElement('FileLoadingState', props),
     FileErrorState: (props: any) => React.createElement('FileErrorState', props),
-    FileBinaryState: (props: any) => React.createElement('FileBinaryState', props),
 }));
 
 vi.mock('@/components/workspaces/files/details/sessionAugmentation/WorkspaceAugmentedScmChangeDiscardButton', () => ({
@@ -533,7 +532,7 @@ describe('WorkspaceFileDetailsView (markdown edit mode)', () => {
         mountedScreens.push(screen);
         const root = screen.findAll(node => typeof node.type === 'string' && String(node.type) === 'View')[0]!;
         expect(StyleSheet.flatten(root.props.style).backgroundColor).toBe('transparent');
-        expect(screen.findAll(node => typeof node.type === 'string' && String(node.type) === 'FileActionToolbar')).toHaveLength(1);
+        expect(screen.findAll(node => typeof node.type === 'string' && String(node.type) === 'FilePageHeader')).toHaveLength(1);
     });
     it('loads the built-in preview without openable-content I/O for empty candidates and preferences', async () => {
         const { WorkspaceFileDetailsView } = await import('./WorkspaceFileDetailsView');
@@ -1018,9 +1017,9 @@ describe('WorkspaceFileDetailsView (markdown edit mode)', () => {
 
     it('offers exactly one mode control owned by the shared field', async () => {
         const tree = await mountView();
-        const toolbar = tree.findByType('FileActionToolbar' as any);
+        const toolbar = tree.findByType('FilePageHeader' as any);
         expect(toolbar.props.showMarkdownEditToggle).not.toBe(true);
-        expect(toolbar.props.showWrapLinesToggle).toBe(true);
+        expect(toolbar.props.menuActions.some((action: { id: string }) => action.id === 'wrap')).toBe(true);
         expect(tree.findAllByType(MarkdownEditModeMenu)).toHaveLength(1);
         expect(tree.findByType(MarkdownEditModeMenu).props.mode).toBe('rich');
     });
@@ -1030,7 +1029,7 @@ describe('WorkspaceFileDetailsView (markdown edit mode)', () => {
         // the toggle and must fall back to the raw editor.
         featureState.markdownRichEditor = false;
         const tree = await mountView();
-        const toolbar = tree.findByType('FileActionToolbar' as any);
+        const toolbar = tree.findByType('FilePageHeader' as any);
         expect(toolbar.props.showMarkdownEditToggle).not.toBe(true);
         expect(tree.findAllByType(MarkdownEditModeMenu)).toHaveLength(0);
         expect(tree.findAllByType(CodeEditorWithFind).length).toBe(1);
@@ -1047,7 +1046,7 @@ describe('WorkspaceFileDetailsView (markdown edit mode)', () => {
         // hook reporting rich, the view must not surface the toggle and must
         // render the raw editor.
         const tree = await mountView('GUIDE.mdx');
-        const toolbar = tree.findByType('FileActionToolbar' as any);
+        const toolbar = tree.findByType('FilePageHeader' as any);
         expect(toolbar.props.showMarkdownEditToggle).not.toBe(true);
         expect(tree.findAllByType(MarkdownEditModeMenu)).toHaveLength(0);
         expect(tree.findAllByType(CodeEditorWithFind).length + tree.findAllByType('FileEditorPanel' as any).length).toBe(1);

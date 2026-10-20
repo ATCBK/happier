@@ -11,7 +11,7 @@ import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { MachineSetupTextField } from '@/components/ui/forms/MachineSetupTextField';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { AppShellMaterialFrame } from '@/components/navigation/shell/AppShellMaterialFrame';
-import { FileActionToolbar } from '@/components/workspaces/files/file/FileActionToolbar';
+import { FilePageHeader } from '@/components/workspaces/files/file/FilePageHeader';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Popover } from '@/components/ui/popover/Popover';
 import { GlassMaterialRuntime } from '@/components/ui/glass/GlassMaterialRuntime';
@@ -206,12 +206,11 @@ function Audit(props: Readonly<{ inputAudit?: boolean }>) {
                 <Text style={styles.groupTitle}>{group}</Text>
                 <CompactSearchField testID={`glass-audit-field-${group}`} value="settings" onChangeText={noop} placeholder="Search" />
                 {props.inputAudit ? <MachineSetupTextField testID={`glass-audit-machine-${group}`} label="Canonical styled input" value="Host field" onChangeText={noop} /> : null}
-                {props.inputAudit && group === 'floating' ? <FileActionToolbar theme={theme} displayMode="file" onDisplayMode={noop}
+                {props.inputAudit && group === 'floating' ? <FilePageHeader displayMode="file" onDisplayMode={noop}
                     diffMode="pending" onDiffMode={noop} hasPendingDelta={false} hasIncludedDelta={false} scmWriteEnabled={false}
                     includeExcludeEnabled={false} virtualSelectionEnabled={false} isSelectedForCommit={false} lineSelectionEnabled={false}
                     selectedLineCount={0} isApplyingStage={false} inFlightScmOperation={null} onStageFile={noop} onUnstageFile={noop}
-                    onApplySelectedLines={noop} onClearSelection={noop} fileEditorEnabled isEditingFile showMarkdownEditToggle
-                    markdownEditMode="rich" markdownRichEligible onMarkdownEditMode={noop} /> : null}
+                    onApplySelectedLines={noop} onClearSelection={noop} fileEditorEnabled isEditingFile /> : null}
                 <SegmentedTabBar tabs={[{ id: 'one', label: 'One' }, { id: 'two', label: 'Two' }]} activeTabId="one" onSelectTab={noop} testIDPrefix={`glass-audit-segment-${group}`} />
                 <ItemGroup header="none" surface="none"><Item testID={`glass-audit-row-${group}`} title="Review the settings modal" subtitle="Rows keep the backdrop visible" onPress={noop} /></ItemGroup>
                 <Buttons />

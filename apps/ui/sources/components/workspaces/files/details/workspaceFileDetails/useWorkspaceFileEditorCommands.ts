@@ -79,7 +79,7 @@ export function useWorkspaceFileEditorCommands(input: Readonly<{
         continueOnSave: false,
     }), [dirty, latest]);
     useActiveUnsavedChangesGuard({ navigation: null, guard, tabId: input.tabKey, focused: input.focused, enabled: input.editor.isEditingFile });
-    return React.useMemo(() => ({ status: input.editor.editorStatus, saved: input.editor.savedAtMs !== null,
+    return React.useMemo(() => ({ status: input.editor.editorStatus, saved: input.editor.savedAtMs !== null, savedAtMs: input.editor.savedAtMs,
         refusal: input.editor.refusal, conflict: input.editor.conflict, canSave: input.editor.editorDirty && !input.editor.isSavingEdits && !input.editor.conflict,
         shortcutLabel, draftPersistenceFailed: input.editor.draftPersistenceFailed, lineEndingNormalization: input.editor.lineEndingNormalization, onSave: save,
         onDone: input.editor.doneEditingFile, onCancel: input.editor.cancelEditingFile, onStart: input.onStart,
