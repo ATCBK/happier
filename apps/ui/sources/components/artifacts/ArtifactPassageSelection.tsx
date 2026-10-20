@@ -107,6 +107,15 @@ function overlapsBlock(range: Readonly<{ start: number; end: number }>, block: M
   return range.start < block.sourceStart + block.sourceLength && range.end > block.sourceStart;
 }
 
+/** A hit shared by several threads opens the existing list, never an arbitrary first thread. */
+function activatePassageThreads(ids: readonly string[], margin: ArtifactPassageMargin | undefined, shownInMargin: boolean): void {
+  if (ids.length > 1) margin?.onOpenThreadList?.();
+  else if (ids.length === 1) {
+    if (shownInMargin) margin?.onFocus(ids[0]!);
+    else margin?.onOpen(ids[0]!);
+  }
+}
+
 function NativePassageSelection(
   props: Readonly<{
     artifactId: string;
@@ -145,9 +154,7 @@ function NativePassageSelection(
     [placed],
   );
   const openPassage = React.useCallback((block: MarkdownSourceRangeAction) => {
-    const passages = passagesIn(block);
-    if (passages.length === 1) marginRef.current?.onOpen(passages[0]!.id);
-    else if (passages.length > 1) marginRef.current?.onOpenThreadList?.();
+    activatePassageThreads(passagesIn(block).map(passage => passage.id), marginRef.current, false);
   }, [passagesIn]);
   const isMarked = React.useCallback((block: MarkdownSourceRangeAction) => passagesIn(block).length > 0, [passagesIn]);
   const { artifactId, markdown, revision } = props;
@@ -351,7 +358,7 @@ function WebPassageSelection(
     };
   }, [passages, props.markdown, wide]);
 
-  // A click (not a selection) on a marked passage focuses its thread, or opens it without a margin.
+  // A click (not a selection) gathers every hit before the shared thread/list decision.
   React.useEffect(() => {
     const element = container.current as unknown as HTMLElement | null;
     if (!element || typeof document === 'undefined') return;
@@ -360,6 +367,7 @@ function WebPassageSelection(
       const frame = element.getBoundingClientRect();
       const x = event.clientX - frame.left;
       const y = event.clientY - frame.top;
+      const hits: string[] = [];
       for (const [id, rects] of marksRef.current) {
         if (
           rects.some(
@@ -370,11 +378,10 @@ function WebPassageSelection(
               y <= rect.top + rect.height,
           )
         ) {
-          if (wideRef.current) marginRef.current?.onFocus(id);
-          else marginRef.current?.onOpen(id);
-          return;
+          hits.push(id);
         }
       }
+      activatePassageThreads(hits, marginRef.current, wideRef.current);
     };
     element.addEventListener('click', click);
     return () => element.removeEventListener('click', click);
