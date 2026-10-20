@@ -16,7 +16,7 @@ function home(value: unknown) { return typeof value === 'string' && isAbsolute(v
 // rewrite it.
 export function connectedAccountRuntime(kind: 'cloud' | 'cua'): ConnectedAccountRuntime {
     const diagnostic = { code: 'cua_connection_unavailable', severity: 'error' as const };
-    function environment(values: Readonly<Record<string, unknown>>) {
+    function environment(values: Readonly<Record<string, unknown>>): Readonly<Record<string, string>> {
         const nativeHome = values.nativeHome;
         if (kind === 'cloud') return { CUA_HOME: home(nativeHome) };
         return nativeHome ? { CUA_HOME: home(nativeHome), CUA_CREDENTIAL_STORE: 'file' } : {};
