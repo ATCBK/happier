@@ -6,7 +6,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import {
     t,
     getLanguageEnglishName,
@@ -21,6 +21,7 @@ import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHead
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { LANGUAGE_SETTINGS } from '@/components/settings/language/languageSettings';
 import { preloadTranslationsForSettings } from '@/text/i18n';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 
 type LanguageOption = 'auto' | SupportedLanguage;
 
@@ -32,7 +33,8 @@ type LanguageItem = Readonly<{
 
 export function LanguageSettingsScreen() {
     const { theme } = useUnistyles();
-    const [preferredLanguage, setPreferredLanguage] = useSettingMutable('preferredLanguage');
+    const preferredLanguage = useSetting('preferredLanguage');
+    const writeSetting = useSettingActionWriter();
     const { reloadApp } = useUpdates();
 
     const deviceLocale = Localization.getLocales()?.[0]?.languageTag ?? 'en-US';
@@ -69,24 +71,16 @@ export function LanguageSettingsScreen() {
     const handleLanguageChange = async (newLanguage: LanguageOption) => {
         if (newLanguage === currentSelection) return;
 
-        const confirmed = await Modal.confirm(
-            t('settingsLanguage.needsRestart'),
-            t('settingsLanguage.needsRestartMessage'),
-        );
-        if (!confirmed) return;
-
         const selected = newLanguage === 'auto' ? null : newLanguage;
+        const result = await writeSetting(LANGUAGE_SETTINGS.settings.appLanguage, selected);
+        if (!result.ok) return;
         try {
             await preloadTranslationsForSettings(selected);
         } catch {
             Modal.alert(t('common.error'), t('errors.operationFailed'));
             return;
         }
-        setPreferredLanguage(selected);
-        // Small delay so the setting is saved before the app restarts.
-        setTimeout(() => {
-            reloadApp();
-        }, 100);
+        if (writeSetting.isCurrent()) await reloadApp();
     };
 
     return (

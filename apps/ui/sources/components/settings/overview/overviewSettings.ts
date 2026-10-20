@@ -20,6 +20,7 @@ export const OVERVIEW_SETTINGS = defineSettingsPage({
                 termsOfService: {},
                 eula: { host: settingsHosts.ios },
                 version: {},
+                developerMode: {},
             },
         },
     },

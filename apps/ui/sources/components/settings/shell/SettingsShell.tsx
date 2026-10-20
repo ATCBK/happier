@@ -10,7 +10,7 @@ import { isRenderableElementType } from '@/components/ui/icons/isRenderableEleme
 import { ResizableDockedPane } from '@/components/ui/panels/ResizableDockedPane';
 import { resolveScaledPaneWidthPx } from '@/components/appShell/panes/layout/paneSizing';
 import { resolveViewportMinEdgePx, VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX } from '@/utils/platform/viewportClass';
-import { useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { getStorage, useLocalSetting } from '@/sync/domains/state/storage';
 
 import { SettingsSidebar } from '@/components/settings/shell/SettingsSidebar';
 import { SettingsPageSearchProvider } from './SettingsPageSearchContext';
@@ -100,8 +100,6 @@ export const SettingsShell = React.memo(function SettingsShell(props: Readonly<{
     const [sidebarFallbackActive, setSidebarFallbackActive] = React.useState(false);
     const sidebarWidthPx = useLocalSetting('settingsNavSidebarWidthPx') ?? SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX;
     const sidebarWidthBasisPx = useLocalSetting('settingsNavSidebarWidthBasisPx') ?? windowWidth;
-    const [, setSidebarWidthPx] = useLocalSettingMutable('settingsNavSidebarWidthPx');
-    const [, setSidebarWidthBasisPx] = useLocalSettingMutable('settingsNavSidebarWidthBasisPx');
     const preferredSidebarWidthPx = typeof sidebarWidthPx === 'number' ? sidebarWidthPx : SETTINGS_NAV_SIDEBAR_DEFAULT_WIDTH_PX;
     const basisSidebarWidthPx = typeof sidebarWidthBasisPx === 'number' ? sidebarWidthBasisPx : windowWidth;
 
@@ -148,8 +146,10 @@ export const SettingsShell = React.memo(function SettingsShell(props: Readonly<{
                         maxWidthPx={SETTINGS_NAV_SIDEBAR_MAX_WIDTH_PX}
                         resizeEdge="right"
                         onCommitWidthPx={(nextWidthPx) => {
-                            setSidebarWidthPx(nextWidthPx);
-                            setSidebarWidthBasisPx(windowWidth);
+                            getStorage().getState().applyLocalSettings({
+                                settingsNavSidebarWidthPx: nextWidthPx,
+                                settingsNavSidebarWidthBasisPx: windowWidth,
+                            }, { source: 'ui' });
                         }}
                     >
                         <AppShellMaterialPlane group="sidebar" color={theme.colors.surface.inset} translucentColor={theme.colors.surface.selected} style={[appShellColumnSurface.column, styles.sidebarColumn]}>

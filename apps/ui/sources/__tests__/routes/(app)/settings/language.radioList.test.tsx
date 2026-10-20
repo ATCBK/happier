@@ -24,13 +24,15 @@ vi.mock('socket.io-client', async (importOriginal) =>
 installDisconnectedServerSocketBoundary();
 const initialStorage = storage.getState();
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
-// Locale transformation belongs to fixture preparation, not the confirmation/write contract.
+// Locale transformation belongs to fixture preparation, not the admitted write contract.
 const { preloadTranslationsForSettings, areTranslationsReadyForSettings } = await import('@/text/i18n');
 await preloadTranslationsForSettings('fr');
 
 async function renderSettingsView(element: React.ReactElement) {
     account = await createSecretSettingsTestHarness({ token: createAccountTokenForTests('account-a', { currentAccount: true }),
-        sharedEnabled: false, settings: settingsParse({ preferredLanguage: shared.preferredLanguage }) });
+        sharedEnabled: false, settings: settingsParse({ preferredLanguage: shared.preferredLanguage,
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+        }) });
     const credentials = account.credentials;
     const wrapper = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={credentials}>{children}</InjectedAuthProvider>;
     return renderBaseSettingsView(element, { wrapper });
@@ -90,7 +92,7 @@ describe('Language settings', () => {
         expect(radios.find((node) => node.props.title === 'Deutsch')?.props.subtitle).toBe('German');
     });
 
-    it('changes the language only after the restart is confirmed', async () => {
+    it('changes the language through the admitted preference without a second confirmation', async () => {
         const { default: LanguageSettingsScreen } = await import('@/app/(app)/settings/language');
         const { Item } = await import('@/components/ui/lists/Item');
         const screen = await renderSettingsView(React.createElement(LanguageSettingsScreen));
@@ -112,15 +114,8 @@ describe('Language settings', () => {
         });
         await screen.pressByTestIdAsync('settings-language-option-fr');
 
-        expect(shared.confirm).toHaveBeenCalledTimes(1);
-        // Language owns confirmation/reload and intentionally uses the incumbent
-        // Settings writer (its generic declaration is read-only). The handler
-        // has admitted the mutation. Its quiet-flush timer can leave the queue
-        // idle initially, so observe the real HTTP write before queue completion.
+        expect(shared.confirm).not.toHaveBeenCalled();
         expect((await writeCompleted).ok).toBe(true);
-        const { sync } = await import('@/sync/sync');
-        const queue = Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync;
-        expect(await queue.awaitQueue()).toEqual({ status: 'completed' });
         await vi.waitFor(() => expect(account?.persistedSettings.preferredLanguage).toBe('fr'));
         expect(storage.getState().settings.preferredLanguage).toBe('fr');
     });

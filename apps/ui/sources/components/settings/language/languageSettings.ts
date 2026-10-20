@@ -7,7 +7,7 @@ export const LANGUAGE_SETTINGS = defineSettingsPage({
         appLanguage: {
             titleKey: 'settingsLanguage.appLanguageTitle',
             settings: {
-                // Changing language also owns confirmation and app reload; generic Actions only read it.
+                // Account projection owns locale activation for UI and Agent writes alike.
                 appLanguage: {},
             },
         },

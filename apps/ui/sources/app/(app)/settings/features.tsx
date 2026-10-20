@@ -4,14 +4,12 @@ import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabl
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { useSettingMutable, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting, useSettingMutable, useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { Switch } from '@/components/ui/forms/Switch';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { t } from '@/text';
 import { FeatureDiagnosticsPanel } from '@/components/settings/features/FeatureDiagnosticsPanel';
 import {
-    buildUiFeatureExperimentsChange,
-    buildUiFeatureToggleChange,
     listUiFeatureToggleDefinitions,
     resolveUiFeatureToggleEnabled,
     type UiFeatureToggleDefinition,
@@ -26,10 +24,12 @@ import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHead
 import { SettingAnchor, SettingRow, SettingSection } from '@/components/settings/shell/SettingRow';
 import { settingRendersOnHost } from '@/components/settings/catalog/settingDeclarations';
 import { FEATURES_SETTINGS, resolveFeatureToggleSetting } from '@/components/settings/features/featuresSettings';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 
 export const WorkspaceRouteBody = React.memo(function FeaturesSettingsScreen() {
-    const [experiments, setExperiments] = useSettingMutable('experiments');
-    const [featureToggles, setFeatureToggles] = useSettingMutable('featureToggles');
+    const experiments = useSetting('experiments');
+    const writeSetting = useSettingActionWriter();
+    const featureToggles = useSetting('featureToggles');
     const [useProfiles, setUseProfiles] = useSettingMutable('useProfiles');
     const [commandPaletteEnabled, setCommandPaletteEnabled] = useSettingMutable('commandPaletteEnabled');
     const [terminalRendererPreference, setTerminalRendererPreference] = useLocalSettingMutable('terminalRendererPreference');
@@ -170,10 +170,6 @@ export const WorkspaceRouteBody = React.memo(function FeaturesSettingsScreen() {
     const standardToggleDefinitions = visibleToggleDefinitions.filter((d) => !d.isExperimental);
     const experimentalToggleDefinitions = visibleToggleDefinitions.filter((d) => d.isExperimental);
 
-    const seedExperimentalFeatureToggleDefaults = React.useCallback(() => {
-        setFeatureToggles(buildUiFeatureExperimentsChange({ experiments, featureToggles }, true).featureToggles!);
-    }, [experiments, featureToggles, setFeatureToggles]);
-
     const toggleSettings = React.useMemo(() => ({ experiments, featureToggles }), [experiments, featureToggles]);
 
     const toggleableFeatureIdSet = React.useMemo(() => {
@@ -197,8 +193,9 @@ export const WorkspaceRouteBody = React.memo(function FeaturesSettingsScreen() {
     }, [isFeatureHardDisabledByServer, isLocallyBlockedByDependencies, toggleDefinitions, toggleSettings]);
 
     const applyLocalToggleChange = React.useCallback((featureId: FeatureId, next: boolean) => {
-        setFeatureToggles(buildUiFeatureToggleChange({ experiments, featureToggles }, featureId, next).featureToggles);
-    }, [experiments, featureToggles, setFeatureToggles]);
+        const setting = resolveFeatureToggleSetting(featureId);
+        if (setting) void writeSetting(setting, next);
+    }, [writeSetting]);
 
     const renderToggleRow = (d: UiFeatureToggleDefinition) => {
         const blockedByDependencies = isLocallyBlockedByDependencies(d.featureId);
@@ -315,11 +312,7 @@ export const WorkspaceRouteBody = React.memo(function FeaturesSettingsScreen() {
                             testID="settings-feature-experiments-toggle"
                             value={experiments}
                             onValueChange={(next) => {
-                                setExperiments(next);
-                                if (next) {
-                                    // Seed each experimental toggle from its own registry default.
-                                    seedExperimentalFeatureToggleDefaults();
-                                }
+                                void writeSetting(FEATURES_SETTINGS.settings.experimentalFeatures, next);
                             }}
                         />
                     }
