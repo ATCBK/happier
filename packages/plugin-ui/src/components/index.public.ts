@@ -6,6 +6,8 @@ export * from './Collection.js';
 export { CollectionToolbar, type CollectionToolbarFreshness, type CollectionToolbarProps } from './CollectionToolbar.js';
 export type { CollectionVirtualizer, CollectionVirtualizerHandle, CollectionVirtualizerRequest } from '../presentation/collection/collectionVirtualizer.js';
 export * from './Content.js';
+export { useResizableSize, type ResizableSizeInput, type ResizableSizeResult, type DockedPaneResizeCommitMeta } from '../presentation/layout/resize/useResizableSize.js';
+export { HappierResizeHandle } from '../presentation/layout/resize/HappierResizeHandle.js';
 export {
   HappierMemoryFactRow,
   type HappierMemoryFactItemProps,
