@@ -1,14 +1,19 @@
 import * as React from 'react';
 import { createTwoFilesPatch } from 'diff';
 import { parseUnifiedDiffHunks, revertHunks, type Hunk } from '@happier-dev/protocol/diff/hunks';
+import type { WorkspaceFileDetailsFileContent } from './refreshWorkspaceFileDetails';
 
 export type EditorComparisonInput = Readonly<{
     baseText: string | null;
     mineText: string;
     theirsText: string;
     theirsHash: string;
+    theirsEncoding?: WorkspaceFileDetailsFileContent['encoding'];
 }>;
-export type EditorComparisonResolution = Readonly<{ text: string; baseText: string; baseHash: string }>;
+export type EditorComparisonResolution = Readonly<{
+    text: string; baseText: string; baseHash: string;
+    baseEncoding?: WorkspaceFileDetailsFileContent['encoding'];
+}>;
 export type EditorComparisonPlace = Readonly<{ hunk: Hunk; choice: 'mine' | 'theirs' | null; automatic: boolean }>;
 export type EditorComparison = EditorComparisonInput & Readonly<{
     places: readonly EditorComparisonPlace[];
@@ -78,7 +83,8 @@ export function useWorkspaceFileEditorComparison(input: Readonly<{
         }
         if (next.places.every(place => place.choice !== null)) {
             publish(null);
-            inputRef.current.onAccept({ text: result.text, baseText: next.theirsText, baseHash: next.theirsHash });
+            inputRef.current.onAccept({ text: result.text, baseText: next.theirsText, baseHash: next.theirsHash,
+                ...(next.theirsEncoding === undefined ? {} : { baseEncoding: next.theirsEncoding }) });
         } else {
             publish({ ...next, mergedText: result.text, error: null });
         }
