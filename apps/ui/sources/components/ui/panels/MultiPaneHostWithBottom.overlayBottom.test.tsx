@@ -119,8 +119,8 @@ describe('MultiPaneHostWithBottom (overlayBottom)', () => {
                 rightPane={rightPane}
                 detailsPane={null}
                 layout={rightPane
-                    ? { kind: 'overlayStack' as const, right: 'overlay' as const, details: 'hidden' as const }
-                    : { kind: 'single' as const, right: 'hidden' as const, details: 'hidden' as const }}
+                    ? { main: 'docked' as const, kind: 'overlayStack' as const, right: 'overlay' as const, details: 'hidden' as const }
+                    : { main: 'docked' as const, kind: 'single' as const, right: 'hidden' as const, details: 'hidden' as const }}
                 rightDockWidthPx={360}
                 detailsDockWidthPx={520}
                 onCloseRight={onCloseRight}

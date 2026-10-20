@@ -58,7 +58,8 @@ export const MultiPaneHostWithBottom = React.memo((props: MultiPaneHostWithBotto
     const shouldRenderBottomPane = bottomPresence.present;
     const renderedBottomPane = bottomPresence.node;
     const isBottomOverlayPresented = bottomPresentation === 'overlay' && bottomPresence.present;
-    const bottomRegionFocus = usePaneRegionFocusBoundary('bottom', bottomPresence.present && bottomPresentation !== 'hidden');
+    const bottomRegionVisible = bottomPresence.present && bottomPresentation !== 'hidden';
+    const bottomRegionFocus = usePaneRegionFocusBoundary('bottom', bottomRegionVisible);
     const bottomModalLabel = t('ui.modalPane.bottom');
     const bottomModalBoundary = useModalPaneBoundary({
         active: isBottomOverlayPresented,
@@ -98,8 +99,9 @@ export const MultiPaneHostWithBottom = React.memo((props: MultiPaneHostWithBotto
             {shouldRenderBottomPane ? (
                 <Animated.View
                     ref={bottomFocusRef}
-                    onFocusCapture={bottomRegionFocus.onFocusCapture}
                     onFocus={bottomRegionFocus.onFocus}
+                    tabIndex={Platform.OS === 'web' && bottomRegionVisible ? -1 : undefined}
+                    focusable={bottomRegionVisible}
                     role={Platform.OS === 'web' ? 'region' : undefined}
                     accessibilityLabel={bottomModalLabel}
                     testID={isBottomOverlayPresented ? 'multi-pane-bottom-overlay' : undefined}

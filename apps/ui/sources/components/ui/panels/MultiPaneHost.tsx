@@ -159,7 +159,8 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
     // the private focus boundary instead of asking plugin surfaces to infer
     // their own presentation state.
     const mainFocusEligible = activeMainBoundary === null;
-    const mainRegionFocus = usePaneRegionFocusBoundary('main', mainFocusEligible && hideMain !== true && (layout.main !== 'overlay' || mainModalActive));
+    const mainRegionVisible = mainFocusEligible && hideMain !== true && (layout.main !== 'overlay' || mainModalActive);
+    const mainRegionFocus = usePaneRegionFocusBoundary('main', mainRegionVisible);
     const detailsOverlayFocusEligible = detailsModalActive && !detailsPresence.closing;
     const rightOverlayFocusEligible = rightModalActive && !rightPresence.closing;
 
@@ -174,8 +175,10 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
 
     return (
         <View style={{ flex: 1, flexDirection: mirrored ? 'row-reverse' : 'row', position: 'relative' }}>
-                <View key="main" ref={mainFocusRef} testID="multi-pane-main-column" onFocusCapture={mainRegionFocus.onFocusCapture}
+                <View key="main" ref={mainFocusRef} testID="multi-pane-main-column"
                     onFocus={mainRegionFocus.onFocus} role={Platform.OS === 'web' ? 'region' : undefined}
+                    tabIndex={Platform.OS === 'web' && mainRegionVisible ? -1 : undefined}
+                    focusable={mainRegionVisible}
                     accessibilityLabel={mainLabel}
                     style={shouldHideDockedMainRegion ? { position: 'absolute', width: 0, height: '100%', overflow: 'hidden', opacity: 0, zIndex: -1 }
                         : layout.main === 'overlay' ? { position: 'absolute', top: 0, right: 0, bottom: 0, width: mainWidthPx, zIndex: overlayZIndexBase + 5, backgroundColor: theme.colors.surface.base }
@@ -334,6 +337,11 @@ function PaneColumn(props: Readonly<{
     const boundaryProps = props.modalActive ? props.overlayProps : (props.underlayProps ?? {});
     return (
         <Animated.View
+            role={Platform.OS === 'web' ? 'region' : undefined}
+            accessibilityLabel={props.name === 'right' ? t('ui.modalPane.right') : t('ui.modalPane.details')}
+            aria-hidden={Platform.OS === 'web' && hidden ? true : undefined}
+            accessibilityElementsHidden={hidden}
+            importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
             style={docked ? {
                 position: 'relative',
                 flex: props.flexible ? 1 : undefined,
@@ -366,10 +374,9 @@ function PaneColumn(props: Readonly<{
         >
             <ModalPaneBoundaryView
                 ref={setFocusRef}
-                onFocusCapture={regionFocus.onFocusCapture}
                 onFocus={regionFocus.onFocus}
-                role={Platform.OS === 'web' ? 'region' : undefined}
-                accessibilityLabel={props.name === 'right' ? t('ui.modalPane.right') : t('ui.modalPane.details')}
+                tabIndex={Platform.OS === 'web' && !hidden && props.focusEligible ? -1 : undefined}
+                focusable={!hidden && props.focusEligible}
                 testID={hidden ? `multi-pane-${props.name}-parked`
                     : props.modalActive ? `multi-pane-${props.name}-modal` : undefined}
                 {...boundaryProps}

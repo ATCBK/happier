@@ -4,7 +4,7 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { FocusReturnTarget } from '@/keyboard/focusReturn';
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
@@ -30,35 +30,11 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-vi.mock('./ResizableDockedPane', () => ({
-    ResizableDockedPane: (props: React.PropsWithChildren<Readonly<{ testID?: string }>>) => (
-        <div data-testid={props.testID}>{props.children}</div>
-    ),
-}));
-
-vi.mock('./motion/usePaneAnimatedPresence', () => ({
-    usePaneAnimatedPresence: (input: Readonly<{ targetOpen: boolean; node: React.ReactNode }>) => ({
-        present: input.targetOpen,
-        node: input.targetOpen ? input.node : null,
-        progress: { interpolate: () => 0 },
-    }),
-}));
-
-vi.mock('./motion/PaneAnimatedScrimPressable', () => ({
-    PaneAnimatedScrimPressable: (props: Readonly<{
-        testID?: string;
-        onPress?: () => void;
-        accessibilityLabel?: string;
-    }>) => (
-        <button data-testid={props.testID} aria-label={props.accessibilityLabel} onClick={props.onPress}>
-            Dismiss
-        </button>
-    ),
-}));
-
-vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
-    useReducedMotionPreference: () => true,
-}));
+// Keep resize, animation and focus ownership real; reduced motion is an OS boundary.
+const { MultiPaneHost } = await import('./MultiPaneHost');
+beforeEach(() => vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query === '(prefers-reduced-motion: reduce)', addEventListener() {}, removeEventListener() {},
+})));
 
 type PaneKind = 'right' | 'details';
 
@@ -76,6 +52,7 @@ afterEach(async () => {
     while (mountedSurfaces.length > 0) {
         await mountedSurfaces.pop()?.unmount();
     }
+    vi.unstubAllGlobals();
 });
 
 describe('MultiPaneHost modal-pane boundary', () => {
@@ -131,7 +108,6 @@ describe('MultiPaneHost modal-pane boundary', () => {
 });
 
 async function mountSurface(kind: PaneKind, open: boolean): Promise<MountedSurface> {
-    const { MultiPaneHost } = await import('./MultiPaneHost');
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -157,8 +133,8 @@ async function mountSurface(kind: PaneKind, open: boolean): Promise<MountedSurfa
                         rightPane={rightPane}
                         detailsPane={detailsPane}
                         layout={kind === 'right'
-                            ? { kind: 'overlayStack', right: 'overlay', details: 'hidden' }
-                            : { kind: 'twoPane', right: 'hidden', details: 'overlay' }}
+                            ? { main: 'docked', kind: 'overlayStack', right: 'overlay', details: 'hidden' }
+                            : { main: 'docked', kind: 'twoPane', right: 'hidden', details: 'overlay' }}
                         rightDockWidthPx={360}
                         detailsDockWidthPx={520}
                         onCloseRight={() => { closeCount += 1; }}

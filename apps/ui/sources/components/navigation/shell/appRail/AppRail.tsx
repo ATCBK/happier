@@ -183,7 +183,7 @@ export const AppRailSurface = React.memo(function AppRailSurface(props: Readonly
     return (
         <View testID="app-rail" style={[styles.rail, { backgroundColor: materialColor(theme.colors.background.canvas, 'transparent') }]} onLayout={onRailLayout}
             ref={props.focusBoundary?.ref} onFocus={props.focusBoundary?.onFocus}
-            focusable={props.focusBoundary ? true : undefined} accessibilityLabel={props.focusBoundary ? t('paneRegions.rail') : undefined}
+            focusable={props.focusBoundary ? true : undefined} accessibilityLabel={props.focusBoundary ? t('settingsKeyboard.paneRegions.rail') : undefined}
             {...(Platform.OS === 'web' && props.focusBoundary ? { role: 'navigation' as const, tabIndex: -1, onFocusCapture: props.focusBoundary.onFocusCapture } : null)}
             {...(Platform.OS === 'web' ? { onContextMenu: (event: { preventDefault: () => void }) => { event.preventDefault(); props.onCustomize?.(); } } : null)}
             >

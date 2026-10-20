@@ -177,7 +177,7 @@ export const SidebarNavigator = React.memo(() => {
             <View
                 ref={columnFocus.ref}
                 onFocus={columnFocus.onFocus}
-                accessibilityLabel={t('paneRegions.navigation')}
+                accessibilityLabel={t('settingsKeyboard.paneRegions.navigation')}
                 focusable
                 style={{ flex: 1, flexShrink: 0, minHeight: 0 }}
                 {...(Platform.OS === 'web'
