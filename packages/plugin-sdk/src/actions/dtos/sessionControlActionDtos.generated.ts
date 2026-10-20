@@ -332,8 +332,8 @@ export type SessionControlActionInputById = {
         } | undefined;
     };
     readonly "session.archive": {
-        [x: string]: unknown;
         sessionId: string;
+        alsoArchiveReports?: boolean | undefined;
     };
     readonly "session.delete": {
         sessionId: string;
@@ -801,7 +801,31 @@ export type SessionControlActionResultById = {
     readonly "session.instructions.set": JsonValue;
     readonly "session.permission_mode.set": JsonValue;
     readonly "session.model.set": JsonValue;
-    readonly "session.archive": JsonValue;
+    readonly "session.archive": {
+        success: true;
+        sessionId: string;
+        archivedAt?: number | undefined;
+        reports?: ({
+            status: 'archived';
+            sessionId: string;
+            title?: string | undefined;
+        } | {
+            status: 'failed';
+            errorCode: string;
+            error: string;
+            sessionId: string;
+            title?: string | undefined;
+        } | {
+            status: 'approval_pending';
+            artifactId: string;
+            sessionId: string;
+            title?: string | undefined;
+        })[] | undefined;
+        reportsError?: {
+            errorCode: string;
+            error: string;
+        } | undefined;
+    };
     readonly "session.delete": {
         success: true;
     };
@@ -1212,6 +1236,7 @@ export type SessionControlActionResultById = {
                     kind: 'source_unavailable';
                 } | {
                     kind: 'broker_unavailable';
+                    reason?: 'application_unavailable' | 'model_unavailable' | undefined;
                 } | {
                     kind: 'update_required';
                 } | {
@@ -1737,6 +1762,7 @@ export type SessionControlActionResultById = {
                                 kind: 'source_unavailable';
                             } | {
                                 kind: 'broker_unavailable';
+                                reason?: 'application_unavailable' | 'model_unavailable' | undefined;
                             } | {
                                 kind: 'update_required';
                             } | {

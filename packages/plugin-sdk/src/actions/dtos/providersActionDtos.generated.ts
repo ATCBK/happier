@@ -736,6 +736,36 @@ export type ProvidersActionInputById = {
                             materializationKinds?: ('httpHeaders' | 'environment' | 'files')[] | undefined;
                             credentialKinds?: ('oauth' | 'token')[] | undefined;
                             endpointTemplateIds?: string[] | undefined;
+                            staticModels?: {
+                                id: string;
+                                name: string;
+                                costTier?: 'low' | 'standard' | 'premium' | undefined;
+                                aliases?: string[] | undefined;
+                                description?: string | undefined;
+                                contextWindowTokens?: number | undefined;
+                                extendedContextModelId?: string | undefined;
+                                modelOptions?: {
+                                    id: string;
+                                    name: string;
+                                    type: string;
+                                    currentValue: string;
+                                    description?: string | undefined;
+                                    options?: {
+                                        value: string;
+                                        name: string;
+                                        description?: string | undefined;
+                                    }[] | undefined;
+                                    overridesWhenOn?: {
+                                        optionIds: string[];
+                                        forcedValue?: string | undefined;
+                                    } | undefined;
+                                }[] | undefined;
+                                capabilities?: {
+                                    toolRoundTrips?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                                    reasoningControls?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                                    structuredOutput?: 'unknown' | 'supported' | 'unsupported' | undefined;
+                                } | undefined;
+                            }[] | undefined;
                         }[] | undefined;
                         connectedAccountPurposeBindingPolicy?: {
                             minimumBound: 1;
