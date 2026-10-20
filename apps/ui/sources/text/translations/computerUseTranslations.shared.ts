@@ -115,7 +115,6 @@ export type ComputerUseTranslations = Readonly<{
         agentUsing: (params: Readonly<{ agent: string; target: string }>) => string;
         agentCanUse: (params: Readonly<{ agent: string; target: string }>) => string;
         agentCanSee: (params: Readonly<{ agent: string; target: string }>) => string;
-        onMachine: (params: Readonly<{ machine: string }>) => string;
         connectingTitle: (params: Readonly<{ target: string }>) => string;
         unavailableTitle: string;
         stopFailed: string;
@@ -167,6 +166,8 @@ export type ComputerUseTranslations = Readonly<{
         paused: (params: Readonly<{ time: string }>) => string;
         offlineTitle: (params: Readonly<{ machine: string }>) => string;
         offlineBody: string;
+        screenUnavailableTitle: (params: Readonly<{ machine: string }>) => string;
+        screenUnavailableBody: string;
         openingTitle: (params: Readonly<{ target: string; machine: string }>) => string;
         openingBody: string;
     }>;
@@ -306,7 +307,6 @@ export const computerUseTranslationsEnglish = { en: {
             agentUsing: ({ agent, target }) => `${agent} is using ${target}`,
             agentCanUse: ({ agent, target }) => `${agent} can use ${target}`,
             agentCanSee: ({ agent, target }) => `${agent} can see ${target}`,
-            onMachine: ({ machine }) => `On ${machine}`,
             connectingTitle: ({ target }) => `Connecting to ${target}`,
             unavailableTitle: 'Can’t show this window right now',
             stopFailed: 'Couldn’t stop sharing',
@@ -357,6 +357,8 @@ export const computerUseTranslationsEnglish = { en: {
             paused: ({ time }) => `Stream paused · last frame ${time}`,
             offlineTitle: ({ machine }) => `${machine} isn’t answering`,
             offlineBody: 'Reconnect to watch it. Watching doesn’t start it.',
+            screenUnavailableTitle: ({ machine }) => `Can’t see ${machine}’s screen`,
+            screenUnavailableBody: 'It’s online, but its desktop didn’t answer. Happier needs a signed-in desktop session to show it.',
             openingTitle: ({ target, machine }) => `Opening ${target} on ${machine}…`,
             openingBody: 'It appears here as soon as the first picture arrives.',
         },

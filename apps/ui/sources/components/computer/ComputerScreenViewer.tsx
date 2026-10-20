@@ -24,6 +24,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { resolveComputerRecovery } from '@/sync/domains/computer/targets';
+import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
@@ -56,10 +57,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     barText: {
         flex: 1,
         minWidth: 0,
-        // One line, like the lab: the window, then where it is (lab `computer` LV viewer bar).
+        // One line, like the lab: the window, then the Machine it is on (lab `computer` LV viewer bar).
         flexDirection: 'row',
-        alignItems: 'baseline',
+        alignItems: 'center',
         gap: theme.space.s8,
+    },
+    barMachine: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s6,
+        flexShrink: 2,
+        minWidth: 0,
     },
     barTitle: {
         ...Typography.variant('label', 'semiBold'),
@@ -265,6 +273,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     // A sentence that must name where the Computer is never leaves a blank while the Machine's name is unreadable.
     const machineInSentence = machine || t('computerUse.presentation.tabFallback');
     const agentName = props.agent.name;
+    const screenUnanswered = !stopFailed && recovery?.cause === 'failed' && !props.shared && props.machineOnline === true;
     const recoveryTitle = stopFailed ? t('computerUse.presentation.stopFailed')
         : recovery?.cause === 'driver_missing' ? t('computerUse.presentation.driverMissing')
         : recovery?.cause === 'driver_invalid' ? t('computerUse.presentation.driverInvalid')
@@ -273,7 +282,9 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenTitle', { machine })
         : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedTitle', { machine })
         : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineTitle', { machine })
-        // Before any window is known to be shared, a failed call can only say which Machine didn't answer.
+        // Before any window is known to be shared, a failed call says which Machine didn't answer, unless
+        // the Machine's own presence says it answers: then the cause is its screen, never the Machine.
+        : screenUnanswered ? t('computerUse.presentation.screenUnavailableTitle', { machine: machineInSentence })
         : recovery?.cause === 'offline' || (recovery?.cause === 'failed' && !props.shared) ? t('computerUse.presentation.offlineTitle', { machine: machineInSentence })
         : recovery?.cause === 'access_removed' || recovery?.cause === 'permission_denied' ? t('errors.permissionDenied')
         : recovery?.cause === 'source_lost' ? t('computerUse.presentation.endedTitle', { target })
@@ -336,6 +347,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 iconName={recovery?.cause === 'failed' && props.shared && !stopFailed ? 'eye-slash' : undefined}
                 title={recoveryTitle}
                 reason={stopFailed ? undefined
+                    : screenUnanswered ? t('computerUse.presentation.screenUnavailableBody')
                     : recovery?.cause === 'failed' ? unavailableReason
                     : recoveryTitle !== recoveryReason ? recoveryReason : undefined}
                 // A machine that isn't answering is not a fault: its title says it and the code adds nothing to look up.
@@ -441,16 +453,30 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         <GlassLivePictureBackdropContext.Provider value>
         <View style={[stylesheet.root, props.chrome === 'none' ? null : { paddingBottom: bottomChromeHeight }]} testID={testID}>
             {props.chrome === 'none' ? null : <View style={stylesheet.bar}>
-                <Icon
-                    name={props.targetKind === 'display' ? 'desktop' : 'browsers'}
-                    size={ICON_SIZE.md}
-                    color={theme.colors.text.secondary}
-                />
+                {/* The pane's tab already says Computer, so the bar names only what isn't said yet:
+                    the shared window, when there is one, and the Machine as its identity chip
+                    ("● NLDW3"), never a second "Computer On …" line (DA3 D11). */}
                 <View style={stylesheet.barText}>
-                    <Text style={stylesheet.barTitle} numberOfLines={1} testID={`${testID}-title`}>
-                        {target}
-                    </Text>
-                    {machine ? <Text style={stylesheet.barMeta} numberOfLines={1}>{t('computerUse.presentation.onMachine', { machine })}</Text> : null}
+                    {props.targetTitle ? (
+                        <>
+                            <Icon
+                                name={props.targetKind === 'display' ? 'desktop' : 'browsers'}
+                                size={ICON_SIZE.md}
+                                color={theme.colors.text.secondary}
+                            />
+                            <Text style={stylesheet.barTitle} numberOfLines={1} testID={`${testID}-title`}>
+                                {target}
+                            </Text>
+                        </>
+                    ) : null}
+                    {machine ? (
+                        <View style={stylesheet.barMachine} testID={`${testID}-machine`}>
+                            <StatusDot
+                                color={props.machineOnline === false ? theme.colors.status.disconnected : theme.colors.status.connected}
+                            />
+                            <Text style={stylesheet.barMeta} numberOfLines={1}>{machine}</Text>
+                        </View>
+                    ) : null}
                 </View>
                 {props.shared ? (
                     <DropdownMenu

@@ -71,8 +71,11 @@ describe('ComputerScreenViewer', () => {
     expect(screen.getTextContent()).not.toContain('computerUse.presentation.notSharedTitle');
     await screen.update(<ComputerScreenViewer {...props({ shared: false, selectionPending: false, targetTitle: null })} />);
     expect(screen.findByTestId('v-not-shared')).not.toBeNull();
-    // The card says nothing is shared; the bar names the surface instead of saying it twice.
-    expect(screen.findByTestId('v-title')?.props.children).toBe('computerUse.presentation.tabFallback');
+    // The card says nothing is shared; the pane's tab already names the surface, so the bar names only
+    // the Machine, once, as its identity chip (no "Computer · On mac-vm-1" line).
+    expect(screen.findByTestId('v-title')).toBeNull();
+    expect(screen.findByTestId('v-machine')).not.toBeNull();
+    expect(screen.getTextContent()).not.toContain('computerUse.presentation.onMachine');
   });
 
   it('keeps a removed-access refusal visible after the owner retires the selection, with no choose or repair bypass', async () => {
@@ -263,6 +266,21 @@ describe('ComputerScreenViewer', () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
+  it('never says a Machine that answers isn\u2019t answering when its screen read fails before anything is shared', async () => {
+    // The Machine is reachable (presence says so) but the Computer read failed: the cause is its
+    // screen, not the Machine. "isn't answering" stays for a Machine that is actually unreachable.
+    const online = await renderScreen(<ComputerScreenViewer {...props({ failure: 'MACHINE_RPC_TIMEOUT', shared: false, machineOnline: true })} />);
+    const card = online.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'v-recovery');
+    expect(card?.props.title).toBe('computerUse.presentation.screenUnavailableTitle:{"machine":"mac-vm-1"}');
+    expect(card?.props.reason).toBe('computerUse.presentation.screenUnavailableBody');
+    expect(card?.props.diagnosticCode).toBe('MACHINE_RPC_TIMEOUT');
+    expect(card?.props.action?.label).toBe('computerUse.permission.checkAgain');
+    // An unreachable Machine still says so.
+    const offline = await renderScreen(<ComputerScreenViewer {...props({ failure: 'machine_unreachable', shared: false, machineOnline: false })} />);
+    expect(offline.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'v-recovery')?.props.title)
+      .toBe('computerUse.presentation.offlineTitle:{"machine":"mac-vm-1"}');
+  });
+
   it('tells a failed reopen as the same calm unavailable state as a lost stream, its code only under Details', async () => {
     const failed = await renderScreen(<ComputerScreenViewer {...props({ failure: 'MACHINE_RPC_TIMEOUT' })} />);
     const card = failed.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'v-recovery');
@@ -291,7 +309,7 @@ describe('ComputerScreenViewer', () => {
     expect(unsharedCard?.props.iconName).toBeUndefined();
     // Nor does the bar claim that nothing is shared: the read that would say so failed.
     const unread = await renderScreen(<ComputerScreenViewer {...props({ failure: 'MACHINE_RPC_TIMEOUT', shared: false, targetTitle: null })} />);
-    expect(unread.findByTestId('v-title')?.props.children).toBe('computerUse.presentation.tabFallback');
+    expect(unread.findByTestId('v-title')).toBeNull();
     // A Machine whose name isn't readable yet is never a blank in the sentence.
     const unnamed = await renderScreen(<ComputerScreenViewer {...props({ failure: 'MACHINE_RPC_TIMEOUT', shared: false, machineName: null })} />);
     expect(unnamed.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'v-recovery')?.props.title)
