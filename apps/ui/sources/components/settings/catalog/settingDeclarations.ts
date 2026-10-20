@@ -140,7 +140,8 @@ export function settingTargetKinds(binding: SettingStorageBinding | undefined): 
  * - `host`: the row exists only on some hosts (a platform or the desktop app). Static for the life of
  *   the app, so search never offers the row elsewhere, and the page renders it under the same
  *   predicate (`settingRendersOnHost`).
- * - `featureId` (sections): the section renders only while that feature is on; search follows.
+ * - `featureId` (portable rows or sections): the row or section renders only while that feature
+ *   is on; search follows. Mixed sections preserve each portable row's own feature decision.
  * - Anything else (another setting's value, a selected machine, a feature being off) is page state.
  *   Search still offers the row; when the page opens without it, the enclosing `SettingSection`
  *   reveals the section instead, whose own state line says what the row needs.

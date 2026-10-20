@@ -9,7 +9,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { createScmUiBackendRegistry } from '@/scm/registry/scmUiBackendRegistry';
 import { getFirstPartyScmBackendLegacyLocalId } from '@/scm/registry/firstPartyScmBackendIdentity';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSettingMutable, useSettingMutable } from '@/sync/domains/state/storage';
 import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { createScmBackendSettingsRegistry } from '@/scm/settings/scmBackendSettingsRegistry';
@@ -218,6 +218,8 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
     const [scmGitPaneLayout, setScmGitPaneLayout] = useSettingMutable('scmGitPaneLayout');
     const [scmChangedFilesLayout, setScmChangedFilesLayout] = useSettingMutable('scmChangedFilesLayout');
     const [showLineNumbers, setShowLineNumbers] = useSettingMutable('showLineNumbers');
+    const [filesTrackAgentEdits, setFilesTrackAgentEdits] = useLocalSettingMutable('filesTrackAgentEdits');
+    const [filesAskWithoutSessionTarget, setFilesAskWithoutSessionTarget] = useSettingMutable('filesAskWithoutSessionTarget');
     const [showLineNumbersInToolViews, setShowLineNumbersInToolViews] = useSettingMutable('showLineNumbersInToolViews');
     const [wrapLinesInDiffs, setWrapLinesInDiffs] = useSettingMutable('wrapLinesInDiffs');
     const [scmCommitMessageGeneratorEnabled, setScmCommitMessageGeneratorEnabled] = useSettingMutable('scmCommitMessageGeneratorEnabled');
@@ -537,6 +539,27 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                     showChevron={false}
                     onPress={() => setWrapLinesInDiffs(wrapLinesInDiffs !== true)}
                 />
+                <SettingRow
+                    subtitleLines={0}
+                    setting={SOURCE_CONTROL_SETTINGS.settings.trackAgentEdits}
+                    rightElement={<Switch value={filesTrackAgentEdits === true} onValueChange={setFilesTrackAgentEdits} />}
+                    showChevron={false}
+                    onPress={() => setFilesTrackAgentEdits(filesTrackAgentEdits !== true)}
+                />
+                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.askWithoutSessionTarget}>
+                    <SegmentedChoiceItem<'detached_run' | 'session'>
+                        subtitleLines={0}
+                        title={t(SOURCE_CONTROL_SETTINGS.settings.askWithoutSessionTarget.titleKey)}
+                        subtitle={t('files.askSelection.targetDescription')}
+                        testIDPrefix="settings.sourceControl.askWithoutSessionTarget"
+                        options={[
+                            { id: 'detached_run', label: t('files.askSelection.detachedRun') },
+                            { id: 'session', label: t('files.askSelection.newSession') },
+                        ]}
+                        value={filesAskWithoutSessionTarget === 'session' ? 'session' : 'detached_run'}
+                        onChange={setFilesAskWithoutSessionTarget}
+                    />
+                </SettingAnchor>
             </ItemGroup>
             </SettingSection>
 
