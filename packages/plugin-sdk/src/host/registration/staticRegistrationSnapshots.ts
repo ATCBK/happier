@@ -479,7 +479,7 @@ export function snapshotScmHostingProviderRuntime(
 
 const SCM_BACKEND_HANDLER_METHODS = Object.freeze({
     detection: ['detectRepo', 'describeBackend'],
-    read: ['ignoredPaths', 'statusSnapshot', 'worktreesEnrichment', 'diffFile', 'diffCommit', 'logList', 'historyEntries', 'stashList'],
+    read: ['ignoredPaths', 'statusSnapshot', 'worktreesEnrichment', 'diffFile', 'blameFile', 'fileAtRevision', 'diffCommit', 'logList', 'historyEntries', 'stashList'],
     changeSet: ['include', 'exclude', 'discard'],
     commit: ['captureTarget', 'create', 'resolveOutcome', 'backout', 'undoLast'],
     remote: ['add', 'setUrl', 'remove', 'fetch', 'pull', 'push', 'publish'],

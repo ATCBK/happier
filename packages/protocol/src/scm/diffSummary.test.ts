@@ -12,12 +12,13 @@ describe('personal reviewed marks', () => {
         occurrences: [0, 1].map(position => ({ id: `pair:${position}`, alias: `c${position}`, path: 'a.ts', position,
           before: { startLine: position, lineCount: 1 }, after: { startLine: position, lineCount: 1 } })) }] },
     };
-    expect(owner.applyScmReviewedMarkIntent).toBeTypeOf('function');
-    expect(owner.applyScmReviewedMarkIntent(comparison, null, ['pair:0'], true)).toEqual({ v: 1, comparisonId: 'pair', reviewedChangeRefs: ['pair:0'] });
+    comparison.inventory.files[0]!.evidence = { state: 'available', unifiedDiff: '@@ -1 +1 @@\n-old\n+new\n@@ -5 +5 @@\n-before\n+after\n' };
+    const first = owner.applyScmReviewedMarkIntent(comparison, null, ['pair:0'], true);
+    expect(first).toMatchObject({ v: 1, scopeId: expect.any(String), reviewedChangeKeys: [expect.any(String)] });
     expect(() => owner.applyScmReviewedMarkIntent(comparison, null, ['c0'], true)).toThrow();
-    expect(() => owner.applyScmReviewedMarkIntent(comparison, { v: 1, comparisonId: 'other', reviewedChangeRefs: [] }, ['pair:0'], true)).toThrow();
-    expect(owner.applyScmReviewedMarkIntent(comparison, { v: 1, comparisonId: 'pair', reviewedChangeRefs: ['pair:0', 'pair:1'] }, ['pair:0'], false))
-      .toEqual({ v: 1, comparisonId: 'pair', reviewedChangeRefs: ['pair:1'] });
+    expect(() => owner.applyScmReviewedMarkIntent(comparison, { ...first, scopeId: 'other' }, ['pair:0'], true)).toThrow();
+    expect(owner.applyScmReviewedMarkIntent(comparison, owner.applyScmReviewedMarkIntent(comparison, null, ['pair:0', 'pair:1'], true), ['pair:0'], false))
+      .toEqual(owner.applyScmReviewedMarkIntent(comparison, null, ['pair:1'], true));
   });
 });
 

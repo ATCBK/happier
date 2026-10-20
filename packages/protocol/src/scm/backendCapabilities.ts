@@ -68,6 +68,8 @@ export const ScmBackendReadCapabilitiesSchema = capabilityLeafMap([
   'ignoredPaths',
   'status',
   'diffFile',
+  'blame',
+  'fileAtRevision',
   'diffCommit',
   'log',
   'historyEntries',

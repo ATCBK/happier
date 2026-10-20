@@ -32,6 +32,7 @@ const ScmCapabilitiesSchemaCore = lazyZodSchema(() => z.object({
   capabilityScope: z._default(z.literal('local-backend'), 'local-backend'),
   readStatus: z.boolean(),
   readDiffFile: z.boolean(),
+  readBlame: z.optional(z.boolean()),
   readDiffCommit: z.boolean(),
   readLog: z.boolean(),
   readHistoryEntries: z.optional(z.boolean()),

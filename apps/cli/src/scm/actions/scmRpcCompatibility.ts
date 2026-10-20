@@ -23,6 +23,9 @@ export function projectScmLegacyRpcResponse(args: Readonly<{
     response: unknown;
 }>): unknown {
     const { request, response } = args;
+    // Blame is a new operation with no predecessor reader; its alignment errors
+    // must never be projected into the released generic SCM vocabulary.
+    if (args.actionId === 'scm.blame.get') return response;
     if (request && typeof request === 'object' && 'outcomeVersion' in request && request.outcomeVersion === 1) return response;
     if (!response || typeof response !== 'object' || Array.isArray(response)) return response;
     const current = response as Readonly<Record<string, unknown>>;

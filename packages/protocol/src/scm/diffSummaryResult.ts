@@ -118,7 +118,6 @@ export const ScmDiffSummaryResultResponseSchema = lazyZodSchema(() => z.discrimi
 export type ScmDiffSummaryResultResponse = z.infer<typeof ScmDiffSummaryResultResponseSchema>;
 export const ScmDiffSummaryResultDeleteResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
   z.strictObject({ success: z.literal(true), resultId: z.string().check(z.minLength(1)), comparisonId: z.string().check(z.minLength(1)),
-    marksCleanup: z.optional(z.strictObject({ success: z.boolean(), errorCode: z.optional(z.string().check(z.minLength(1))), error: z.optional(z.string().check(z.minLength(1))) })),
   }),
   ScmDiffSummaryResultFailureSchema,
 ]));

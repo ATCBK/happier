@@ -35,6 +35,7 @@ describe('SCM backend contract capability coverage', () => {
         const accounts = createScmBackendCapabilityLeafAccounts({ repoMode: '.sl' });
         const accountPaths = new Set(accounts.map((account) => pathKey(account.path)));
         const backendOperationLeaves = new Set([
+            'read.fileAtRevision',
             'read.branches',
             'read.stash',
             'changeSet.include',
@@ -74,6 +75,7 @@ describe('SCM backend contract capability coverage', () => {
         );
 
         for (const key of [
+            'read.fileAtRevision',
             'branch.list',
             'branch.create',
             'branch.checkout',
