@@ -108,7 +108,7 @@ describe('TurnChangesCard (WT9 variant R)', () => {
         const navigate = vi.fn();
         const source = createTestSessionTranscriptSource({ sessionId: 's1', serverId: 'home-a', workspacePath: '/repo', navigate });
         const screen = await renderWithSessionTranscriptSource(
-            <TranscriptTurnChangesCard sessionId="s1" serverId="home-a" turnId="turn-4" files={FOUR} onOpenFile={vi.fn()} />, source,
+            <TranscriptTurnChangesCard sessionId="s1" serverId="home-a" turnId="turn-4" files={FOUR} fileOpenEnabled />, source,
         );
         await screen.pressByTestIdAsync('turn-changes-card:turn-4-toggle');
         const path = FOUR[0]!.fullPath;
@@ -123,7 +123,7 @@ describe('TurnChangesCard (WT9 variant R)', () => {
         const navigate = vi.fn();
         const source = createTestSessionTranscriptSource({ sessionId: 's1', serverId: 'home-a', workspacePath: '/repo', navigate });
         const screen = await renderWithSessionTranscriptSource(
-            <TranscriptTurnChangesCard sessionId="s1" serverId="home-a" turnId="turn-4" files={FOUR} onOpenFile={vi.fn()} />, source,
+            <TranscriptTurnChangesCard sessionId="s1" serverId="home-a" turnId="turn-4" files={FOUR} fileOpenEnabled />, source,
         );
         await screen.pressByTestIdAsync('turn-changes-card:turn-4-walk');
         const href = new URL(navigate.mock.calls[0]![0], 'https://happier.test');
@@ -131,7 +131,7 @@ describe('TurnChangesCard (WT9 variant R)', () => {
         expect(href.searchParams.get('serverId')).toBe('home-a');
         expect(href.searchParams.get('view')).toBe('walkthrough');
         expect(href.searchParams.get('comparison')).toBe('turnCheckpoint');
-        await screen.update(<TranscriptTurnChangesCard sessionId="s1" serverId="home-a" turnId="turn-4" files={BIG} onOpenFile={vi.fn()} />);
+        await screen.update(<TranscriptTurnChangesCard sessionId="s1" serverId="home-a" turnId="turn-4" files={BIG} fileOpenEnabled />);
         await screen.pressByTestIdAsync('turn-changes-card:turn-4-walk');
         expect(navigate.mock.calls[1]?.[0]).toBe(navigate.mock.calls[0]?.[0]);
     });

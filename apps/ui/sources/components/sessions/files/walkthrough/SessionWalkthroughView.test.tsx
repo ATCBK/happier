@@ -307,8 +307,12 @@ async function mountWithAccountMarks(sessionId: string) {
         return undefined;
     };
     const mounted = await mount({ kind: 'workingTree' }, sessionId, '', undefined, true);
-    await vi.waitFor(() => expect(mounted.screen.findByTestId('walkthrough-mark-retained')?.props.disabled).toBe(false));
-    expect(reads).toBeGreaterThan(0);
+    await vi.waitFor(() => {
+        const button = mounted.screen.findByTestId('walkthrough-mark-retained');
+        expect(button).toBeTruthy();
+        expect(button?.props.disabled).not.toBe(true);
+        expect(reads).toBeGreaterThan(0);
+    });
     const entry = Object.values(getScmDiffSummaryState().entriesByKey).find(value => value.sessionId === sessionId)!;
     expect(entry.observedAtMs).toBeGreaterThan(0);
     const offline = async () => {

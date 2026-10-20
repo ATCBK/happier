@@ -458,6 +458,20 @@ describe('TranscriptEventRow', () => {
         expect(recovered.findByProps({ testID: 'transcript-event-agent-quota-recovered' })).toBeTruthy();
     });
 
+    it('explains a restart policy refusal in the transcript', async () => {
+        const screen = await renderScreen(
+            <TranscriptEventRow event={{
+                type: 'connected-service-account-switch-attempt',
+                ok: false,
+                action: 'restart_requested',
+                errorCode: 'restart_disallowed_by_execution_policy',
+            }} />,
+        );
+        expect(JSON.stringify(screen.tree.toJSON())).toContain(
+            t('connectedServices.authSwitch.errors.restartDisallowedByExecutionPolicy'),
+        );
+    });
+
     it('O1: renders connected-service-account-switch-attempt events without falling back to Unknown event', async () => {
         const okRestart = await renderScreen(
             <TranscriptEventRow

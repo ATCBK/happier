@@ -30,8 +30,9 @@ export class SessionTranscriptSourceMissingError extends Error {
     }
 }
 
-export function SessionTranscriptSourceProvider(props: Readonly<{ source: SessionTranscriptSource; children: React.ReactNode }>) {
-    return <SessionTranscriptSourceContext.Provider key={`${props.source.kind}:${props.source.serverId ?? ''}:${props.source.sessionId}`} value={props.source}>{props.children}</SessionTranscriptSourceContext.Provider>;
+export function SessionTranscriptSourceProvider(props: Readonly<{ source: SessionTranscriptSource | null; children: React.ReactNode }>) {
+    const key = props.source ? `${props.source.kind}:${props.source.serverId ?? ''}:${props.source.sessionId}` : 'no-session';
+    return <SessionTranscriptSourceContext.Provider key={key} value={props.source}>{props.children}</SessionTranscriptSourceContext.Provider>;
 }
 
 export function useSessionTranscriptSource(): SessionTranscriptSource {

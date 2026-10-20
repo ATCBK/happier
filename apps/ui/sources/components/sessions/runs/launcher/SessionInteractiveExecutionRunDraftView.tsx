@@ -20,7 +20,9 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { SESSION_EXECUTION_RUN_LAUNCH_UNAVAILABLE_KEYS, useSessionExecutionRunLaunchability } from '@/hooks/session/useSessionExecutionRunLaunchability';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
-import { resolveExecutionRunsCapabilityRead } from '@/sync/domains/executionRuns/extractExecutionRunsBackendsFromMachineCapabilities';
+import { extractExecutionRunsBackendsFromMachineCapabilitiesState, resolveExecutionRunsCapabilityRead } from '@/sync/domains/executionRuns/extractExecutionRunsBackendsFromMachineCapabilities';
+import { readExecutionRunProtocolV2Support } from '@happier-dev/protocol/execution/runs/protocolSupport';
+import { appendMountedComposerDraft } from '@/sync/ops/actions/appendMountedComposerDraft';
 import { createRepositoryComposerDocumentOwner } from '@/components/sessions/composer/repositoryComposerDocumentOwner';
 import {
     promoteAcceptedComposerDocument,
@@ -174,11 +176,12 @@ const stylesheet = StyleSheet.create((theme) => ({
 }));
 
 export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readonly<{
-    sessionId: string;
+    sessionId: string | null;
+    workspace?: Readonly<{ machineId: string; cwd: string }>;
     serverId?: string | null;
     onRunStarted: (
         runId: string,
-        recovery?: Readonly<{ retryInputLocalId: string }>,
+        recovery?: Readonly<{ retryInputLocalId: string; initialText?: string }>,
         presentation?: ExecutionRunStartedPresentation,
     ) => void;
     /**
@@ -211,12 +214,12 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     const explicitServerId = props.serverId?.trim() || null;
     const preferredServerId = usePreferredServerIdForSession({
         serverId: explicitServerId,
-        sessionId: props.sessionId,
+        sessionId: props.sessionId ?? '',
     });
-    const serverId = preferredServerId;
+    const serverId = props.sessionId === null ? explicitServerId : preferredServerId;
     const { session, accountBinding, accountLifetime, exactSettings, settings, profileCatalogReady, acpCatalogSnapshot, enabledAgentIds, defaultBackend,
-        backendTarget, inheritedModelSelection, resolveInheritedModelLabel, inheritedRoutePresentation, inheritedConnectedServicesSelection, machineId, startAction } = useExecutionRunLaunchContext(props.sessionId, serverId);
-    const [mountedComposerRef, setMountedComposerRef] = React.useState<Extract<ComposerRefV1, { kind: 'participantMessage' }> | null>(null);
+        backendTarget, inheritedModelSelection, resolveInheritedModelLabel, inheritedRoutePresentation, inheritedConnectedServicesSelection, machineId, machineReachable, startAction, executeAction } = useExecutionRunLaunchContext(props.sessionId, serverId, props.workspace);
+    const [mountedComposerRef, setMountedComposerRef] = React.useState<Extract<ComposerRefV1, { kind: 'participantMessage' | 'newSession' }> | null>(null);
     const initialComposerFocusApplied = React.useRef(false);
     const sharedSavedSecretsEnabled = useFeatureEnabled('teams', {
         scopeKind: 'spawn',
@@ -228,8 +231,8 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         [session?.metadata, launchProfiles],
     );
     const defaultSecretBindings = sessionLaunchProfile?.secretBindings ?? null;
-    const { canLaunchExecutionRuns, launchUnavailableReason, executionRunsBackends } = useSessionExecutionRunLaunchability(
-        props.sessionId,
+    const sessionLaunchability = useSessionExecutionRunLaunchability(
+        props.sessionId ?? '',
         session,
         serverId,
     );
@@ -237,8 +240,24 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         machineId,
         enabled: Boolean(machineId),
         ...(serverId ? { serverId } : {}),
-        request: { requests: [{ id: 'tool.executionRuns', params: { sessionId: props.sessionId } }] },
+        request: { requests: [{ id: 'tool.executionRuns', ...(props.sessionId ? { params: { sessionId: props.sessionId } } : {}) }] },
     });
+    const executionRunsEnabled = useFeatureEnabled('execution.runs', { scopeKind: 'spawn', serverId });
+    const detachedProtocol = props.sessionId === null ? readExecutionRunProtocolV2Support(
+        'snapshot' in machineCapabilitiesState && machineCapabilitiesState.snapshot
+            ? { supported: true, response: machineCapabilitiesState.snapshot.response }
+            : { supported: false, reason: machineCapabilitiesState.status === 'not-supported' ? 'not-supported' : 'error' }, {
+            detachedScope: true, startAndWait: false, exactInputResults: true, runScopedAgentBindings: false, secretReferenceOverlay: false,
+        }) : null;
+    const canLaunchExecutionRuns = props.sessionId === null
+        ? executionRunsEnabled === true && machineReachable && detachedProtocol?.ok === true
+        : sessionLaunchability.canLaunchExecutionRuns;
+    const launchUnavailableReason = props.sessionId === null
+        ? executionRunsEnabled !== true ? 'notEnabled' : !machineReachable ? 'machineOffline' : null
+        : sessionLaunchability.launchUnavailableReason;
+    const executionRunsBackends = props.sessionId === null
+        ? extractExecutionRunsBackendsFromMachineCapabilitiesState(machineCapabilitiesState) ?? {}
+        : sessionLaunchability.executionRunsBackends;
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
         machineId,
         serverId: serverId ?? null,
@@ -272,8 +291,9 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             instructions: '',
             // The Report chip sends the Account's existing default explicitly.
             extra: {
+                ...(props.sessionId === null && props.workspace ? { cwd: props.workspace.cwd } : {}),
                 ...(props.roleId ? { roleId: props.roleId } : {}),
-                notifyParentOnCompletion: resolveExecutionRunNotifyParentDefaultV1({
+                notifyParentOnCompletion: props.sessionId === null ? false : resolveExecutionRunNotifyParentDefaultV1({
                     runClass: intent ? 'bounded' : 'long_lived',
                     accountDefault: settings.executionRunsNotifyParentOnCompletionDefault,
                 }),
@@ -310,13 +330,13 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         setActionInput,
         onSelectionChange: () => setError(null),
     });
-    const machine = useExecutionRunMachineName(session?.metadata ?? null);
+    const machine = useExecutionRunMachineName(session?.metadata ?? (props.workspace ? { machineId: props.workspace.machineId } : null));
     const childChoice = useExecutionRunChildChoice();
     const runIdRef = React.useRef<string | null>(null);
     const notifiedRunIdRef = React.useRef<string | null>(null);
     const submitInFlightRef = React.useRef(false);
     const startedTitleRef = React.useRef<string | null>(null);
-    const notifyRunStarted = React.useCallback((runId: string, recovery?: Readonly<{ retryInputLocalId: string }>) => {
+    const notifyRunStarted = React.useCallback((runId: string, recovery?: Readonly<{ retryInputLocalId: string; initialText?: string }>) => {
         if (notifiedRunIdRef.current === runId) return;
         notifiedRunIdRef.current = runId;
         const presentation: ExecutionRunStartedPresentation = { title: startedTitleRef.current };
@@ -324,6 +344,9 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     }, [props.onRunStarted]);
 
     const findCorrelatedRun = React.useCallback(async (): Promise<string | null> => {
+        // Detached external starts carry no Session correlation contract. An unknown
+        // outcome remains explicitly unresolved instead of guessing from another Run.
+        if (props.sessionId === null) return null;
         setPhase('reconciling');
         const listed = await sessionExecutionRunList(
             props.sessionId,
@@ -493,7 +516,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 startedTitleRef.current = intentTitle;
                 const launchOrigin = props.launchOrigin
                     ? { ...props.launchOrigin, draftCorrelationId: identity.correlationId }
-                    : { kind: 'session' as const, sessionId: props.sessionId, draftCorrelationId: identity.correlationId };
+                    : props.sessionId === null ? undefined : { kind: 'session' as const, sessionId: props.sessionId, draftCorrelationId: identity.correlationId };
                 const startInput = {
                     intent: 'delegate',
                     ...startOptions.options,
@@ -503,7 +526,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                     ioMode: 'streaming',
                     // Each attempt carries its own correlation so a lost response can be
                     // reconciled; a Discussion launch keeps its selection provenance.
-                    launchOrigin,
+                    ...(launchOrigin ? { launchOrigin } : {}),
                 };
                 const started = await startAction('execution.run.start',
                     childSelection ? applyExecutionRunChildSelection(startInput, childSelection) : startInput,
@@ -534,6 +557,21 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                     throw new Error(message);
                 }
                 runIdRef.current = runId;
+            }
+
+            if (props.sessionId === null) {
+                if (!machineId) throw new Error(t('common.unavailable'));
+                const sent = await executeAction('execution.run.send', { sessionId: null, runId,
+                    message: selectionContext ? `${selectionContext}\n\n${submission.text}` : submission.text,
+                    localInputId: identity.inputLocalId }, { executionRunTargetMachineId: machineId,
+                    externalActionTarget: { kind: 'machine', machineId } });
+                if (!sent.ok) throw new Error(resolveActionExecutionFailureMessage(sent, t('errors.failedToSendMessage')) ?? t('errors.failedToSendMessage'));
+                if (!accountLifetime.isCurrent()) throw new ParticipantComposerSubmissionHeld();
+                handedOff = true;
+                launcherDraft.clearAcceptedSelection(selectionCapture, submission.onOutboundHandoff());
+                notifyRunStarted(runId);
+                setPhase('idle');
+                return;
             }
 
             writeExistingSessionDraft({
@@ -602,7 +640,8 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                         destinationAcceptedCurrentness: runDraftPromotion.acceptedCurrentness,
                     });
                 }
-                notifyRunStarted(runIdRef.current, handedOff ? undefined : { retryInputLocalId: identity.inputLocalId });
+                notifyRunStarted(runIdRef.current, handedOff ? undefined : { retryInputLocalId: identity.inputLocalId,
+                    ...(props.sessionId === null ? { initialText: submission.readCurrentDraft().text } : {}) });
                 setPhase('idle');
             } else if (!startIssued) {
                 // The refusal happened before any start reached the Home, so nothing can
@@ -620,7 +659,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         } finally {
             submitInFlightRef.current = false;
         }
-    }, [accountLifetime, actionInput, childChoice.begin, childChoice.offer, startAction, findCorrelatedRun, identity, notifyRunStarted, options.selectedBackendChoice, props.launchOrigin, props.sessionId, secretOverlayState.overlay, secretOverlayState.readiness.ok, selectionContext, serverId, teamCredential.available]);
+    }, [accountLifetime, actionInput, childChoice.begin, childChoice.offer, startAction, executeAction, machineId, findCorrelatedRun, identity, notifyRunStarted, options.selectedBackendChoice, props.launchOrigin, props.sessionId, secretOverlayState.overlay, secretOverlayState.readiness.ok, selectionContext, serverId, teamCredential.available]);
 
     submitConversationStartRef.current = submitConversationStart;
 
@@ -632,13 +671,14 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     );
 
     const editable = phase === 'idle';
-    const canSendMessages = session !== null && deriveTranscriptInteractionFromSession(session).canSendMessages;
+    const canSendMessages = props.sessionId === null ? accountLifetime?.isCurrent() === true
+        : session !== null && deriveTranscriptInteractionFromSession(session).canSendMessages;
     const hasTarget = intent === 'review'
         ? options.selectedBackendTargetKeys.length > 0
         : options.selectedBackendChoice !== null;
     const unavailable = exactSettings === null
         || !profileCatalogReady
-        || !session
+        || (props.sessionId !== null && !session)
         || !canSendMessages
         || canLaunchExecutionRuns !== true
         || !hasTarget
@@ -651,6 +691,17 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         if (!props.autoFocusComposer || !mountedComposerRef || unavailable || !editable || initialComposerFocusApplied.current) return;
         initialComposerFocusApplied.current = requestRegisteredComposerFocus(mountedComposerRef);
     }, [editable, mountedComposerRef, props.autoFocusComposer, unavailable]);
+    const appliedHostSeed = React.useRef(composerInitialText);
+    const hostSeedTail = React.useRef(Promise.resolve());
+    React.useEffect(() => {
+        if (appliedHostSeed.current === composerInitialText || !composerInitialText || !editable || !mountedComposerRef || !accountLifetime?.isCurrent()) return;
+        hostSeedTail.current = hostSeedTail.current.then(async () => {
+            if (appliedHostSeed.current === composerInitialText || !accountLifetime.isCurrent()) return;
+            if (await appendMountedComposerDraft({ scope: accountLifetime.scope, ref: mountedComposerRef, text: composerInitialText })) {
+                appliedHostSeed.current = composerInitialText;
+            } else if (accountLifetime.isCurrent()) setError(t('common.unavailable'));
+        });
+    }, [accountLifetime, composerInitialText, editable, mountedComposerRef]);
 
     // The role this start runs (lab `convo-S1/S2`): the one chosen here, else the role the run-start
     // owner gives its intent (a review is the Reviewer's). Only a chosen role travels as `roleId`; the
@@ -972,7 +1023,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 renderContent: () => renderOptions(['fields'], isReviewScopeFieldPath),
             }));
         }
-        chips.push(createExecutionRunReportChip({
+        if (props.sessionId !== null) chips.push(createExecutionRunReportChip({
             value: reportToSession,
             disabled,
             onChange: (next) => onPatch({ notifyParentOnCompletion: next }),
@@ -1000,7 +1051,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             }));
         }
         return chips;
-    }, [actionInput.changeType, chipRevision, editable, routeChoice, routeFollowed, routeInFoot, intent, onPatch, onSelectBackend, roleItem?.name, roleValue, rolesRail, rolesStatus, options.backendChoices, options.fields, options.profileChoices.length, options.selectedBackendTargetKeys, options.selectedPermissionMode, options.targetMatchesParent, options.visiblePermissionModeOptions, renderOptions, reportToSession, teamCredential.picker, exactModelSubtitle, exactModelPresentation.accessibilityLabel, demandRouteModel, chooseDraftModel]);
+    }, [props.sessionId, actionInput.changeType, chipRevision, editable, routeChoice, routeFollowed, routeInFoot, intent, onPatch, onSelectBackend, roleItem?.name, roleValue, rolesRail, rolesStatus, options.backendChoices, options.fields, options.profileChoices.length, options.selectedBackendTargetKeys, options.selectedPermissionMode, options.targetMatchesParent, options.visiblePermissionModeOptions, renderOptions, reportToSession, teamCredential.picker, exactModelSubtitle, exactModelPresentation.accessibilityLabel, demandRouteModel, chooseDraftModel]);
 
     // Why it can't start yet, said above the kept draft (lab `convo-ST` "Machine offline"): still
     // reading what the machine offers, or the reason agents can't start in this Session.
@@ -1074,6 +1125,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                     size="line"
                     kind={checkingCapabilities ? 'loading' : launchUnavailableReason === 'machineOffline' || capabilityRead === 'unreadable' ? 'warning' : 'denied'}
                     title={blockedReason}
+                    diagnosticCode={detachedProtocol?.ok === false && !checkingCapabilities ? detachedProtocol.errorCode : null}
                 />
             ) : null}
             {pendingChildChoice ? (
@@ -1095,6 +1147,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 // person authored but has not sent anywhere.
                 key={JSON.stringify([serverId, accountBinding?.accountId, props.sessionId, launcherDraftKey])}
                 sessionId={props.sessionId}
+                workspace={props.workspace}
                 serverId={serverId}
                 canSendMessages={canSendMessages}
                 disabled={!editable}
