@@ -2,6 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { ArtifactPublishFromFileInputV1Schema } from './artifactActionsV1.js';
 import { ARTIFACT_HTML_BUNDLE_MIME_V1 } from './artifactHtmlV1.js';
 import { prepareArtifactWorkspaceFileV1 } from './artifactWorkspaceFileV1.js';
+import { ArtifactWorkspaceSourceV1Schema } from './artifactBinaryV1.js';
+
+it('admits a closed explicit workspace source without changing the legacy Session input', () => {
+  const workspace = { machineId: 'machine', rootPath: '/repo' };
+  expect(ArtifactPublishFromFileInputV1Schema.safeParse({ path: 'docs/note.txt', workspace }).success).toBe(true);
+  expect(ArtifactPublishFromFileInputV1Schema.parse({ path: 'docs/note.txt' })).toEqual({ path: 'docs/note.txt' });
+  for (const input of [
+    { path: 'docs/note.txt', workspace, sessionId: 'session' },
+    { path: 'docs/note.txt', workspace: { ...workspace, sessionId: 'session' } },
+    { path: 'docs/note.txt', workspace: { ...workspace, machineId: '' } },
+    { path: 'docs/note.txt', workspace: { ...workspace, rootPath: '' } },
+  ]) expect(ArtifactPublishFromFileInputV1Schema.safeParse(input).success).toBe(false);
+});
+
+it('prepares private workspace provenance without inventing a Session and preserves the Session shape', () => {
+  const file = { bytes: new TextEncoder().encode('Copy'), name: 'note.txt', path: 'docs/note.txt', sha: 'a'.repeat(64) };
+  const result = prepareArtifactWorkspaceFileV1({ caller: { machineId: 'machine', rootPath: '/repo' }, file, input: {} });
+  expect(result.source).toEqual({ machineId: 'machine', rootPath: '/repo', path: file.path, sha: file.sha });
+  expect(ArtifactWorkspaceSourceV1Schema.parse(result.source)).toEqual(result.source);
+  const legacy = prepareArtifactWorkspaceFileV1({ caller: { sessionId: 'session', machineId: 'machine' }, file, input: {} });
+  expect(legacy.source).toEqual({ sessionId: 'session', machineId: 'machine', path: file.path, sha: file.sha });
+  expect(ArtifactWorkspaceSourceV1Schema.safeParse({ ...result.source, sessionId: 'session' }).success).toBe(false);
+  expect(result.header).not.toHaveProperty('source');
+});
 
 describe('workspace HTML publication', () => {
   const bundle = { v: 1 as const, entrypoint: 'pages/index.html', files: {

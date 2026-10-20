@@ -100,6 +100,9 @@ export function createCliArtifactActions(params: Readonly<{
         }
         case 'artifact.publish_from_file': {
           const input = ArtifactActionInputSchemasV1[args.actionId].parse(args.input);
+          // This host owns only its authenticated Session workspace. A requested
+          // Machine workspace must not silently read that ambient Session instead.
+          if (input.workspace) return { ok: false, errorCode: 'artifact_source_unavailable', error: 'artifact_source_unavailable' };
           const caller = await params.resolvePublishCaller(args.context);
           if (!caller) return { ok: false, errorCode: 'artifact_source_unavailable', error: 'artifact_source_unavailable' };
           return await publishArtifactFromWorkspaceFile({ store: params.store, caller, input, savedBy, ...(signal ? { signal } : {}) });

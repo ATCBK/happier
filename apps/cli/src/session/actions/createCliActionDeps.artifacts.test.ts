@@ -896,4 +896,20 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       .resolves.toMatchObject({ ok: false, errorCode: 'artifact_source_unavailable' });
     expect(http.post.mock.calls.filter(([url]) => !String(url).endsWith('/v2/sessions/lookup-by-tags'))).toEqual([]);
   });
+
+  it('never falls back to the ambient Session for an explicit workspace publication source', async () => {
+    await writeFile(join(root, 'workspace', 'result.txt'), 'Ambient Session bytes');
+    http.get.mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+    const host = createCliActionDeps({ token, credentials: { token, encryption: null },
+      sessionId: 'session', mode: 'plain', ctx: null,
+      rawSession: { machineId: 'local-machine', path: join(root, 'workspace') } });
+    const context = { surface: 'cli' as const,
+      actionCaller: { kind: 'session' as const, sessionId: 'session', starterDepth: 0, turnDepth: 0 },
+      defaultSessionId: 'session', presentUserConfirmation: { actionId: 'artifact.publish_from_file' as const } };
+    await expect(host.artifactAction?.({ actionId: 'artifact.publish_from_file',
+      input: { path: 'result.txt', workspace: { machineId: 'other-machine', rootPath: '/other-workspace' } }, context }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'artifact_source_unavailable' });
+    expect(http.post.mock.calls.filter(([url]) => !String(url).endsWith('/v2/sessions/lookup-by-tags'))).toEqual([]);
+  });
 });

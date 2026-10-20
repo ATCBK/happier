@@ -24,13 +24,17 @@ export const ArtifactSavedByV1Schema = lazyZodSchema(() => z.discriminatedUnion(
 ]));
 export type ArtifactSavedByV1 = z.infer<typeof ArtifactSavedByV1Schema>;
 /** Host-admitted workspace identity belongs to private revision custody, not public preview content. */
-export const ArtifactWorkspaceSourceV1Schema = lazyZodSchema(() => z.strictObject({
-  sessionId: preservedBoundedNfcString(191, 'Session ids'),
-  runId: zMini.optional(preservedBoundedNfcString(191, 'Run ids')),
+const workspaceSourceFile = {
   machineId: preservedBoundedNfcString(191, 'Machine ids'),
   path: z.string().check(z.minLength(1)),
   sha: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
-}));
+};
+export const ArtifactWorkspaceSourceV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ ...workspaceSourceFile,
+    sessionId: preservedBoundedNfcString(191, 'Session ids'),
+    runId: zMini.optional(preservedBoundedNfcString(191, 'Run ids')) }),
+  z.strictObject({ ...workspaceSourceFile, rootPath: z.string().check(z.minLength(1)) }),
+]));
 export type ArtifactWorkspaceSourceV1 = z.infer<typeof ArtifactWorkspaceSourceV1Schema>;
 export const ArtifactRevisionProvenanceV1Schema = lazyZodSchema(() => z.strictObject({
   savedBy: ArtifactSavedByV1Schema,

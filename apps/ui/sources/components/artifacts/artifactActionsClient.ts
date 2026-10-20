@@ -115,9 +115,9 @@ export function createArtifactActionsClient(scope: ServerAccountScope,
         acceptEdit: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.edit.accept']>) => runMutation('doc.edit.accept', input),
         declineEdit: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.edit.decline']>) => runMutation('doc.edit.decline', input),
         createArtifact: (input: ArtifactActionInputV1<'artifact.create'>) => runMutation('artifact.create', input),
-        /** The captured Session supplies source custody; this remains a person's copy operation. */
-        publishWorkspaceFile: (input: ArtifactActionInputV1<'artifact.publish_from_file'>, source: Readonly<{ sessionId: string }>) =>
-            runMutation('artifact.publish_from_file', input, { defaultSessionId: source.sessionId }),
+        /** An explicit workspace wins; the captured Session remains the legacy source fallback. */
+        publishWorkspaceFile: (input: ArtifactActionInputV1<'artifact.publish_from_file'>, source?: Readonly<{ sessionId: string }>) =>
+            runMutation('artifact.publish_from_file', input, source ? { defaultSessionId: source.sessionId } : undefined),
         setAccessGrant: (input: ArtifactAccessGrantSetInputV1) => runMutation('artifact.access.grants.set', input),
         updateArtifact: (input: ArtifactActionInputV1<'artifact.update'>) => runMutation('artifact.update', input),
         storageUsage: () => run('artifact.storage.usage', {}),

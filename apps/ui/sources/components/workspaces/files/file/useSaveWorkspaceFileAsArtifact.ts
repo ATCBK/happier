@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { ArtifactActionResultV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import type { ArtifactActionInputV1, ArtifactActionResultV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { createArtifactActionsClient, type ArtifactActionFailure } from '@/components/artifacts/artifactActionsClient';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -17,12 +17,14 @@ export function useSaveWorkspaceFileAsArtifact(input: Readonly<{
     /** Captured from the source File's Account, rather than the currently focused Home. */
     scope: ServerAccountScope | null;
     sourceSessionId: string | null;
+    sourceWorkspace?: ArtifactActionInputV1<'artifact.publish_from_file'>['workspace'] | null;
     filePath: string;
     team?: Readonly<{ teamId: string; name: string }> | null;
 }>) {
     const scope = React.useMemo(() => input.scope ? { serverId: input.scope.serverId, accountId: input.scope.accountId } : null,
         [input.scope?.serverId, input.scope?.accountId]);
-    const identity = JSON.stringify([scope?.serverId, scope?.accountId, input.sourceSessionId, input.filePath, input.team?.teamId]);
+    const identity = JSON.stringify([scope?.serverId, scope?.accountId, input.sourceSessionId,
+        input.sourceWorkspace?.machineId, input.sourceWorkspace?.rootPath, input.filePath, input.team?.teamId]);
     const fileName = input.filePath.split(/[\\/]/).filter(Boolean).at(-1) ?? input.filePath;
     const initial = (): Dialog => ({ identity, isOpen: false, title: fileName, visibility: 'private', status: { kind: 'idle' } });
     const [dialog, setDialog] = React.useState<Dialog>(initial);
@@ -42,11 +44,12 @@ export function useSaveWorkspaceFileAsArtifact(input: Readonly<{
     })) : null, [scope, mounted.execute]);
     const busy = dialog.status.kind === 'publishing' || dialog.status.kind === 'sharing';
     const receipt = 'receipt' in dialog.status ? dialog.status.receipt : undefined;
-    const available = Boolean(scope && input.sourceSessionId);
+    const available = Boolean(scope && (input.sourceWorkspace || input.sourceSessionId));
     const canSubmit = available && mounted.ready && dialog.isOpen && !busy && dialog.status.kind !== 'approval' && dialog.status.kind !== 'saved';
     const submit = async (): Promise<string | null> => {
         const sessionId = input.sourceSessionId;
-        if (!canSubmit || !client || !sessionId || submission.current) return null;
+        const workspace = input.sourceWorkspace;
+        if (!canSubmit || !client || (!workspace && !sessionId) || submission.current) return null;
         const run = {};
         submission.current = run;
         const isCurrent = () => submission.current === run && currentIdentity.current === identity;
@@ -55,7 +58,8 @@ export function useSaveWorkspaceFileAsArtifact(input: Readonly<{
         try {
             if (!published) {
                 update({ kind: 'publishing' });
-                const result = await client.publishWorkspaceFile({ path: input.filePath, title: dialog.title }, { sessionId });
+                const result = await client.publishWorkspaceFile({ path: input.filePath, title: dialog.title,
+                    ...(workspace ? { workspace } : {}) }, sessionId ? { sessionId } : undefined);
                 if (!isCurrent()) return null;
                 if ('approvalId' in result) { update({ kind: 'approval', approvalId: result.approvalId }); return null; }
                 if (!result.ok) { update({ kind: 'failed', failure: result.failure }); return null; }

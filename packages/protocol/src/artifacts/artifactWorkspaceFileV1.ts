@@ -9,11 +9,17 @@ import { UiSurfaceCapabilityRequestV1Schema, type UiSurfaceCapabilityRequestV1 }
 export const ArtifactWorkspacePublicationSourceV1Schema = lazyZodSchema(() => z.strictObject({
   path: z.string().check(z.minLength(1)),
   entrypoint: z.optional(z.lazy(() => ArtifactHtmlBundleV1Schema.shape.entrypoint)),
+  workspace: z.optional(z.strictObject({
+    machineId: z.string().check(z.minLength(1)), rootPath: z.string().check(z.minLength(1)),
+  })),
 }));
 
 /** File classification and provenance shared by the keyholding publication hosts. */
 export function prepareArtifactWorkspaceFileV1(params: Readonly<{
-  caller: Readonly<{ sessionId: string; machineId: string; runId?: string }>;
+  caller: Readonly<{ machineId: string } & (
+    { sessionId: string; runId?: string; rootPath?: never }
+    | { rootPath: string; sessionId?: never; runId?: never }
+  )>;
   file: Readonly<{ bytes: Uint8Array; name: string; path: string; sha: string; bundle?: ArtifactHtmlBundleV1 }>;
   input: Readonly<{ title?: string; mime?: string; kind?: string; requestedCapabilities?: UiSurfaceCapabilityRequestV1 }>;
 }>) {
@@ -40,7 +46,8 @@ export function prepareArtifactWorkspaceFileV1(params: Readonly<{
   const mime = acquiredBundle ? ARTIFACT_HTML_BUNDLE_MIME_V1
     : input.mime ?? (kind === 'html' ? 'text/html' : body === undefined ? 'application/octet-stream' : 'text/plain');
   const header = { title: input.title ?? file.name, kind, mime, sizeBytes: file.bytes.length };
-  const source = ArtifactWorkspaceSourceV1Schema.parse({ sessionId: caller.sessionId, ...(caller.runId ? { runId: caller.runId } : {}),
+  const source = ArtifactWorkspaceSourceV1Schema.parse({ ...(caller.rootPath !== undefined ? { rootPath: caller.rootPath }
+    : { sessionId: caller.sessionId, ...(caller.runId ? { runId: caller.runId } : {}) }),
     machineId: caller.machineId, path: file.path, sha: file.sha });
   let bundle = acquiredBundle;
   if (!bundle && kind === 'html') {

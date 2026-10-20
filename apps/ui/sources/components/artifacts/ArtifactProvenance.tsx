@@ -15,12 +15,14 @@ import { getSessionName } from '@/utils/sessions/sessionUtils';
 import type { ArtifactProvenance as Provenance } from './artifactBrowserModel';
 
 /** The session and machine names a provenance names, from the store's narrow display projections. */
-function useProvenanceNames(provenance: Provenance): Readonly<{ session: string; machine: string | null }> {
-    const source = useSessionDisplayNameSource(provenance.sessionId);
+function useProvenanceNames(provenance: Provenance): Readonly<{ sessionId: string | null; session: string; machine: string | null }> {
+    const sessionId = 'sessionId' in provenance ? provenance.sessionId : null;
+    const source = useSessionDisplayNameSource(sessionId ?? '');
     const machineIds = React.useMemo(() => [provenance.machineId], [provenance.machineId]);
     const machines = useMachineDisplayNamesById(machineIds);
     const fileName = provenance.path.split(/[\\/]/).filter(Boolean).pop() ?? provenance.path;
     return {
+        sessionId,
         session: source ? getSessionName(source) : t('artifacts.browser.provenance.fromFile', { name: fileName }),
         machine: machines[provenance.machineId] ?? null,
     };
@@ -43,12 +45,13 @@ export const ArtifactProvenanceLabel = React.memo(function ArtifactProvenanceLab
 
 function SourcedProvenance(props: Readonly<{ provenance: Provenance; presentation: 'line' | 'chip'; testID?: string }>) {
     const names = useProvenanceNames(props.provenance);
+    const sessionId = names.sessionId;
     const router = useRouter();
     return <ProvenanceText icon="chat-circle" session={names.session} machine={names.machine}
-        presentation={props.presentation} chevron={props.presentation === 'chip'} testID={props.testID}
-        {...(props.presentation === 'chip' ? {
+        presentation={props.presentation} chevron={props.presentation === 'chip' && sessionId !== null} testID={props.testID}
+        {...(props.presentation === 'chip' && sessionId ? {
             accessibilityLabel: t('artifacts.browser.provenance.openSession', { session: names.session }),
-            onPress: () => router.push(buildScopedSessionRouteHref({ sessionId: props.provenance.sessionId }) as never),
+            onPress: () => router.push(buildScopedSessionRouteHref({ sessionId }) as never),
         } : {})} />;
 }
 

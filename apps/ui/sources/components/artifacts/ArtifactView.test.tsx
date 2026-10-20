@@ -92,6 +92,19 @@ async function setup(kind: 'image' | 'html' | 'file', delayBlob?: Promise<Respon
 }
 
 describe('Artifact composed view reads', () => {
+    it('displays a workspace copy without fabricating a Session destination', async () => {
+        const row: DecryptedArtifact = { id: 'workspace-copy', title: 'Copied note', isDecrypted: true,
+            header: { kind: 'published.v1', title: 'Copied note' }, body: 'Frozen workspace bytes',
+            ownerAccountId: 'owner', access: 'owner', storageMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+            provenance: { savedBy: { kind: 'person', accountId: 'owner' }, source: {
+                machineId: 'machine', rootPath: '/repo', path: 'docs/note.txt', sha: 'a'.repeat(64),
+            } } };
+        const screen = await renderScreen(<ArtifactView artifactId={row.id} artifact={row} presentation="page" />);
+        expect(screen.findByTestId('artifact:provenance')).not.toBeNull();
+        expect(screen.findByTestId('artifact:provenance:open')).toBeNull();
+        await screen.unmount();
+    });
     it.each(['pane', 'page'] as const)('never mounts cached approval custody as a Document in the %s', async presentation => {
         const row: DecryptedArtifact = { id: 'approval', title: 'Review request', isDecrypted: true,
             header: { kind: 'approval_request.v1', title: 'Review request', serverIdentityId: 'home' },
