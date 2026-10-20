@@ -13,6 +13,39 @@ vi.mock('axios', () => ({ default: { post: vi.fn(), delete: vi.fn() } }));
 describe('fetchTeamCredentialDirectMaterial', () => {
   beforeEach(() => vi.mocked(axios.post).mockReset());
 
+  it('accepts slow valid direct material within its caller lifetime and propagates cancellation', async () => {
+    vi.useFakeTimers();
+    try {
+      // Axios is the network boundary: reproduce its configured timeout and signal behavior.
+      vi.mocked(axios.post).mockImplementation((_url, _body, config) => new Promise((resolve, reject) => {
+        const finish = setTimeout(() => resolve({ status: 200, data: { status: 'unavailable', reason: 'preparing' } }), 20_000);
+        const cutoff = config?.timeout ? setTimeout(() => {
+          clearTimeout(finish);
+          reject(new Error('Axios timeout'));
+        }, config.timeout) : undefined;
+        config?.signal?.addEventListener?.('abort', () => {
+          clearTimeout(finish);
+          if (cutoff !== undefined) clearTimeout(cutoff);
+          reject(new Error('Axios canceled'));
+        });
+      }));
+      const controller = new AbortController();
+      const input = {
+        token: 'token', teamId: 'team', resourceId: 'resource', signal: controller.signal,
+        request: { resourceId: 'resource', consumer: { kind: 'session' as const, sessionId: 'session-1' },
+          slot: { kind: 'provider_model' as const }, sourceMemberKey: 'member-1' },
+      };
+      const slow = fetchTeamCredentialDirectMaterial(input).then((value) => value, (error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await slow).toEqual({ status: 'unavailable', reason: 'preparing' });
+      const canceled = fetchTeamCredentialDirectMaterial(input).then((value) => value, (error: unknown) => error);
+      controller.abort();
+      expect(await canceled).toMatchObject({ name: 'AbortError' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('withdraws only the exact captured publication through the authenticated material route', async () => {
     vi.mocked(axios.delete).mockResolvedValue({ data: { status: 'withdrawn' } });
     const body = { sourceMemberKey: 'member', expectedResourceRevision: 4, expectedPublishedSourceVersion: 'source-v1' };

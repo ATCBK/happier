@@ -47,6 +47,24 @@ class TestGenerationConflictError extends Error {
 }
 
 describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
+  it('waits for the owning switch beyond 30 seconds when no containing deadline is supplied', async () => {
+    vi.useFakeTimers();
+    try {
+      const leases = new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry();
+      const identity = { serviceId: 'openai-codex', groupId: 'main' };
+      const owner = leases.acquire(identity);
+      const waiter = leases.acquire(identity);
+      if (owner.kind !== 'owner' || waiter.kind !== 'loser') throw new Error('Expected owner and waiter');
+      const completion = { ...identity, activeProfileId: 'backup', generation: 2 };
+      const waiting = waiter.waitForOwner().then((value) => value, (error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(35_000);
+      owner.complete(completion);
+      expect(await waiting).toEqual(completion);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps same-named Account groups independent in the canonical lease owner', () => {
     const leases = new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry();
     const alice = leases.acquire({ serviceId: 'openai-codex', groupId: 'main',
