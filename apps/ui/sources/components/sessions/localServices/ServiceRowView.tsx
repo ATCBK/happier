@@ -210,8 +210,6 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
     /** The tail is the reason the row cannot act (lab `db`: "Docker isn't available on devbox"). */
     tailReason: ReturnType<typeof resolveReasonCopy> | null;
     reason: ReturnType<typeof resolveReasonCopy> | null;
-    /** The declaring file is already part of `lead`: the facts line draws no source chip. */
-    sourceInline?: boolean;
 }> {
     const reason = row.status !== 'loading' && row.reasonCode
         ? resolveReasonCopy({ reasonCode: row.reasonCode, kind: 'localServiceLauncher', machineName: unavailableMachineName ?? undefined })
@@ -234,8 +232,8 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
         const lead = [row.processLabel].filter((part): part is string => Boolean(part));
         if (row.status === 'failed') return { lead, tail: [t('localServices.row.failed')], tailReason: null, reason };
         if (reason) return { lead, tail: [reason.body], tailReason: reason, reason: null };
-        // "Ready to start" already says it is not started: one quiet line, the command and its source.
-        if (isNotStarted(row)) return { lead: [...lead, ...(row.sourceBadge ? [row.sourceBadge] : [])], tail: [], tailReason: null, reason: null, sourceInline: true };
+        // "Ready to start" already says it is not started: one quiet line, the command then the same
+        // source chip a running row draws (lab s-services).
         return { lead, tail: [], tailReason: null, reason: null };
     }
     const address = row.addressLabel
@@ -268,7 +266,7 @@ function ServiceRowFacts(props: Readonly<{
     const styles = stylesheet;
     const { row } = props;
     const facts = resolveRowFacts(row, props.machineName, props.startedByName, props.unavailableMachineName);
-    const badge = facts.sourceInline ? null : row.sourceBadge ?? null;
+    const badge = row.sourceBadge ?? null;
     const lead = facts.lead.join(' · ');
     const tail = facts.tail.join(' · ');
     // One line of facts: lead · [source badge] tail. Without a badge the separator joins lead and tail.

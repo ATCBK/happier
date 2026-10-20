@@ -387,8 +387,13 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
             : observation.failedBeforeStop ? t('projectServices.moveRefused')
             : terminal ? t('projectServices.moveUnknown')
               : stop?.pending || stop?.stopRequested ? t('projectServices.cancelPending')
-                : observation.progressText ?? t('projectServices.moving', { service: props.serviceName, to: toName })}
-      description={operation?.snapshot.progress?.label}
+                : t('projectServices.moving', { service: props.serviceName, to: toName })}
+      // While it runs, the Move names itself and the description says its current phase in the app's
+      // words; the producer's own English phase label would only repeat it.
+      description={!terminal && !outcomeUncertain && !(stop?.pending || stop?.stopRequested)
+        && observation.progressText !== t('projectServices.moving', { service: props.serviceName, to: toName })
+        && observation.progressText !== t('projectServices.moveUnknown')
+        ? observation.progressText ?? undefined : undefined}
       {...(operation?.snapshot.error ? { details: [operation.snapshot.error.errorCode] } : {})}
       action={{ label: t('projectServices.inspect'), testID: `${testID}.move.inspect`,
         onPress: () => openActionOperationDetail({ serverId: props.source.serverId, operationId: move.operationId }) }}

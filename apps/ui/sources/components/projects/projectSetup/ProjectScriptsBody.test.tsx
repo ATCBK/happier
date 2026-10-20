@@ -292,13 +292,14 @@ async function render(
     host.bottomPresentation ? (
       <AppPaneScopeLayoutProvider
         value={{
+          arrangement: 'session', mainHidden: false, mainDrawerOpen: false, effectiveDetailsOpen: false, detailsAvailable: true,
           containerWidthPx: 1440,
           containerHeightPx: 600,
           mainRegionWidthPx: 1440,
           mainRegionHeightPx: 600,
           multiPaneEnabled: true,
           deviceType: 'tablet',
-          layout: { kind: 'single', right: 'hidden', details: 'hidden' },
+          layout: { main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' },
           bottomPresentation: host.bottomPresentation,
         }}
       >

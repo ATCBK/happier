@@ -12,7 +12,7 @@ import type {
 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
-import { showWorkspaceFileEditorComparison } from '@/components/workspaces/files/details/workspaceFileDetails/WorkspaceFileEditorComparison';
+import { showTextComparison } from '@/components/ui/code/diff/TextComparisonModal';
 import { CodeEditor } from '@/components/ui/code/editor/CodeEditor';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -232,10 +232,11 @@ function ProjectManifestEditorLeaf(
             label: t('projects.scripts.definition.compare'),
             testID: 'project-manifest-editor.compare',
             onPress: () =>
-              showWorkspaceFileEditorComparison({
+              showTextComparison({
                 oldText: conflict.document?.bytes ?? '',
                 newText: snapshot.draft.bytes,
                 filePath: '.happier/project.json',
+                subtitle: t('files.fileChangedExternally'),
               }),
           }}
           moreActions={[
