@@ -127,7 +127,7 @@ export async function readDroidTranscript(filePath: string, signal: AbortSignal)
   const projection = chain.reverse().flatMap(row => normalize(row, fileKey));
   signal.throwIfAborted();
   return { sessionId: header.id, ...(typeof header.title === 'string' ? { title: header.title } : {}),
-    ...(typeof header.cwd === 'string' ? { cwd: header.cwd } : {}), updatedAtMs: after.mtimeMs,
+    ...(typeof header.cwd === 'string' ? { cwd: header.cwd } : {}), updatedAtMs: Math.max(0, Math.trunc(after.mtimeMs)),
     ...(projection[0]?.item.createdAtMs ? { createdAtMs: projection[0].item.createdAtMs } : {}),
     items: projection.map(entry => entry.item), texts: projection.map(entry => entry.text), partial, bytes,
     identity: `${after.dev}:${after.ino}:${after.birthtimeMs}`, digest: digest(bytes) };

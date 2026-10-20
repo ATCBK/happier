@@ -217,4 +217,4 @@ export function createDroidExternalSessionsContribution(options: { env?: NodeJS.
     }); },
   };
 }
-export const droidExternalSessionsContribution = createDroidExternalSessionsContribution();
+export const droidExternalSessionsContribution: AgentExternalSessionsContribution = createDroidExternalSessionsContribution();

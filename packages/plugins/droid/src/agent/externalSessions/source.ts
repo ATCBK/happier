@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises';
+import { opendir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonicalAbsolutePathsEqual, canonicalizePath, isCanonicalAbsolutePathInsideRoot,
   resolveConfiguredPath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
@@ -25,13 +25,24 @@ export async function resolveDroidSource(source: AgentExternalSessionSource, env
 export function droidRoots(source: DroidSource): string[] {
   return ['sessions', 'projects'].map(name => join(source.factoryDir, name));
 }
-export async function droidInventory(source: DroidSource, signal: AbortSignal) {
+export function droidInventory(source: DroidSource, signal: AbortSignal): ReturnType<typeof discoverAgentAccountingJsonlSource> {
   return discoverAgentAccountingJsonlSource(droidRoots(source), signal);
 }
 export async function authorizeDroidFile(source: DroidSource, candidate: string): Promise<string> {
-  const file = await realpath(candidate).catch(() => { throw new DroidReadError('source_unreachable', 'Droid transcript is unavailable.'); });
-  const roots = await Promise.all(droidRoots(source).map(root => canonicalizePath(root)));
-  if (!file.endsWith('.jsonl') || !roots.some(root => isCanonicalAbsolutePathInsideRoot(root, file))) {
+  const roots = await Promise.all(droidRoots(source).map(async native => ({ native, physical: await canonicalizePath(native) })));
+  const containingRoot = roots.find(root => isCanonicalAbsolutePathInsideRoot(root.native, candidate)
+    || isCanonicalAbsolutePathInsideRoot(root.physical, candidate));
+  if (!containingRoot || !candidate.endsWith('.jsonl')) throw new DroidReadError('source_invalid', 'Droid transcript is outside its native session roots.');
+  const file = await realpath(candidate).catch(async (error: unknown) => {
+    if (!(error instanceof Error) || !('code' in error) || (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')) throw error;
+    // A missing file is authoritative absence only while its native storage
+    // root is readable. A removed/offline store or denied read must retain the
+    // incumbent Memory projection rather than look like individual deletion.
+    const root = await opendir(containingRoot.native);
+    await root.close();
+    throw new DroidReadError('source_unreachable', 'Droid transcript is no longer present in its native store.');
+  });
+  if (!file.endsWith('.jsonl') || !roots.some(root => isCanonicalAbsolutePathInsideRoot(root.physical, file))) {
     throw new DroidReadError('source_invalid', 'Droid transcript is outside its native session roots.');
   }
   return file;
