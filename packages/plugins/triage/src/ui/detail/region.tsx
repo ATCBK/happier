@@ -818,9 +818,9 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       ) : detail.kind === 'unreachable' ? (
         <ErrorState
           titleKey="plugins.triage.surface.detail.accountError.title"
-          title="Your account could not be read"
+          title="These details could not be read"
           descriptionKey="plugins.triage.surface.detail.accountError.description"
-          description="Happier could not reach your account, so this entry's details are unavailable right now."
+          description="This entry's details are unavailable right now. Try again when the connection is available."
           action={(
             <Button
               titleKey="plugins.triage.surface.actions.retry"

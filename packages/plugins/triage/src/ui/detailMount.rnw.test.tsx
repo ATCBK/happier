@@ -5,6 +5,9 @@ import { definePlugin, PluginError } from '@happier-dev/plugin-sdk';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { Button, Text, defineUiSurface } from '@happier-dev/plugin-ui';
+import type { PluginUiDataClient, PluginUiAccountCollectionForDefinition } from '@happier-dev/plugin-ui/data';
+import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
+import { useTriageEntryDetail, type TriageEntryDetailInputSourceV1 } from './detail/useTriageEntryDetail.js';
 import { useTriageFixPullRequests } from './detail/useTriageFixPullRequests.js';
 import { useTriageActions } from './actions/useTriageActions.js';
 import { useTriageSavedViews } from './views/useTriageSavedViews.js';
@@ -1037,6 +1040,68 @@ function openedFixtureEntry(): string {
 }
 
 describe('opening a row into the source detail', () => {
+    it.each([false, true])('uses the selected detail transport for readiness with mounted Account data (source-owned links: %s)', async (sourceOwned) => {
+        const harness = createHarness();
+        const protocol = PROTOCOL;
+        const initial = surfaceContext();
+        const targetedContributions = initial.targetedContributions!;
+        const context = { ...initial, machineConnectionPending: true, machineExecutionReady: false,
+            targetedContributions: { ...targetedContributions, points: targetedContributions.points.map(point => ({ ...point,
+                protocols: point.protocols.map(candidate => ({ ...candidate,
+                    contributions: candidate.contributions.map(contribution => contribution.contributor.pluginId !== SOURCE.pluginId
+                        ? contribution : { ...contribution, operations: sourceOwned ? [{
+                            point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol },
+                            contributor: CONTRIBUTOR, role: 'readSessionLinks',
+                            action: { pluginId: SOURCE.pluginId, localId: 'read-links' },
+                        }] : [] }),
+                })),
+            })) } };
+        const entryRef = TriageEntryRefV1Schema.parse({ source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' });
+        const input = { selection: { entryRef, sourceInstanceId: INSTANCE }, observation: {
+            entryRef, observedAtMs: 4_000,
+            locator: testkitLocator(), snapshot: testkitSnapshot(), viewer: testkitViewer(),
+        } } satisfies TriageEntryDetailInputSourceV1;
+        const dataClient: PluginUiDataClient = {
+            collection<TDefinition extends PluginAccountCollectionDefinition>(definition: TDefinition) {
+                const collection = definition.id === 'source-instances' ? harness.collections.sourceInstances
+                    : definition.id === 'session-links' ? harness.collections.sessionLinks
+                    : definition.id === 'user-marks' ? harness.collections.userMarks : null;
+                if (collection === null) throw new Error(`Undeclared test Collection: ${definition.id}`);
+                // Real Collection boundary fixtures share one codec; the generic definition selects its handle.
+                return collection as unknown as PluginUiAccountCollectionForDefinition<TDefinition>;
+            },
+            accountKv: createTestkitAccountKv().kv,
+            openCollectionQuery: async () => { throw new Error('This detail does not open a UI query'); },
+        };
+        const surface = defineUiSurface(() => {
+            const read = useTriageEntryDetail(input);
+            return <Text value={read?.kind ?? 'none'} />;
+        });
+        let pending = true;
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'source-detail-read', mountNonce: 'source-detail-read' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' },
+            surface: renderContext => {
+                const entry = surface(renderContext);
+                if (!entry || (typeof entry.type !== 'function' && typeof entry.type !== 'object') || entry.type === null
+                    || !Reflect.get(entry.type, Symbol.for('happier.pluginUi.privateSurfaceEntryProvider.v1'))) {
+                    throw new Error('Expected the host-cloned surface entry provider');
+                }
+                return React.cloneElement(entry as unknown as React.ReactElement<{ dataClient?: PluginUiDataClient }>, { dataClient });
+            },
+            surfaceContext: context, adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+            handlers: { executeAction: async request => {
+                if (pending) throw new PluginError({ code: 'unavailable', retryable: true,
+                    diagnostics: [{ code: 'plugin_surface_connection_pending', severity: 'error' }] });
+                return await harness.executeAction(request);
+            } },
+        });
+        mounted.push(shell);
+        await vi.waitFor(() => { expect(document.body.textContent).toBe(sourceOwned ? 'reading' : 'ready'); });
+        pending = false;
+        await act(async () => { await shell.updateSurface({ ...context, machineConnectionPending: false, machineExecutionReady: true }); });
+        await vi.waitFor(() => { expect(document.body.textContent).toBe('ready'); });
+    });
+
     it('applies the same pending and re-acquisition lifecycle to mounted catalog reads', async () => {
         let withdrawn = true;
         const kv = createTestkitAccountKv();
@@ -1075,7 +1140,7 @@ describe('opening a row into the source detail', () => {
         const shell = await mountShell({ refusedHostReads, activeSurface: true });
         await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineConnectionPending: true, machineExecutionReady: false }); });
         await openTheRow(shell);
-        await expect(shell.queryByText('Your account could not be read')).resolves.toBeUndefined();
+        await expect(shell.queryByText('These details could not be read')).resolves.toBeUndefined();
         refusedHostReads.clear();
         await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineConnectionPending: false, machineExecutionReady: true }); });
         await vi.waitFor(async () => { await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined(); });
@@ -1380,7 +1445,7 @@ describe('opening a row into the source detail', () => {
         expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Activity');
     });
 
-    it('retries an Account-read failure without closing the selected entry', async () => {
+    it('retries a detail-read failure without closing the selected entry', async () => {
         const shell = await mountShell();
         const harness = currentHarness;
         if (harness === null) throw new Error('the shell was not mounted');
@@ -1388,7 +1453,7 @@ describe('opening a row into the source detail', () => {
 
         await openTheRow(shell);
 
-        await expect(shell.getByText('Your account could not be read')).resolves.toBeDefined();
+        await expect(shell.getByText('These details could not be read')).resolves.toBeDefined();
         await expect(shell.getByRole('heading', { name: 'Replace the duplicated normalizer' }))
             .resolves.toBeDefined();
         harness.setDetailReadsUnavailable(false);
@@ -1400,7 +1465,7 @@ describe('opening a row into the source detail', () => {
         }
 
         await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
-        await expect(shell.queryByText('Your account could not be read')).resolves.toBeUndefined();
+        await expect(shell.queryByText('These details could not be read')).resolves.toBeUndefined();
     });
 
     it('restores the settled list and announces a host-rejected selection', async () => {
