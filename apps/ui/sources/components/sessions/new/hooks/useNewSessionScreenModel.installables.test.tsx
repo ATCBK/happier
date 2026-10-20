@@ -35,6 +35,8 @@ import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/prompt
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { readBackendTargetKeyV2, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
+import { resetDynamicModelProbeCacheForTests } from '@/sync/domains/models/dynamicModelProbeCache';
+import { resetDynamicConfigOptionsProbeCacheForTests } from '@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 import type { StorageState } from '@/sync/store/types';
@@ -620,6 +622,10 @@ afterAll(async () => {
 
 describe('useNewSessionScreenModel (installables)', () => {
     beforeEach(async () => {
+        // Cases reuse the same Home/machine/Agent with different probe responses.
+        // Clearing physical storage alone leaves these module-owned observations warm.
+        resetDynamicModelProbeCacheForTests();
+        resetDynamicConfigOptionsProbeCacheForTests();
         network.resetRequests();
         const targetHome = await network.addHome('https://installables-target.example.test', 'account-1');
         homeState.targetServerId = targetHome.id;
@@ -907,7 +913,7 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(model?.variant).toBe('simple');
         expect(model?.simpleProps?.agentType).toBe('codex');
         expect(model?.simpleProps?.selectedMachineId).toBe('machine-1');
-        expect(model?.simpleProps?.machineName).toBe('Machine One');
+        expect(model?.simpleProps?.machineName).toBe('account-1 · Machine One');
         expect(model?.simpleProps?.selectedPath).toBe('/repo');
         expect(model?.simpleProps?.canCreate, JSON.stringify(model?.simpleProps?.connectionStatus)).toBe(true);
         expect(dependencyInstallRequests()).toEqual([]);
@@ -1013,10 +1019,6 @@ describe('useNewSessionScreenModel (installables)', () => {
 
         const detailScreen = await renderScreen(<>{opencodeDetailContent}</>);
         const { NewSessionEngineOptionDetail } = await import('../components/NewSessionEngineOptionDetail');
-        const { getConnectedAccountCatalogValue } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
-        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
-        let lastPreviewDiagnostic = '';
-
         const previewTestId = `model-picker-overlay-option:${sessionModelSelectionKey({
             agentTargetKey: buildBuiltInBackendTargetKey('opencode'),
             providerConnectionId: null,
@@ -1024,23 +1026,16 @@ describe('useNewSessionScreenModel (installables)', () => {
         })}`;
         await waitForHomeGovernance(() => {
             const detail = detailScreen.tree.root.findByType(NewSessionEngineOptionDetail);
-            const purposes = getConnectedAccountCatalogValue({ serverId: resolveServerProfileScopeIdForIdentifier(homeState.targetServerId),
-                accountId: homeState.targetAccountId }, 'purposes');
-            const diagnostic = JSON.stringify({ machineId: detail.props.selectedMachineId,
-                purposes: { status: purposes.status, stale: purposes.stale, reason: purposes.reason },
-                http: network.httpRequests.map(({ url }) => new URL(url)).filter(url => url.pathname.includes('connected-accounts/purposes'))
-                    .map(url => ({ origin: url.origin, path: url.pathname })),
-                probes: network.requests.flatMap(({ method, payload }) => method === RPC_METHODS.CAPABILITIES_INVOKE
-                    && payload !== null && typeof payload === 'object'
-                    ? [{ id: 'id' in payload ? payload.id : null, method: 'method' in payload ? payload.method : null }] : []),
-            });
-            if (diagnostic !== lastPreviewDiagnostic) console.info('[MFIX97 model prerequisite]', diagnostic);
-            lastPreviewDiagnostic = diagnostic;
             expect(detail.props).toMatchObject({
                 selectedMachineId: 'machine-1', capabilityServerId: homeState.targetServerId, cwd: '/repo',
             });
-            expect(detailScreen.findAllByTestId(previewTestId)).toHaveLength(1);
+            expect(detailScreen.findAllHostsByTestId(previewTestId)).toHaveLength(1);
         });
+        expect(network.httpRequests.some(({ url }) => {
+            const request = new URL(url);
+            return request.origin === homeState.targetServerUrl
+                && request.pathname === '/v1/account/entity-rows/connected-accounts/purposes';
+        })).toBe(true);
         expect(network.requests.some(({ serverUrl, method, payload }) => serverUrl === homeState.targetServerUrl
             && method === RPC_METHODS.CAPABILITIES_INVOKE && payload !== null && typeof payload === 'object'
             && 'id' in payload && payload.id === 'cli.opencode' && 'method' in payload && payload.method === 'probeModels')).toBe(true);
@@ -1302,7 +1297,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             expect(detailScreen.tree.root.findByType(NewSessionEngineOptionDetail).props).toMatchObject({
                 selectedMachineId: 'machine-1', capabilityServerId: homeState.targetServerId, cwd: '/repo',
             });
-            expect(detailScreen.findAllByTestId('agent-input-config-option:speed')).toHaveLength(1);
+            expect(detailScreen.findAllHostsByTestId('agent-input-config-option:speed')).toHaveLength(1);
         });
     });
 
