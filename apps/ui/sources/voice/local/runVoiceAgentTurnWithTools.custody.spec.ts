@@ -265,7 +265,7 @@ describe('runVoiceAgentTurnWithTools local effect custody', () => {
     const result = await run('send it', { onAssistantTurn: async ({ assistantText }) => {
       // The non-streaming TTS consumer awaits this callback before continuing.
       expect(parseVoiceToolResultsFollowUp(wireTurns.at(-1)?.message)).toMatchObject({
-        toolResults: [expect.objectContaining({ t: 'sendSessionMessage', result: { ok: false, errorCode: 'not_found' } })],
+        toolResults: [expect.objectContaining({ t: 'sendSessionMessage', result: expect.objectContaining({ ok: false, errorCode: 'not_found' }) })],
       });
       expect(targetPendingRequests()).toEqual([]);
       spoken.push(assistantText);

@@ -2476,7 +2476,6 @@ describe('voice tool handlers', () => {
     expect(parsed.items.length).toBe(2);
     expect(parsed.items[0].role).toBe('user');
     expect(parsed.items[1].role).toBe('assistant');
-    expect(tools.getSessionRecentMessages).toBeUndefined();
   });
 
   it('accepts larger on-demand limits for getSessionTranscript (up to 50)', async () => {

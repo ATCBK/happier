@@ -38,12 +38,18 @@ const SESSION_SUMMARY_KEYS: ReadonlySet<string> = new Set(['title', 'label', 'na
  * UI composer before it reaches this provider boundary. Its navigation,
  * entity, and command labels are governed by `currentUiContextMode`, not by
  * the unrelated session-summary preference. Keep this classification at the
- * one result-redaction owner; every other tool still treats these keys as
- * session-summary aliases.
+ * one result-redaction owner. Admitted inventory labels name Agents/models,
+ * rather than Sessions, and follow the independent inventory permission.
+ * Other tools still treat these keys as session-summary aliases.
  */
 const CURRENT_UI_CONTEXT_READ_TOOL_NAME = String(
   getActionSpec('ui.current_context.read').bindings?.voiceClientToolName ?? '',
 ).trim();
+const AGENT_CATALOG_LABEL_TOOL_NAMES: ReadonlySet<string> = new Set(
+  (['agents.backends.list', 'agents.models.list'] as const).flatMap(id => [
+    id, getActionSpec(id).bindings?.voiceClientToolName ?? '',
+  ]).filter(Boolean),
+);
 
 /**
  * Action and current-UI command execution cross an authority boundary before
@@ -70,6 +76,7 @@ const ACTION_RESULT_HANDLER_ERROR_CODES: ReadonlySet<string> = new Set([
  * it is dropped wholesale when path sharing is disabled (mirrors the `listSessions` tool gating).
  */
 const FILE_PATH_KEYS: ReadonlySet<string> = new Set(['locationLabel']);
+const PRIVATE_CONNECTION_KEYS: ReadonlySet<string> = new Set(['uiConnectedService', 'flavorAliases']);
 
 /**
  * Pending permission-request identifiers/state surfaced by the session-activity tool.
@@ -140,9 +147,10 @@ function redactPendingRequestState(value: unknown): unknown {
 function shouldDropKey(
   key: string,
   prefs: VoiceToolResultRedactionPrefs,
-  allowCurrentUiPresentationLabels: boolean,
+  preservePresentationLabels: boolean,
 ): boolean {
-  if (!allowCurrentUiPresentationLabels && !prefs.shareSessionSummary && SESSION_SUMMARY_KEYS.has(key)) return true;
+  if (PRIVATE_CONNECTION_KEYS.has(key)) return true;
+  if (!preservePresentationLabels && !prefs.shareSessionSummary && SESSION_SUMMARY_KEYS.has(key)) return true;
   if (!prefs.shareFilePaths && FILE_PATH_KEYS.has(key)) return true;
   if (!prefs.sharePermissionRequests && PERMISSION_REQUEST_KEYS.has(key)) return true;
   return false;
@@ -152,14 +160,14 @@ function stripGatedKeys(
   value: unknown,
   prefs: VoiceToolResultRedactionPrefs,
   depth: number,
-  allowCurrentUiPresentationLabels: boolean,
+  preservePresentationLabels: boolean,
 ): unknown {
   // Tool output is untrusted provider-bound data. Returning the untouched
   // subtree at the safety limit would turn the recursion guard into a privacy
   // bypass for deeply nested/cyclic payloads, so truncate fail closed.
   if (depth > 20) return null;
   if (Array.isArray(value)) {
-    return value.map((entry) => stripGatedKeys(entry, prefs, depth + 1, allowCurrentUiPresentationLabels));
+    return value.map((entry) => stripGatedKeys(entry, prefs, depth + 1, preservePresentationLabels));
   }
   if (!value || typeof value !== 'object') return value;
   const privacyProjected = prefs.sharePermissionRequests
@@ -167,8 +175,8 @@ function stripGatedKeys(
     : redactPendingRequestState(value);
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(privacyProjected as Record<string, unknown>)) {
-    if (shouldDropKey(key, prefs, allowCurrentUiPresentationLabels)) continue;
-    output[key] = stripGatedKeys(entry, prefs, depth + 1, allowCurrentUiPresentationLabels);
+    if (shouldDropKey(key, prefs, preservePresentationLabels)) continue;
+    output[key] = stripGatedKeys(entry, prefs, depth + 1, preservePresentationLabels);
   }
   return output;
 }
@@ -186,14 +194,14 @@ export function redactVoiceToolResultValue(value: unknown, prefs: VoiceToolResul
 function redactVoiceToolResultValueWithClassification(
   value: unknown,
   prefs: VoiceToolResultRedactionPrefs,
-  allowCurrentUiPresentationLabels: boolean,
+  preservePresentationLabels: boolean,
 ): unknown {
   const resolvedPrefs: VoiceToolResultRedactionPrefs = {
     shareFilePaths: prefs?.shareFilePaths === true,
     shareSessionSummary: prefs?.shareSessionSummary === true,
     sharePermissionRequests: prefs?.sharePermissionRequests === true,
   };
-  const stripped = stripGatedKeys(value, resolvedPrefs, 0, allowCurrentUiPresentationLabels);
+  const stripped = stripGatedKeys(value, resolvedPrefs, 0, preservePresentationLabels);
   return resolvedPrefs.shareFilePaths ? stripped : redactVoicePathLikeData(stripped);
 }
 
@@ -255,7 +263,7 @@ export function redactVoiceToolResultForProvider(
   return redactVoiceToolResultValueWithClassification(
     value,
     prefs,
-    toolName === CURRENT_UI_CONTEXT_READ_TOOL_NAME,
+    toolName === CURRENT_UI_CONTEXT_READ_TOOL_NAME || AGENT_CATALOG_LABEL_TOOL_NAMES.has(toolName),
   );
 }
 

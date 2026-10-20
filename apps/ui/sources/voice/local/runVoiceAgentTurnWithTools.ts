@@ -17,7 +17,7 @@ import {
 import { storage } from '@/sync/domains/state/storage';
 import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePrivacySettings';
 import type { VoiceToolResultRedactionPrefs } from '@/voice/context/redactVoiceToolResult';
-import { buildToolResultsFollowUpPrompt, compactToolResultsForFollowUp } from '@/voice/context/buildVoiceToolResultsFollowUp';
+import { buildToolResultsFollowUpPrompt, projectVoiceToolResultsForFollowUp } from '@/voice/context/buildVoiceToolResultsFollowUp';
 export { buildToolResultsFollowUpPrompt } from '@/voice/context/buildVoiceToolResultsFollowUp';
 import type { VoiceCurrentUiToolPort } from '@/voice/tools/currentUiContextToolPort';
 
@@ -123,32 +123,10 @@ function readToolResultErrorCode(value: unknown): string | null {
 function redactCompletedLocalEffectOutcome(
   entry: LocalVoiceAgentToolResultEntry,
 ): LocalVoiceAgentToolResultEntry {
-  return compactToolResultsForFollowUp(
+  return projectVoiceToolResultsForFollowUp(
     [entry],
     resolveVoiceToolResultPrivacyPrefs(),
   )[0] ?? createLocalToolErrorResult(entry.t, null, 'redaction_failed');
-}
-
-function normalizeAssistantTextForActions(
-  assistantText: string,
-  actions: ReadonlyArray<unknown>,
-  turnIndex: number,
-): string {
-  const trimmed = String(assistantText ?? '').trim();
-  if (turnIndex !== 0) return trimmed;
-
-  const actionNames = actions
-    .map((actionRaw) => {
-      const action = actionRaw as VoiceToolAction;
-      return typeof action?.t === 'string' ? action.t.trim() : '';
-    })
-    .filter((name) => name.length > 0);
-
-  if (actionNames.includes('sendSessionMessage')) {
-    return 'I sent that to the coding assistant and am waiting for its update.';
-  }
-
-  return trimmed;
 }
 
 export async function runVoiceAgentTurnWithTools(params: Readonly<{
@@ -366,17 +344,13 @@ export async function runVoiceAgentTurnWithTools(params: Readonly<{
       };
     }
 
-    const assistantText = normalizeAssistantTextForActions(response.assistantText ?? '', actions, turnIndex);
-    assistantTurns.push(assistantText);
     totalActions += actions.length;
-
-    await params.onAssistantTurn?.({
-      assistantText,
-      actions,
-      turnIndex,
-    });
-
     if (actions.length === 0) {
+      // Action-bearing text precedes execution and cannot confirm an outcome.
+      // Only the follow-up informed by the real result is a spoken answer.
+      const assistantText = String(response.assistantText ?? '').trim();
+      assistantTurns.push(assistantText);
+      await params.onAssistantTurn?.({ assistantText, actions, turnIndex });
       return {
         disposition: 'completed',
         assistantTurns,

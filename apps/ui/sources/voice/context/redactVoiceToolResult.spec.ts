@@ -9,6 +9,19 @@ import {
 const SHARE_ALL = { shareFilePaths: true, shareSessionSummary: true, sharePermissionRequests: true } as const;
 
 describe('redactVoiceToolResultValue', () => {
+  it('keeps admitted inventory labels and owner paging while omitting private connection details', () => {
+    const result = redactVoiceToolResultForProvider('listAgentModels', {
+      items: [{ modelId: 'model', label: 'Model', uiConnectedService: 'private', flavorAliases: ['alias'] }],
+      hasMore: true, nextCursor: 'next', totalCount: 12,
+    }, { ...SHARE_ALL, shareSessionSummary: false, shareDeviceInventory: true });
+    expect(result).toEqual({ items: [{ modelId: 'model', label: 'Model' }], hasMore: true, nextCursor: 'next', totalCount: 12 });
+    // Inventory permission is not permission to disclose a Session summary
+    // nested in another inventory-family Action's result.
+    expect(redactVoiceToolResultForProvider('projects.open', { session: { id: 's1', title: 'PRIVATE SESSION' } }, {
+      ...SHARE_ALL, shareSessionSummary: false, shareDeviceInventory: true,
+    })).toEqual({ session: { id: 's1' } });
+  });
+
   it('withholds awareness request state and private work without changing the canonical result', () => {
     const awareness = {
       v: 1, sessionId: 's1', runtime: 'waiting', freshness: 'live', lifecycle: 'active',

@@ -381,8 +381,18 @@ describe('runVoiceAgentTurnWithTools permission shortcuts', () => {
 
     const { createVoiceToolHandlers } = await import('@/voice/tools/handlers');
     const tools = createVoiceToolHandlers({ currentSessionAddress: currentToolSessionAddress, resolveSessionId: () => 's1' });
-    const refusal = await tools.answerUserActionRequest({ decision: 'reject', currentSessionOnly: true });
-    expect(JSON.parse(refusal), refusal).toMatchObject({ ok: false, errorCode: 'present_user_required', sessionId: 's1', requestId: 'req_question' });
+    const proposal = JSON.parse(await tools.answerUserActionRequest({ decision: 'reject', currentSessionOnly: true }, {
+      serverId: currentToolSessionAddress.serverId, effectId: 'question-answer-proposal',
+    }));
+    expect(proposal).toMatchObject({ ok: true, kind: 'approval_request_created', artifactId: expect.any(String) });
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const executor = createDefaultActionExecutor();
+    expect(await executor.execute('approval.request.decide', { artifactId: proposal.artifactId, decision: 'approve' }, {
+      surface: 'voice', serverId: currentToolSessionAddress.serverId,
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(await executor.execute('approval.request.get', { artifactId: proposal.artifactId }, {
+      surface: 'ui', serverId: currentToolSessionAddress.serverId,
+    })).toMatchObject({ ok: true, result: { request: { status: 'open', actionId: 'session.user_action.answer' } } });
 
     const pendingRequest = structuredClone(storage.getState().sessions.s1?.agentState?.requests?.req_question);
     expect(pendingRequest).toBeDefined();
