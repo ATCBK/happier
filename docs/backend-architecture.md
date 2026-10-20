@@ -290,6 +290,11 @@ Archive progress in the development UI belongs to the transient
 `SessionsDomain.sessionArchiveOperations` map, keyed by Home-qualified
 `SessionAddress`. Direct, stop-and-archive, and bulk UI actions claim it after
 confirmation; object-identity settlement cannot retire a later operation.
+The UI Action adapter borrows that exact admission object. Report Stop and Archive
+share child admission within the same invocation; terminal children release their
+own progress while the lead remains pending until its caller settles. Invocation
+cleanup releases remaining owned admissions without replacing the domain owner
+or serializing these objects into Action inputs.
 Existing row and index projections derive Archiving presentation and pending
 visibility from that owner, without changing authoritative membership or generic
 attention retention. Home identity discovery resolves retained aliases through
@@ -298,16 +303,18 @@ Home's rows and memberships; a focus change cannot write a same-id Session on
 another Home. Account replacement or logout retires the affected Home's pending
 operations; focus changes and same-account reauthentication preserve them.
 
-The archive network stage has one 75-second lifetime through readiness, request
-headers, and response consumption. Stop completes before that clock starts;
-unarchive retains its existing request lifecycle. The HTTP owner consumes the
+The archive network stage has one 75-second lifetime through carrier acquisition,
+readiness, request headers, and response consumption. Stop completes before that
+clock starts; unarchive retains its existing request lifecycle. The HTTP owner consumes the
 archive response while cancellation and captured authority remain live, and the
 operation applies local results only after that request returns. Timeout or
 caller/account cancellation releases UI admission. A timeout can follow a server
 commit, so it is a failure to confirm completion, not evidence that the server
 rolled the write back. Existing reachability startup and carrier custody keep
-their own owners. An active-session conflict fails immediately; the UI does not
-poll or repeat Stop. A missing runner permits one authoritative archive attempt.
+their own owners. Context settlement releases a carrier that arrives after caller
+cancellation without cancelling a shared native dial. An active-session conflict
+fails immediately; the UI does not poll or repeat Stop. A missing runner permits
+one authoritative archive attempt.
 Accepted Stop and ordinary disconnect do not establish runner exit: inactive
 state still requires acknowledged, fenced publisher Close, a proven machine Stop,
 or the existing presence-expiry path.

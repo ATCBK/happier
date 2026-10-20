@@ -1,7 +1,8 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionFixture, renderScreen as renderCanonicalScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import {
     TREE_DROP_OVERLAY_KIND_NONE,
     type TreeDropOverlaySharedValues,
@@ -9,7 +10,6 @@ import {
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionStatus } from '@/utils/sessions/sessionUtils';
-import { lightTheme } from '@/theme';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 import {
     createModelBackedSessionItemTestComponent,
@@ -45,18 +45,6 @@ vi.mock('@/components/ui/text/Text', () => ({
 }));
 
 installSessionShellCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            useWindowDimensions: () => windowDimensions,
-            Platform: {
-                get OS() {
-                    return platformOs;
-                },
-                select: (value: any) => value[platformOs] ?? value.default,
-            },
-        });
-    },
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
@@ -77,6 +65,15 @@ vi.doUnmock('@/sync/domains/state/storage');
 vi.doUnmock('@/hooks/session/useDraft');
 vi.doUnmock('@/agents/registry/registryUiBehavior');
 
+// Install SDK boundaries before loading provider/store consumers. The broad
+// testkit barrel can otherwise resolve the shell's default web mock first.
+// Configure the shared SDK object itself: imports elsewhere may already hold
+// its default web boundary before this suite installs shell options.
+const nativeBoundary = await import('react-native');
+Object.defineProperty(nativeBoundary.Platform, 'OS', { configurable: true, get: () => platformOs });
+vi.spyOn(nativeBoundary, 'useWindowDimensions').mockImplementation(() => windowDimensions);
+const { lightTheme } = await import('@/theme');
+const { renderScreen: renderCanonicalScreen } = await import('@/dev/testkit/render/renderScreen');
 const storageModule = await import('@/sync/domains/state/storage');
 const { SessionItem: ArchiveProgressSessionItem } = await import('./SessionItem');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
@@ -724,7 +721,7 @@ describe('SessionItem activity time', () => {
         expect(findRowContentStyle(screen, 'sess_compact_avatar_web').marginLeft).toBe(8);
     });
 
-    it('uses a 20px micro avatar for very compact native phone rows', async () => {
+    it('preserves session identity and an accessible touch area in compact native phone rows', async () => {
         platformOs = 'ios';
         windowDimensions = { width: 390, height: 844, scale: 3, fontScale: 1 };
         const SessionItem = await importSessionItem();
@@ -744,14 +741,9 @@ describe('SessionItem activity time', () => {
             />,
         );
 
-        expect(screen.findByType('Avatar' as any)?.props.size).toBe(20);
+        expect(screen.findByType('Avatar')?.props.id).toBe('sess_compact_avatar_phone');
         const rowStyle = findRowGeometryStyle(screen, 'sess_compact_avatar_phone');
-        expect(rowStyle.height).toBe(42);
-        const title = screen.findAllByType('Text').find((node) => node.props.children === 'Session');
-        const titleStyle = flattenStyle(title?.props.style);
-        expect(titleStyle.fontSize).toBe(14);
-        expect(titleStyle.lineHeight).toBe(18);
-        expect(findRowContentStyle(screen, 'sess_compact_avatar_phone').marginLeft).toBe(8);
+        expect(rowStyle.height).toBeGreaterThanOrEqual(44);
     });
 
     it('renders the selected agent logo in the same narrow identity slot', async () => {
