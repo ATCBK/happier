@@ -52,6 +52,7 @@ import { withStackEnv } from './stack_environment.mjs';
 import { resolveStackRuntimeLaunchContext } from '../runtime/launch/resolveStackRuntimeLaunchContext.mjs';
 import { prepareSourceRuntimeReload } from '../runtime/launch/prepareSourceRuntimeReload.mjs';
 import { projectBorrowedExpoWebappEnv, resolveSourceQaUiMode } from '../runtime/shared/borrowed_expo.mjs';
+import { resolveRuntimeRemoteServiceObservation } from '../utils/tui/runtime_placement_summary.mjs';
 
 const DEFAULT_BACKGROUND_READY_TIMEOUT_MS = 600_000;
 
@@ -181,6 +182,14 @@ export async function waitForBackgroundStackReadiness({
             String(sourceDaemonLaunchAttempt.incumbentDaemonProcessInstanceFingerprint ?? '').trim(),
         }
       : null;
+  const sourceOwnerAuthenticated = runtime => {
+    if (!sourceLaunchAdmission) return true;
+    const admittedAt = Date.parse(String(sourceLaunchAdmission.ownerStartedAt ?? ''));
+    const startedAt = Date.parse(String(normalizeStackRuntimeOwnerStartedAt(runtime?.startedAt) ?? ''));
+    return Number.isFinite(sourceLaunchAdmission.ownerPid) && sourceLaunchAdmission.ownerPid > 1
+      && Number(runtime?.ownerPid) === sourceLaunchAdmission.ownerPid
+      && Number.isFinite(admittedAt) && Number.isFinite(startedAt) && startedAt >= admittedAt;
+  };
   let lastObservation = null;
   while (true) {
     if (typeof isRunnerAlive === 'function' && !isRunnerAlive()) {
@@ -188,8 +197,11 @@ export async function waitForBackgroundStackReadiness({
     }
 
     const now = Date.now();
+    let runtimeState = await readStackRuntimeStateFile(runtimeStatePath);
+    const remoteDaemon = resolveRuntimeRemoteServiceObservation(runtimeState, 'daemon');
     const preparationObservation =
       observesSourcePreparation
+      && !remoteDaemon.target
       && !preparationCompleted
       && await isDaemonPreparationActiveImpl({ env });
     const preparationActive = typeof preparationObservation === 'object'
@@ -233,13 +245,30 @@ export async function waitForBackgroundStackReadiness({
         )
         : readyTimeoutMs - (now - daemonReadyStartedAt),
     );
+    if (remoteDaemon.target) {
+      const target = runtimeState.remoteTargets?.[remoteDaemon.target];
+      const identity = runtimeState.sourceRuntimeIdentities?.daemon;
+      const remoteIdentity = target?.sourceRuntimeIdentities?.daemon;
+      // The supervisor publishes per-service readiness after the native probe.
+      // Source starts also require its loaded identity in the new lifecycle's
+      // publication; inherited target status alone cannot admit a replacement.
+      const sourceLoaded = runtimeState.runtimeMode !== 'source-snapshot' || Boolean(
+        identity?.selected && identity.loaded === identity.selected
+        && remoteIdentity?.selected === identity.selected && remoteIdentity.loaded === identity.selected);
+      const ownerAuthenticated = sourceOwnerAuthenticated(runtimeState);
+      if (!runtimeState.stopRequest && ownerAuthenticated && sourceLoaded
+        && remoteDaemon.running && target?.serviceStatus?.daemon === 'running') return;
+      lastObservation = { target: remoteDaemon.target, status: remoteDaemon.status, sourceLoaded, ownerAuthenticated };
+      await delay(Math.min(250, remainingMs));
+      continue;
+    }
     const daemonState = await checkDaemonStateImpl(cliHomeDir, {
       serverUrl: readinessServerUrl,
       env,
       stackName,
       pingTimeoutMs: Math.min(1_000, remainingMs),
     });
-    const runtimeState = await readStackRuntimeStateFile(runtimeStatePath);
+    runtimeState = await readStackRuntimeStateFile(runtimeStatePath);
     const daemonPid = Number(daemonState?.pid);
     const runtimeDaemonPid = Number(runtimeState?.processes?.daemonPid);
     const observedFingerprint = String(daemonState?.distClosureFingerprint ?? '').trim().toLowerCase();
@@ -252,8 +281,6 @@ export async function waitForBackgroundStackReadiness({
       String(runtimeState?.daemon?.distClosureFingerprint ?? '').trim().toLowerCase();
     const runtimeOwnerPid = Number(runtimeState?.ownerPid);
     const runtimeOwnerStartedAt = normalizeStackRuntimeOwnerStartedAt(runtimeState?.startedAt);
-    const sourceOwnerStartedAtMs = Date.parse(String(sourceLaunchAdmission?.ownerStartedAt ?? ''));
-    const runtimeOwnerStartedAtMs = Date.parse(String(runtimeOwnerStartedAt ?? ''));
     const incumbentStillObserved = sourceLaunchAdmission
       ? sourceLaunchAdmission.incumbentDaemonProcessInstanceFingerprint
         ? runtimeDaemonProcessInstanceFingerprint ===
@@ -263,12 +290,7 @@ export async function waitForBackgroundStackReadiness({
           && daemonPid === sourceLaunchAdmission.incumbentDaemonPid
       : false;
     const sourceLaunchAuthenticated = !sourceLaunchAdmission || (
-      Number.isFinite(sourceLaunchAdmission.ownerPid)
-      && sourceLaunchAdmission.ownerPid > 1
-      && runtimeOwnerPid === sourceLaunchAdmission.ownerPid
-      && Number.isFinite(sourceOwnerStartedAtMs)
-      && Number.isFinite(runtimeOwnerStartedAtMs)
-      && runtimeOwnerStartedAtMs >= sourceOwnerStartedAtMs
+      sourceOwnerAuthenticated(runtimeState)
       && Boolean(runtimeDaemonProcessInstanceFingerprint)
       && (
         !observedProcessInstanceFingerprint

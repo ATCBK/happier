@@ -29,6 +29,7 @@ import * as pendingSourceStart from '../../runtime/shared/pending_source_start.m
 import { inspectDevTargetSync, runDevTargetDependencyBootstrap } from './executor.mjs';
 import { readStackRuntimeStateFile, recordStackRuntimeStart, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { decideDevStartupTopology, observeDevServerStartupTopology } from '../dev/devStartupTopology.mjs';
+import { waitForBackgroundStackReadiness } from '../../stack/run_script_with_stack_env.mjs';
 
 const successfulDependencyBootstrap = async () => ({ code: 0 });
 const repoDir = fileURLToPath(new URL('../../../../../', import.meta.url));
@@ -981,6 +982,11 @@ test('source snapshot supervisor builds on each mirror without native transfer o
   const observed = Object.fromEntries(targets.map(target => [target.name, { [target.name]: { selected: `${target.name}-source`, loaded: `${target.name}-source` } }]));
   const phaseLogs = [];
   const execFileAsync = promisify(execFile);
+  const runtimeStatePath = join(root, 'consumer', 'stack.runtime.json');
+  const started = await recordStackRuntimeStart(runtimeStatePath, {
+    stackName, ownerPid: process.pid, runtimeMode: 'source-snapshot',
+    placement: { daemon: 'daemon' }, sourceRuntimeIdentities: {},
+  });
   const controller = await startStackDevTargets({
     stackName, stackBaseDir: join(root, 'consumer'), syncStackBaseDir, sourceDir: repoDir,
     sourceSnapshot: true, credentialPath, localServerPort: 3005, publicServerUrl: 'http://127.0.0.1:3005',
@@ -989,7 +995,11 @@ test('source snapshot supervisor builds on each mirror without native transfer o
     targetPlans: targets.map(target => ({ target, services: { server: target.name === 'server', daemon: target.name === 'daemon', expo: false } })),
     remoteWorkspacePreparation: async () => { throw new Error('source snapshots must not publish workspace dist'); },
     onServerDataAuthority: async state => { authorities.push(state); },
-    onTargetStateChange: state => {
+    onTargetStateChange: async state => {
+      await recordStackRuntimeUpdate(runtimeStatePath, {
+        remoteTargets: { [state.name]: state },
+        ...(state.sourceRuntimeIdentities ? { sourceRuntimeIdentities: state.sourceRuntimeIdentities } : {}),
+      });
       states.push(state);
       if (targets.every(target => states.some(state => state.name === target.name && state.status === 'running'))) resolveRunning();
     }, env: { HAPPIER_STACK_AUTH_FLOW: '1', HAPPIER_WEB_LATENCY_TRACE: '1' },
@@ -1027,6 +1037,14 @@ test('source snapshot supervisor builds on each mirror without native transfer o
   try {
     assert.equal(controller.workers.length, 2);
     await running;
+    await waitForBackgroundStackReadiness({
+      stackName, scriptPath: 'run.mjs', runtimeStatePath,
+      env: { HAPPIER_STACK_CLI_HOME_DIR: join(root, 'controller-cli') },
+      internalServerUrl: 'http://127.0.0.1:3005', timeoutMs: 750,
+      sourceDaemonLaunchAttempt: { ownerPid: process.pid, ownerStartedAt: started.startedAt },
+      // HTTP is the external boundary; supervisor, projection and readiness stay real.
+      waitForServerReadyImpl: async () => {}, isRunnerAlive: () => true,
+    });
     assert.equal(dataChecks.length, 1);
     assert.equal(dataChecks[0].target.name, 'server');
     assert.deepEqual(authorities, [{ targetName: 'server' }]);
