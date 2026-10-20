@@ -23,6 +23,7 @@ import {
     useSpotlightTarget,
 } from '@/components/onboarding/tour/stage/useSpotlightTarget';
 import { useComposerKeyboardLayoutContext } from '@/components/sessions/keyboardAvoidance';
+import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
 import {
     KeyPressEvent,
     type MultiTextInputSubmitBehavior,
@@ -1551,12 +1552,38 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
 
     const inputRef = React.useRef<MultiTextInputHandle>(null);
+    const mainColumn = usePaneMainColumn();
+    const focusAdmissionRef = React.useRef({ mainColumn, presented: props.surfacePresented !== false });
+    focusAdmissionRef.current = { mainColumn, presented: props.surfacePresented !== false };
+    const pendingComposerFocusRef = React.useRef(false);
     // A host's explicit focus request puts the caret where the composer's document has it: after a host
     // writes the text (the Discussion composer's `@`), the field opens at the end, not where it last was.
-    const requestComposerFocus = React.useCallback(() => {
+    const focusComposerInput = React.useCallback(() => {
         inputRef.current?.focus();
         inputRef.current?.setSelection(inputStateRef.current.selection);
     }, []);
+    const requestComposerFocus = React.useCallback(() => {
+        const { mainColumn, presented } = focusAdmissionRef.current;
+        if (!presented) return;
+        if (mainColumn?.hidden) {
+            pendingComposerFocusRef.current = true;
+            mainColumn.setHidden(false);
+            return;
+        }
+        pendingComposerFocusRef.current = false;
+        focusComposerInput();
+    }, [focusComposerInput]);
+    React.useLayoutEffect(() => {
+        if (!pendingComposerFocusRef.current) return;
+        if (props.surfacePresented === false) {
+            pendingComposerFocusRef.current = false;
+            return;
+        }
+        if (mainColumn?.hidden) return;
+        // The retained field can receive focus only after the reveal has committed.
+        pendingComposerFocusRef.current = false;
+        focusComposerInput();
+    }, [focusComposerInput, mainColumn?.hidden, props.surfacePresented]);
     const flushComposerInput = React.useCallback(() => {
         inputRef.current?.flushPendingTextChange?.();
     }, []);
@@ -3038,9 +3065,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [handleAbortPress]);
 
     const handleComposerFocusShortcut = React.useCallback(() => {
-        if (props.disabled) return;
-        inputRef.current?.focus();
-    }, [props.disabled]);
+        if (props.disabled || props.surfacePresented === false) return false;
+        requestComposerFocus();
+    }, [props.disabled, props.surfacePresented, requestComposerFocus]);
 
     const handleComposerAbortShortcut = React.useCallback(() => {
         const escapeAction = resolveComposerEscapeAction({ key: 'Escape', shiftKey: true }, {
