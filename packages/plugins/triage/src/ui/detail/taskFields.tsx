@@ -3,7 +3,7 @@ import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 import {
   Banner, Button, EmptyState, ErrorState, Form, Item, ItemGroup, LoadingState, Select, Stack,
-  usePluginHostApi, usePluginTranslation, useSurfaceContext,
+  usePluginHostApi, usePluginHostReadiness, usePluginTranslation, useSurfaceContext,
   type ActionFormFieldHint,
 } from '@happier-dev/plugin-ui';
 import { TriageGetResultV1Schema, TriageTaskFieldsV1Schema, TriageTaskWriteResultV1Schema,
@@ -14,6 +14,13 @@ import type { TriageListRowV1 } from '../../projection/listWindow.js';
 import type { TriageMountedConfiguredSourceV1 } from '../configuration/useTriageConfiguredSources.js';
 import { readTriageSelectedObservationV1 } from '../window/selectedObservation.js';
 import { readTriageSourceGetOperationV1, resolveTriageSourceDescriptorV1, resolveTriageSourceTaskOperationV1 } from './sourceSurface.js';
+
+/** List age and other sources' health do not decide whether this source can execute. */
+function useTriageTaskExecutionUnavailable(): boolean {
+  const readiness = usePluginHostReadiness();
+  const context = useSurfaceContext();
+  return readiness.pending || context.machineExecutionReady === false;
+}
 
 /** A single explicit form commit; provider authorization and settlement stay in tasks/* and the source. */
 export function useTriageTaskCommit(onApplied: () => Promise<void>) {
@@ -67,12 +74,12 @@ export function TriageCreateTaskFields(props: Readonly<{
   sourcesLoaded: boolean;
   sourcesUnavailableReason: string | null;
   draft?: Readonly<{ title?: string; body?: string }>;
-  disabled: boolean;
   onApplied(): Promise<void>;
   onClose(): void;
 }>): React.ReactElement {
   const context = useSurfaceContext();
   const text = usePluginTranslation();
+  const disabled = useTriageTaskExecutionUnavailable();
   const [where, setWhere] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState<Record<string, unknown>>({ title: '', ...props.draft });
   const write = useTriageTaskCommit(props.onApplied);
@@ -95,8 +102,8 @@ export function TriageCreateTaskFields(props: Readonly<{
   return <ItemGroup title={text('plugins.triage.tasks.create', 'Create task')}>
     <Item title={text('plugins.triage.tasks.where', 'Where?')} accessoryWraps accessory={
       <Select label={text('plugins.triage.tasks.where', 'Where?')} presentation="field" value={where}
-        disabled={props.disabled || !canChoose} options={choices}
-        onChange={(value) => { if (canChoose && !props.disabled && typeof value === 'string') setWhere(value); }} />
+        disabled={disabled || !canChoose} options={choices}
+        onChange={(value) => { if (canChoose && !disabled && typeof value === 'string') setWhere(value); }} />
     } />
     {props.sourcesUnavailableReason !== null ? <ErrorState kind="unavailable" layout="line"
       title={text('plugins.triage.tasks.sourcesUnavailable', 'Task sources are unavailable')}
@@ -104,7 +111,7 @@ export function TriageCreateTaskFields(props: Readonly<{
       : !props.sourcesLoaded ? <LoadingState layout="line" title={text('plugins.triage.surface.sources.loading', 'Reading your sources…')} />
       : !canChoose ? <EmptyState layout="line" title={text('plugins.triage.tasks.noCreateSource', 'Add a source that supports creating tasks in Sources.')} />
       : chosen === undefined ? <Banner tone="info" title={text('plugins.triage.tasks.chooseSource', 'Choose where this task belongs.')} />
-      : <Form value={draft} onChange={setDraft} disabled={props.disabled || chosen.disabled || unsupportedBody || write.result?.kind === 'uncertain' || write.result?.kind === 'applied'} busy={write.busy}
+      : <Form value={draft} onChange={setDraft} disabled={disabled || chosen.disabled || unsupportedBody || write.result?.kind === 'uncertain' || write.result?.kind === 'applied'} busy={write.busy}
         onCancel={props.onClose}
         hints={{ submitLabel: text('plugins.triage.tasks.create', 'Create task'), fields: [
           { path: 'title', title: text('plugins.triage.tasks.taskTitle', 'Title'), widget: 'text', required: true },
@@ -113,7 +120,7 @@ export function TriageCreateTaskFields(props: Readonly<{
         ] }}
         onSubmit={async (value) => {
           const title = typeof value.title === 'string' ? value.title.trim() : '';
-          if (title.length === 0 || chosen.disabled || !sourcesReady || props.disabled || unsupportedBody) return;
+          if (title.length === 0 || chosen.disabled || !sourcesReady || disabled || unsupportedBody) return;
           await write.commit(TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1, { v: 1,
             source: chosen.source.configured.instance.source, sourceInstanceId: chosen.source.sourceInstanceId,
             kindId: chosen.kind.id, fields: { title,
@@ -148,6 +155,7 @@ export function TriageEditTaskFields(props: Readonly<{
   const context = useSurfaceContext();
   const host = usePluginHostApi();
   const text = usePluginTranslation();
+  const executionUnavailable = useTriageTaskExecutionUnavailable();
   const selected = readTriageSelectedObservationV1(props.row);
   const kind = resolveTriageSourceDescriptorV1(context.targetedContributions, props.row.entryRef.source)
     ?.kinds.find((kind) => kind.id === props.row.entryRef.kindId);
@@ -170,7 +178,7 @@ export function TriageEditTaskFields(props: Readonly<{
   const transitions = resolveTriageSourceTaskOperationV1(context.targetedContributions, props.row.entryRef.source, 'transition') === undefined
     ? [] : capabilities?.transitions ?? [];
   const address = { v: 1, entryRef: props.row.entryRef, sourceInstanceId: selected.sourceInstanceId, lastKnownLocator: selected.observation.locator };
-  const disabled = props.disabled || props.instance === undefined || reading || write.busy || write.result?.kind === 'uncertain';
+  const disabled = props.disabled || executionUnavailable || props.instance === undefined || reading || write.busy || write.result?.kind === 'uncertain';
   const openEditor = async () => {
     if (disabled || !canEdit || !get || !props.instance || read.current) return;
     const controller = new AbortController();

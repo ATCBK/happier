@@ -61,6 +61,13 @@ all three authority arms distinct.
 
 Triage's [`administerConfiguredSourceInstance.ts`](../packages/plugins/triage/src/corpus/configuration/administerConfiguredSourceInstance.ts) owns configured-instance writes and the exact source-ownership comparison. [`readConfiguredSourceRows.ts`](../packages/plugins/triage/src/corpus/configuration/readConfiguredSourceRows.ts) supplies the shared active-row read and cursor handling. Discovery produces candidates, not automatic durable creation; mounted source Settings uses the administration Action rather than a direct Collection writer. The read ABI distinguishes complete from truncated results and refuses invalid or changed caller authority.
 
+Uninstalling or disabling a source does not retire its configured instances. The
+mounted list and Manage sources retain those active Account records, with the
+list reporting that source as unavailable. The caller-scoped configured read
+filters by currently admitted contributions, so its complete result may contain
+fewer records than those Account-backed surfaces; that difference alone does
+not establish stale mounted configuration.
+
 In 0.3 development source, the durable `source-instances` Collection is v4. Its
 binding admits credentialless current Account data; the preceding v3 also admitted
 the reserved `happier/mcp-sign-in` Connected Account identity. The same migration
@@ -112,6 +119,12 @@ values were returned, and submits only changes through `tasks/edit-v1`.
 Snapshot `projectionTruncated` describes display completeness and does not
 disable an unrelated complete field. Sources without full values remain
 readable and show the edit-read failure rather than seeding an empty field.
+
+Task create, edit and transition controls follow the selected source's declared
+roles, configured instance and host execution readiness. An age-stale list or an
+unrelated unavailable source does not disable a ready task's controls. Pending
+or unavailable Machine execution still disables writes, and the source Action
+retains authorization and confirming-read authority.
 
 Task category is derived by the single public `triageTaskStatusCategoryV1`
 mapper from the existing entry state, including its optional active stage and

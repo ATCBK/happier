@@ -53,7 +53,7 @@ it('keeps task creation unavailable until sources are read and distinguishes set
         setReadiness = update;
         setSources = updateSources;
         return <TriageCreateTaskFields sources={sources} sourcesLoaded={readiness.loaded}
-          sourcesUnavailableReason={readiness.unavailableReason} disabled={false}
+          sourcesUnavailableReason={readiness.unavailableReason}
           draft={{ title: 'Fix reconnect handling' }}
           onApplied={async () => undefined} onClose={() => undefined} />;
       }),
@@ -173,7 +173,8 @@ it.each([true, false])('blocks task edits during a Machine outage even with reta
     targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, entry.kindId, 'edit'),
     machineConnectionPending: pending, machineExecutionReady: false,
   })); });
-  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
+  const edit = await fixture.getByRole('button', { name: 'Edit task' });
+  if (!edit.state?.disabled) await act(async () => { await fixture.press(edit); });
   expect(document.querySelector('[aria-label="Notes"]')).toBeNull();
   expect((await fixture.getByRole('button', { name: 'Edit task' })).state?.disabled).toBe(true);
   expect(saved).toEqual([]);

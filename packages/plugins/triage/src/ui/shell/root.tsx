@@ -67,7 +67,6 @@ import { projectTriageDetailHeaderV1 } from '../detail/header.js';
 import { useTriagePostMutationRow } from '../detail/useTriagePostMutationRow.js';
 import {
   renderTriageDetailHeaderV1,
-  TriageDetailHeaderView,
   TriageDetailRegion,
 } from '../detail/region.js';
 import {
@@ -363,6 +362,7 @@ function readTriageScaledTypeMetricsV1(
 export type TriageListShellProps = Readonly<{
   tasksPage?: boolean;
   createDraft?: Readonly<{ title?: string; body?: string }>;
+  onCreateDraftClose?: () => void;
   /**
    * The host-owned plugin-local location this page was opened at. Triage owns
    * no router: this is read once as the reducer's seed and written back through
@@ -2100,8 +2100,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
    * like", and they would diverge the first time either changed. The Collection
    * tells it when the host already supplies the identity band and Close.
    */
+  const detailRow = selectedRow ?? lastKnown?.row ?? null;
   const detailContent = (headerHosted: boolean, pushed: boolean): React.ReactNode => surface.selection === null ? null : (
-    selectedRow !== null ? (
+    detailRow !== null ? (
       <TriageDetailRegion
         sourcePanelActions={sourcePanel.actions}
         tabSelection={{ value: detailTab?.key === selectedKey ? detailTab.tab : 'overview', onChange: chooseDetailTab, onAvailableTabsChange: reportDetailTabs }}
@@ -2109,9 +2110,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           onChange: chooseLinkedSession, onAvailableSessionsChange: reportDetailSessions, onLoadMore: loadMoreLinkedSessions }}
         headerHosted={headerHosted}
         pushed={pushed}
-        row={selectedRow}
+        row={detailRow}
+        lastKnown={selectedRow === null}
         completePostMutation={completePostMutation}
-        sourceWritesDisabled={listedStale || state.kind !== 'window'}
         lanes={listWindow?.window.lanes ?? []}
         rows={windowRows}
         connectionLabel={selectedConnectionLabel}
@@ -2123,35 +2124,11 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
         actions={configuredActions}
         originComposer={detailOriginComposer}
         pin={{
-          row: projectTriageWindowRow(selectedRow, pinsByEntry, { text }),
+          row: projectTriageWindowRow(detailRow, pinsByEntry, { text }),
           handlers: pinHandlers,
         }}
         onClose={dismissDetail}
       />
-    ) : lastKnownHeader !== null ? (
-      /*
-       * The selection outlived its row. The reader keeps the entry they
-       * opened — its title, why it was asking for them, its state, scope and
-       * observing connection — stated as the last thing this page knew, and
-       * the cause underneath it. Replacing all of it with the cause alone
-       * left them holding a sentence with no subject: they could not say
-       * WHICH entry had gone, which is the one thing they were reading.
-       */
-      <Stack gap="small">
-        <TriageDetailHeaderView
-          headerHosted={headerHosted}
-          header={lastKnownHeader}
-          pin={lastKnownPinRow === null ? undefined : { row: lastKnownPinRow, handlers: pinHandlers }}
-          onClose={dismissDetail}
-          lastKnown
-        />
-        <EmptyState
-          titleKey="plugins.triage.surface.entryGone.heading"
-          title="This entry is no longer in the list"
-          descriptionKey="plugins.triage.surface.entryGone.description"
-          description="The current window no longer holds this entry, so there is nothing to open it with. It may return on the next refresh."
-        />
-      </Stack>
     ) : (
       /*
        * `core/SURFACE.md` §3.1 and §3.2: a selection the current window
@@ -2229,7 +2206,10 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       {!creatingTask ? null : <TriageCreateTaskFields key={JSON.stringify(props.createDraft ?? {})} sources={configuredSources.sources}
         sourcesLoaded={configuredSources.loaded} sourcesUnavailableReason={configuredSources.unavailableReason}
         {...(props.createDraft === undefined ? {} : { draft: props.createDraft })}
-        disabled={listedStale || state.kind !== 'window'} onApplied={refresh} onClose={() => setCreatingTask(false)} />}
+        onApplied={refresh} onClose={() => {
+          setCreatingTask(false);
+          props.onCreateDraftClose?.();
+        }} />}
       {routeWriteFailure === null ? null : (
         <Banner
           tone="warning"

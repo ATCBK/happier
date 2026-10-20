@@ -240,6 +240,7 @@ type Harness = Readonly<{
     /** Every chooser engine-list request reached through this physical mount. */
     reviewEngineListRequests: readonly unknown[];
     comparisonOpens: readonly unknown[];
+    setEntryListed(listed: boolean): void;
 }>;
 
 function createHarness(options: Readonly<{
@@ -278,6 +279,7 @@ function createHarness(options: Readonly<{
         delivery: 'notRequested',
     }];
     let startResultIndex = 0;
+    let entryListed = true;
 
     const admitted = [{
         contributor: SOURCE_CONTRIBUTOR,
@@ -293,7 +295,7 @@ function createHarness(options: Readonly<{
     const executeScan: TriageAdmittedOperationExecutorV1 = async () => ({
         kind: 'complete',
         observations: [
-            {
+            ...(entryListed ? [{
                 kind: 'present',
                 localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
                 locator: testkitLocator(),
@@ -310,7 +312,7 @@ function createHarness(options: Readonly<{
                 viewer: testkitViewer(options.involvement === undefined ? {} : { involvement: [...options.involvement] }),
                 sourceUpdatedAtMs: 3_000,
                 repository: REPOSITORY,
-            },
+            } as const] : []),
             ...(options.includeSecondEntry === true ? [{
                 kind: 'present' as const,
                 localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '18' },
@@ -439,11 +441,12 @@ function createHarness(options: Readonly<{
             return reviewEngineListRequests;
         },
         comparisonOpens,
+        setEntryListed: (listed) => { entryListed = listed; },
     };
 }
 
 const mounted: PluginUiTestkit[] = [];
-const refreshMountedShell = new WeakMap<PluginUiTestkit, () => Promise<unknown>>();
+const refreshMountedShell = new WeakMap<PluginUiTestkit, (trigger?: 'view' | 'manual') => Promise<unknown>>();
 
 /** How many times this mount opened the host's New Session surface. */
 let draftsOpened = 0;
@@ -547,7 +550,7 @@ async function mountShell(harness: Harness, hostedDetail = false, chooseDraft?: 
         });
     });
     mounted.push(fixture);
-    refreshMountedShell.set(fixture, () => refreshTriageListWindow('view', fixture.context.hostApi, ephemeralSharedScope));
+    refreshMountedShell.set(fixture, (trigger = 'view') => refreshTriageListWindow(trigger, fixture.context.hostApi, ephemeralSharedScope));
     await act(async () => {
         await refreshTriageListWindow('view', fixture.context.hostApi, ephemeralSharedScope);
     });
@@ -586,8 +589,61 @@ afterEach(async () => {
 const PREPARATION_UNSUPPORTED_COPY = 'This source cannot prepare a review workspace, so actions that need one cannot start here.';
 
 describe('the entry action controls on the mounted detail header', () => {
-    it.each(['opened', 'open failed', 'cancelled', 'entry retired'] as const)(
-        'settles the Walk through recipe after a wide-phone-wide resize while the chooser is pending: %s', async (outcome) => {
+    it.each([
+        { hosted: false, openFails: false, confirmed: false },
+        { hosted: true, openFails: false, confirmed: false },
+        { hosted: false, openFails: true, confirmed: false },
+        { hosted: true, openFails: true, confirmed: false },
+        { hosted: true, openFails: false, confirmed: true },
+        { hosted: true, openFails: true, confirmed: true },
+    ])('settles a pinned recipe when a source refresh removes its selected entry: %j', async ({ hosted, openFails, confirmed }) => {
+        let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
+        let finishStart!: (result: TriageStartEntrySessionResultV1) => void;
+        let reads = 0;
+        const harness = createHarness({ comparisonRead: async () => {
+            reads += 1;
+            return {
+                kind: 'present',
+                localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+                locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+                comparisonSource: PR_COMPARISON,
+            };
+        }, ...(openFails ? { comparisonOpen: async () => { throw new Error('Navigation unavailable'); } } : {}) });
+        const startResult = { v: 1, type: 'linked', sessionId: 'session-a',
+            disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1;
+        harness.setStartResults([confirmed ? () => new Promise<TriageStartEntrySessionResultV1>((resolve) => { finishStart = resolve; }) : startResult]);
+        const shell = await mountShell(harness, hosted, () => new Promise((resolve) => { finishRecipe = resolve; }));
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        expect(draftsOpened).toBe(1);
+        if (confirmed) {
+            await act(async () => { finishRecipe(SETTLED_DRAFT); });
+            await settle();
+            expect(harness.startRequests).toHaveLength(1);
+        }
+        // A new source walk drops the row without changing the reader's selection or pinned refs.
+        harness.setEntryListed(false);
+        await act(async () => { await refreshMountedShell.get(shell)!('manual'); });
+        await settle();
+        await expect(shell.getByText('This entry is no longer in the list')).resolves.toBeDefined();
+        await act(async () => {
+            if (confirmed) finishStart(startResult);
+            else finishRecipe(SETTLED_DRAFT);
+        });
+        await settle();
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.comparisonOpens).toEqual([{ sessionId: 'session-a', serverId: 'server-a',
+            destination: { kind: 'scmReview', comparison: PR_COMPARISON, view: 'walkthrough' } }]);
+        expect(reads).toBe(1);
+        expect(draftsOpened).toBe(1);
+        if (openFails) {
+            await expect(shell.getByText('The session was created and linked, but Happier could not open it.')).resolves.toBeDefined();
+        }
+    }, 60_000);
+
+    it.each([false, true].flatMap((hosted) => ['opened', 'open failed', 'cancelled', 'entry retired'].map((outcome) => ({ hosted, outcome }))))(
+        'settles the Walk through recipe after a wide-phone-wide resize while the chooser is pending: %j', async ({ hosted, outcome }) => {
         let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
         const harness = createHarness({ includeSecondEntry: outcome === 'entry retired', comparisonRead: async () => ({
             kind: 'present',
@@ -597,7 +653,7 @@ describe('the entry action controls on the mounted detail header', () => {
         }), ...(outcome === 'open failed' ? { comparisonOpen: async () => { throw new Error('Navigation unavailable'); } } : {}) });
         harness.setStartResults([{ v: 1, type: 'linked', sessionId: 'session-a',
             disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1]);
-        const shell = await mountShell(harness, false, () => new Promise((resolve) => { finishRecipe = resolve; }));
+        const shell = await mountShell(harness, hosted, () => new Promise((resolve) => { finishRecipe = resolve; }));
         const resize = async (width: number) => {
             const stage = document.querySelector(`[data-testid="${TRIAGE_SHELL_FILL_TEST_ID_V1}:stage"]`)!;
             const onLayout = (stage as unknown as { __reactLayoutHandler: (event: unknown) => void }).__reactLayoutHandler;
@@ -611,7 +667,7 @@ describe('the entry action controls on the mounted detail header', () => {
         expect(draftsOpened).toBe(1);
         expect(harness.startRequests).toHaveLength(0);
         await resize(390);
-        expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`)).not.toBeNull();
+        if (!hosted) expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`)).not.toBeNull();
         await resize(1440);
         expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`)).toBeNull();
         if (outcome === 'entry retired') {

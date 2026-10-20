@@ -129,7 +129,8 @@ export type TriageDetailRegionProps = Readonly<{
    */
   pushed?: boolean;
   row: TriageListRowV1;
-  sourceWritesDisabled?: boolean;
+  /** The selection remains, but its row is no longer in the current window. */
+  lastKnown?: boolean;
   /** Reobserves the shell-owned selected snapshot used by both identity and body. */
   completePostMutation(): Promise<void>;
   lanes: readonly TriageListLaneV1[];
@@ -619,14 +620,15 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   ), [row.entryRef, selected]);
   const observation = selected?.observation ?? null;
 
-  const detail = useTriageEntryDetail(
-    selection === null || observation === null ? null : { selection, observation },
+  const observedDetail = useTriageEntryDetail(
+    props.lastKnown === true || selection === null || observation === null ? null : { selection, observation },
   );
+  const detail = props.lastKnown === true ? null : observedDetail;
   const linkedSessions = detail?.kind === 'ready' ? detail.linkedSessions : EMPTY_SESSIONS;
   const linkedSessionsHasMore = detail?.kind === 'ready'
     ? detail.linkedSessionsNextCursor !== undefined
     : false;
-  const sourceDescriptor = readTriageSourceDescriptorV1(context, row.entryRef.source);
+  const sourceDescriptor = props.lastKnown === true ? null : readTriageSourceDescriptorV1(context, row.entryRef.source);
   const header = React.useMemo(() => projectTriageDetailHeaderV1({
     row,
     lanes: props.lanes,
@@ -945,7 +947,19 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
         </TriageDetailWholeBody>
       )}
       </Stack>;
-  const renderDetail = (actionRegion: React.ReactElement | null) => (
+  const renderDetail = (actionRegion: React.ReactElement | null) => props.lastKnown === true ? (
+    <Stack gap="small">
+      <TriageDetailHeaderView headerHosted={props.headerHosted} header={header} pin={props.pin}
+        onClose={props.onClose} lastKnown />
+      {actionRegion}
+      <EmptyState
+        titleKey="plugins.triage.surface.entryGone.heading"
+        title="This entry is no longer in the list"
+        descriptionKey="plugins.triage.surface.entryGone.description"
+        description="The current window no longer holds this entry, so there is nothing to open it with. It may return on the next refresh."
+      />
+    </Stack>
+  ) : (
     <Stack style={DETAIL_FILL_STYLE_V1}>
     {/* The Collection's detail body owns the edge (given `detailHeader`); the footer below spans the detail. */}
     <Stack gap="medium" style={DETAIL_FILL_STYLE_V1}>
@@ -973,7 +987,7 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
           made React drop or duplicate one of them on update. */}
       <TriageEditTaskFields key={`task-fields:${selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}`}
         row={row} {...(detail?.kind === 'ready' ? { instance: detail.input.instance } : {})}
-        disabled={props.sourceWritesDisabled === true || detail?.kind !== 'ready'} onApplied={completePostMutation} />
+        disabled={detail?.kind !== 'ready'} onApplied={completePostMutation} />
       {actionRegionShown ? null : sourceActions}
       </Stack>
       </ScrollArea>
