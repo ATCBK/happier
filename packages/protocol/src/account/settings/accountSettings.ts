@@ -290,6 +290,8 @@ export const DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1: UsageLimitRecoverySetting
 
 export const SESSION_PENDING_QUEUE_DRAIN_MODES = ['one_at_a_time', 'drain_all'] as const;
 export const DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE = 'one_at_a_time' as const;
+export const SESSION_LIST_BACKGROUND_WORK_ATTENTION_MODE_VALUES = ['keepWorking', 'keepWorkingUnread', 'showUnread'] as const;
+export type SessionListBackgroundWorkAttentionMode = typeof SESSION_LIST_BACKGROUND_WORK_ATTENTION_MODE_VALUES[number];
 export const SESSION_INACTIVE_RESUME_POLICY_VALUES = ['when_available', 'online_only', 'manual'] as const;
 export const DEFAULT_SESSION_INACTIVE_RESUME_POLICY = 'online_only' as const;
 export const SessionInactiveResumePolicySchema = lazyZodSchema(() => classicZ.catch(z
@@ -899,6 +901,7 @@ const ACCOUNT_CORE_CATALOG_DEFINITIONS = {
     sessionListOrderingModeV1: accountPreference(z.enum(['custom', 'created', 'updated']), 'custom', 'session list presentation'),
     sessionListFolderSortModeV1: accountPreference(z.enum(['foldersFirst', 'mixed']), 'foldersFirst', 'session list presentation'),
     sessionListAttentionPromotionModeV1: accountPreference(z.enum(['off', 'global', 'withinGroups']), 'off', 'session list presentation'),
+    sessionListBackgroundWorkAttentionModeV1: accountPreference(z.enum(SESSION_LIST_BACKGROUND_WORK_ATTENTION_MODE_VALUES), 'keepWorking', 'session list presentation'),
     sessionListAttentionStandingDefaultV1: accountPreference(z.boolean(), false, 'session list presentation'),
     sessionListWorkingPlacementModeV1: accountPreference(z.enum(['off', 'global', 'withinGroups']), 'off', 'session list presentation'),
     sessionListSeparateBackgroundWorkV1: accountPreference(z.boolean(), false, 'session list presentation'),

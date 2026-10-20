@@ -61,7 +61,7 @@ function readSessionPresentationStateWorkStatusV1(
   // A settlement the runtime can no longer stand behind reads offline.
   if (state === 'disconnected' || state === 'recoverable_unservable') return { bucket: 'offline', tone: 'neutral' };
   if (settled === true && (state === 'ready' || state === 'waiting')) return { bucket: 'finished', tone: 'neutral' };
-  return { bucket: state === 'thinking' ? 'working' : 'idle', tone: 'neutral' };
+  return { bucket: state === 'thinking' || state === 'background_active' ? 'working' : 'idle', tone: 'neutral' };
 }
 
 /**

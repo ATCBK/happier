@@ -96,8 +96,9 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
     expect(projection.operational.reasons).not.toContain('working');
   });
 
-  it('separates background runtime activity from a foreground turn', () => {
+  it('separates continuing background work from a completed foreground turn', () => {
     const background = projectSessionAwarenessV1(input({
+      lifecycle: { latestTurnStatus: 'completed', latestReadyEventSeq: 9 },
       runtime: {
         presence: 'online',
         active: true,
@@ -107,7 +108,18 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
     }));
 
     expect(background.runtime).toBe('background_active');
-    expect(background.operational.primary).not.toBe('working');
+    expect(background.operational.primary).toBe('none');
+    expect(background.operational.reasons).not.toContain('ready');
+    const settled = projectSessionAwarenessV1(input({
+      lifecycle: { latestTurnStatus: 'completed', latestReadyEventSeq: 9 },
+      runtime: { presence: 'online', active: true, activityState: 'idle', activityActiveCount: 0 },
+    }));
+    expect(settled.operational.primary).toBe('ready');
+    const disconnected = projectSessionAwarenessV1(input({
+      lifecycle: { latestTurnStatus: 'completed', latestReadyEventSeq: 9 },
+      runtime: { presence: 'offline', active: false, activityState: 'active', activityActiveCount: 2 },
+    }));
+    expect(disconnected.operational.reasons).not.toContain('ready');
     expect(background.operational.reasons).toContain('background_activity');
 
     const foreground = projectSessionAwarenessV1(input({

@@ -136,7 +136,8 @@ export function projectSessionAwarenessOperationalV1(input: Readonly<{
   const failed = lifecycle.latestTurnStatus === 'failed';
   const actionRequired = runtime.freshActionRequired || runtime.blockedInput;
   const permissionRequired = runtime.freshPermissionRequired;
-  const ready = hasSessionAwarenessReadyEvidenceV1(lifecycle, lifecycleEvidenceUnavailable);
+  // A completed foreground turn is not finished work while reported background activity continues.
+  const ready = !runtime.backgroundActive && hasSessionAwarenessReadyEvidenceV1(lifecycle, lifecycleEvidenceUnavailable);
 
   const primary = ((): SessionAwarenessOperationalPrimaryV1 => {
     if (failed) return 'failed';

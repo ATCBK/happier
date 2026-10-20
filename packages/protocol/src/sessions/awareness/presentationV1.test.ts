@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { readSessionAwarenessPresentationV1, readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1, readSessionManagedSessionsPresentationV1 } from './presentationV1.js';
+import { listSessionPresentationStatesForWorkStatusFilterV1, readSessionAwarenessPresentationV1, readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1, readSessionManagedSessionsPresentationV1 } from './presentationV1.js';
 
 describe('readSessionAwarenessWorkStatusV1', () => {
+  it('keeps background activity in Working and its status filter until it settles', () => {
+    const awareness = { runtime: 'background_active', encryption: 'plain', operational: { primary: 'none' } } as const;
+    const status = readSessionAwarenessWorkStatusV1({ awareness, settled: true });
+    expect(status).toEqual({ bucket: 'working', tone: 'neutral' });
+    expect(readSessionWorkStateGroupV1(status.bucket)).toBe('working');
+    expect(listSessionPresentationStatesForWorkStatusFilterV1('working')).toContain('background_active');
+    expect(readSessionAwarenessWorkStatusV1({ awareness: { ...awareness, runtime: 'idle' }, settled: true }))
+      .toEqual({ bucket: 'finished', tone: 'neutral' });
+  });
   it('does not turn offline in-flight reports into working reports in a summary', () => {
     expect(readSessionManagedSessionsPresentationV1({ working: 0, needsYou: 0, stalled: 4 }))
       .toEqual({ bucket: 'offline', count: 4 });

@@ -28,6 +28,18 @@ import { MAX_PLUGIN_IDENTIFIER_BYTES } from '../../plugins/pluginId.js';
 import { AccountSettingsPersistedObjectSchema } from './accountSettingsPersistedObject.js';
 import { readRetainedConnectedAccountCatalogRecordV1 } from '../../connect/connectedAccountCatalogV1.js';
 
+describe('background-work attention preference', () => {
+  it('defaults retained Accounts to working status and admits each explicit presentation choice', () => {
+    expect(accountSettingsParse({})).toHaveProperty('sessionListBackgroundWorkAttentionModeV1', 'keepWorking');
+    expect(accountSettingsParse({ sessionListBackgroundWorkAttentionModeV1: 'invalid' }))
+      .toHaveProperty('sessionListBackgroundWorkAttentionModeV1', 'keepWorking');
+    for (const value of ['keepWorking', 'keepWorkingUnread', 'showUnread']) {
+      const stored = AccountSettingsPersistedObjectSchema.parse(JSON.parse(JSON.stringify({ sessionListBackgroundWorkAttentionModeV1: value })));
+      expect(accountSettingsParse(stored)).toHaveProperty('sessionListBackgroundWorkAttentionModeV1', value);
+    }
+  });
+});
+
 describe('file Ask target preference', () => {
   it('defaults old Accounts to side runs and preserves an explicit new-session choice', () => {
     expect(accountSettingsParse({}).filesAskWithoutSessionTarget).toBe('detached_run');

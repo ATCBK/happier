@@ -9,6 +9,27 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1,
   buildBuiltInAccountSettingMutationV1, readPortablePlatformAccountSettingBindingV1,
   readBuiltInSettingsOperationPolicyV1, resolveBuiltInAccountSettingResetValueV1 } from './settingsDeclarations.js';
 
+describe('background-work attention Settings declaration', () => {
+  it('reads, writes and resets the preference through its portable account owner', () => {
+    const declaration = readBuiltInSettingDeclarationV1('session.backgroundWorkAttention');
+    expect(declaration).toMatchObject({ pageId: 'session', sectionId: 'session.activitySignals',
+      storage: { scope: 'account', key: 'sessionListBackgroundWorkAttentionModeV1', access: 'read_write' } });
+    if (!declaration) throw new Error('Background-work attention setting unavailable');
+    const baseline = accountSettingsParse({});
+    expect(readBuiltInAccountSettingValueV1(declaration, baseline)).toBe('keepWorking');
+    for (const value of ['keepWorking', 'keepWorkingUnread', 'showUnread']) {
+      expect(parseBuiltInAccountSettingValueV1(declaration, value)).toEqual({ success: true, value });
+      const mutation = buildBuiltInAccountSettingMutationV1(declaration, baseline, value);
+      expect(mutation).toEqual({ sessionListBackgroundWorkAttentionModeV1: value });
+      expect(readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({ ...baseline, ...mutation }))).toBe(value);
+    }
+    for (const value of ['invalid', null, false, 1]) {
+      expect(buildBuiltInAccountSettingMutationV1(declaration, baseline, value)).toBeNull();
+    }
+    expect(resolveBuiltInAccountSettingResetValueV1(declaration)).toEqual({ success: true, value: 'keepWorking' });
+  });
+});
+
 describe('portable built-in Settings declarations', () => {
   it.each([
     ['toolRendering.collapsedOverrides', 'toolViewDetailLevelByToolName', 'compact'],
