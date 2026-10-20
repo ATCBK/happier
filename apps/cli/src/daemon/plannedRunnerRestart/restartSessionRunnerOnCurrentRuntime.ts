@@ -75,6 +75,9 @@ type RestartSessionRunnerOnCurrentRuntimeInput = Readonly<{
   resolveActivityDisabledReason?: ResolveActivityDisabledReason;
   resolveAgentRuntimeCurrentness?: ResolveAgentRuntimeCurrentness;
   refreshTrackedSessionRuntimeSnapshot?: RefreshTrackedSessionRuntimeSnapshot;
+  readNativeRuntimeActivity?: (sessionId: string) => Promise<'active' | 'settled' | 'unknown'>;
+  /** Set only by the explicit confirmed-background restart operation. */
+  allowNativeBackgroundInterruption?: true;
 }>;
 
 export type RestartSessionRunnerCompletion =
@@ -418,9 +421,23 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
     return providerRecoverySpawnOptions;
   }
 
+  const resolveNativeActivityGate = async (): Promise<PlannedRunnerRestartSignalGateResult> => {
+    if (input.allowNativeBackgroundInterruption === true || !input.readNativeRuntimeActivity) return true;
+    try {
+      const state = await input.readNativeRuntimeActivity(sessionId);
+      return state === 'active' ? 'turn_in_progress' : true;
+    } catch { return 'activity_observation_unavailable'; }
+  };
   const activityRefusal = resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason);
   if (activityRefusal) {
     return busy(sessionId, activityRefusal);
+  }
+
+  const nativeActivityGate = await resolveNativeActivityGate();
+  if (nativeActivityGate !== true) {
+    return nativeActivityGate === 'turn_in_progress'
+      ? busy(sessionId, { reasonCode: 'turn_in_progress', diagnostics: { busySource: 'native_background_work' } })
+      : { ok: false, status: 'partial_failure', sessionId, diagnostics: { activityObservation: 'unavailable' } };
   }
 
   if ('dryRun' in input.request && input.request.dryRun === true) {
@@ -488,7 +505,13 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
       if (signalVersionGateResult) {
         return agentRuntimeRestartUnavailableReason ?? false;
       }
-      return resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason)?.reasonCode ?? true;
+      const foreground = resolveActivityRefusal(tracked, sessionId, input.resolveActivityDisabledReason);
+      if (foreground) return foreground.reasonCode;
+      const nativeGate = await resolveNativeActivityGate();
+      if (nativeGate === 'turn_in_progress') {
+        signalVersionGateResult = busy(sessionId, { reasonCode: 'turn_in_progress', diagnostics: { busySource: 'native_background_work' } });
+      }
+      return nativeGate;
     }
     : undefined;
   const restart = await input.requestRestart({
@@ -641,6 +664,7 @@ export async function restartAllSessionRunnersOnCurrentRuntime(input: Readonly<{
   ) => Promise<SessionRunnerAgentRuntimeCurrentness>;
   refreshTrackedSessionRuntimeSnapshot?: RefreshTrackedSessionRuntimeSnapshot;
   shouldContinue?: () => boolean;
+  readNativeRuntimeActivity?: RestartSessionRunnerOnCurrentRuntimeInput['readNativeRuntimeActivity'];
 }>): Promise<RestartAllSessionRunnersResult> {
   const results: RestartSessionRunnerResult[] = [];
   const restartTargets = input.trackedSessions.map((tracked) => ({
@@ -676,6 +700,7 @@ export async function restartAllSessionRunnersOnCurrentRuntime(input: Readonly<{
         }
         : {}),
       requestRestart: input.requestRestart,
+      readNativeRuntimeActivity: input.readNativeRuntimeActivity,
       ...(input.resolveAgentRuntimeCurrentness
         ? {
           resolveAgentRuntimeCurrentness:

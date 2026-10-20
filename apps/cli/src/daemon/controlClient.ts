@@ -63,7 +63,7 @@ import {
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
 import { RestartAllSessionRunnersRequestV1Schema, RestartAllSessionRunnersResultV1Schema, RestartSessionRunnerRequestV1Schema, RestartSessionRunnerResultV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
-import { RestartSessionRunnerRequestV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
+import { RestartSessionRunnerRequestV2Schema, RestartSessionRunnerConfirmedBackgroundRequestSchema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
 import type { ConnectedServiceBindingsV2, ConnectedAccountServiceKey, ConnectedServiceId, ConnectedServiceUsageSourceV1, ProviderAccountUsageSnapshotV1, RestartAllSessionRunnersRequestV1, RestartAllSessionRunnersResultV1, RestartSessionRunnerRequestV1, RestartSessionRunnerRequestV2, RestartSessionRunnerResultV1, SessionRunnerRestartModeV1, SessionMetadataPublisherPreconditionV1, SshTunnelEnsureRequest, SshTunnelEnsureResponse, SshTunnelListResponse, SshTunnelMutationResponse, SshTunnelProbeResponse, SessionUsageLimitRecoveryResumePromptModeV1, SpawnSessionNonceResolution } from '@happier-dev/protocol';
 import {
   StopSessionResultSchema,
@@ -1027,44 +1027,43 @@ export type DaemonSessionRunnerRestartMode = SessionRunnerRestartModeV1;
 export type RestartAllDaemonSessionRunnersRequest = RestartAllSessionRunnersRequestV1;
 export type RestartAllDaemonSessionRunnersResult = RestartAllSessionRunnersResultV1;
 
+async function requestDaemonSessionRunnerRestartOperation(
+  path: '/session-runners/restart' | '/session-runners/restart-confirmed-background' | '/session-runners/restart-v2',
+  request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2,
+  options: DaemonControlRequestOptions,
+): Promise<RestartSessionRunnerResultV1> {
+  const body = path === '/session-runners/restart-confirmed-background'
+    ? RestartSessionRunnerConfirmedBackgroundRequestSchema.parse(request)
+    : path === '/session-runners/restart-v2'
+      ? RestartSessionRunnerRequestV2Schema.parse(request)
+      : RestartSessionRunnerRequestV1Schema.parse(request);
+  // The canonical retirement and respawn lifecycle owns completion; caller cancellation remains live.
+  const result = await daemonPost(path, body, { timeoutMs: null, ...options });
+  if (result?.error) throw new Error(String(result.error));
+  const parsed = RestartSessionRunnerResultV1Schema.safeParse(result);
+  if (!parsed.success) throw new Error('Invalid daemon session runner restart response');
+  return parsed.data;
+}
+
 export async function requestDaemonSessionRunnerRestart(
   request: RestartSessionRunnerRequestV1,
   options: DaemonControlRequestOptions = {},
 ): Promise<RestartSessionRunnerResultV1> {
-  const body = RestartSessionRunnerRequestV1Schema.parse(request);
-  const result = await daemonPost('/session-runners/restart', body, {
-    // Planned retirement and respawn own completion. Observe under the caller
-    // lifetime; an explicit caller deadline may still narrow that lifetime.
-    timeoutMs: null,
-    ...options,
-  });
-  if (result?.error) {
-    throw new Error(String(result.error));
-  }
-  const parsed = RestartSessionRunnerResultV1Schema.safeParse(result);
-  if (!parsed.success) {
-    throw new Error('Invalid daemon session runner restart response');
-  }
-  return parsed.data;
+  return await requestDaemonSessionRunnerRestartOperation('/session-runners/restart', request, options);
+}
+
+export async function requestDaemonSessionRunnerRestartConfirmedBackground(
+  request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2,
+  options: DaemonControlRequestOptions = {},
+): Promise<RestartSessionRunnerResultV1> {
+  return await requestDaemonSessionRunnerRestartOperation('/session-runners/restart-confirmed-background', request, options);
 }
 
 export async function requestDaemonSessionRunnerRestartV2(
   request: RestartSessionRunnerRequestV2,
   options: DaemonControlRequestOptions = {},
 ): Promise<RestartSessionRunnerResultV1> {
-  const body = RestartSessionRunnerRequestV2Schema.parse(request);
-  const result = await daemonPost('/session-runners/restart-v2', body, {
-    timeoutMs: null,
-    ...options,
-  });
-  if (result?.error) {
-    throw new Error(String(result.error));
-  }
-  const parsed = RestartSessionRunnerResultV1Schema.safeParse(result);
-  if (!parsed.success) {
-    throw new Error('Invalid daemon session runner V2 restart response');
-  }
-  return parsed.data;
+  return await requestDaemonSessionRunnerRestartOperation('/session-runners/restart-v2', request, options);
 }
 
 export async function restartAllDaemonSessionRunners(

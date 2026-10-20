@@ -105,7 +105,7 @@ import { LocalServiceActionRequestV1Schema, LocalServiceActionResultV1Schema } f
 import { LocalServicePreviewSnapshotV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
 import { ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { RestartAllSessionRunnersRequestV1Schema, RestartAllSessionRunnersResultV1Schema, RestartSessionRunnerRequestV1Schema, RestartSessionRunnerResultV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
-import { RestartSessionRunnerRequestV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
+import { RestartSessionRunnerRequestV2Schema, RestartSessionRunnerConfirmedBackgroundRequestSchema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
 import { SessionRunnerStatusGetRequestV1Schema, SessionRunnerRuntimeStateV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
 import { SessionRunnerRuntimeStatusV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV2';
 import { SessionCreationTerminalSpawnErrorDetailSchema, SpawnSessionErrorCodeSchema } from '@happier-dev/protocol/spawnSession';
@@ -826,7 +826,7 @@ export function createDaemonControlApp({
     accountSettingsVersionHint?: number;
   }>) => Promise<unknown>;
   handleSessionConnectedServiceRuntimeAuthRefresh?: SessionConnectedServiceRuntimeAuthRefreshHandler;
-  handleSessionRunnerRestart?: (request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2) => Promise<RestartSessionRunnerResultV1>;
+  handleSessionRunnerRestart?: (request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2, options?: Readonly<{ allowNativeBackgroundInterruption: true }>) => Promise<RestartSessionRunnerResultV1>;
   handleSessionRunnerRestartAll?: (request: RestartAllSessionRunnersRequestV1) => Promise<RestartAllSessionRunnersResultV1>;
   handleSessionRunnerStatusGet?: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStateV1>;
   handleSessionRunnerStatusV2Get?: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStatusV2>;
@@ -1690,46 +1690,53 @@ export function createDaemonControlApp({
     return result;
   });
 
-  typed.post('/session-runners/restart', {
-    schema: {
-      body: RestartSessionRunnerRequestV1Schema,
-      response: {
-        200: RestartSessionRunnerResultV1Schema,
-        401: authSchema401,
-        503: daemonShuttingDownRouteResponseSchema,
-        501: z.object({
-          ok: z.literal(false),
-          status: z.literal('unsupported_daemon'),
-          sessionId: z.string(),
-          reasonCode: z.literal('unsupported_daemon_version'),
-        }),
+  for (const restartRoute of [
+    { path: '/session-runners/restart', confirmedBackground: false },
+    { path: '/session-runners/restart-confirmed-background', confirmedBackground: true },
+  ] as const) {
+    typed.post(restartRoute.path, {
+      schema: {
+        body: restartRoute.confirmedBackground ? RestartSessionRunnerConfirmedBackgroundRequestSchema : RestartSessionRunnerRequestV1Schema,
+        response: {
+          200: RestartSessionRunnerResultV1Schema,
+          401: authSchema401,
+          503: daemonShuttingDownRouteResponseSchema,
+          501: z.object({
+            ok: z.literal(false),
+            status: z.literal('unsupported_daemon'),
+            sessionId: z.string(),
+            reasonCode: z.literal('unsupported_daemon_version'),
+          }),
+        },
       },
-    },
-    preHandler: requireAuth,
-  }, async (request, reply) => {
-    if (isDaemonQuiescing()) {
-      reply.code(503);
-      return daemonShuttingDownResponse();
-    }
-    if (!handleSessionRunnerRestart) {
-      reply.code(501);
-      return {
-        ok: false as const,
-        status: 'unsupported_daemon' as const,
-        sessionId: request.body.sessionId,
-        reasonCode: 'unsupported_daemon_version' as const,
-      };
-    }
-    if (isUnattestedPublicV1RunnerRolloutMutation(request.body)) {
-      return {
-        ok: false as const,
-        status: 'ineligible' as const,
-        sessionId: request.body.sessionId,
-        reasonCode: 'runner_generation_unattested' as const,
-      };
-    }
-    return await handleSessionRunnerRestart(request.body);
-  });
+      preHandler: requireAuth,
+    }, async (request, reply) => {
+      if (isDaemonQuiescing()) {
+        reply.code(503);
+        return daemonShuttingDownResponse();
+      }
+      if (!handleSessionRunnerRestart) {
+        reply.code(501);
+        return {
+          ok: false as const,
+          status: 'unsupported_daemon' as const,
+          sessionId: request.body.sessionId,
+          reasonCode: 'unsupported_daemon_version' as const,
+        };
+      }
+      if (isUnattestedPublicV1RunnerRolloutMutation(request.body)) {
+        return {
+          ok: false as const,
+          status: 'ineligible' as const,
+          sessionId: request.body.sessionId,
+          reasonCode: 'runner_generation_unattested' as const,
+        };
+      }
+      return restartRoute.confirmedBackground
+        ? await handleSessionRunnerRestart(request.body, { allowNativeBackgroundInterruption: true })
+        : await handleSessionRunnerRestart(request.body);
+    });
+  }
 
   typed.post('/session-runners/restart-v2', {
     schema: {
@@ -4334,7 +4341,7 @@ export function startDaemonControlServer({
     accountSettingsVersionHint?: number;
   }>) => Promise<unknown>;
   handleSessionConnectedServiceRuntimeAuthRefresh?: SessionConnectedServiceRuntimeAuthRefreshHandler;
-  handleSessionRunnerRestart?: (request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2) => Promise<RestartSessionRunnerResultV1>;
+  handleSessionRunnerRestart?: (request: RestartSessionRunnerRequestV1 | RestartSessionRunnerRequestV2, options?: Readonly<{ allowNativeBackgroundInterruption: true }>) => Promise<RestartSessionRunnerResultV1>;
   handleSessionRunnerRestartAll?: (request: RestartAllSessionRunnersRequestV1) => Promise<RestartAllSessionRunnersResultV1>;
   handleSessionRunnerStatusGet?: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStateV1>;
   handleSessionRunnerStatusV2Get?: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStatusV2>;

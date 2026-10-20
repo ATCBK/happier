@@ -81,6 +81,55 @@ function providerRecoveryRequest() {
 }
 
 describe('restartSessionRunnerOnCurrentRuntime', () => {
+  it.each(['active', 'unknown'] as const)('refuses active native work and permits nonreporting compatibility (%s), including a legacy UI reason', async state => {
+    const requestRestart = vi.fn(async () => ({ signaled: true }));
+    const result = await restartSessionRunnerOnCurrentRuntime({
+      request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'ui_stale_runner_banner' },
+      tracked: trackedSession(), currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      readNativeRuntimeActivity: async () => state,
+    });
+    expect(result).toMatchObject(state === 'active'
+      ? { ok: false, status: 'busy', reasonCode: 'turn_in_progress', diagnostics: { busySource: 'native_background_work' } }
+      : { ok: true, status: 'restarted' });
+    if (state === 'active') expect(requestRestart).not.toHaveBeenCalled();
+    else expect(requestRestart).toHaveBeenCalled();
+  });
+
+  it('refuses refresh when native activity cannot be read, without treating an absent report as a failure', async () => {
+    const requestRestart = vi.fn(async () => ({ signaled: true }));
+    expect(await restartSessionRunnerOnCurrentRuntime({
+      request: { sessionId: 'sess-1', mode: 'if_stale', reason: 'doctor_repair' },
+      tracked: trackedSession(), currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      readNativeRuntimeActivity: async () => { throw new Error('fixture transport unavailable'); },
+    })).toMatchObject({ status: 'partial_failure', diagnostics: { activityObservation: 'unavailable' } });
+    expect(requestRestart).not.toHaveBeenCalled();
+  });
+
+  it('permits explicit native-background interruption but still refuses a foreground turn', async () => {
+    const requestRestart = vi.fn(async () => ({ signaled: true }));
+    const input = { currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      readNativeRuntimeActivity: async () => 'active' as const, allowNativeBackgroundInterruption: true as const,
+      request: { sessionId: 'sess-1', mode: 'if_stale' as const, reason: 'ui_stale_runner_banner' as const } };
+    expect(await restartSessionRunnerOnCurrentRuntime({ ...input, tracked: trackedSession() })).toMatchObject({ status: 'restarted' });
+    expect(await restartSessionRunnerOnCurrentRuntime({ ...input, tracked: trackedSession({ activeTurnId: 'foreground' }) }))
+      .toMatchObject({ status: 'busy', reasonCode: 'turn_in_progress' });
+  });
+
+  it('protects dry runs and rechecks native work at the physical signal gate', async () => {
+    let state: 'settled' | 'active' = 'active';
+    let gate: (() => unknown) | undefined;
+    const requestRestart = vi.fn<Parameters<typeof restartSessionRunnerOnCurrentRuntime>[0]['requestRestart']>(async input => { gate = input.canSignal; return { signaled: true }; });
+    const input = { request: { sessionId: 'sess-1', mode: 'if_stale' as const, reason: 'doctor_repair' as const },
+      tracked: trackedSession(), currentIdentity: currentIdentity('0.2.11'), requestRestart,
+      readNativeRuntimeActivity: async () => state };
+    expect(await restartSessionRunnerOnCurrentRuntime({ ...input, request: { ...input.request, dryRun: true } }))
+      .toMatchObject({ status: 'busy' });
+    state = 'settled';
+    expect(await restartSessionRunnerOnCurrentRuntime(input)).toMatchObject({ status: 'restarted' });
+    state = 'active';
+    expect(await gate?.()).toBe('turn_in_progress');
+  });
+
   it('returns an actionable typed refusal when the receiving runner cannot prepare restart admission', async () => {
     const tracked = trackedSession();
     const restart = () => restartSessionRunnerOnCurrentRuntime({

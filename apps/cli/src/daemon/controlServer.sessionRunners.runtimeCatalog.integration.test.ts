@@ -195,7 +195,7 @@ describe('daemon control server: session runner restarts', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ status: 'incomplete', reason: 'runner_exit_timeout' });
-      expect(stopSession).toHaveBeenCalledWith('sess-1', 'explicit_stop');
+      expect(stopSession).toHaveBeenCalledWith('sess-1', 'explicit_stop', expect.any(AbortSignal));
     } finally {
       await app.close();
     }
@@ -350,6 +350,47 @@ describe('daemon control server: session runner restarts', () => {
     } finally {
       await app.close();
     }
+  });
+
+  it.each(['V1', 'V2'] as const)('keeps native interruption consent for %s on the dedicated route through the same restart owner', async version => {
+    let signals = 0;
+    const tracked = {
+      startedBy: 'daemon', pid: 123, happySessionId: 'sess-1', processCommandHash: 'hash', processStartTimeMs: 100,
+      processCommand: 'node /tmp/versions/0.2.10/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+      vendorResumeId: 'thread', spawnOptions: { directory: '/tmp/project', resume: 'thread',
+        backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' } },
+    } satisfies TrackedSession;
+    const app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'machine',
+      stopSession: async () => ({ status: 'stopped' as const }), spawnSession: async () => ({ type: 'success', sessionId: 'sess-1' }),
+      requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'test-token',
+      handleSessionRunnerRestart: (request, options) => restartSessionRunnerOnCurrentRuntime({ request, tracked,
+        currentIdentity: { status: 'known', source: 'launch_spec', comparableId: 'version:0.2.11', entrypointVersion: '0.2.11' },
+        ...options, readNativeRuntimeActivity: async () => 'active',
+        requestRestart: async () => { signals++; return { signaled: true }; },
+      }),
+    });
+    try {
+      await app.ready();
+      const payload = version === 'V1'
+        ? { sessionId: 'sess-1', mode: 'if_stale', reason: 'ui_stale_runner_banner' }
+        : { v: 2, sessionId: 'sess-1', mode: 'force_current_cli', reason: 'provider_binding_change_recovery',
+          expectedRunnerPid: tracked.pid, expectedProcessCommandHash: tracked.processCommandHash,
+          expectedRunnerEntrypointIdentity: 'version:0.2.10',
+          expectedRunnerProcessIdentity: { pid: tracked.pid, processStartTimeMs: tracked.processStartTimeMs } };
+      const defaultPath = version === 'V1' ? '/session-runners/restart' : '/session-runners/restart-v2';
+      const request = (url: string, body = payload) => app.inject({ method: 'POST', url,
+        headers: { 'x-happier-daemon-token': 'test-token' }, payload: body });
+      expect((await request(defaultPath)).json()).toMatchObject({ status: 'busy' });
+      const confirmed = await request('/session-runners/restart-confirmed-background');
+      expect(confirmed.statusCode).toBe(200);
+      expect(confirmed.json()).toMatchObject({ status: 'restarted' });
+      expect(signals).toBe(1);
+      expect((await app.inject({ method: 'POST', url: '/session-runners/restart-confirmed-background', payload })).statusCode).toBe(401);
+      const invalid = await app.inject({ method: 'POST', url: '/session-runners/restart',
+        headers: { 'x-happier-daemon-token': 'test-token' }, payload: { ...payload, allowNativeBackgroundInterruption: true } });
+      expect(invalid.statusCode).toBe(400);
+      expect(signals).toBe(1);
+    } finally { await app.close(); }
   });
 
   it('forwards strict process-attested recovery V2 to the canonical restart owner', async () => {

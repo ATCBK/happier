@@ -195,13 +195,13 @@ export async function requestPlannedRunnerRestart(
             if (!release) { notSignaledReason = 'activity_observation_unavailable'; return false; }
             releaseSignalAdmission = release;
           }
-          const allowedByActivityGate = (await params.canSignal?.(signal)) ?? true;
-          if (allowedByActivityGate !== true) {
-            notSignaledReason = allowedByActivityGate === false
-              ? 'activity_in_progress'
-              : allowedByActivityGate;
+          const activityStillAllowsSignal = async (): Promise<boolean> => {
+            const allowed = (await params.canSignal?.(signal)) ?? true;
+            if (allowed === true) return true;
+            notSignaledReason = allowed === false ? 'activity_in_progress' : allowed;
             return false;
-          }
+          };
+          if (!await activityStillAllowsSignal()) return false;
           if (params.captureRunnerRemainder) {
             const captured = await params.captureRunnerRemainder(params.tracked, params.sessionId);
             if (!captured) {
@@ -209,6 +209,8 @@ export async function requestPlannedRunnerRestart(
               return false;
             }
             params.tracked.ownerRemainderCapture = captured;
+            // OS capture can suspend while native work starts on this runner.
+            if (!await activityStillAllowsSignal()) return false;
           }
           if (!await exactProcessWitnessIsCurrent()) return false;
           if (signal.aborted || releaseSignalAdmission?.signal.aborted) {

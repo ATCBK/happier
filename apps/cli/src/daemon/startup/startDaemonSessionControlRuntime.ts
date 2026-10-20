@@ -30,7 +30,7 @@ import { createSessionLiveWorkProducer } from '../lifecycle/sessionLiveWorkProdu
 import { createSessionFollowOccurrenceDispatcher } from '@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { reportPendingSessionActivationFailure } from '@/api/session/pendingActivationTransport';
-import { readTrackedSessionInputLiveWork } from '../lifecycle/readTrackedSessionInputLiveWork';
+import { readTrackedSessionInputLiveWorkRequired } from '../lifecycle/readTrackedSessionInputLiveWork';
 import { waitForChangeOrDeadline } from '../lifecycle/waitForChangeOrDeadline';
 import { prepareSessionRunnerRestartAdmission, SessionRunnerRestartAdmissionUnsupportedError } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
 import { ExecutionRunListResponseSchema, isExecutionRunActive } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -6513,6 +6513,21 @@ export async function startDaemonSessionControlRuntime(
   // during that observation without giving rejected lifecycle input authority in the queue.
   // Separate entries keep overlapping begins protected until each observation settles.
   const pendingTurnBegins = new Set<Readonly<{ sessionId: string }>>();
+  const readSessionRunnerLiveWork = async (tracked: TrackedSession, signal: AbortSignal) => {
+    const sessionId = resolveCanonicalTrackedSessionId(tracked.pid);
+    return await withSessionAccountContext(sessionId || null, async requester =>
+      await readTrackedSessionInputLiveWorkRequired({
+        tracked, credentials: params.credentials, custodianAccountId: params.externalActionAccountId ?? null,
+        serverId: params.serverId, machineId: params.machineId, serverHttpBaseUrl: params.serverBaseUrl,
+        ...(requester ? { requesterBootstrap: requester.bootstrap } : {}),
+        isTrackedCurrent: () => params.pidToTrackedSession.get(tracked.pid) === tracked, signal,
+      }), undefined, signal);
+  };
+  const readSessionRunnerNativeRuntimeActivity = async (sessionId: string): Promise<'active' | 'settled' | 'unknown'> => {
+    const tracked = findTrackedSessionByHappySessionId(params.pidToTrackedSession.values(), sessionId);
+    if (!tracked) return 'unknown';
+    return (await readSessionRunnerLiveWork(tracked, shutdownCancellationDomains.daemonWorkSignal)).nativeRuntimeActivity ?? 'unknown';
+  };
   const resolveSessionRunnerActivity = (
     sessionId: string,
     childRuns?: readonly Parameters<typeof isExecutionRunActive>[0][],
@@ -6801,8 +6816,12 @@ export async function startDaemonSessionControlRuntime(
         const allowed = input.canSignal ? await input.canSignal()
           : resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true;
         if (allowed !== true || input.requesterReason === 'request_auth_source_cutover') return allowed;
-        return await waitForSessionRunnerChildTurns(input.sessionId,
+        const childGate = await waitForSessionRunnerChildTurns(input.sessionId,
           AbortSignal.any([signal, shutdownCancellationDomains.daemonWorkSignal]));
+        if (childGate !== true) return childGate;
+        // Native work and the exact restart context may change while child turns drain.
+        return input.canSignal ? await input.canSignal()
+          : resolveSessionRunnerActivityDisabledReason(input.sessionId) ?? true;
       },
       requestSignal: async (signalInput) => {
         // Session-runner version refresh uses the shared forced-respawn
@@ -16824,25 +16843,7 @@ export async function startDaemonSessionControlRuntime(
   const sessionLiveWorkProducer = createSessionLiveWorkProducer({
     startup: spawnRequestCoalescer,
     readSessions: () => [...params.pidToTrackedSession.values()],
-    readActivity: async (tracked) => {
-      const sessionId = resolveCanonicalTrackedSessionId(tracked.pid);
-      return await withSessionAccountContext(sessionId || null, async (requester) =>
-        await readTrackedSessionInputLiveWork({
-          tracked,
-          credentials: params.credentials,
-          custodianAccountId: params.externalActionAccountId ?? null,
-          serverId: params.serverId,
-          machineId: params.machineId,
-          serverHttpBaseUrl: params.serverBaseUrl,
-          ...(requester ? { requesterBootstrap: requester.bootstrap } : {}),
-          isTrackedCurrent: () =>
-            params.pidToTrackedSession.get(tracked.pid) === tracked,
-          signal: shutdownCancellationDomains.daemonWorkSignal,
-        }),
-        undefined,
-        shutdownCancellationDomains.daemonWorkSignal,
-      );
-    },
+    readActivity: tracked => readSessionRunnerLiveWork(tracked, shutdownCancellationDomains.daemonWorkSignal),
   });
   notifySessionLiveWorkChanged = () => sessionLiveWorkProducer.notifyChanged();
   let sourceFollow: Readonly<{ machine: ApiMachineClient; personalSettingsLifetime: number; isCurrent: () => Promise<boolean>;
@@ -18884,7 +18885,7 @@ export async function startDaemonSessionControlRuntime(
         });
       },
       handleSessionConnectedServiceRuntimeAuthRefresh,
-      handleSessionRunnerRestart: async (request) => {
+      handleSessionRunnerRestart: async (request, options) => {
         const tracked = findTrackedSessionByHappySessionId(
           params.pidToTrackedSession.values(),
           request.sessionId,
@@ -18908,6 +18909,8 @@ export async function startDaemonSessionControlRuntime(
           resolveAgentRuntimeCurrentness:
             resolveTrackedRunnerRuntimeCurrentness,
           requestRestart: requestSessionRunnerVersionRuntimeRefresh,
+          readNativeRuntimeActivity: readSessionRunnerNativeRuntimeActivity,
+          ...options,
           resolveActivityDisabledReason:
             resolveSessionRunnerActivity,
           refreshTrackedSessionRuntimeSnapshot:
@@ -18924,6 +18927,7 @@ export async function startDaemonSessionControlRuntime(
           resolveCurrentIdentity: resolveCurrentSessionRunnerLaunchIdentity,
           trackedSessions: Array.from(params.pidToTrackedSession.values()),
           requestRestart: requestSessionRunnerVersionRuntimeRefresh,
+          readNativeRuntimeActivity: readSessionRunnerNativeRuntimeActivity,
           resolveActivityDisabledReason:
             resolveSessionRunnerActivity,
           resolveAgentRuntimeCurrentness:
@@ -20100,6 +20104,7 @@ export async function startDaemonSessionControlRuntime(
         resolveCurrentIdentity: resolveCurrentSessionRunnerLaunchIdentity,
         trackedSessions: Array.from(params.pidToTrackedSession.values()),
         requestRestart: requestSessionRunnerVersionRuntimeRefresh,
+        readNativeRuntimeActivity: readSessionRunnerNativeRuntimeActivity,
         resolveActivityDisabledReason: resolveSessionRunnerActivity,
         resolveAgentRuntimeCurrentness: resolveTrackedRunnerRuntimeCurrentness,
         refreshTrackedSessionRuntimeSnapshot: refreshTrackedSessionRuntimeSnapshotForPlannedRestart,

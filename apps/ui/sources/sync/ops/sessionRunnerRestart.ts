@@ -13,6 +13,10 @@ import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { delay } from '@/utils/timing/time';
+import { Modal } from '@/modal';
+import { storage } from '@/sync/domains/state/storage';
+import { hasActiveSessionRuntimeActivity } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import { t } from '@/text';
 
 type RestartSessionRunnerInput = Readonly<{
     runtimeState: SessionRunnerRuntimeStateV1;
@@ -93,13 +97,18 @@ const SESSION_RUNNER_RESTART_OBSERVE_INTERVAL_MS = 1_500;
 async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRunnerInput & Readonly<{
     method:
         | typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART
-        | typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2;
+        | typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2
+        | typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND;
+    fallbackMethod?: typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART | typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2;
     request: Request;
     reconcileMode?: 'if_stale' | 'force_current_cli';
 }>): Promise<RestartSessionRunnerResultV1> {
     input.signal?.throwIfAborted();
     const machineId = input.runtimeState.machineId?.trim() ?? '';
     if (machineId.length === 0) return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
+    const unsupported = () => input.fallbackMethod
+        ? sendSessionRunnerRestartRequest({ ...input, method: input.fallbackMethod, fallbackMethod: undefined })
+        : Promise.resolve(buildUnsupportedDaemonResult(input.runtimeState.sessionId));
     let result: RestartSessionRunnerResultV1;
     try {
         const raw = await machineRpcWithServerScope<unknown, Request>({
@@ -115,8 +124,8 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
                 sessionId: input.runtimeState.sessionId,
             },
         });
-        if (isRpcMethodNotFoundResult(raw) || isUnsupportedDaemonError(raw)) {
-            return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
+        if (isUnsupportedDaemonError(raw) || (!input.fallbackMethod && isRpcMethodNotFoundResult(raw))) {
+            return await unsupported();
         }
 
         const parsed = RestartSessionRunnerResultV1Schema.safeParse(raw);
@@ -130,7 +139,7 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
     } catch (error) {
         input.signal?.throwIfAborted();
         if (isUnsupportedDaemonError(error)) {
-            return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
+            return await unsupported();
         }
         result = buildResult({
             sessionId: input.runtimeState.sessionId,
@@ -167,18 +176,67 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
     return result;
 }
 
+// One open confirmation protects repeated presses across every UI runner restart.
+let backgroundWorkConfirmationOpen = false;
+
+async function confirmRunnerRestartStopsBackgroundWork(input: RestartSessionRunnerInput): Promise<boolean> {
+    input.signal?.throwIfAborted();
+    if (backgroundWorkConfirmationOpen) return false;
+    backgroundWorkConfirmationOpen = true;
+    try {
+        const count = storage.getState().sessions[input.runtimeState.sessionId]?.runtimeActivityActiveCount ?? 0;
+        const confirmed = await Modal.confirm(
+            t('session.runnerRestartBackgroundWork.title'),
+            t('session.runnerRestartBackgroundWork.body', { count }),
+            { cancelText: t('common.cancel'), confirmText: t('session.runnerRestartBackgroundWork.confirmAction'),
+                destructive: true },
+        );
+        input.signal?.throwIfAborted();
+        return confirmed;
+    } finally {
+        backgroundWorkConfirmationOpen = false;
+    }
+}
+
+async function restartSessionRunnerWithBackgroundWorkConfirmation<Request>(input: RestartSessionRunnerInput & Readonly<{
+    method: typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART | typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2;
+    request: Request;
+    reconcileMode?: 'if_stale' | 'force_current_cli';
+}>): Promise<RestartSessionRunnerResultV1 | null> {
+    input.signal?.throwIfAborted();
+    const session = storage.getState().sessions[input.runtimeState.sessionId];
+    // Interruption protection reads the reported fact even when presentation is stale or foregrounded.
+    const hasActivity = hasActiveSessionRuntimeActivity({
+        state: session?.runtimeActivityState, activeCount: session?.runtimeActivityActiveCount,
+    });
+    if (hasActivity && !await confirmRunnerRestartStopsBackgroundWork(input)) return null;
+    const restart = (confirmed: boolean) => sendSessionRunnerRestartRequest({ ...input,
+        method: confirmed ? RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND : input.method,
+        // Supported older daemons receive the unchanged original request only after the same consent.
+        ...(confirmed ? { fallbackMethod: input.method } : {}),
+    });
+    const result = await restart(hasActivity);
+    // The daemon can observe native work before its projection reaches this device.
+    if (!hasActivity && result.status === 'busy' && result.diagnostics?.busySource === 'native_background_work') {
+        if (!await confirmRunnerRestartStopsBackgroundWork(input)) return null;
+        return await restart(true);
+    }
+    return result;
+}
+
 export async function restartSessionRunnerOnCurrentRuntime(
     input: RestartSessionRunnerInput,
-): Promise<RestartSessionRunnerResultV1> {
+): Promise<RestartSessionRunnerResultV1 | null> {
+    input.signal?.throwIfAborted();
     const request = buildSessionRunnerRuntimeRefreshRequestV1(input.runtimeState);
     if ('ok' in request) return request;
-    return await sendSessionRunnerRestartRequest({ ...input,
+    return await restartSessionRunnerWithBackgroundWorkConfirmation({ ...input,
         method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, request, reconcileMode: 'if_stale' });
 }
 
 export async function restartSessionRunnerForProviderBindingChange(
     input: RestartSessionRunnerForProviderBindingChangeInput,
-): Promise<RestartSessionRunnerResultV1> {
+): Promise<RestartSessionRunnerResultV1 | null> {
     if (!input.runnerProcessIdentity) {
         return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
     }
@@ -205,7 +263,7 @@ export async function restartSessionRunnerForProviderBindingChange(
         expectedRunnerProcessIdentity: input.runnerProcessIdentity,
         ...(confirmation ? { providerBindingSecurityChangeConfirmationV1: confirmation } : {}),
     });
-    return await sendSessionRunnerRestartRequest({
+    return await restartSessionRunnerWithBackgroundWorkConfirmation({
         runtimeState: input.runtimeState,
         serverId: input.serverId,
         signal: input.signal,

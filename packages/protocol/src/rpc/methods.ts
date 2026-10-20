@@ -374,6 +374,7 @@ export const RPC_METHODS = {
   DAEMON_SESSION_RUNNER_STATUS_V2_GET: 'daemon.sessionRunner.status.v2.get',
   DAEMON_SESSION_FOLLOW_SOURCE_KEY_PREPARE: 'daemon.sessionFollow.sourceKey.prepare.v1',
   DAEMON_SESSION_RUNNER_RESTART: 'daemon.sessionRunner.restart',
+  DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND: 'daemon.sessionRunner.restart.confirmedBackground',
   DAEMON_SESSION_RUNNER_RESTART_V2: 'daemon.sessionRunner.restart.v2',
   DAEMON_SESSION_RUNNER_RESTART_ALL: 'daemon.sessionRunner.restartAll',
   DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME: 'daemon.connectedServiceQuota.recoveryCredit.consume',

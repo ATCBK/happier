@@ -93,6 +93,26 @@ describe('requestPlannedRunnerRestart', () => {
     expect(signaled).toBe(false);
     expect(result).toMatchObject({ signaled: false, notSignaledReason: 'stale_owner' });
   });
+  it('refuses native work that becomes active during remainder capture', async () => {
+    const tracked = makeTracked();
+    let nativeActive = false;
+    let signaled = false;
+    const result = await requestPlannedRunnerRestart({ sessionId: 'sess-1', tracked,
+      deferral: { kind: 'none' }, restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+      isProcessSafeToSignal: async () => true,
+      canSignal: () => nativeActive ? 'turn_in_progress' : true,
+      captureRunnerRemainder: async () => {
+        nativeActive = true;
+        return { scope: 'subtree', roots: [], ownership: [] };
+      },
+      requestSignal: async request => {
+        signaled = await request.shouldSignal();
+        return { status: signaled ? 'requested' : 'skipped_stale_owner' };
+      },
+    });
+    expect(signaled).toBe(false);
+    expect(result).toEqual({ signaled: false, notSignaledReason: 'turn_in_progress' });
+  });
   it.each(['none', 'connected_service_switch'] as const)('does not signal after shutdown begins during the final process probe (%s)', async (kind) => {
     const tracked = makeTracked();
     const restartRequestedPids = new Set<number>();

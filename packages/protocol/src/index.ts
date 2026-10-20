@@ -4513,6 +4513,8 @@ export {
 } from './sessions/control/sessionRunnerRestartV1.js';
 
 export {
+  RestartSessionRunnerConfirmedBackgroundRequestSchema,
+  type RestartSessionRunnerConfirmedBackgroundRequest,
   RestartSessionRunnerRequestV2Schema,
   type RestartSessionRunnerRequestV2,
 } from './sessions/control/sessionRunnerRestartV2.js';

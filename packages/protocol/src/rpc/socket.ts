@@ -609,6 +609,7 @@ const SOCKET_RPC_SESSION_WRITE_AUTHORIZATION: ReadonlyMap<string, SocketRpcSessi
     { method: RPC_METHODS.SESSION_FORK_PROVIDER_SAFE, authority: 'sessionOwner', routeToSessionOwnerDaemon: false },
     { method: RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY, authority: 'sessionOwner', routeToSessionOwnerDaemon: false },
     { method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, authority: 'submitAgentInput', routeToSessionOwnerDaemon: false },
+    { method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND, authority: 'submitAgentInput', routeToSessionOwnerDaemon: false },
     { method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, authority: 'submitAgentInput', routeToSessionOwnerDaemon: false },
     { method: RPC_METHODS.SESSION_AGENT_TRANSITION, authority: 'submitAgentInput', routeToSessionOwnerDaemon: false },
   ] as const satisfies readonly SocketRpcSessionWriteClassificationV1[])
@@ -625,6 +626,7 @@ const SOCKET_RPC_PROVIDER_STARTING_METHODS = new Set<string>([
   RPC_METHODS.SESSION_AGENT_TRANSITION,
   RPC_METHODS.DAEMON_SESSION_CONNECTED_SERVICE_AUTH_SWITCH,
   RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART,
+  RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND,
   RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2,
   RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_ALL,
   RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE,

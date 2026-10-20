@@ -174,7 +174,7 @@ import type {
   SessionRunnerRuntimeStatusV2,
 } from '@happier-dev/protocol';
 import { RestartAllSessionRunnersRequestV1Schema, RestartSessionRunnerRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
-import { RestartSessionRunnerRequestV2Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
+import { RestartSessionRunnerRequestV2Schema, RestartSessionRunnerConfirmedBackgroundRequestSchema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV2';
 import { SessionRunnerStatusGetRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
 import { SessionConnectedServiceAuthSwitchRpcParamsSchema } from '@happier-dev/protocol/connect/sessionConnectedServiceAuthSwitch';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
@@ -193,6 +193,7 @@ import type { TerminalProcessRegistry } from '@/daemon/local/services/inventory/
 import {
   requestDaemonSessionConnectedServiceAuthSwitch,
   requestDaemonSessionRunnerRestart,
+  requestDaemonSessionRunnerRestartConfirmedBackground,
   requestDaemonSessionRunnerRestartV2,
   restartAllDaemonSessionRunners,
 } from '@/daemon/controlClient';
@@ -948,6 +949,10 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
       };
     }
     return await requestDaemonSessionRunnerRestart(request, { signal: context?.signal });
+  });
+  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_CONFIRMED_BACKGROUND, async (raw: unknown, context) => {
+    const request = RestartSessionRunnerConfirmedBackgroundRequestSchema.parse(raw);
+    return await requestDaemonSessionRunnerRestartConfirmedBackground(request, { signal: context?.signal });
   });
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, async (raw: unknown, context) => {
     const request = RestartSessionRunnerRequestV2Schema.parse(raw);

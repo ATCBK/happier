@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { RestartSessionRunnerRequestV1Schema } from './sessionRunnerRestartV1.js';
 
 import { SessionProviderBindingSecurityChangeConfirmationV1Schema } from '../../providers/sessions/bindingMetadataV1.js';
 import { SessionRunnerProcessIdentityV2Schema } from './sessionRunnerRuntimeV2.js';
@@ -41,3 +42,10 @@ export const RestartSessionRunnerRequestV2Schema = lazyZodSchema(() => z.strictO
     }
   })));
 export type RestartSessionRunnerRequestV2 = z.infer<typeof RestartSessionRunnerRequestV2Schema>;
+
+/** Explicit consent changes the operation, while both predecessor request shapes remain unchanged. */
+export const RestartSessionRunnerConfirmedBackgroundRequestSchema = lazyZodSchema(() => z.union([
+  RestartSessionRunnerRequestV1Schema,
+  RestartSessionRunnerRequestV2Schema,
+]));
+export type RestartSessionRunnerConfirmedBackgroundRequest = z.infer<typeof RestartSessionRunnerConfirmedBackgroundRequestSchema>;

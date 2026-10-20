@@ -3106,7 +3106,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         }));
     });
 
-    it("rejects session-runner restart RPCs without edit authorization before forwarding", async () => {
+    it.each(['daemon.sessionRunner.restart', 'daemon.sessionRunner.restart.confirmedBackground'])('rejects %s RPCs without edit authorization before forwarding', async method => {
         sessionShareFindUniqueMock.mockResolvedValue({ id: "share-1", accessLevel: "view", canApprovePermissions: false });
         const socket = createFakeSocket({
             id: "caller-socket",
@@ -3125,7 +3125,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
             socket,
             SOCKET_RPC_EVENTS.CALL,
             {
-                method: `machine-1:${RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART}`,
+                method: `machine-1:${method}`,
                 params: "encrypted-payload",
                 authorization: {
                     kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_WRITE,
