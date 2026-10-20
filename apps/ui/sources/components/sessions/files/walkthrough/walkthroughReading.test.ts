@@ -96,6 +96,13 @@ function input(overrides: Partial<WalkthroughReadingInput> = {}): WalkthroughRea
 }
 
 describe('buildWalkthroughReading', () => {
+    it('projects optional suggested questions unchanged beside the exact stop', () => {
+        const suggestedQuestions = ['Why keep one key across renders?'];
+        const value = { ...WALKTHROUGH, stops: WALKTHROUGH.stops.map((stop, index) => index === 0 ? { ...stop, suggestedQuestions } : stop) };
+        const reading = buildWalkthroughReading(input({ walkthrough: { state: 'complete', value } }));
+        expect(reading.stops[0]).toMatchObject({ id: 'stop-why', suggestedQuestions });
+        expect(reading.stops[1]?.suggestedQuestions).toBeUndefined();
+    });
     it('projects the Board next stop and personal progress without reading 214 files of diff evidence', () => {
         let evidenceReads = 0;
         const files = Array.from({ length: 214 }, (_, index) => {
