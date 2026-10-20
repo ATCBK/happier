@@ -30,6 +30,16 @@ Do not introduce direct product-runtime calls to:
 
 These are allowed only behind centralized managed runtime/tooling abstractions.
 
+In current development source, the PTY provider uses the existing Python relay on
+POSIX Bun. Both native packages use `tty.ReadStream` for a nonblocking PTY master;
+Bun 1.4.2 can return a successful spawn without working input/output
+([upstream issue](https://github.com/oven-sh/bun/issues/25822)). Module-load success
+therefore cannot establish backend usability. Re-enable native POSIX selection
+only after the bundled runtime passes interactive input/output and cleanup checks.
+The relay requires Python 3, applies the initial window size, and reports
+`terminal_resize_unavailable` for subsequent resizes. Node-hosted and Windows
+backend selection are unchanged.
+
 In 0.3 development, remote SSH machine setup installs the selected CLI through
 the canonical first-party payload installer after host trust and before relay
 installation, service inventory, or Home enrollment. SSH command execution and
