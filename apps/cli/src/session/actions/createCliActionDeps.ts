@@ -3383,7 +3383,8 @@ export function createCliActionDeps(params: Readonly<{
         : { ...inputRecord, cwd: workingDirectory,
             ...(actionId === 'scm.diffSummary.capture' ? { sessionId: transport.sessionId } : {}),
           };
-    const backendTarget = actionId === 'scm.diffSummary.generate' ? resolveScmBackendTarget(metadata) : null;
+    const backendTarget = actionId === 'scm.diffSummary.generate' || actionId === 'scm.diffSummary.draftPullRequest'
+      ? resolveScmBackendTarget(metadata) : null;
 
     if (actionId.startsWith('scm.diffSummary.') && !await localReviewHomeCurrent()) {
       return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
