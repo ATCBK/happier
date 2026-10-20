@@ -18,6 +18,7 @@ import { Popover } from '@/components/ui/popover';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { Typography } from '@/constants/Typography';
 import { getPoolStrategyPresentation } from '@/sync/domains/connectedServices/connectedServicePoolPolicy';
@@ -701,11 +702,14 @@ function PoolComparison(props: WhyProps) {
       itemTrigger={{ title: t('usage.board.plans.comparisonMoment') }}
       onSelect={value => { if (value === 'now' || moments.includes(Number(value))) { setAtMs(value === 'now' ? null : Number(value)); setAsked(true); } }} />
     <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.comparisonNote')}</Text>
+    {asked && snapshot.error ? <SurfaceFreshnessLine testID={`${id}.failed`} tone="warning"
+      reason={t('usage.board.plans.usedFirstReadFailed')}
+      action={{ label: t('common.retry'), onPress: async () => { await entry?.refresh(); } }} /> : null}
     {asked ? !entry ? <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.usedFirstNoMachine')}</Text>
-      : snapshot.error || response && 'status' in response ? <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.usedFirstReadFailed')}</Text>
+      : response && 'status' in response ? <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.usedFirstReadFailed')}</Text>
       : response && 'group' in response ? <View accessibilityRole="list">{readUsagePoolMembers(props.pool, props.accounts, response.selection).map((member, index) =>
         <WhyRow key={member.accountId} member={member} first={index === 0} nameOf={props.nameOf} nowMs={moment} testID={`${id}.candidate.${member.accountId}`} />)}</View>
-      : <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.hintLoading')}</Text> : null}
+      : snapshot.error ? null : <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.hintLoading')}</Text> : null}
   </View>;
 }
 

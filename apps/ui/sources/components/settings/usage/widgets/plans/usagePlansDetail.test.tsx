@@ -12,6 +12,8 @@ import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { captureUiUsageQueryAccountContext, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
+import { RetryableServerResponseError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 import {
   ConnectedServiceQuotaGetResultV1Schema,
   type ConnectedServiceQuotaGetResultV1,
@@ -174,6 +176,7 @@ function bodyProps(
   quota: readonly ConnectedServiceQuotaGetResultV1[],
   pools?: Parameters<typeof resolveUsagePageAggregation>[0]['pools'],
   shownQuery = query,
+  previous?: Parameters<typeof resolveUsagePageAggregation>[0]['previous'],
 ) {
   if (pools && pools.flatMap(read => read.value ?? []).some(pool => !storage.getState().profile.connectedAccountGroupsV4.some(group =>
     group.ref.groupId === pool.group.groupId && group.ref.service.pluginId === pool.group.service.pluginId
@@ -194,6 +197,7 @@ function bodyProps(
   const slice = resolveUsagePageAggregation({
     queries: [shownQuery],
     nowMs: Date.now(),
+    previous,
     quota: { status: 'available', value: [...quota] },
     ...(pools ? { pools } : {}),
   }).results[0]!;
@@ -607,15 +611,19 @@ it("lists a pool in the selector's own order and builds the why detail from its 
     },
   ]);
   const comparisonProfile = AccountProfileSchema.parse({ ...storage.getState().profile, id: 'comparison-account' });
+  let comparisonUnavailable = false;
   comparisonHome = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-pool-comparison.test', accountId: 'comparison-account', profile: comparisonProfile }],
-    route: request => request.path === '/v1/account/encryption/currentness'
-      ? Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }) : undefined });
+    route: request => request.path === '/test/selection' ? new Response(null, { status: comparisonUnavailable ? 503 : 200 })
+      : request.path === '/v1/account/encryption/currentness'
+        ? Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }) : undefined });
   const home = comparisonHome.homes.a!;
   publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: home.serverUrl, generation: 0 });
   storage.setState({ profileScope: { serverId: home.id, accountId: 'comparison-account' }, profile: comparisonProfile });
   const { TokenStorage } = await import('@/auth/storage/tokenStorage');
   const credentials = (await TokenStorage.getCredentialsForServerUrl(home.serverUrl))!;
   selectionTransport.mockImplementation(async (request: { payload: unknown }) => {
+    const response = await comparisonHome!.fetch('https://usage-pool-comparison.test/test/selection');
+    if (!response.ok) throw new RetryableServerResponseError(response.status, 'unavailable');
     const input = ConnectedServicePoolSelectionGetRequestV1Schema.parse(request.payload);
     expect(input.machineId).toBe('witnessed-selector');
     expect(input.group).toEqual(group);
@@ -680,8 +688,19 @@ it("lists a pool in the selector's own order and builds the why detail from its 
   // Hypothetical rows never replace the current queue or issue a mutation Action.
   expect(screen.findHostByTestId('cap.usedFirst.pool.personal')).toBeTruthy();
   expect(execute).not.toHaveBeenCalled();
+  const captured = captureUiUsageQueryAccountContext(credentials)!;
+  const comparisonEntry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'connectedServices.pools.selection.get',
+    input: { machineId: 'witnessed-selector', group, hypothetical: { strategy: 'priority', atMs: now + 3 * HOUR } } });
+  comparisonUnavailable = true;
+  await act(async () => { await comparisonEntry.refresh(); });
+  expect.soft(screen.findHostByTestId(`${comparison}.candidate.work`), 'a failed replacement keeps the admitted comparison').toBeTruthy();
+  expect.soft(screen.getTextContent()).toContain(t('usage.board.plans.usedFirstReadFailed'));
+  comparisonUnavailable = false;
+  await act(async () => { await comparisonEntry.refresh(); });
+  expect(screen.findHostByTestId(`${comparison}.candidate.work`)).toBeTruthy();
   const failed = bodyProps(quota, [{ query, value: [{ group, memberAccountIds: ['work', 'personal', 'side'],
-    activeAccountId: 'personal', selection: { status: 'error', machineId: 'witnessed-selector', errorCode: 'connected_service_request_failed' } }] }]);
+    activeAccountId: 'personal', selection: { status: 'error', machineId: 'witnessed-selector', errorCode: 'connected_service_request_failed' } }] }], query,
+    { v: 1, results: [props.slice] });
   await screen.update(<InjectedAuthProvider credentials={credentials}><UsageCapacityWidget {...failed} serverId={home.id}
     id="usage_capacity" testID="cap" /></InjectedAuthProvider>);
   expect.soft(screen.findHostByTestId('cap.usedFirst.pool.personal')).toBeTruthy();

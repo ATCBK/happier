@@ -315,7 +315,7 @@ export function resolveUsagePageAccountingRequests(queries: readonly UsageQuery[
   return resolveUsagePageAccountingReads(queries, nowMs).map(read => read.query);
 }
 
-function canRetainUsageReadFailure(errorCode?: string): boolean {
+export function canRetainUsageReadFailure(errorCode?: string): boolean {
   return !['denied', 'permission_denied', 'unauthorized', 'forbidden', 'stale_surface', 'cancelled'].includes(errorCode ?? '');
 }
 
@@ -355,7 +355,17 @@ export type UsagePageAggregationInput = Readonly<{
 }>;
 
 /** Shared B admission and source projection for accounting-backed and quota-only slices. */
-function projectUsageQuotaFields(quota: UsagePageAggregationInput['quota'], pools: readonly UsageQueryPoolSnapshot[] | undefined) {
+function projectUsageQuotaFields(quota: UsagePageAggregationInput['quota'], observedPools: readonly UsageQueryPoolSnapshot[] | undefined,
+  previousPools?: readonly UsageQueryPoolSnapshot[]) {
+  const pools = observedPools?.map(pool => {
+    const previous = previousPools?.find(candidate => sameStrictJsonValue(candidate.group, pool.group));
+    if (!previous?.selection.value || !canRetainUsageReadFailure(pool.selection.errorCode)
+      || (!['pending', 'not_loaded', 'error'].includes(pool.selection.status) && pool.selection.errorCode !== 'no_machine') || pool.selection.value
+      || (pool.selection.machineId !== previous.selection.machineId && pool.selection.errorCode !== 'no_machine')
+      || pool.activeAccountId !== previous.activeAccountId || !sameStrictJsonValue(pool.memberAccountIds, previous.memberAccountIds)) return pool;
+    return { ...pool, selection: { ...pool.selection, machineId: previous.selection.machineId, value: previous.selection.value,
+      status: 'stale' as const, ...(previous.selection.asOfMs === undefined ? {} : { asOfMs: previous.selection.asOfMs }) } };
+  });
   const sources: UsageQuerySourceState[] = [
     { source: 'quota', status: quota?.status ?? 'not_loaded',
       ...(quota?.asOfMs === undefined ? {} : { asOfMs: quota.asOfMs }),
@@ -380,7 +390,8 @@ export function resolveUsageQuotaPageAggregation(input: Pick<UsagePageAggregatio
     return [getUsageQueryKey(query), query] as const;
   }));
   const results = [...queries].map(([key, query]): UsageQueryResultSlice => {
-    const { sources: quotaSources, ...quotaFields } = projectUsageQuotaFields(input.quota, poolsByQuery.get(key));
+    const { sources: quotaSources, ...quotaFields } = projectUsageQuotaFields(input.quota, poolsByQuery.get(key),
+      input.previous?.results.find(slice => slice.key === key)?.pools);
     const sources: UsageQuerySourceState[] = [
       { source: 'accounting', status: 'unsupported' },
       { source: 'work', status: 'not_loaded' },
@@ -432,7 +443,7 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     const observed = accounting.get(key);
     const prior = previous.get(key);
     const pools = poolsByQuery.get(key);
-    const { sources: quotaSources, ...quotaFields } = projectUsageQuotaFields(input.quota, pools);
+    const { sources: quotaSources, ...quotaFields } = projectUsageQuotaFields(input.quota, pools, prior?.pools);
     const snapshot = projectPrices(retainAccountingOnReadFailure(observed, prior?.accounting,
       prior?.sources.find(source => source.source === 'accounting')?.asOfMs));
     const readPeriod = observed?.period ?? (input.nowMs !== undefined ? resolveUsageQueryPeriod(query, input.nowMs)
@@ -458,12 +469,18 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     const failedDetail = detailSnapshot?.errorCode !== undefined && !detailSnapshot.detail && detailAuthorized;
     const retainedDetail = pendingDetail || failedDetail ? prior : undefined;
     const retainedNightHours = retainedDetail?.howYouWork?.nightShift;
+    // Missing evidence on an ordinary failed read is not a replacement. An
+    // explicit empty admission/quarantine still withdraws the old witnesses.
+    const failedWork = workSnapshot?.status === 'error' && workSnapshot.evidence === undefined
+      && workSnapshot.branchEvidence === undefined && canRetainUsageReadFailure(workSnapshot.errorCode) && prior?.work !== undefined;
+    const retainWork = workSnapshot?.status === 'pending' || failedWork;
+    const workAsOfMs = failedWork ? prior?.sources.find(source => source.source === 'work')?.asOfMs : workSnapshot?.asOfMs;
     // Retained evidence remains attached to this exact query while its owner
     // rereads it. Allocation always recomputes over the current contributions;
     // a terminal refusal below removes that previously admitted evidence.
-    const workEvidence = workSnapshot?.status === 'pending' ? prior?.work?.allocations.flatMap(row => row.evidence) ?? []
+    const workEvidence = retainWork ? prior?.work?.allocations.flatMap(row => row.evidence) ?? []
       : workSnapshot && ['available', 'partial', 'stale'].includes(workSnapshot.status) ? workSnapshot.evidence ?? [] : [];
-    const branchEvidence = workSnapshot?.status === 'pending' ? prior?.work?.branchAllocations.flatMap(row => row.evidence) ?? []
+    const branchEvidence = retainWork ? prior?.work?.branchAllocations.flatMap(row => row.evidence) ?? []
       : workSnapshot && ['available', 'partial', 'stale'].includes(workSnapshot.status) ? workSnapshot.branchEvidence ?? [] : [];
     // An open query is projected only up to a witnessed source as-of. It is not
     // relabelled as a different bounded query or filled forward to this clock.
@@ -519,8 +536,8 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
       ...(snapshot?.value?.coverage?.sources.map(source => ({ source: source.source, status: source.status,
         ...(source.asOfMs === undefined ? {} : { asOfMs: source.asOfMs }) })) ?? []),
       ...quotaSources,
-      { source: 'work', status: workSnapshot?.status ?? 'not_loaded',
-        ...(workSnapshot?.asOfMs === undefined ? {} : { asOfMs: workSnapshot.asOfMs }),
+      { source: 'work', status: failedWork ? 'stale' : workSnapshot?.status ?? 'not_loaded',
+        ...(workAsOfMs === undefined ? {} : { asOfMs: workAsOfMs }),
         ...(workSnapshot?.errorCode === undefined ? {} : { errorCode: workSnapshot.errorCode }) },
       // An exact-query detail snapshot supersedes the batch-wide initial
       // source. Retaining both lets an unfinished sibling keep this slice

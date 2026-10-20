@@ -3,7 +3,7 @@ import type { ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/pl
 import { createCanonicalJsonSigningInput } from '@happier-dev/plugin-sdk';
 import { getUsageQueryBatchKey, getUsageQueryKey, normalizeUsageQueryBatchInput, resolveUsageQueryPeriod, usageQueryToAnalyticsRequest, type UsageQuery, type UsageQueryBatchInput } from '@happier-dev/protocol/inputs/usageQuery';
 import { collectUsageWorkSources } from '@happier-dev/protocol/usage/usageWorkSources';
-import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainAccountingOnReadFailure, retainUsageQueryResultReferences, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsageHowYouWorkSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainAccountingOnReadFailure, retainUsageQueryResultReferences, canRetainUsageReadFailure, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsageHowYouWorkSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { ConnectedServicePoolSelectionGetRequestV1Schema, type ConnectedServicePoolSelectionGetRequestV1, type ConnectedServicePoolSelectionGetResponseV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { computePluginUiArtifactSha256Digest } from '@/sync/domains/plugins/ui/artifactIntegrity';
@@ -378,7 +378,7 @@ async function readOpenedQuotaHistory(context: UsageQueryAccountContext, periods
         const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
             ? error.code : 'quota_read_failed';
         failures.set(index, code);
-        if (['denied', 'permission_denied', 'stale_surface'].includes(code)) { publishProgress(index, null); return; }
+        if (!canRetainUsageReadFailure(code)) { publishProgress(index, null); return; }
         const accepted = acceptedBySource.get(index);
         const retained = retainedBySource.get(createCanonicalJsonSigningInput(scope.sources[index]!.source));
         // A failed replacement has not supplied a newer complete history. Keep
@@ -917,7 +917,7 @@ export async function readUiUsageQueryBatch(
         } catch (error) {
             requireCurrent(context, signal);
             const errorCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'usage_query_failed';
-            if (['denied', 'permission_denied', 'stale_surface'].includes(errorCode)) throw error;
+            if (!canRetainUsageReadFailure(errorCode)) throw error;
             const retained = priorAccounting.get(getUsageQueryKey(query));
             // Detail/Work membership must see the same retained accounting as
             // aggregation, rather than shrinking to the currently hydrated Sessions.
@@ -1060,9 +1060,10 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
     // until that replacement answers, rather than claiming its range is read.
     let allowance: Pick<UsageQueryBatchResult['results'][number], 'key' | 'requestedQuery' | 'shownQuery' | 'quota' | 'sources' | 'pending'> | undefined;
     // Queries move between route batches as visible widgets register. These
-    // are the same Account Resource's accounting facts, independent of batch membership.
-    const accountingByQuery = new Map<string, Pick<UsageQueryBatchResult['results'][number],
-        'key' | 'requestedQuery' | 'shownQuery' | 'accounting' | 'comparison' | 'sources' | 'pending'>>();
+    // are the same Account Resource's admitted slices, independent of batch membership.
+    // Keep private evidence and selector state beside accounting so a changed
+    // widget demand cannot retire only part of the same query's admission.
+    const slicesByQuery = new Map<string, UsageQueryBatchResult['results'][number]>();
     const sessionInputs = new Map<string, { sessionId: string; basis: string; needsAdmission: boolean;
         value?: SessionInputEvidence; read: Promise<SessionInputEvidence | null>;
         listeners: Set<(value: SessionInputEvidence) => void> }>();
@@ -1187,7 +1188,7 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                 const previousByKey = new Map(ownPrevious?.results.map(slice => [slice.key, slice]));
                 const previousSlices = queries.flatMap(query => {
                     const key = getUsageQueryKey(query);
-                    const slice = previousByKey.get(key) ?? accountingByQuery.get(key);
+                    const slice = previousByKey.get(key) ?? slicesByQuery.get(key);
                     return slice ? [slice] : [];
                 });
                 const priorBatch = previousSlices.length ? { v: 1 as const, results: previousSlices } : undefined;
@@ -1236,12 +1237,7 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                     if (first) allowance = { key: first.key, requestedQuery: first.requestedQuery, shownQuery: first.shownQuery,
                         quota: first.quota, sources: first.sources.filter(source => source.source === 'quota' || source.source.startsWith('quota:')),
                         pending: first.sources.some(source => (source.source === 'quota' || source.source.startsWith('quota:')) && source.status === 'pending') };
-                    for (const slice of batch.results) if (slice.accounting
-                        && slice.sources.some(source => source.source === 'accounting' && source.status !== 'pending' && source.status !== 'not_loaded')) {
-                        accountingByQuery.set(slice.key, { key: slice.key, requestedQuery: slice.requestedQuery, shownQuery: slice.shownQuery,
-                            accounting: slice.accounting, comparison: slice.comparison,
-                            sources: slice.sources.filter(source => source.source === 'accounting'), pending: false });
-                    }
+                    for (const slice of batch.results) slicesByQuery.set(slice.key, slice);
                     const current = entry.getSnapshot().value;
                     // Reconcile each revision against the same entry's admitted
                     // value so unrelated slices keep their selected references.
@@ -1289,10 +1285,10 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                         } });
                 } catch (error) {
                     const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
-                    if (typeof code === 'string' && ['denied', 'permission_denied', 'unauthorized', 'forbidden', 'stale_surface'].includes(code)) {
+                    if (typeof code === 'string' && !canRetainUsageReadFailure(code)) {
                         allowance = undefined;
                         owner.projectionDocuments.clear();
-                        accountingByQuery.clear();
+                        slicesByQuery.clear();
                     }
                     throw error;
                 }
@@ -1475,7 +1471,7 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
         evidenceAbort.abort();
         sessionInputs.clear();
         owner.projectionDocuments.clear();
-        accountingByQuery.clear();
+        slicesByQuery.clear();
         allowance = undefined;
         accountStores.delete(lifetime);
         unwatch();
@@ -1492,7 +1488,7 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
         evidenceAbort.abort();
         sessionInputs.clear();
         owner.projectionDocuments.clear();
-        accountingByQuery.clear();
+        slicesByQuery.clear();
         allowance = undefined;
         accountStores.delete(lifetime);
         listeners.clear();

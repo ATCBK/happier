@@ -2,6 +2,7 @@ import { USAGE_SOURCE_ACTION_OUTPUT_SCHEMAS, parseUsageSourceActionResult, type 
   type UsageSourceActionOutputById } from '../../usage/usageSources.js';
 import { readActionFailureEnvelope } from './actionFailureEnvelope.js';
 import type { ActionExecutorContext, ActionExecuteFailure } from './types.js';
+import { canRetainUsageReadFailure } from '../../usage/resolveUsagePageAggregation.js';
 
 export type UsageSourceActionRequest = { [K in UsageSourceActionId]: Readonly<{
   actionId: K; input: UsageSourceActionInputById[K];
@@ -32,7 +33,11 @@ export function createUsageSourceActionPort(host: Readonly<{
     const read = request.actionId === 'usage.sources.discover' || request.actionId === 'usage.sources.get';
     let raw: unknown;
     try { raw = await host.rpc(request, context); }
-    catch {
+    catch (error) {
+      // Preserve an explicit authority withdrawal across the Machine boundary;
+      // an ordinary read outage still uses the incumbent unavailable marker.
+      if (read && error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+        && !canRetainUsageReadFailure(error.code)) return failure(error.code);
       return failure(read ? 'usage_source_unavailable' : 'usage_source_mutation_outcome_unknown');
     }
     const refused = readActionFailureEnvelope(raw);

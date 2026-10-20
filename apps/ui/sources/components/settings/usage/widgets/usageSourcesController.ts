@@ -4,6 +4,7 @@ import { parseUsageSourceActionResult, USAGE_SOURCE_ACTION_INPUT_SCHEMAS, USAGE_
     type UsageSourceActionId, type UsageSourceActionInputById, type UsageSourceDateRangeV1,
     type UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { canRetainUsageReadFailure } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -111,6 +112,14 @@ export function createUsageSourcesController(options: Readonly<{
         return next.length === snapshot.sources.length && next.every((row, index) => row === snapshot.sources[index])
             ? snapshot.sources : next;
     };
+    const publishFailure = (actionId: UsageSourceActionId, sourceId: string | undefined, error: ActionExecuteFailure) => {
+        if (!isRead(actionId)) { publish({ ...snapshot, error }); return; }
+        const retain = canRetainUsageReadFailure(error.errorCode);
+        const sources = snapshot.sources.flatMap(source => sourceId !== undefined && source.sourceId !== sourceId ? [source]
+            : !retain ? [] : [source.status === 'unavailable' ? source : { ...source, status: 'unavailable' as const }]);
+        publish({ ...snapshot, sources: reconcile(sources), loaded: retain ? snapshot.loaded : sources.length > 0, error,
+            ...(!retain ? { dismissedSourceIds: [], historyDeletion: null } : {}) });
+    };
 
     async function run<K extends UsageSourceActionId>(actionId: K, input: UsageSourceActionInputById[K]): Promise<ActionExecuteResult> {
         if (!current()) return failure('action_account_scope_changed');
@@ -134,7 +143,7 @@ export function createUsageSourcesController(options: Readonly<{
             if (!current()) return failure('action_account_scope_changed');
             if (!operations.has(controller)) return failure('cancelled');
             if (!result.ok) {
-                publish({ ...snapshot, error: result });
+                publishFailure(actionId, sourceId, result);
                 return result;
             }
             const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
@@ -145,7 +154,7 @@ export function createUsageSourcesController(options: Readonly<{
             const data = parseUsageSourceActionResult(actionId, input, result.result);
             if (!data) {
                 const invalid = failure(isRead(actionId) ? 'usage_source_response_invalid' : 'usage_source_mutation_outcome_unknown');
-                publish({ ...snapshot, error: invalid });
+                publishFailure(actionId, sourceId, invalid);
                 return invalid;
             }
             if ('sources' in data) {
@@ -177,7 +186,7 @@ export function createUsageSourcesController(options: Readonly<{
             if (!current()) return failure('action_account_scope_changed');
             const error = failure(controller.signal.aborted ? 'cancelled'
                 : isRead(actionId) || actionId === 'usage.sources.dismiss' ? 'usage_source_unavailable' : 'usage_source_mutation_outcome_unknown');
-            if (operations.has(controller)) publish({ ...snapshot, error });
+            if (operations.has(controller)) publishFailure(actionId, sourceId, error);
             return error;
         } finally {
             if (operations.delete(controller)) publish({ ...snapshot, pending: [...operations.values()] });

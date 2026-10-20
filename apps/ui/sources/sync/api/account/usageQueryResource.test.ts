@@ -6,6 +6,10 @@ import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getUsageQueryKey, normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageWorkEvidence } from '@happier-dev/protocol/usage/usageOutcomeAllocation';
+import { collectUsageWorkSources } from '@happier-dev/protocol/usage/usageWorkSources';
+import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { scmFallbackError } from '@/sync/ops/scm/scmRpcFailure';
+import { RetryableServerResponseError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore, readUiUsageQueryBatch } from './usageQueryResource';
 import { storage } from '@/sync/domains/state/storage';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -136,6 +140,49 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 }
 
 describe('usage query captured Resource adapter', () => {
+  it('retains Work after repeated HTTP failures while real SCM failure normalization still quarantines denial', async () => {
+    let status = 200;
+    let hasEvidence = true;
+    const branchEvidence = { sessionId: 'work-session', turnId: 'turn', repositoryKey: 'repo', checkpointRef: 'checkpoint',
+      checkpointCommitSha: 'a'.repeat(40), commitSha: 'b'.repeat(40), attributionScope: 'no_happier_checkpoint_overlap_observed',
+      branch: { ref: 'refs/heads/work', headSha: 'b'.repeat(40) } };
+    const captured = await context(request => {
+      if (!request.path.startsWith('/test/work/')) return undefined;
+      if (status !== 200) return Response.json({ error: status === 403 ? 'denied' : 'unavailable' }, { status });
+      return request.path.endsWith('/scm.branch.list')
+        ? Response.json({ success: true, branches: [], branchEvidence: hasEvidence ? [branchEvidence] : [], branchEvidenceStatus: 'partial' })
+        : Response.json({ success: true, pullRequests: [], workEvidence: [], workEvidenceStatus: 'partial' });
+    });
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeSessionEvidence: false });
+    const accounting = [{ query, value: { ...value, contributions: [workContribution] }, status: 'available' as const }];
+    const read = async (previous?: ReturnType<typeof resolveUsagePageAggregation>) => {
+      const work = await collectUsageWorkSources({ queries: [query], accounting, assertCurrent: () => {
+        if (!captured.accountLifetime.isCurrent()) throw new Error('retired');
+      }, readSession: async () => async (method, input) => {
+        try {
+          const response = await captured.request(`/test/work/${method}`, { method: 'POST', body: JSON.stringify(input) });
+          if (response.status >= 500) throw new RetryableServerResponseError(response.status, 'unavailable');
+          if (!response.ok) throw Object.assign(new Error('Denied'), { code: 'denied' });
+          return await response.json();
+        } catch (error) { return scmFallbackError(error, { method, request: {} }); }
+      } });
+      return resolveUsagePageAggregation({ queries: [query], accounting, work, previous });
+    };
+    const first = await read();
+    expect(first.results[0]?.work?.branchAllocations[0]?.reason).toBe('allocated');
+    status = 503;
+    let previous = first;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      previous = await read(previous);
+      expect.soft(previous.results[0]?.work?.branchAllocations[0]?.reason).toBe('allocated');
+      expect.soft(previous.results[0]?.sources).toContainEqual({ source: 'work', status: 'stale', errorCode: 'work_evidence_failed' });
+    }
+    status = 403;
+    expect((await read(previous)).results[0]?.work?.branchAllocations[0]?.reason).toBe('missing_evidence');
+    status = 200;
+    hasEvidence = false;
+    expect((await read(previous)).results[0]?.work?.branchAllocations[0]?.reason).toBe('missing_evidence');
+  });
   it.each(['recovery', 'empty-success'] as const)('admits only successfully acquired interval evidence: %s', async scenario => {
     const ids = ['healthy-turns', 'retry-turns', 'empty-turns', 'unread', 'healthy-second'];
     let failedTurns = scenario === 'recovery';
@@ -3113,6 +3160,15 @@ describe('usage query captured Resource adapter', () => {
         await broad.refresh();
         expect.soft(coach(broad).sessionCoverage, 'a repeated failed replacement keeps the same admitted evidence').toEqual({ selected: 3, admitted: 3 });
         expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+        const rebatched = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+          queries: [query, normalizeUsageQuery({ ...query, agents: ['codex'] })],
+        }) });
+        await rebatched.refresh();
+        const moved = decodeUsageQueryResource(rebatched.getSnapshot().value!).results.find(slice => slice.key === getUsageQueryKey(query))!;
+        expect.soft(moved.coach?.sessionCoverage, 'batch membership does not retire this exact query admission').toEqual({ selected: 3, admitted: 3 });
+        expect.soft(moved.coach?.findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+        expect.soft(moved.pending).toBe(false);
+        expect(UsageQueryBatchResultSchema.safeParse(decodeUsageQueryResource(rebatched.getSnapshot().value!)).success).toBe(true);
       }
       failing = false;
       await broad.refresh();
