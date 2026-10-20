@@ -39,7 +39,7 @@ const stylesheet = StyleSheet.create((theme) => ({
  * until the person sends.
  */
 export const ExecutionRunDraftSelectionContext = React.memo((props: Readonly<{
-    sessionId: string;
+    sessionId: string | null;
     serverId: string | null;
     origin: DiscussionSelectionSourceV1;
     contextText: string;

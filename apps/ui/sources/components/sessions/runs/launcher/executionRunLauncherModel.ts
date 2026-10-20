@@ -87,7 +87,10 @@ export function createExecutionRunLauncherDetailsTab(intent?: ExecutionRunIntent
  * resource does not create a Run until the canonical composer hands off its
  * first outbound message.
  */
-export function createInteractiveExecutionRunDraftDetailsTab(input?: Readonly<{ initialText?: string }>): DetailsTab {
+export function createInteractiveExecutionRunDraftDetailsTab(input?: Readonly<{
+    initialText?: string;
+    detachedWorkspace?: Readonly<{ machineId: string; cwd: string }>;
+}>): DetailsTab {
     return {
         key: 'execution-run-conversation-draft',
         kind: 'executionRunLauncher',
@@ -96,6 +99,7 @@ export function createInteractiveExecutionRunDraftDetailsTab(input?: Readonly<{ 
             kind: 'executionRunLauncher',
             mode: 'conversation',
             ...(input?.initialText !== undefined ? { initialInstructions: input.initialText } : {}),
+            ...(input?.detachedWorkspace ? { sessionId: null, workspace: input.detachedWorkspace } : {}),
         },
     };
 }
@@ -123,13 +127,15 @@ export function createDiscussionSelectionInteractiveExecutionRunDraftDetailsTab(
  */
 export function createExecutionRunDetailsTab(
     runId: string,
-    recovery?: Readonly<{ retryInputLocalId: string }>,
+    recovery?: Readonly<{ retryInputLocalId: string; initialText?: string }>,
     title?: string | null,
+    detachedWorkspace?: Readonly<{ machineId: string; cwd: string }>,
 ): DetailsTab {
     return {
         key: `execution-run:${runId}`,
         kind: 'executionRun',
         title: title?.trim() || t('runPage.untitledRun'),
-        resource: { kind: 'executionRun', runId, ...(recovery ?? {}) },
+        resource: { kind: 'executionRun', runId, ...(recovery ?? {}),
+            ...(detachedWorkspace ? { sessionId: null, workspace: detachedWorkspace } : {}) },
     };
 }
