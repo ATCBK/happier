@@ -187,9 +187,12 @@ entry under `./happier-plugin-ui/<artifactId>`; it must not import host internal
 See the [SDK author reference](../packages/plugin-sdk/README.md#portable-account-actions-03-development)
 and [separately authored fixture](../packages/plugin-sdk/fixtures/account-actions/src/index.ts).
 
-Triage's aggregate and credentialless personal source use this placement while
-the existing `tasks.internal.*` Actions remain the task data/CAS owner. The
-aggregate still merges sources through its existing targeted-source owner.
+Triage's approved cutover moves its aggregate and credentialless personal
+source to this placement while the existing `tasks.internal.*` Actions remain
+the task data/CAS owner. Its live declarations are temporarily Machine-placed
+until the consumed UI/CLI executor and declaration switch land together; do not
+infer loaded-runtime availability from the new SDK contract. The aggregate
+still merges sources through its existing targeted-source owner.
 Provider-backed source Actions remain Machine-placed: without their required
 Machine, they report `plugin_action_machine_required` per source without hiding
 personal rows. Account placement grants neither provider credentials nor Machine
@@ -876,6 +879,8 @@ writer. A schema-proven compatible widening can adopt a different digest at the
 same schema version without rewriting payload bytes or row revisions. Data's
 Protocol predicate proves nested optional additions and wider value domains while
 preserving projection, index, query, relation, identity and quota semantics.
+Changes within `allOf` or `oneOf` are not proven by that predicate: they require
+a new schema version and the existing migration path, even for an optional field.
 New required fields and narrowed types remain typed contract conflicts; lagging
 claims cannot reclaim the writer. Retained compatible contracts receive read-only
 access through tolerant stored readers; mutations still require the exact current

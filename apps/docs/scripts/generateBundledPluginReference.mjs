@@ -76,6 +76,11 @@ const CATEGORIES = [
     title: 'Managed machines',
     blurb: 'Machine provisioning plugins in the 0.3 development source.',
   },
+  {
+    prefix: 'happier.language.',
+    title: 'Language intelligence',
+    blurb: 'On-demand language servers in the 0.3 development source.',
+  },
 ];
 
 /** Everything that is not part of a family. Named explicitly so a new one fails the build. */

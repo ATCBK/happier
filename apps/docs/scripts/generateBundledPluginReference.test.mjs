@@ -68,14 +68,16 @@ test('the admitted bundled registry contains projected plugin ids', async () => 
   assert.ok(ids.has('happier.channels'));
 });
 
-test('the bundled Machine family is categorized without dropping its plugins', async () => {
+test('the bundled Machine and language families are categorized without dropping their plugins', async () => {
   const registry = await readBundledPluginRegistry();
   const plugins = registry.BUNDLED_FIRST_PARTY_PLUGIN_METADATA.map((entry) => entry.pluginId)
     .map((id) => plugin(id, id));
-  const machines = plugins.filter((entry) => entry.id.startsWith('happier.machine.'));
-  assert.ok(machines.length > 0);
-  const section = categorize(plugins).find((entry) => entry.prefix === 'happier.machine.');
-  assert.deepEqual(section?.plugins, machines);
+  for (const prefix of ['happier.machine.', 'happier.language.']) {
+    const members = plugins.filter((entry) => entry.id.startsWith(prefix));
+    assert.ok(members.length > 0);
+    const section = categorize(plugins).find((entry) => entry.prefix === prefix);
+    assert.deepEqual(section?.plugins, members);
+  }
 });
 
 // CodeBuddy is admitted by ordinary source publication without a packed plugin.json.

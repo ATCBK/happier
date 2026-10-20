@@ -1093,7 +1093,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `path` (text, required): File path — File within the source workspace. Without workspace, the admitted caller Session supplies the source.
+- `workspace` (json): Source workspace — Explicit &#123;machineId, rootPath&#125; source. Overrides an ambient Session; the host must support this Machine workspace or refuse the operation.
+- `title` (text): Document title
 
 ## `artifact.revisions.list`
 
@@ -2319,6 +2321,107 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `text` (text, required): Text to copy
+
+## `code.definition.get`
+
+**Go to definition** — Find the definition of a symbol by one-based line plus symbol text. Semantic answers concern disk text and include its hash. Without a capable server, explicit symbol names use approximate declaration search labeled text_matches.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `line` (text, required): Line (one-based)
+- `symbol` (text, required): Symbol name
+
+## `code.diagnostics.list`
+
+**Check file problems** — Check diagnostics after multi-file edits. Explicitly pull the current disk text and include its hash; return loading until that pull succeeds, never an older stored list as a fresh answer. Unsaved editor changes are refused.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+
+## `code.hover.get`
+
+**Get symbol information** — Read type and documentation for the symbol at a one-based line plus symbol text, or an explicit zero-based UTF-16 character. Answers concern disk text and include its content hash. Unsaved editor edits are refused; a loading project never becomes an empty answer.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `line` (text, required): Line (one-based)
+- `symbol` (text, required): Symbol name
+
+## `code.references.list`
+
+**Find references** — Find semantic references before changing a signature; address the symbol by one-based line plus name. Answers include the disk content hash. Without a capable server, explicit names use identifier text search labeled text_matches.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
+- `line` (text, required): Line (one-based)
+- `symbol` (text, required): Symbol name
+
+## `code.restart`
+
+**Restart language servers** — Restart the host-owned language-server sessions for the addressed workspace, optionally one server definition. This reversible operation changes no workspace files; a root with no session is unavailable.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+
+## `code.symbols.list`
+
+**List file symbols** — Read a file outline before opening a long file. Return current disk-text symbols and the content hash, or loading/unavailable; unsaved editor changes are refused.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `machineId` (text, required): Machine id
+- `rootPath` (text, required): Workspace root
+- `path` (text, required): Current file
 
 ## `composer.attachments.pick`
 
@@ -4330,12 +4433,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
 - `tabId` (text): File tab — Mounted file tab id; defaults to the most recently mounted editor.
-- `resolution` (text): Resolution — useMine, useTheirs or discardDraft.
+- `resolution` (text, required): Resolution — useMine, useTheirs or discardDraft.
 
 ## `file.editor.save`
 
@@ -4345,7 +4448,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -5362,7 +5465,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `inbox.get`
 
-**Read Inbox** — Read the answering client’s open canonical Inbox for the exact invoking Home and Account. Unavailable without its mounted owner; never opens or loads Inbox.
+**Read Inbox** — Read the canonical Inbox for the invoking Home and own Account. Without a mounted app, reads owned notices and reports unavailable source projections as partial; never opens Inbox.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -7833,7 +7936,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `serverId` (text): MCP server
+- `client.clientId` (text): Client ID
+- `client.clientSecret` (secret): Client secret
 
 ## `mcp.servers.test`
 
@@ -12158,6 +12263,22 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `stopIds` (text_list): Selected stops
 - `startNew` (boolean): Start a seeded conversation
 
+## `scm.diffSummary.draftPullRequest`
+
+**Draft pull request description** — Draft an editable repository-template description from captured changes and recorded Session command outcomes. Does not publish a pull request.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `cwd` (text, required): Repository directory
+- `sessionId` (text): Testing context Session
+- `source.kind` (text, required): Comparison source
+
 ## `scm.diffSummary.generate`
 
 **Generate source-control diff summary** — Capture comparison evidence and start retained summary, walkthrough, or commit-plan analysis.
@@ -12304,8 +12425,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `cwd` (text, required): Repository directory
-- `resultId` (text, required): Saved result
-- `changeRefs` (text_list, required): Exact change references
+- `v` (integer): Selector version
+- `resultId` (text): Saved result
+- `comparisonId` (text): Captured comparison
+- `source` (json): Comparison source
+- `sessionId` (text): Session namespace
+- `changeRefs` (text_list): Exact change references
+- `changeKeys` (text_list): Live content keys
 
 ## `scm.diffSummary.reviewed.unmark`
 
@@ -12320,8 +12446,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `cwd` (text, required): Repository directory
-- `resultId` (text, required): Saved result
-- `changeRefs` (text_list, required): Exact change references
+- `v` (integer): Selector version
+- `resultId` (text): Saved result
+- `comparisonId` (text): Captured comparison
+- `source` (json): Comparison source
+- `sessionId` (text): Session namespace
+- `changeRefs` (text_list): Exact change references
+- `changeKeys` (text_list): Live content keys
 
 ## `scm.file.read`
 
@@ -19715,6 +19846,23 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `workspace.files.link.get`
+
+**Get workspace file link** — Operate on the mounted client workspace in its current Home, Account and window. A headless host without that workspace returns unsupported_action.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `target` (json, required): File destination
+- `path` (text, required): Workspace-relative path
+- `anchor` (json): Line or range
+- `changesScope` (json): Changes scope
+
 ## `workspace.files.replace`
 
 **Replace text in workspace files** — Apply the reviewed replacement only to selected files and matches whose raw file hashes still match the preview.
@@ -20129,7 +20277,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `href` (text): Destination
 - `tabId` (text): Tab id
-- `find` (json): Find target — Query/options and an exact Session message or Project file target. Private launch input; not persisted in the URL or tab.
+- `file` (json): Workspace file — Session or Project target, workspace-relative path, optional anchor, view, blame and Changes scope. Exclusive with href.
+- `present` (boolean): Present file — False positions a preview in the foreground Session without navigating or presenting its pane.
+- `find` (json): Find target — Query/options and an exact Session message, Session file or Project file target. Private launch input; not persisted in the URL or tab.
 - `groupId` (text): Pane id
 - `beforeTabId` (text): Insert before tab — The current tab anchor; null appends after the last tab.
 - `reuseExisting` (boolean): Go to an existing tab

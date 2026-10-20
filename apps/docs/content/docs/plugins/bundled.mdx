@@ -3,7 +3,7 @@ title: What ships in the box
 description: Every plugin Happier bundles — agents, model providers, voice engines, source control and channels — generated from their projected manifests.
 ---
 
-Happier bundles 62 plugins. That number is the clearest statement
+Happier bundles 64 plugins. That number is the clearest statement
 of how this version is built: coding agents, model providers, voice engines,
 version-control backends and hosting forges all use the plugin platform.
 
@@ -108,6 +108,7 @@ Places a session can talk to people outside Happier.
 | --- | --- | --- |
 | **Discord Channels** | `happier.channel.discord` | Connects Discord conversations to Happier Channels. |
 | **Email Channels** | `happier.channel.email` | Connects authenticated mailbox conversations to Happier Channels. |
+| **Slack Channels** | `happier.channel.slack` | Connects Slack conversations to Happier Channels. |
 | **Telegram Channels** | `happier.channel.telegram` | Connects Telegram bot conversations to Happier Channels. |
 
 ### Managed machines
@@ -126,6 +127,14 @@ Machine provisioning plugins in the 0.3 development source.
 | **Lima Machines** | `happier.machine.lima` | Managed local Lima guests using native, private bootstrap IO. |
 | **Lume Machines** | `happier.machine.lume` | Managed Lume guests on the selected Apple silicon Mac. |
 | **Modal Machines** | `happier.machine.modal` | Finite Modal Sandboxes with private native bootstrap IO. |
+
+### Language intelligence
+
+On-demand language servers in the 0.3 development source.
+
+| Plugin | Id | What it does |
+| --- | --- | --- |
+| **TypeScript** | `happier.language.typescript` | TypeScript and JavaScript language intelligence on the workspace Machine. |
 
 ### Everything else
 
@@ -150,24 +159,24 @@ useful to know before you build on it.
 
 | Family | Plugins |
 | --- | --- |
-| `mcp` | 62 |
-| `ui` | 62 |
+| `mcp` | 64 |
+| `ui` | 64 |
 | `resources` | 39 |
 | `systemTools` | 28 |
-| `actions` | 25 |
-| `connectedAccountDescriptors` | 23 |
+| `actions` | 26 |
+| `connectedAccountDescriptors` | 24 |
 | `agents` | 22 |
 | `settings` | 13 |
-| `targetedPluginContributions` | 12 |
+| `targetedPluginContributions` | 13 |
 | `machineProvisioners` | 10 |
-| `managedDependencies` | 9 |
+| `managedDependencies` | 10 |
 | `providers` | 9 |
 | `voiceProviders` | 6 |
-| `events` | 4 |
+| `events` | 5 |
+| `backgroundServices` | 4 |
 | `hooks` | 4 |
 | `scmHostingProviders` | 4 |
 | `accountCollections` | 3 |
-| `backgroundServices` | 3 |
 | `composerAttachments` | 3 |
 | `pluginContributionPoints` | 3 |
 | `composerControls` | 2 |
@@ -178,6 +187,7 @@ useful to know before you build on it.
 | `dragSources` | 1 |
 | `dropTargets` | 1 |
 | `inputTypes` | 1 |
+| `languageServers` | 1 |
 | `searchProviders` | 1 |
 | `sessionHeaderActions` | 1 |
 | `sessionInfoSections` | 1 |
