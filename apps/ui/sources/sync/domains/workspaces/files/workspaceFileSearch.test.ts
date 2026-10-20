@@ -145,6 +145,21 @@ describe('workspaceFileSearch', () => {
         expect(machineRipgrepMock).toHaveBeenCalledTimes(2);
     });
 
+    it('prefers filename matches, word boundaries and natural filenames with interchangeable separators', async () => {
+        machineRipgrepMock.mockResolvedValue({ ok: true, paths: [
+            'src/foo/bar.ts', 'foo.ts', 'src/afoo.ts', 'src/my-foo.ts',
+            'src/my_settings.ts', 'src/my-settings.ts', 'src/my settings.ts',
+            'src/item10.ts', 'src/item2.ts',
+        ], truncated: false });
+        const { searchWorkspaceFiles } = await import('./workspaceFileSearch');
+        const search = async (query: string) => (await searchWorkspaceFiles({ scope: SCOPE_A, query, resultType: 'file', limit: 100 })).map(file => file.fullPath);
+        const foo = await search('foo');
+        expect(foo[0]).toBe('foo.ts');
+        expect(foo.indexOf('src/my-foo.ts')).toBeLessThan(foo.indexOf('src/afoo.ts'));
+        expect(await search('my settings')).toEqual(expect.arrayContaining(['src/my_settings.ts', 'src/my-settings.ts', 'src/my settings.ts']));
+        expect(await search('item')).toEqual(['src/item2.ts', 'src/item10.ts']);
+    });
+
     it('rejects late index publication from a retired Account lifetime', async () => {
         activeAccountLifetime = createAccountLifetimeFixture('account-a');
         let releaseAccountA!: (value: { success: boolean; stdout: string }) => void;

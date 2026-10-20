@@ -1,4 +1,4 @@
-import Fuse from 'fuse.js';
+import type Fuse from 'fuse.js';
 import { WORKSPACE_FILE_LIST_MAX_RESULTS } from '@happier-dev/protocol/machines/workspaceFiles';
 
 import type { FileSearchItem } from '@/sync/domains/fileSystem/fileSearchItem';
@@ -9,6 +9,7 @@ import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domai
 import { machineFilesystemListDirectory } from '@/sync/ops/machineFileBrowser';
 import { machineWorkspaceFileList, type MachineWorkspaceFileListErrorCode } from '@/sync/ops/machineWorkspaceFileList';
 import { AsyncLock } from '@/utils/system/lock';
+import { createWorkspaceFileSearchIndex as createFuse, normalizeFileSearchText, rankFileSearchResults } from './workspaceFileSearchMatcher';
 
 type WorkspaceCache = {
     files: FileSearchItem[];
@@ -125,40 +126,6 @@ function buildFileItemsFromPaths(filePaths: string[]): FileSearchItem[] {
     }
 
     return files;
-}
-
-// Keep fuzzy score ordering within each relevance tier. Test/spec variants are
-// basename prefixes, after the exact stem, and before broader fuzzy matches.
-function fileSearchRelevance(file: FileSearchItem, query: string): number {
-    const needle = query.trim().toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
-    const name = file.fileName.toLowerCase().replace(/\/$/, '');
-    const path = file.fullPath.toLowerCase().replace(/\/$/, '');
-    if (path === needle || name === needle) return 0;
-    if (!needle.includes('/') && !needle.includes('.') && file.fileType === 'file') {
-        const extension = name.lastIndexOf('.');
-        if (extension > 0 && name.slice(0, extension) === needle) return 1;
-    }
-    if (!needle.includes('/') && name.startsWith(`${needle}.`)) return 2;
-    if ((needle.includes('/') ? path : name).startsWith(needle)) return 3;
-    return 4;
-}
-
-function rankFileSearchResults(files: FileSearchItem[], query: string): FileSearchItem[] {
-    return files.sort((a, b) => fileSearchRelevance(a, query) - fileSearchRelevance(b, query));
-}
-
-function createFuse(files: FileSearchItem[], threshold: number = 0.3): Fuse<FileSearchItem> {
-    return new Fuse(files, {
-        keys: [
-            { name: 'fileName', weight: 0.7 },
-            { name: 'fullPath', weight: 0.3 },
-        ],
-        includeScore: true,
-        threshold,
-        shouldSort: true,
-        ignoreLocation: true,
-        distance: 100,
-    });
 }
 
 const workspaceCachePartitions = new Map<WorkspaceFileSearchAccountLifetime | null, WorkspaceCachePartition>();
@@ -474,6 +441,12 @@ async function ensureCacheValid(input: Readonly<{
 }
 
 export const workspaceFileSearchCache = {
+    /** Last observed listing for this exact Account lifetime; never crosses Accounts or issues an RPC. */
+    readFiles(scope: WorkspaceScopeBase, lifetime: WorkspaceFileSearchAccountLifetime): readonly FileSearchItem[] | null {
+        if (!lifetime.isCurrent()) return null;
+        const key = tryBuildWorkspaceCacheKey(scope);
+        return key ? workspaceCachePartitions.get(lifetime)?.caches.get(key)?.files ?? null : null;
+    },
     /**
      * Drops one workspace's index, addressed by the same scope that fills it — so a clear
      * cannot silently miss the entry a search wrote by spelling the key differently.
@@ -536,7 +509,7 @@ export async function searchWorkspaceFiles(
     input: WorkspaceFileSearchInput,
 ): Promise<FileSearchItem[] | WorkspaceFileSearchPage> {
     const limit = typeof input.limit === 'number' && Number.isFinite(input.limit)
-        ? Math.max(1, Math.min(input.mode === 'glob' ? WORKSPACE_FILE_LIST_MAX_RESULTS : 1000, Math.floor(input.limit)))
+        ? Math.max(1, Math.floor(input.limit))
         : input.mode === 'glob' ? Infinity : 10;
     const project = (items: readonly FileSearchItem[], corpusTruncated: boolean) => {
         const page = items.slice(0, limit);
@@ -608,7 +581,7 @@ export async function searchWorkspaceFiles(
         : input.resultType
         ? createFuse(searchableFiles, threshold)
         : threshold === 0.3 ? cache.fuse : createFuse(cache.files, threshold);
-    const cachedResults = fuse?.search(query) ?? [];
+    const cachedResults = fuse?.search(normalizeFileSearchText(query)) ?? [];
     if (cachedResults.length > 0 && !cache.truncated) {
         throwIfWorkspaceFileSearchAborted(input.signal);
         return project(rankFileSearchResults(cachedResults.map((r) => r.item), query), false);
@@ -653,6 +626,6 @@ export async function searchWorkspaceFiles(
         ? cache.files.filter((item) => item.fileType === input.resultType)
         : cache.files;
     const mergedFuse = createFuse(mergedSearchable, threshold);
-    const merged = rankFileSearchResults(mergedFuse.search(query).map((result) => result.item), query);
+    const merged = rankFileSearchResults(mergedFuse.search(normalizeFileSearchText(query)).map((result) => result.item), query);
     return project(merged, cache.truncated || globResult.truncated);
 }
