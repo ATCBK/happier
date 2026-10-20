@@ -65,8 +65,23 @@ function bootBridge() {
 
 describe('native CodeMirror WebView line endings', () => {
     let cleanup: (() => void) | undefined;
+    let restoreRangeGeometry: (() => void) | undefined;
 
-    beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }));
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        // JSDOM has no layout engine; retain the real CodeMirror measurement path over a DOM boundary fixture.
+        const descriptors = ['getClientRects', 'getBoundingClientRect'].map((name) => [name, Object.getOwnPropertyDescriptor(Range.prototype, name)] as const);
+        Object.defineProperties(Range.prototype, {
+            getClientRects: { configurable: true, value: () => [] },
+            getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
+        });
+        restoreRangeGeometry = () => {
+            for (const [name, descriptor] of descriptors) {
+                if (descriptor) Object.defineProperty(Range.prototype, name, descriptor);
+                else Reflect.deleteProperty(Range.prototype, name);
+            }
+        };
+    });
     afterEach(() => {
         cleanup?.();
         cleanup = undefined;
@@ -75,6 +90,8 @@ describe('native CodeMirror WebView line endings', () => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
         Reflect.deleteProperty(window, 'ReactNativeWebView');
+        restoreRangeGeometry?.();
+        restoreRangeGeometry = undefined;
     });
 
     it('publishes the current line at a caret and exact CRLF selection text with whole-line anchor bounds', () => {

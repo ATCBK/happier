@@ -25,9 +25,11 @@ describe('useWorkspaceFileQuery', () => {
         await act(async () => { await vi.advanceTimersByTimeAsync(200); });
         expect(hook.getCurrent().items).toHaveLength(20);
         expect(hook.getCurrent().hasMore).toBe(true);
-        await act(async () => { hook.getCurrent().loadMore(); await vi.advanceTimersByTimeAsync(200); });
+        await act(async () => { hook.getCurrent().loadMore(); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(200); });
         expect(hook.getCurrent().items).toHaveLength(40);
-        await act(async () => { hook.getCurrent().loadMore(); await vi.advanceTimersByTimeAsync(200); });
+        await act(async () => { hook.getCurrent().loadMore(); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(200); });
         expect(hook.getCurrent().items).toHaveLength(45);
         expect(hook.getCurrent().hasMore).toBe(false);
         await hook.rerender('different*');
