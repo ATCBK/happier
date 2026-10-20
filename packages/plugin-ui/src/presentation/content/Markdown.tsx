@@ -17,11 +17,25 @@ export type MarkdownInlineReferences = Readonly<{
   onPress?: (target: string) => void;
 }>;
 
+export type MarkdownImageSource = Readonly<
+  | { kind: 'workspace'; path: string }
+  | { kind: 'remote'; url: string }
+  | { kind: 'blocked' }
+>;
+
+/** The caller resolves document images; only a person's Load intent grants remote consent. */
+export type MarkdownImageResolver = Readonly<{
+  resolve(destination: string): MarkdownImageSource;
+  remoteLoaded: boolean;
+  onLoadRemote(): void;
+}>;
+
 export type HappierMarkdownRenderInput = Readonly<{
   value: string;
   selectable: boolean;
   testID?: string;
   inlineReferences?: MarkdownInlineReferences;
+  images?: MarkdownImageResolver;
 }>;
 
 export type HappierMarkdownProps = HappierMarkdownRenderInput & Readonly<{
@@ -41,6 +55,7 @@ export function HappierMarkdown(input: HappierMarkdownProps): ReactElement {
       selectable: input.selectable,
       ...(input.testID ? { testID: input.testID } : {}),
       ...(input.inlineReferences ? { inlineReferences: input.inlineReferences } : {}),
+      ...(input.images ? { images: input.images } : {}),
     };
     return input.renderContent(semanticInput);
   }

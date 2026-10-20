@@ -12,6 +12,39 @@ import {
 } from '../presentationHost/context.js';
 
 describe('bounded Markdown and Code presentation', () => {
+  it('keeps document image resolution and remote consent with the caller through the host renderer', () => {
+    const context = createSurfaceContext();
+    const onLoadRemote = vi.fn();
+    const images = {
+      resolve: () => ({ kind: 'remote' as const, url: 'https://example.test/shot.png' }),
+      remoteLoaded: false,
+      onLoadRemote,
+    };
+    const host: PluginUiPresentationHost = {
+      renderMarkdown: (input) => {
+        const source = input.images?.resolve('./shot.png');
+        return <button onClick={input.images?.onLoadRemote}>{source?.kind}</button>;
+      },
+      renderCodeBlock: () => null,
+      renderPopover: () => null,
+      renderIcon: () => null,
+    };
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <PluginUiPresentationHostProviderInternal host={host}>
+          <Markdown value="![Screenshot](./shot.png)" images={images} />
+        </PluginUiPresentationHostProviderInternal>
+      </PluginUiProvider>,
+    );
+    try {
+      expect(mount.container.textContent).toBe('remote');
+      act(() => { mount.container.querySelector('button')?.click(); });
+      expect(onLoadRemote).toHaveBeenCalledTimes(1);
+    } finally {
+      mount.unmount();
+    }
+  });
+
   it('degrades safely to selectable literal content when no host renderer is installed', () => {
     const context = createSurfaceContext();
     const mount = mountThroughReactNativeWeb(

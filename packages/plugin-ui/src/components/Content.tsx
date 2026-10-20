@@ -14,6 +14,8 @@ import { useHappierCodeBlockBehavior } from '../presentation/content/CodeBlock.j
 import { resolveHappierDiffViewerRequest } from '../presentation/content/DiffViewer.js';
 import { Button } from './Button.js';
 
+export type { MarkdownImageSource, MarkdownImageResolver } from '../presentation/content/Markdown.js';
+
 export type MarkdownProps = Omit<HappierMarkdownRenderInput, 'selectable'> & Readonly<{
   selectable?: boolean;
 }>;
@@ -23,7 +25,7 @@ export type MarkdownProps = Omit<HappierMarkdownRenderInput, 'selectable'> & Rea
  * product. Isolated author tests deliberately degrade to literal selectable
  * text: this package never grows a competing parser or raw-HTML execution path.
  */
-export function Markdown({ value, selectable = true, testID, inlineReferences }: MarkdownProps): ReactElement {
+export function Markdown({ value, selectable = true, testID, inlineReferences, images }: MarkdownProps): ReactElement {
   const host = useOptionalPluginUiPresentationHost();
   return (
     <HappierMarkdown
@@ -31,6 +33,7 @@ export function Markdown({ value, selectable = true, testID, inlineReferences }:
       selectable={selectable}
       testID={testID}
       inlineReferences={inlineReferences}
+      images={images}
       renderContent={host ? (input) => <>{host.renderMarkdown(input)}</> : undefined}
     />
   );
