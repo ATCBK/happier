@@ -1,4 +1,5 @@
 import { resolveServerUiEnv } from './ui_env.mjs';
+import { applyStackInfraProcessKind } from '../proc/stack_process_kind.mjs';
 
 function resolveStackServerLogLevel({ baseEnv }) {
   const stackLevel = String(baseEnv.HAPPIER_STACK_SERVER_LOG_LEVEL ?? '').trim();
@@ -59,7 +60,7 @@ export function buildServerRuntimeEnv({
     nextEnv.HAPPIER_SERVER_UI_REQUIRED = uiRequired ? '1' : '0';
   }
 
-  return {
+  return applyStackInfraProcessKind({
     ...nextEnv,
     ...resolveServerUiEnv({
       serveUi,
@@ -67,5 +68,5 @@ export function buildServerRuntimeEnv({
       uiPrefix,
       uiBuildDirExists,
     }),
-  };
+  });
 }

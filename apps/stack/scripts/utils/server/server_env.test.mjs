@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 
 import { buildServerRuntimeEnv } from './server_env.mjs';
 
+test('Stack server environments replace inherited Session classification without reclassifying the caller', () => {
+  const baseEnv = {
+    HAPPIER_STACK_STACK: 'dev-owned-server',
+    HAPPIER_STACK_ENV_FILE: '/stack-fixture/env',
+    HAPPIER_STACK_PROCESS_KIND: 'session',
+  };
+  const env = buildServerRuntimeEnv({ baseEnv, serverPort: 3005, publicServerUrl: 'http://localhost:3005' });
+  assert.equal(env.HAPPIER_STACK_PROCESS_KIND, 'infra');
+  assert.equal(baseEnv.HAPPIER_STACK_PROCESS_KIND, 'session');
+  const stackless = buildServerRuntimeEnv({ baseEnv: {}, serverPort: 3005, publicServerUrl: 'http://localhost:3005' });
+  assert.equal(stackless.HAPPIER_STACK_PROCESS_KIND, undefined);
+});
+
 test('buildServerRuntimeEnv injects separate canonical identity and public ingress URLs', () => {
   const env = buildServerRuntimeEnv({
     baseEnv: {

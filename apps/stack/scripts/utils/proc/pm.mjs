@@ -10,6 +10,8 @@ import { resolveCommandPath } from './commands.mjs';
 import { coerceHappyMonorepoRootFromPath, getDefaultAutostartPaths, getHappyStacksHomeDir } from '../paths/paths.mjs';
 import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 import { expandHome } from '../paths/canonical_home.mjs';
+import { applyStackInfraProcessKind } from './stack_process_kind.mjs';
+export { applyStackInfraProcessKind };
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './cliDistBuildLock.mjs';
 import { inspectDependencyRefresh, resolveDependencyInstallRoot, withDependencyRefresh } from './dependency_refresh.mjs';
 export { resolveDependencyInstallRoot } from './dependency_refresh.mjs';
@@ -1398,13 +1400,6 @@ export async function pmExecBin(dirOrOpts, binArg, argsArg, optsArg) {
     await ensureYarnReady({ dir, env, quiet, pm });
   }
   await runPm(pm, ['run', bin, ...args], { cwd: dir, env, stdio });
-}
-
-export function applyStackInfraProcessKind(env) {
-  if (!(env.HAPPIER_STACK_ENV_FILE ?? '').toString().trim()) {
-    return env;
-  }
-  return { ...env, HAPPIER_STACK_PROCESS_KIND: 'infra' };
 }
 
 export async function pmSpawnBin(dir, label, bin, args, { env = process.env } = {}) {
