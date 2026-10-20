@@ -47,7 +47,8 @@ export type MachineStorageApplyItem = Readonly<{ ref: MachineStorageTrashMoveInp
     claimedVerdict?: MachineStorageTrashMoveInputV1['items'][number]['claimedVerdict']; reason?: MachineStorageTrashMoveInputV1['items'][number]['reason'] }>;
 export type MachineStorageApplyInput = MachineStorageReadInput & Readonly<{ mode: 'trash' | 'delete'; items: readonly MachineStorageApplyItem[] }>;
 export type MachineStorageTrashMoveInput = ScopedInput<MachineStorageTrashMoveInputV1>;
-export type MachineStorageDeleteNowInput = ScopedInput<MachineStorageDeleteNowInputV1>;
+/** `reviewedByPerson`: the person just confirmed these exact items in the review sheet; it never enters the Action input. */
+export type MachineStorageDeleteNowInput = ScopedInput<MachineStorageDeleteNowInputV1> & Readonly<{ reviewedByPerson?: boolean }>;
 export type MachineStorageTrashEmptyInput = ScopedInput<MachineStorageTrashEmptyInputV1>;
 export type MachineStorageTrashRestoreInput = ScopedInput<MachineStorageTrashRestoreInputV1>;
 export type MachineStorageResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response' | 'approval_requested' | 'declined' }>;
@@ -89,12 +90,14 @@ async function result<T>(input: MachineStorageReadInput, request: () => Promise<
 }
 
 let actionExecute: FrontDoorActionExecute | undefined;
-async function execute(input: MachineStorageReadInput, actionId: MachineStorageActionId, extra: Readonly<Record<string, unknown>> = {}): Promise<unknown> {
+async function execute(input: MachineStorageReadInput & Readonly<{ reviewedByPerson?: boolean }>, actionId: MachineStorageActionId, extra: Readonly<Record<string, unknown>> = {}): Promise<unknown> {
     if (!actionExecute) actionExecute = (await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')).createFrontDoorActionExecute();
     const outcome = await actionExecute(actionId, {
         machineId: input.machineId, ...(input.serverId ? { serverId: input.serverId } : {}), ...extra,
     }, { surface: 'ui', ...(input.serverId ? { serverId: input.serverId } : {}),
-        ...(input.expectedAccountId ? { expectedAccountId: input.expectedAccountId } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+        ...(input.expectedAccountId ? { expectedAccountId: input.expectedAccountId } : {}), ...(input.signal ? { signal: input.signal } : {}),
+        // A completed review of this exact Action replaces the default confirmation; explicit Action settings still apply.
+        ...(input.reviewedByPerson ? { authority: 'present_user' as const, presentUserConfirmation: { actionId } } : {}) });
     if (!outcome.ok) throw createRpcCallError({ error: outcome.error, errorCode: outcome.errorCode });
     return outcome.result;
 }
@@ -113,7 +116,7 @@ export function fetchMachineStoragePileViaAction(input: MachineStorageReadInput)
 }
 /** Runtime scope and cancellation fields never enter the strict Action input. */
 function fields<T extends MachineStorageReadInput>(input: T) {
-    const { machineId: _machine, serverId: _server, expectedAccountId: _account, daemonStateVersion: _version, signal: _signal, ...payload } = input;
+    const { machineId: _machine, serverId: _server, expectedAccountId: _account, daemonStateVersion: _version, signal: _signal, reviewedByPerson: _reviewed, ...payload } = input as T & { reviewedByPerson?: boolean };
     return payload;
 }
 export function setMachineStoragePileViaAction(input: MachineStoragePileSetInput) {
@@ -125,7 +128,7 @@ export function checkMachineStorageItemsViaAction(input: ScopedInput<MachineStor
 export function moveMachineStorageToTrashViaAction(input: ScopedInput<MachineStorageTrashMoveInputV1>) {
     return result(input, () => execute(input, 'machines.storage.trash.move', fields(input)), raw => PileApplyResultV1Schema.safeParse(raw));
 }
-export function deleteMachineStorageNowViaAction(input: ScopedInput<MachineStorageDeleteNowInputV1>) {
+export function deleteMachineStorageNowViaAction(input: MachineStorageDeleteNowInput) {
     return result(input, () => execute(input, 'machines.storage.deleteNow', fields(input)), raw => PileApplyResultV1Schema.safeParse(raw));
 }
 export function emptyMachineStorageTrashViaAction(input: ScopedInput<MachineStorageTrashEmptyInputV1>) {

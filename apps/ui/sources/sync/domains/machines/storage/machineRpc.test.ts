@@ -38,11 +38,28 @@ beforeEach(async () => {
 afterEach(async () => { boundary.rpc.mockReset(); await homes.reset(); });
 
 describe('storage Action and Machine RPC boundary', () => {
-    it('lets the Action policy confirm reviewed deletion and keeps a decline quiet without a receipt or mutation', async () => {
-        const item = { ref: { itemId: 'log', path: '/logs/old', identity: { dev: '1', ino: '2', kind: 'file' as const },
-            collectedAt: 100, collectedBy: { accountId: key.expectedAccountId, kind: 'person' as const } }, expect: 'checked-log' };
-        expect(await machineStorageStore.applyPile({ ...key, mode: 'delete', items: [item] }))
-            .toEqual({ ok: false, reason: 'declined' });
+    const reviewed = () => ({ ref: { itemId: 'log', path: '/logs/old', identity: { dev: '1', ino: '2', kind: 'file' as const },
+        collectedAt: 100, collectedBy: { accountId: key.expectedAccountId, kind: 'person' as const } }, expect: 'checked-log' });
+
+    it('treats the review sheet as the one confirmation of a permanent delete', async () => {
+        const item = reviewed();
+        const receipt = PileApplyResultV1Schema.parse({ batchId: 'delete-a', mode: 'delete', inTrashBytes: 0, freedBytes: 64, outcomes: [{ itemId: item.ref.itemId, status: 'deleted' }] });
+        boundary.rpc.mockResolvedValueOnce(receipt);
+        expect(await machineStorageStore.applyPile({ ...key, mode: 'delete', items: [item] })).toEqual({ ok: true, value: receipt });
+        expect(Modal.confirm).not.toHaveBeenCalled();
+        expect(boundary.rpc).toHaveBeenLastCalledWith(expect.objectContaining({ method: RPC_METHODS.DAEMON_STORAGE_DELETE_NOW,
+            payload: { machineId: key.machineId, serverId: HOME, items: [{ ref: item.ref, expect: 'checked-log' }] } }));
+    });
+
+    it('still asks for an unreviewed permanent delete and for an explicit Ask first, keeping a decline quiet without a receipt or mutation', async () => {
+        const item = reviewed();
+        expect(await storageRpc.deleteMachineStorageNowViaAction({ ...key, items: [item] })).toEqual({ ok: false, reason: 'declined' });
+        expect(Modal.confirm).toHaveBeenCalledOnce();
+        Modal.confirm.mockClear();
+        homes.answer(key.serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'machines.storage.deleteNow': { approvalRequiredSurfaces: ['ui'] } } }),
+        } }, version: 1 } });
+        expect(await machineStorageStore.applyPile({ ...key, mode: 'delete', items: [item] })).toEqual({ ok: false, reason: 'declined' });
         expect(Modal.confirm).toHaveBeenCalledOnce();
         expect(boundary.rpc).not.toHaveBeenCalled();
         expect(machineStorageStore.getReceipt(key)).toBeNull();

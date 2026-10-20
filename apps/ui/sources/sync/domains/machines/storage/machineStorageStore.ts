@@ -315,11 +315,11 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
         },
         /** Move to Trash or Delete now, exactly the reviewed items the person kept ticked; the result is the machine's receipt. */
         async applyPile(input: MachineStorageApplyInput): Promise<MachineStorageResult<PileApplyResultV1>> {
-            // Review selects exact operands; the Action's policy owns confirmation.
+            // Review selects exact operands and is the person's one confirmation of a permanent delete; Action settings still win.
             const { mode, items, ...rest } = input;
             const response = mode === 'trash'
                 ? await (clients.trashMoveClient ?? (async value => (await rpc()).moveMachineStorageToTrashViaAction(value)))({ ...rest, items: items.map(item => ({ ...item, claimedVerdict: item.claimedVerdict ?? 'safe' })) })
-                : await (clients.deleteNowClient ?? (async value => (await rpc()).deleteMachineStorageNowViaAction(value)))({ ...rest, items: items.map(item => ({ ref: item.ref, expect: item.expect })) });
+                : await (clients.deleteNowClient ?? (async value => (await rpc()).deleteMachineStorageNowViaAction(value)))({ ...rest, reviewedByPerson: true, items: items.map(item => ({ ref: item.ref, expect: item.expect })) });
             if (response.ok) { setReceipt(input, { kind: 'applied', result: response.value, at: Date.now(), paths: Object.fromEntries(items.map(item => [item.ref.itemId, item.ref.path])) }); afterEffect(input); }
             return response;
         },
