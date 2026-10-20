@@ -107,7 +107,7 @@ type Recorded = Readonly<{ action: unknown; input: unknown }>;
 
 function createHarness(options: Readonly<{
   discovery: JsonValue | ((signal: AbortSignal) => Promise<JsonValue>);
-  scopeUnits?: JsonValue | ((input: unknown) => JsonValue);
+  scopeUnits?: JsonValue | ((input: unknown, signal: AbortSignal) => JsonValue | Promise<JsonValue>);
   /**
    * What the target says this source has already configured. Defaults to nothing
    * configured, which is the state a first visit is in.
@@ -133,7 +133,7 @@ function createHarness(options: Readonly<{
   ): Promise<JsonValue> {
     recorded.push({ action, input });
     const ref = action as Readonly<{ pluginId?: string; localId?: string }>;
-    if (ref.localId === 'author/list-units') return (typeof options.scopeUnits === 'function' ? options.scopeUnits(input) : options.scopeUnits) ?? {
+    if (ref.localId === 'author/list-units') return (typeof options.scopeUnits === 'function' ? options.scopeUnits(input, signal) : options.scopeUnits) ?? {
       kind: 'page', status: 'complete', selection: { kind: 'all' },
       units: [{ id: 'unit-1', label: 'First team' }, { id: 'unit-2', label: 'Second team' }],
     };
@@ -233,6 +233,10 @@ afterEach(async () => {
 
 describe('the mounted PRs & Issues source settings page', () => {
   it('lets a separately authored source configure a selected set through the shared editor and real administration schema', async () => {
+    let directoryReads = 0;
+    let oldSignal: AbortSignal | undefined;
+    let releaseOldRead!: (value: JsonValue) => void;
+    const oldRead = new Promise<JsonValue>((resolve) => { releaseOldRead = resolve; });
     const surface = createTriageSourceSettingsSurface({
       pluginId: PLUGIN_ID, listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
       connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID,
@@ -246,8 +250,12 @@ describe('the mounted PRs & Issues source settings page', () => {
       },
     });
     const harness = createHarness({ discovery: { kind: 'complete', candidates: [candidate('Workspace')], failures: [] },
-      scopeUnits: (input) => {
+      scopeUnits: (input, signal) => {
         const key = TriageListScopeUnitsInputV1Schema.parse(input).draft.localInstanceKey;
+        if (key !== 'Other workspace' && ++directoryReads === 2) {
+          oldSignal = signal;
+          return oldRead;
+        }
         return { kind: 'page', status: 'complete', selection: { kind: 'all' }, units: key === 'Other workspace'
           ? [{ id: 'unit-3', label: 'Third team' }, { id: 'unit-4', label: 'Fourth team' }]
           : [{ id: 'unit-1', label: 'First team' }, { id: 'unit-2', label: 'Second team' }] };
@@ -260,8 +268,12 @@ describe('the mounted PRs & Issues source settings page', () => {
     await expect(page.getByRole('button', { name: 'Save selection', state: { disabled: true } })).resolves.toBeDefined();
     await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'First team' })); });
     await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Second team' })); });
+    await pressControl(page, 'Search');
     await pressControl(page, 'Choose another workspace');
+    expect(oldSignal?.aborted).toBe(true);
     await act(async () => { await page.press(await page.getByRole('radio', { name: 'Selected…' })); });
+    await act(async () => { releaseOldRead({ kind: 'page', status: 'complete', selection: { kind: 'all' },
+      units: [{ id: 'unit-1', label: 'First team' }] }); });
     await expect(page.queryByRole('checkbox', { name: 'First team' })).resolves.toBeUndefined();
     await expect(page.getByRole('button', { name: 'Save selection', state: { disabled: true } })).resolves.toBeDefined();
     await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Third team' })); });

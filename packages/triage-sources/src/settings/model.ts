@@ -309,7 +309,7 @@ export type TriageSourceSettingsRowV1 = Readonly<{
  * that same tuple must land on the same row, or the page would offer Add beside
  * a row it already configured.
  */
-function instanceKey(
+export function instanceKey(
   binding: TriageSourceAccountBindingV1,
   localInstanceKey: string,
 ): string {

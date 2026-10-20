@@ -10,7 +10,7 @@ import {
   type TriageSourceScopeUnitV1,
 } from '@happier-dev/triage-protocol/v1';
 
-import { describeTriageSourceFailure } from './model.js';
+import { describeTriageSourceFailure, instanceKey } from './model.js';
 import type { TriageSourceSettingsDraftEditorPropsV1 } from './surface.js';
 import type { TriageSourceSettingsDraftFieldsPropsV1, TriageSourceSettingsScopeSelectionV1 } from './scopeSelection.js';
 
@@ -30,7 +30,7 @@ export function TriageSourceScopeSelectionEditor({
   Fields?: React.ComponentType<TriageSourceSettingsDraftFieldsPropsV1>;
 }>): React.ReactElement {
   const text = usePluginTranslation();
-  const [initial] = React.useState(() => adapter.readSelection(draft));
+  const [initial, setInitial] = React.useState(() => adapter.readSelection(draft));
   const [mode, setMode] = React.useState(initial?.kind ?? 'all');
   const [ids, setIds] = React.useState<readonly string[]>(initial?.kind === 'selected' ? initial.unitIds : []);
   const [editedDraft, setEditedDraft] = React.useState(draft);
@@ -40,42 +40,78 @@ export function TriageSourceScopeSelectionEditor({
   const [visibleIds, setVisibleIds] = React.useState<readonly string[]>([]);
   const [listing, setListing] = React.useState<Listing>({ pending: false, error: null, partial: false, nextCursor: null });
   const active = React.useRef<AbortController | null>(null);
+  const readCompletion = React.useRef<Promise<void>>(Promise.resolve());
+  const metadataRead = React.useRef(false);
   const action = React.useMemo(() => ({ pluginId, localId: adapter.listScopeUnitsLocalActionId }), [pluginId, adapter.listScopeUnitsLocalActionId]);
   const { execute } = useExecutePluginAction(action);
 
-  const load = React.useCallback(async (cursor?: TriageScanContinuationV1) => {
-    if (active.current !== null) return;
+  const load = React.useCallback((cursor?: TriageScanContinuationV1): Promise<void> => {
+    active.current?.abort();
     const controller = new AbortController();
     active.current = controller;
     setListing((previous) => ({ ...previous, pending: true, error: null }));
-    try {
-      const execution = await execute({ v: 1, draft, ...(query === '' ? {} : { query }), ...(cursor === undefined ? {} : { cursor }) }, { signal: controller.signal });
+    const previous = readCompletion.current;
+    const pending = (async () => {
+      // The shared Action hook remains single-flight until cancellation settles.
+      // A replacement directory read must wait for that call, not receive `pending`.
+      await previous;
       if (controller.signal.aborted) return;
-      if (execution.status !== 'success') {
-        setListing((previous) => ({ ...previous, pending: false, error: text('plugins.triage.sourceSettings.selection.readFailed', 'The list could not be read. Try again.') }));
-        return;
+      try {
+        // Retained labels come from the source's existing configuration-only read,
+        // even when provider discovery fails or the selected unit is on a later page.
+        if (!metadataRead.current && initial?.kind === 'selected') {
+          const retained = await execute({ v: 1, draft: editedDraft, mode: 'configured' }, { signal: controller.signal });
+          if (controller.signal.aborted) return;
+          metadataRead.current = true;
+          const parsed = retained.status === 'success' ? TriageListScopeUnitsResultV1Schema.safeParse(retained.result) : null;
+          if (parsed?.success && parsed.data.kind === 'page') {
+            const units = parsed.data.units;
+            setKnown((previous) => new Map([...previous, ...units.map((unit) => [unit.id, unit] as const)]));
+          }
+        }
+        const execution = await execute({ v: 1, draft: editedDraft, ...(query === '' ? {} : { query }), ...(cursor === undefined ? {} : { cursor }) }, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        if (execution.status !== 'success') {
+          setListing((previous) => ({ ...previous, pending: false, error: text('plugins.triage.sourceSettings.selection.readFailed', 'The list could not be read. Try again.') }));
+          return;
+        }
+        const parsed = TriageListScopeUnitsResultV1Schema.safeParse(execution.result);
+        if (!parsed.success) {
+          setListing((previous) => ({ ...previous, pending: false, error: text('plugins.triage.sourceSettings.selection.unreadable', 'This version cannot read the selection list.') }));
+          return;
+        }
+        const result = parsed.data;
+        if (result.kind === 'failed') {
+          setListing((previous) => ({ ...previous, pending: false, error: describeTriageSourceFailure(result.failure, text) }));
+          return;
+        }
+        setKnown((previous) => new Map([...previous, ...result.units.map((unit) => [unit.id, unit] as const)]));
+        setVisibleIds((previous) => [...new Set([...(cursor === undefined ? [] : previous), ...result.units.map((unit) => unit.id)])]);
+        setListing({
+          pending: false, partial: result.status === 'partial',
+          nextCursor: result.status === 'partial' ? result.nextCursor ?? null : null,
+          error: result.status === 'partial' && result.failure !== undefined ? describeTriageSourceFailure(result.failure, text) : null,
+        });
+      } finally {
+        if (active.current === controller) active.current = null;
       }
-      const parsed = TriageListScopeUnitsResultV1Schema.safeParse(execution.result);
-      if (!parsed.success) {
-        setListing((previous) => ({ ...previous, pending: false, error: text('plugins.triage.sourceSettings.selection.unreadable', 'This version cannot read the selection list.') }));
-        return;
-      }
-      const result = parsed.data;
-      if (result.kind === 'failed') {
-        setListing((previous) => ({ ...previous, pending: false, error: describeTriageSourceFailure(result.failure, text) }));
-        return;
-      }
-      setKnown((previous) => new Map([...previous, ...result.units.map((unit) => [unit.id, unit] as const)]));
-      setVisibleIds((previous) => [...new Set([...(cursor === undefined ? [] : previous), ...result.units.map((unit) => unit.id)])]);
-      setListing({
-        pending: false, partial: result.status === 'partial',
-        nextCursor: result.status === 'partial' ? result.nextCursor ?? null : null,
-        error: result.status === 'partial' && result.failure !== undefined ? describeTriageSourceFailure(result.failure, text) : null,
-      });
-    } finally {
-      if (active.current === controller) active.current = null;
-    }
-  }, [draft, execute, query, text]);
+    })();
+    readCompletion.current = pending;
+    return pending;
+  }, [editedDraft, execute, initial, query, text]);
+
+  const changeFields = (next: typeof draft) => {
+    if (instanceKey(next.binding, next.localInstanceKey) !== instanceKey(editedDraft.binding, editedDraft.localInstanceKey)) {
+      active.current?.abort();
+      metadataRead.current = false;
+      const reset = adapter.writeSelection(next, { kind: 'all' }, []) ?? next;
+      setInitial(adapter.readSelection(reset));
+      setMode('all'); setIds([]); setKnown(new Map()); setVisibleIds([]);
+      setQueryDraft(''); setQuery('');
+      setListing({ pending: false, error: null, partial: false, nextCursor: null });
+      setEditedDraft(reset);
+    } else setEditedDraft(next);
+  };
 
   React.useEffect(() => {
     if (mode === 'selected' && initial !== null) void load();
@@ -129,7 +165,7 @@ export function TriageSourceScopeSelectionEditor({
       {listing.nextCursor !== null ? <Button title={text('plugins.triage.sourceSettings.selection.more', 'Load more')} variant="secondary" size="small"
         disabled={listing.pending || busy} onPress={() => { void load(listing.nextCursor ?? undefined); }} /> : null}
     </Stack> : null}
-    {Fields === undefined ? null : <Fields draft={nextDraft ?? editedDraft} busy={busy} onChange={setEditedDraft} />}
+    {Fields === undefined ? null : <Fields draft={nextDraft ?? editedDraft} busy={busy} onChange={changeFields} />}
     <Row gap="small">
       <Button title={text('plugins.triage.sourceSettings.selection.save', 'Save selection')} variant="primary" size="small"
         busy={busy} disabled={busy || nextDraft === null} onPress={() => { if (!busy && nextDraft !== null) void onSubmit(nextDraft); }} />
