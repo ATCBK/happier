@@ -355,7 +355,7 @@ describe("preview native HTTP transport", () => {
             expect(loader.statusCode).toBe(200);
             const reporter = runLoader(loader.body, { canGoBack: true, canGoForward: false });
             expect(reporter.messages).toContainEqual({ v: 1, kind: 'browser.collector.navigation', browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
-                collectorId: 'c', nonce: 'pane_nonce', loading: false, canGoBack: true, canGoForward: false, url: 'http://preview.example.test/other?app=1' });
+                collectorId: 'c', nonce: 'pane_nonce', loading: false, canGoBack: true, canGoForward: false, url: 'http://preview.example.test/other?app=1', title: 'Other' });
             // An in-frame document is not re-admitted to page automation: it only reports and obeys navigation.
             expect(reporter.messages.some((message) => message.kind === 'browser.collector.ready')).toBe(false);
             reporter.send('https://evil.example.test', reporter.parent, 'back');

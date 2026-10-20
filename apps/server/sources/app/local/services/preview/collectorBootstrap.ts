@@ -95,6 +95,21 @@ function readBoundCollectorConfig(input: ProxyLocalServicePreviewHttpRequestInpu
     return null;
 }
 
+/**
+ * A refusal the preview route answers before the proxy (no such preview, no admission) is still the
+ * pane's state probe's typed answer: the ended state rests on it. Only the parent origin the probe's
+ * own collector identity names, and that sent the request, may read it; the body names a refusal and
+ * no page content. Any other request gets no CORS grant.
+ */
+export function cooperativeProbeRefusalHeaders(search: string, headers: Readonly<Record<string, unknown>>): Readonly<Record<string, string>> | null {
+    const query = new URLSearchParams(search);
+    if (query.get(COOPERATIVE_COLLECTOR_STATE_QUERY) !== '1') return null;
+    const config = parseCooperativeCollectorConfig(query.get(COOPERATIVE_COLLECTOR_QUERY));
+    const origin = headers.origin;
+    if (!config || typeof origin !== 'string' || origin !== config.webPostMessageTargetOrigin) return null;
+    return { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', vary: 'Origin' };
+}
+
 /** Called only after the existing preview route has admitted access; configuration is not a grant. */
 export async function prepareCooperativePreview(input: ProxyLocalServicePreviewHttpRequestInput): Promise<ProxyLocalServicePreviewHttpRequestInput | null> {
     const query = new URLSearchParams(input.request.search);

@@ -16,7 +16,8 @@ export const COOPERATIVE_COLLECTOR_BINDING_COOKIE = 'happier_preview_collector';
 export const COOPERATIVE_NAVIGATION_STATE_KIND = 'browser.collector.navigation';
 export const COOPERATIVE_NAVIGATION_COMMAND_KIND = 'browser.collector.navigate';
 export type CooperativeNavigationCommand = 'back' | 'forward' | 'stop';
-export type CooperativeNavigationState = Readonly<{ loading: boolean; canGoBack: boolean; canGoForward: boolean; url: string }>;
+/** `title` is the document's own title; reporters that predate it omit the field. */
+export type CooperativeNavigationState = Readonly<{ loading: boolean; canGoBack: boolean; canGoForward: boolean; url: string; title?: string }>;
 
 /** Document-scoped transport configuration, not an access grant. Preview authorization is separate. */
 export type CooperativeCollectorConfig = Readonly<{
@@ -99,10 +100,12 @@ export function parseCooperativeNavigationState(value: unknown, config: Cooperat
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const message = value as Record<string, unknown>;
     const identity = cooperativeCollectorIdentity(config);
+    const hasTitle = Object.hasOwn(message, 'title');
     if (message.v !== 1 || message.kind !== COOPERATIVE_NAVIGATION_STATE_KIND
-        || Object.keys(message).length !== Object.keys(identity).length + 6
+        || Object.keys(message).length !== Object.keys(identity).length + (hasTitle ? 7 : 6)
         || !Object.entries(identity).every(([key, expected]) => message[key] === expected)) return null;
-    const { loading, canGoBack, canGoForward, url } = message;
-    if (typeof loading !== 'boolean' || typeof canGoBack !== 'boolean' || typeof canGoForward !== 'boolean' || typeof url !== 'string') return null;
-    return { loading, canGoBack, canGoForward, url };
+    const { loading, canGoBack, canGoForward, url, title } = message;
+    if (typeof loading !== 'boolean' || typeof canGoBack !== 'boolean' || typeof canGoForward !== 'boolean' || typeof url !== 'string'
+        || (hasTitle && typeof title !== 'string')) return null;
+    return { loading, canGoBack, canGoForward, url, ...(typeof title === 'string' ? { title } : {}) };
 }

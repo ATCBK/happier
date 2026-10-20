@@ -337,6 +337,21 @@ describe('local service preview routes', () => {
             await assertRefusal('/qa-preview-probe', 401, 'preview_access_denied', 'preview_token_missing');
             await assertRefusal('/', 404, 'preview_not_found', 'preview_not_found', 'unknown.preview.happier.test');
 
+            // The pane's state probe reads the proxy's typed refusal, so an ended preview can say so. Only
+            // the parent its own collector identity names may read it; any other origin gets no CORS grant.
+            const appOrigin = 'https://app.happier.test';
+            const collector = encodeURIComponent(JSON.stringify({ browserSessionId: 'bs', viewId: 'v', navigationGeneration: 0,
+                collector: { collectorId: 'collector_1', nonce: 'nonce_1', version: '1.0.0' }, webPostMessageTargetOrigin: appOrigin }));
+            const probe = (host: string, origin: string) => app.inject({ method, url: `/?__happierCollector=${collector}&__happierCollectorState=1`, headers: { host, origin } });
+            for (const [host, status] of [['unknown.preview.happier.test', 404], [HOST, 401]] as const) {
+                const read = await probe(host, appOrigin);
+                expect(read.statusCode).toBe(status);
+                expect(read.headers['access-control-allow-origin']).toBe(appOrigin);
+                expect(read.headers['access-control-allow-credentials']).toBe('true');
+                expect((await probe(host, 'https://elsewhere.test')).headers['access-control-allow-origin']).toBeUndefined();
+            }
+            expect((await injectPreview('/', 'unknown.preview.happier.test')).headers['access-control-allow-origin']).toBeUndefined();
+
             const ui = await app.inject({ method, url: '/', headers: { host: 'app.happier.test' } });
             expect(ui.statusCode).toBe(200);
             expect(ui.headers['content-security-policy']).toBe("frame-ancestors 'none'");

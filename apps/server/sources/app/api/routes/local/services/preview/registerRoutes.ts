@@ -35,6 +35,7 @@ import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requ
 import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
 import { LOCAL_SERVICE_APPLICATION_HTTP_METHODS, registerLocalServiceHostRoutes } from '../hostRoutes';
 import { readLocalServiceRequestHostname, resolveLocalServiceExternalProtocol } from '@/app/local/services/preview/origin';
+import { cooperativeProbeRefusalHeaders } from '@/app/local/services/preview/collectorBootstrap';
 import type {
     LocalServicePreviewRuntimeRegistrationInput,
     LocalServicePreviewRuntimeRegistrationResult,
@@ -403,6 +404,15 @@ function sendError(reply: RouteReply, statusCode: number, error: string, reasonC
     reply.code?.(statusCode).send?.({ error, reasonCode });
 }
 
+/** A data-plane refusal, readable by the pane's own state probe (see `cooperativeProbeRefusalHeaders`). */
+function sendPreviewRefusal(request: RouteRequest, reply: RouteReply, statusCode: number, error: string, reasonCode: string): void {
+    let response = reply.code?.(statusCode);
+    for (const [name, value] of Object.entries(cooperativeProbeRefusalHeaders(serializeQuery(request.query), request.headers ?? {}) ?? {})) {
+        response = response?.header?.(name, value);
+    }
+    response?.send?.({ error, reasonCode });
+}
+
 async function isSessionAuthorized(
     request: RouteRequest,
     options: RegisterLocalServicePreviewRoutesOptions,
@@ -455,7 +465,7 @@ export async function handleLocalServicePreviewHttpRequest(
     }
     const target = resolvePreviewHttpRouteTarget(request, options);
     if (isPreviewHttpRouteError(target)) {
-        sendError(reply, target.errorStatusCode, target.error, target.reasonCode);
+        sendPreviewRefusal(request, reply, target.errorStatusCode, target.error, target.reasonCode);
         return undefined;
     }
 
@@ -477,7 +487,7 @@ export async function handleLocalServicePreviewHttpRequest(
                 reply.code?.(303).header?.('Location', target.exchangeRedirectLocation).send?.();
                 return undefined;
             }
-            sendError(reply, 401, "preview_access_denied", exchanged.reasonCode);
+            sendPreviewRefusal(request, reply, 401, "preview_access_denied", exchanged.reasonCode);
             return undefined;
         }
         redirectPreviewTokenExchange(reply, target, exchanged.rawToken);
@@ -491,7 +501,7 @@ export async function handleLocalServicePreviewHttpRequest(
         machineId: target.preview.machineId,
     });
     if (!access.ok) {
-        sendError(reply, 401, "preview_access_denied", access.reasonCode);
+        sendPreviewRefusal(request, reply, 401, "preview_access_denied", access.reasonCode);
         return undefined;
     }
 

@@ -1,6 +1,6 @@
 /**
  * The cooperative preview's navigation reporter. It is the only part of the collector that every
- * in-frame document of a bound relay preview carries: it reports history position and loading to
+ * in-frame document of a bound relay preview carries: it reports history position, loading and title to
  * the exact host that embedded it, and obeys back, forward and stop from that host only. It never
  * admits page automation or diagnostics; the full runtime still does that for the document loaded
  * with the pane's own navigation identity.
@@ -30,7 +30,8 @@ export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
           loading: navigationPending || String(document.readyState) !== 'complete',
           canGoBack: Boolean(navigation && navigation.canGoBack),
           canGoForward: Boolean(navigation && navigation.canGoForward),
-          url: currentUrl()
+          url: currentUrl(),
+          title: String(document.title || '')
         }), config.webPostMessageTargetOrigin);
       } catch (_error) {
         // Reporting is best-effort metadata; it must never disturb the previewed page.
