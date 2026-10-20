@@ -5,7 +5,7 @@ import {
   type SkillFileInputV1,
   type SkillInstallPreviewV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
-import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
+import { DEFAULT_CREATE_REACH_CHANGE_V1, type ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import { readRegistryFailureStatus, type RegistryFailureStatus } from '@/registries/describeRegistrySourceStatus';
@@ -27,6 +27,7 @@ export type SkillInstallOutcome =
       ok: true;
       skillIds: readonly string[];
       rulesMissing: readonly string[];
+      incomplete: readonly Readonly<{ skillId: string; step: 'rules' | 'session_include' }>[];
     }>
   | Readonly<{ ok: false; error: string; status?: RegistryFailureStatus }>;
 
@@ -62,6 +63,7 @@ export async function installSkills(
       return {
         ok: true,
         skillIds: effects.data.skillIds,
+        incomplete: effects.data.incomplete,
         rulesMissing: effects.data.incomplete
           .filter((entry) => entry.step === 'rules')
           .map((entry) => entry.skillId),
@@ -82,6 +84,7 @@ export async function installSkills(
   return {
     ok: true,
     skillIds: parsed.data.skillIds,
+    incomplete: parsed.data.incomplete ?? [],
     rulesMissing: (parsed.data.incomplete ?? [])
       .filter((entry) => entry.step === 'rules')
       .map((entry) => entry.skillId),
@@ -124,4 +127,20 @@ export async function retrySkillRules(
     change: input.change,
   });
   return readReachRulesAcknowledgment('skill', input.skillId, result).ok;
+}
+
+export type SkillInstallAcknowledgment = Extract<SkillInstallOutcome, { ok: true }>;
+
+/** Keep every content acknowledgment; a subsequent retry only visits rules still missing. */
+export async function retrySkillInstallRules(
+  execute: MountedAuthoringActionExecute,
+  outcome: SkillInstallAcknowledgment,
+  change: ReachRulesChangeV1 = DEFAULT_CREATE_REACH_CHANGE_V1,
+): Promise<SkillInstallAcknowledgment> {
+  const incomplete: SkillInstallAcknowledgment['incomplete'][number][] = [];
+  for (const step of outcome.incomplete) {
+    if (step.step !== 'rules' || !await retrySkillRules(execute, { skillId: step.skillId, change }).catch(() => false))
+      incomplete.push(step);
+  }
+  return { ...outcome, incomplete, rulesMissing: incomplete.filter(step => step.step === 'rules').map(step => step.skillId) };
 }

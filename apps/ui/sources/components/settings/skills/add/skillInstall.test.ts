@@ -4,7 +4,7 @@ import { SkillsRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/spec
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
-import { installSkills, previewSkillInstall, retrySkillRules } from './skillInstall';
+import { installSkills, previewSkillInstall, retrySkillRules, retrySkillInstallRules } from './skillInstall';
 
 /** The Action transport is the boundary: the Home answers `skills.install` / `skills.rules.set`. */
 function home(answer: (actionId: string, input: unknown) => ActionExecuteResult) {
@@ -20,9 +20,25 @@ const POINTER = { kind: 'registry' as const, sourceId: 'builtin:skills-sh', item
 const RULES_CHANGE = { kind: 'replace', rules: [{ target: { t: 'allMachines' }, enabled: true }] } as const satisfies ReachRulesChangeV1;
 
 describe('installSkills (Add to library)', () => {
+    it('retains every acknowledged identity and incomplete step, including a session step', async () => {
+        const incomplete = [{ skillId: 'sibling', step: 'rules' }, { skillId: 'primary', step: 'session_include' }];
+        const { execute } = home(() => ({ ok: true, result: { skillIds: ['primary', 'sibling'], includedInSessionId: null, incomplete } }));
+        expect(await installSkills(execute, { source: POINTER })).toMatchObject({ skillIds: ['primary', 'sibling'], incomplete });
+    });
+
+    it('repairs only missing rules and never drops an outstanding step from another authority', async () => {
+        const { execute, calls } = home(() => ({ ok: true, result: { ok: true, revision: 2,
+            items: [{ skillId: 'sibling', previous: [], rules: [] }] } }));
+        expect(await retrySkillInstallRules(execute, {
+            ok: true, skillIds: ['primary', 'sibling'], rulesMissing: ['sibling'],
+            incomplete: [{ skillId: 'sibling', step: 'rules' }, { skillId: 'primary', step: 'session_include' }],
+        })).toMatchObject({ skillIds: ['primary', 'sibling'], rulesMissing: [], incomplete: [{ skillId: 'primary', step: 'session_include' }] });
+        expect(calls.map(call => call.actionId)).toEqual(['skills.rules.set']);
+    });
+
     it('installs exactly the version the details read, and sends no Where when the pick is untouched', async () => {
         const { execute, calls } = home(() => ({ ok: true, result: { skillIds: ['sk_1'], includedInSessionId: null } }));
-        await expect(installSkills(execute, { source: POINTER })).resolves.toEqual({ ok: true, skillIds: ['sk_1'], rulesMissing: [] });
+        await expect(installSkills(execute, { source: POINTER })).resolves.toEqual({ ok: true, skillIds: ['sk_1'], rulesMissing: [], incomplete: [] });
         expect(calls).toEqual([{ actionId: 'skills.install', input: { source: POINTER } }]);
     });
 
@@ -38,7 +54,7 @@ describe('installSkills (Add to library)', () => {
             : { ok: true, result: SkillsRulesSetOutputV1Schema.parse({ ok: true, revision: 1,
                 items: [{ skillId: 'sk_1', previous: [], rules: [] }] }) });
         const outcome = await installSkills(execute, { source: POINTER });
-        expect(outcome).toEqual({ ok: true, skillIds: ['sk_1'], rulesMissing: ['sk_1'] });
+        expect(outcome).toEqual({ ok: true, skillIds: ['sk_1'], rulesMissing: ['sk_1'], incomplete: [{ skillId: 'sk_1', step: 'rules' }] });
         await expect(retrySkillRules(execute, { skillId: 'sk_1', change: RULES_CHANGE })).resolves.toBe(true);
         expect(calls.map((call) => call.actionId)).toEqual(['skills.install', 'skills.rules.set']);
         expect(calls[1]!.input).toEqual({ items: [{ skillId: 'sk_1' }], change: RULES_CHANGE });
@@ -55,7 +71,7 @@ describe('installSkills (Add to library)', () => {
     it('keeps the created identity when the install fails after the content landed', async () => {
         const { execute } = home(() => ({ ok: false, error: 'rules write failed', errorCode: 'skill_rules_write_failed',
             details: { skillIds: ['sk_2'], incomplete: [{ skillId: 'sk_2', step: 'rules' }] } }));
-        await expect(installSkills(execute, { source: POINTER })).resolves.toEqual({ ok: true, skillIds: ['sk_2'], rulesMissing: ['sk_2'] });
+        await expect(installSkills(execute, { source: POINTER })).resolves.toEqual({ ok: true, skillIds: ['sk_2'], rulesMissing: ['sk_2'], incomplete: [{ skillId: 'sk_2', step: 'rules' }] });
     });
 });
 

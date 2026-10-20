@@ -14,7 +14,7 @@ import { t } from '@/text';
 
 import { previewRef, SkillPreviewRows } from './SkillPreviewRows';
 import { readAllHeldFooter, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
-import { installSkills, previewSkillInstall } from './skillInstall';
+import { installSkills, previewSkillInstall, retrySkillInstallRules, type SkillInstallAcknowledgment } from './skillInstall';
 
 /**
  * From a link (lab sa L): paste a repository or folder, look (`skills.install` dry run, nothing written), tick the
@@ -43,8 +43,10 @@ export function SkillLinkInput(
   );
   const [adding, setAdding] = React.useState(false);
   const [addError, setAddError] = React.useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = React.useState<SkillInstallAcknowledgment | null>(null);
 
   const find = React.useCallback(async () => {
+    if (acknowledged) return;
     const link = url.trim();
     if (!/^https:\/\/\S+$/.test(link)) {
       setState({
@@ -69,13 +71,13 @@ export function SkillLinkInput(
     }
     setState({ kind: 'found', items: preview.items });
     setTicked(tickAllSkillPreviews(preview.items));
-  }, [props.execute, url]);
+  }, [acknowledged, props.execute, url]);
 
   const add = React.useCallback(async () => {
     if (state.kind !== 'found' || ticked.size === 0) return;
     setAdding(true);
     setAddError(null);
-    const outcome = await installSkills(props.execute, {
+    const outcome = acknowledged ? await retrySkillInstallRules(props.execute, acknowledged) : await installSkills(props.execute, {
       source: { kind: 'link', url: url.trim() },
       selectPaths: state.items
         .filter((item) => ticked.has(item.path))
@@ -86,8 +88,13 @@ export function SkillLinkInput(
       setAddError(outcome.status ? describeRegistrySourceStatus(outcome.status) : t('capabilities.add.addFailed'));
       return;
     }
+    setAcknowledged(outcome);
+    if (outcome.incomplete.length > 0) {
+      setAddError(t('capabilities.skillAdd.partial.rules'));
+      return;
+    }
     props.onAdded(outcome.skillIds[0]!);
-  }, [props, state, ticked, url]);
+  }, [acknowledged, props, state, ticked, url]);
 
   const found = state.kind === 'found' ? state.items : null;
   const allHeld = found ? readAllHeldFooter(found) : null;
@@ -106,6 +113,7 @@ export function SkillLinkInput(
             <FieldTextInput
               testID={`${props.testID}.url`}
               value={url}
+              editable={!acknowledged && !adding}
               onChangeText={(next) => {
                 setUrl(next);
                 if (state.kind === 'error') setState({ kind: 'idle' });
@@ -126,7 +134,7 @@ export function SkillLinkInput(
             display="secondary"
             title={t('capabilities.skillAdd.link.find')}
             loading={state.kind === 'finding'}
-            disabled={url.trim() === ''}
+            disabled={url.trim() === '' || acknowledged !== null || adding}
             onPress={() => void find()}
             testID={`${props.testID}.find`}
           />
@@ -144,7 +152,7 @@ export function SkillLinkInput(
               testID={props.testID}
               items={found}
               ticked={ticked}
-              onToggle={(path) => setTicked((previous) => toggleSkillPreview(found, previous, path))}
+              onToggle={(path) => { if (!acknowledged && !adding) setTicked((previous) => toggleSkillPreview(found, previous, path)); }}
               onOpen={props.onAdded}
               facts={(item) => ({
                 presentation: 'row',
@@ -165,7 +173,7 @@ export function SkillLinkInput(
           testID={`${props.testID}.footer`}
           start={
             addError ? (
-              <Text variant="meta" style={{ color: theme.colors.status.error }}>
+              <Text variant="meta" style={{ color: theme.colors.status.error }} testID={`${props.testID}.add-error`}>
                 {addError}
               </Text>
             ) : null
@@ -188,11 +196,11 @@ export function SkillLinkInput(
           ) : (
             <RoundButton
               size="normal"
-              title={t('capabilities.skillAdd.link.addSelected', {
+              title={acknowledged ? t('capabilities.skillAdd.partial.tryAgain') : t('capabilities.skillAdd.link.addSelected', {
                 count: ticked.size,
               })}
               loading={adding}
-              disabled={ticked.size === 0}
+              disabled={adding || ticked.size === 0}
               onPress={() => void add()}
               testID={`${props.testID}.add`}
             />

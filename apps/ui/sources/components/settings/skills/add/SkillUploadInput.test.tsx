@@ -57,6 +57,29 @@ const execute: MountedAuthoringActionExecute = async (_actionId, input) => {
 };
 
 describe('SkillUploadInput', () => {
+  it('keeps an acknowledged upload open and retries its rules without another install', async () => {
+    const onAdded = vi.fn();
+    const writes: string[] = [];
+    const answer: MountedAuthoringActionExecute = async (actionId, input) => {
+      if (actionId === 'skills.install' && (input as { dryRun?: boolean }).dryRun)
+        return { ok: true, result: { items: [PREVIEW] } };
+      writes.push(actionId);
+      return actionId === 'skills.install'
+        ? { ok: false, error: 'rules unavailable', details: { skillIds: ['uploaded'], incomplete: [{ skillId: 'uploaded', step: 'rules' }] } }
+        : { ok: true, result: { ok: true, revision: 2, items: [{ skillId: 'uploaded', previous: [], rules: [] }] } };
+    };
+    const { SkillUploadInput } = await import('./SkillUploadInput');
+    const screen = await renderScreen(<SkillUploadInput execute={answer} onAdded={onAdded} onDone={() => {}} testID="upload" />);
+    await act(async () => { await drop.onFilesDropped?.({ dataTransfer: {} }); });
+    await screen.pressByTestIdAsync('upload.add');
+    expect(onAdded).not.toHaveBeenCalled();
+    expect(screen.findByTestId('upload.preview')).not.toBeNull();
+    expect(screen.findByTestId('upload.add-error')).not.toBeNull();
+    await screen.pressByTestIdAsync('upload.add');
+    expect(onAdded).toHaveBeenCalledExactlyOnceWith('uploaded');
+    expect(writes).toEqual(['skills.install', 'skills.rules.set']);
+  });
+
   it('keeps the preview and its Add after a failed Add, with the failure beside it', async () => {
     const { SkillUploadInput } = await import('./SkillUploadInput');
     const screen = await renderScreen(<SkillUploadInput execute={execute} onAdded={() => {}} onDone={() => {}} testID="upload" />);

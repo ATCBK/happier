@@ -90,6 +90,41 @@ function footerDirection(screen: Awaited<ReturnType<typeof renderFailedAdd>>) {
 }
 
 describe('SkillLinkInput footer', () => {
+  it('keeps every acknowledged skill and retries only the remaining sibling rules', async () => {
+    const calls: { actionId: string; input: unknown }[] = [];
+    let remainingFails = true;
+    const onAdded = vi.fn();
+    const answer: MountedAuthoringActionExecute = async (actionId, input) => {
+      if (actionId === 'skills.install' && (input as { dryRun?: boolean }).dryRun)
+        return { ok: true, result: { items: [PREVIEW] } };
+      calls.push({ actionId, input });
+      if (actionId === 'skills.install') return { ok: true, result: {
+        skillIds: ['primary', 'sibling-a', 'sibling-b'], includedInSessionId: null,
+        incomplete: [{ skillId: 'sibling-a', step: 'rules' }, { skillId: 'sibling-b', step: 'rules' }],
+      } };
+      const skillId = (input as { items: { skillId: string }[] }).items[0]!.skillId;
+      if (skillId === 'sibling-b' && remainingFails) return { ok: true, result: { ok: false, code: 'settings_conflict' } };
+      return { ok: true, result: { ok: true, revision: 2, items: [{ skillId, previous: [], rules: [] }] } };
+    };
+    const { SkillLinkInput } = await import('./SkillLinkInput');
+    const screen = await renderScreen(<SkillLinkInput execute={answer} onAdded={onAdded} onDone={() => {}} testID="link" />);
+    await act(async () => { screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills'); });
+    await screen.pressByTestIdAsync('link.find');
+    await screen.pressByTestIdAsync('link.add');
+    expect(onAdded).not.toHaveBeenCalled();
+    expect(screen.findByTestId('link.item.grill-me')).not.toBeNull();
+    expect(screen.findByTestId('link.add-error')).not.toBeNull();
+    await screen.pressByTestIdAsync('link.add');
+    expect(onAdded).not.toHaveBeenCalled();
+    remainingFails = false;
+    await screen.pressByTestIdAsync('link.add');
+    expect(onAdded).toHaveBeenCalledExactlyOnceWith('primary');
+    expect(calls.map(call => call.actionId)).toEqual(['skills.install', 'skills.rules.set', 'skills.rules.set', 'skills.rules.set']);
+    expect(calls.slice(1).map(call => call.input)).toEqual(['sibling-a', 'sibling-b', 'sibling-b'].map(skillId => ({
+      items: [{ skillId }], change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } },
+    })));
+  });
+
   it('stacks the refusal above the actions on a phone, as the other Add modes do', async () => {
     device.current = 'phone';
     expect(footerDirection(await renderFailedAdd())).toBe('column');

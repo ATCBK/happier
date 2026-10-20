@@ -63,10 +63,27 @@ it('retires the exited runner without waiting for remote skill cache inventory',
     }
 });
 
-it('leaves cache collection to non-Stop maintenance after an explicit Stop', async () => {
-    const readLibraryDigests = vi.fn(async () => []);
-    const result = await fixture(false, readLibraryDigests, Date.now());
-    expect(readLibraryDigests).not.toHaveBeenCalled();
-    expect(result.sessions.has(424242)).toBe(false);
-    await expect(lstat(result.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+it('collects obsolete cache after explicit Stop without waiting for remote inventory', async () => {
+    let releaseInventory!: (value: readonly string[]) => void;
+    const inventory = new Promise<readonly string[]>(resolve => { releaseInventory = resolve; });
+    let inventoryStarted = false;
+    let obsoleteCache: string | undefined;
+    const readLibraryDigests = async () => {
+        inventoryStarted = true;
+        return await inventory;
+    };
+    try {
+        const result = await fixture(false, readLibraryDigests, Date.now());
+        expect(result.sessions.has(424242)).toBe(false);
+        await expect(lstat(result.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+        obsoleteCache = join(result.pluginRoot, '..', '..', 'cache', 'a'.repeat(64));
+        await mkdir(obsoleteCache, { recursive: true });
+        await writeFile(join(obsoleteCache, 'SKILL.md'), 'obsolete skill');
+        expect(inventoryStarted).toBe(true);
+    } finally {
+        releaseInventory([]);
+    }
+    await vi.waitFor(async () => {
+        await expect(lstat(obsoleteCache!)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
 });

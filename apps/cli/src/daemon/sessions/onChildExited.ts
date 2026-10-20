@@ -342,14 +342,10 @@ export function createOnChildExited(params: Readonly<{
               sessionId: finalSessionId, elapsedMs: Date.now() - skillsStartedAtMs,
             });
           }
-          // Account-wide cache inventory is maintenance, not runner retirement.
-          // Explicit Stop still owes Home control-serviceability retirement, so
-          // it leaves collection to startup reconciliation or a natural exit.
-          if (typeof tracked.stopRequestedAtMs !== 'number') {
-            void params.skillStore.collectSkillCache().catch((error) => {
-              logger.warn('[DAEMON RUN] Skill cache collection unavailable', { sessionId: finalSessionId, error });
-            });
-          }
+          // Account-wide inventory must not delay runner or explicit Stop retirement.
+          void params.skillStore.collectSkillCache().catch((error) => {
+            logger.warn('[DAEMON RUN] Skill cache collection unavailable', { sessionId: finalSessionId, error });
+          });
         } catch (error) {
           // Startup reconciliation retries owner-local cleanup after an unavailable filesystem/library read.
           logger.warn('[DAEMON RUN] Skill session directory cleanup unavailable', { sessionId: finalSessionId, error });

@@ -54,7 +54,7 @@ describe('skill library name inventory', () => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       response.setHeader('content-type', 'application/json');
       if (url.pathname === '/v1/artifacts') {
-        response.end(JSON.stringify(bundles.map((body, index) => ({
+        const items = bundles.map((body, index) => ({
           id: `skill-${index}`, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
           dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1,
           seq: index + 1, createdAt: 1, updatedAt: 1,
@@ -62,7 +62,9 @@ describe('skill library name inventory', () => {
             bundleSchemaId: 'skills.skill_md_v1' }),
           ...(url.searchParams.get('includeBody') === 'true' && !(unreadable && index === 1)
             ? { body: encodePlainArtifactStoredContent({ body: JSON.stringify(body) }) } : {}),
-        }))));
+        }));
+        // The current filtered HTTP list returns classification coverage alongside its rows.
+        response.end(JSON.stringify(url.searchParams.has('kind') ? { items, hasUnclassified: false } : items));
       } else if (url.pathname === '/v1/plugins/availability/materializations/read') {
         response.end(JSON.stringify({ availabilityCursor: 0, inventoryComplete: true, snapshots: [], releases: [] }));
       } else if (url.pathname.startsWith('/v1/artifacts/')) {

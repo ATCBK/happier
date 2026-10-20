@@ -25,7 +25,7 @@ import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 
 import { SkillPreviewRows } from './SkillPreviewRows';
 import { readAllHeldFooter, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
-import { installSkills, previewSkillInstall } from './skillInstall';
+import { installSkills, previewSkillInstall, retrySkillInstallRules, type SkillInstallAcknowledgment } from './skillInstall';
 
 function describeUploadError(error: SkillUploadError): string {
   switch (error.code) {
@@ -85,10 +85,12 @@ export function SkillUploadInput(
   const [adding, setAdding] = React.useState(false);
   // A failed Add keeps the preview and the ticks: the footer says so and the same Add retries the same selection.
   const [addError, setAddError] = React.useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = React.useState<SkillInstallAcknowledgment | null>(null);
   const [dragging, setDragging] = React.useState(false);
 
   const accept = React.useCallback(
     async (source: UploadSource) => {
+      if (acknowledged || adding) return;
       setState({ kind: 'reading' });
       setAddError(null);
       const read = await readSkillUpload(source);
@@ -110,7 +112,7 @@ export function SkillUploadInput(
       setTicked(tickAllSkillPreviews(preview.items));
       setState({ kind: 'ready', files: read.files, items: preview.items });
     },
-    [props.execute],
+    [acknowledged, adding, props.execute],
   );
 
   const acceptWebFiles = React.useCallback(
@@ -141,7 +143,7 @@ export function SkillUploadInput(
   );
 
   const drop = useWebFileDropZone({
-    enabled: Platform.OS === 'web' && !adding,
+    enabled: Platform.OS === 'web' && !adding && acknowledged === null,
     onFileDragActiveChange: setDragging,
     onFilesDropped: async (event) => {
       const transfer = event.dataTransfer as DataTransfer | null | undefined;
@@ -194,6 +196,7 @@ export function SkillUploadInput(
       items={items}
       ticked={ticks}
       onToggle={(path) => {
+        if (acknowledged || adding) return;
         setAddError(null);
         setTicked((previous) => toggleSkillPreview(items, previous, path));
       }}
@@ -213,7 +216,7 @@ export function SkillUploadInput(
     setAddError(null);
     // One skill is added as it is; a folder of several adds the ticked ones.
     const several = state.items.length > 1;
-    const outcome = await installSkills(props.execute, {
+    const outcome = acknowledged ? await retrySkillInstallRules(props.execute, acknowledged) : await installSkills(props.execute, {
       source: { kind: 'upload', files: state.files },
       ...(several ? { selectPaths: state.items.filter((item) => ticked.has(item.path)).map((item) => item.path) } : {}),
     });
@@ -222,8 +225,13 @@ export function SkillUploadInput(
       setAddError(t('capabilities.add.addFailed'));
       return;
     }
+    setAcknowledged(outcome);
+    if (outcome.incomplete.length > 0) {
+      setAddError(t('capabilities.skillAdd.partial.rules'));
+      return;
+    }
     props.onAdded(outcome.skillIds[0]!);
-  }, [props, state, ticked]);
+  }, [acknowledged, props, state, ticked]);
 
   const allHeld = state.kind === 'ready' ? readAllHeldFooter(state.items) : null;
   return (
@@ -259,6 +267,7 @@ export function SkillUploadInput(
               size="small"
               display="secondary"
               title={t('capabilities.skillAdd.upload.chooseZip')}
+              disabled={adding || acknowledged !== null}
               onPress={() => void choose('zip')}
               testID={`${props.testID}.zip`}
             />
@@ -267,6 +276,7 @@ export function SkillUploadInput(
                 size="small"
                 display="secondary"
                 title={t('capabilities.skillAdd.upload.chooseFolder')}
+                disabled={adding || acknowledged !== null}
                 onPress={() => void choose('folder')}
                 testID={`${props.testID}.folder`}
               />
@@ -324,12 +334,12 @@ export function SkillUploadInput(
             <RoundButton
               size="normal"
               title={
-                state.items.length > 1
+                acknowledged ? t('capabilities.skillAdd.partial.tryAgain') : state.items.length > 1
                   ? t('capabilities.skillAdd.link.addSelected', { count: ticked.size })
                   : t('capabilities.skillAdd.addToLibrary')
               }
               loading={adding}
-              disabled={state.items.length > 1 && ticked.size === 0}
+              disabled={adding || (state.items.length > 1 && ticked.size === 0)}
               onPress={() => void add()}
               testID={`${props.testID}.add`}
             />
