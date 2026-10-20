@@ -95,6 +95,15 @@ test('native privileged observation reclaims an unused root while preserving act
   assert.ok(references.paths.includes(join(parent, 'happier-held')));
   assert.ok(references.paths.includes(join(parent, 'happier-inherited')));
   await access(join(parent, 'happier-old'));
+  // The native collector above really observes the whole host. Scope the
+  // following deletion fixture's process inventory to its known holder: a
+  // new unrelated nondumpable process can otherwise correctly block sweeping
+  // between those observations. All holder cwd/fd/environ reads stay real.
+  const readdir = fs.readdirSync;
+  t.mock.method(fs, 'readdirSync', (path, ...args) => path === '/proc'
+    ? [String(child.pid)] : readdir(path, ...args));
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   const result = reapHistoricalTempRoots(parent);
   assert.equal(result.observationUnavailable, null);
   assert.equal(result.reclaimedRoots, 1);

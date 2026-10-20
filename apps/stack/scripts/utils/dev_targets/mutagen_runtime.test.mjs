@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import test from 'node:test';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { resolveMutagenSessionName } from './mutagen_project.mjs';
 
 test('routed repositories and QA consumers share one daemon while repository sessions stay distinct', () => {
@@ -256,10 +258,13 @@ test('Mutagen list parsing rejects nonterminal scan and transition problems incl
   assert.equal(excludedAlone.recovery, undefined);
 });
 
-test('Mutagen evidence problems warn only for approved project data paths', () => {
+test('Mutagen evidence problems warn only for approved project data paths', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-sync-data-' });
+  await mkdir(join(root, '.project/plans/qa/lanes/live'), { recursive: true });
+  await writeFile(join(root, '.project/plans/qa/lanes/live/browser-diagnostics.json'), '{}');
   const base = {
     name: 'happier-linux', paused: false, status: 'watching', successfulCycles: 7,
-    alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true },
+    alpha: { connected: true, scanned: true, path: root }, beta: { connected: true, scanned: true },
   };
   const inspect = (problems, extra = {}, kind = 'transitionProblems') => parseMutagenSyncList(JSON.stringify([{
     ...base, ...extra, beta: { ...base.beta, [kind]: problems, ...extra.beta },
@@ -268,6 +273,7 @@ test('Mutagen evidence problems warn only for approved project data paths', () =
   for (const kind of ['scanProblems', 'transitionProblems']) {
     for (const extension of ['json', 'md', 'txt', 'csv', 'html', 'svg', 'png', 'jpg', 'jpeg', 'webp', 'gif']) {
       const problem = { ...capture, path: `.project/plans/qa/capture.${extension}` };
+      await writeFile(join(root, problem.path), 'capture');
       const result = inspect([problem], {}, kind);
       assert.equal(result.state, 'ready', problem.path);
       assert.ok(result.warnings.some(warning => warning.includes(problem.path)), problem.path);
@@ -287,6 +293,35 @@ test('Mutagen evidence problems warn only for approved project data paths', () =
   assert.equal(inspect([capture], { conflicts: [{ root: '.project/data.json' }] }).state, 'unhealthy');
   assert.equal(inspect([capture], { beta: { connected: false } }).state, 'unhealthy');
   assert.equal(inspect([capture], { successfulCycles: 0 }).state, 'synchronizing');
+});
+
+test('Mutagen capture warnings require a proven regular non-symlink source file', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-sync-file-kind-' });
+  await mkdir(join(root, '.project/directory.json'), { recursive: true });
+  await writeFile(join(root, '.project/directory.json/index.js'), 'console.log("command")');
+  await writeFile(join(root, '.project/command.mjs'), 'console.log("command")');
+  await symlink('command.mjs', join(root, '.project/link.json'));
+  await writeFile(join(root, '.project/capture.json'), '{}');
+  const session = {
+    name: 'happier-linux', paused: false, status: 'watching', successfulCycles: 7,
+    alpha: { connected: true, scanned: true, path: root }, beta: { connected: true, scanned: true },
+  };
+  for (const kind of ['scanProblems', 'transitionProblems']) {
+    for (const path of ['.project/link.json', '.project/directory.json', '.project/missing.json']) {
+      const result = parseMutagenSyncList(JSON.stringify([{ ...session,
+        beta: { ...session.beta, [kind]: [{ path, error: 'apply failed' }] },
+      }]), session.name);
+      assert.equal(result.state, 'unhealthy', `${kind}: ${path}`);
+      assert.deepEqual(result.warnings, [], path);
+    }
+    for (const source of [undefined, '', 'relative-root']) {
+      const result = parseMutagenSyncList(JSON.stringify([{ ...session,
+        alpha: { ...session.alpha, path: source },
+        beta: { ...session.beta, [kind]: [{ path: '.project/capture.json', error: 'apply failed' }] },
+      }]), session.name);
+      assert.equal(result.state, 'unhealthy', `unproven source: ${source}`);
+    }
+  }
 });
 
 test('Mutagen scan races recover before the first cycle but never mask unsafe scan evidence', () => {

@@ -140,6 +140,7 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   // A source flush must neither delete them nor overwrite them with another host's output.
   'packages/iroh-native/native',
   'packages/iroh-native/native-test',
+  'packages/*/ios/vendor',
   'packages/iroh-native/release-evidence',
   'apps/ui/android/app/build',
   'apps/ui/android/build',

@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 
 import { DEV_TARGET_DISPOSABLE_REPLICA_ARTIFACT_ROOTS, DEV_TARGET_SYNC_EXECUTOR_REPO, isExecutionHostCandidateSyncOwner, resolveMutagenRepositoryKey } from './mutagen_project.mjs';
 import { resolveRepoStackIdentity, resolveStacksStorageRoot } from '../stack/repo_stack_identity.mjs';
@@ -36,20 +36,26 @@ const transientTransitionError = new RegExp(TRANSIENT_TRANSITION_ERRORS.join('|'
 const TRANSIENT_SCAN_ERRORS = ['^hashed size mismatch: [0-9]+ != [0-9]+$'];
 const transientScanError = new RegExp(TRANSIENT_SCAN_ERRORS.join('|'), 'i');
 
-// Dev-target policy permits stale project data/captures by extension. Other
-// extensions and all paths outside .project remain blocking command inputs.
+// Dev-target policy permits stale regular, non-symlink project data/captures.
+// An allowed suffix alone cannot prove that a path is data (e.g. a command link).
 const PROJECT_DATA_PROBLEM_PATH = '^\\.project/([^/]+/)*[^/]+\\.(json|md|txt|csv|html|svg|png|jpg|jpeg|webp|gif)$';
 const invalidProblemSegments = /(^|\/)([.]|[.][.]|)(\/|$)/;
 const projectDataProblemPath = new RegExp(PROJECT_DATA_PROBLEM_PATH);
 
-function isProjectDataProblem(problem) {
-  return typeof problem?.path === 'string'
+function isProjectDataProblem(problem, sourceDir) {
+  if (!(typeof problem?.path === 'string'
     && typeof problem?.error === 'string'
     && problem.error.length > 0
     && !/[\x00-\x1f\x7f\\|]/.test(problem.path)
     && !/[\x00-\x1f\x7f|]/.test(problem.error)
     && !invalidProblemSegments.test(problem.path)
-    && projectDataProblemPath.test(problem.path);
+    && projectDataProblemPath.test(problem.path)
+    && typeof sourceDir === 'string' && isAbsolute(sourceDir))) return false;
+  try {
+    return lstatSync(join(sourceDir, problem.path)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 export function classifyCleanMutagenReadiness(facts) {
@@ -78,7 +84,9 @@ export function renderNativeSyncReadinessPolicy() {
     "  case \"$1\" in *'|'*|*'\\'*) return 1 ;; esac",
     "  if printf '%s\\n' \"$1\" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then return 1; fi",
     `  if printf '%s\\n' "$1" | grep -Eq '${invalidProblemSegments.source}'; then return 1; fi`,
-    `  printf '%s\\n' "$1" | grep -Eq '${PROJECT_DATA_PROBLEM_PATH}'`,
+    `  printf '%s\\n' "$1" | grep -Eq '${PROJECT_DATA_PROBLEM_PATH}' || return 1`,
+    '  case "$2" in /*) ;; *) return 1 ;; esac',
+    '  [ -f "$2/$1" ] && [ ! -L "$2/$1" ]',
     '}',
     'classify_transient_mutagen_scan_errors() {',
     `  printf '%s\\n' "$1" | grep -Eiv '${TRANSIENT_SCAN_ERRORS.join('|')}' >/dev/null`,
@@ -282,7 +290,7 @@ export function parseMutagenSyncList(raw, sessionName) {
       };
     }
     const blockingProblems = (problems, kind) => problems.filter(problem => {
-      if (!isProjectDataProblem(problem)) return true;
+      if (!isProjectDataProblem(problem, alpha.path)) return true;
       warnings.push(`${endpointName} ${kind} warning: ${problem.path}: ${problem.error}`);
       return false;
     });

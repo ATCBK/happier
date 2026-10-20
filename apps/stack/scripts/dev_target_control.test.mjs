@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -208,14 +208,20 @@ test('native barrier admits project capture warnings but rejects command inputs 
     '[ "$2" != list ] && exit 0',
     'scan=0; transition=1',
     '[ "$PROBLEM_KIND" != scan ] || { scan=1; transition=0; }',
-    'printf "%s|Watching|false|true|1|%s/0|0/0|true|1|%s/0|%s/%s|active|%s|ok|%s|0\\n" "$3" "$SCAN_COUNT" "$scan" "$transition" "$EXCLUDED" "$CYCLES" "$CONFLICTS"',
+    'printf "%s|Watching|false|true|1|%s/0|0/0|true|1|%s/0|%s/%s|active|%s|ok|%s|0|||%s\\n" "$3" "$SCAN_COUNT" "$scan" "$transition" "$EXCLUDED" "$CYCLES" "$CONFLICTS" "$SOURCE_ROOT"',
     'case "$5" in *".Path"*) printf "%s|apply failed\\n" "$PROBLEM_PATH" ;; *) printf "apply failed\\n" ;; esac',
     '[ "$SCAN_COUNT" = 0 ] || printf "source.ts|unreadable\\n"',
   ].join('\n'));
   const capture = '.project/plans/qa/lanes/live/browser-diagnostics.json';
+  await mkdir(join(root, dirname(capture)), { recursive: true });
+  await writeFile(join(root, capture), '{}');
+  await writeFile(join(root, '.project/command.mjs'), 'console.log("command")');
+  await symlink('command.mjs', join(root, '.project/link.json'));
+  await mkdir(join(root, '.project/directory.json'));
+  await writeFile(join(root, '.project/directory.json/index.js'), 'console.log("command")');
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`,
     MUTAGEN_DATA_DIRECTORY: join(root, 'mutagen', 'data'), DBUS_SESSION_BUS_ADDRESS: '',
-    SCAN_COUNT: '0', EXCLUDED: '0', CYCLES: '7', CONFLICTS: '0', PROBLEM_PATH: capture };
+    SCAN_COUNT: '0', EXCLUDED: '0', CYCLES: '7', CONFLICTS: '0', PROBLEM_PATH: capture, SOURCE_ROOT: root };
   const run = extra => spawnSync(controlExecutable, ['--sync-check', 'happier-linux'], {
     env: { ...env, ...extra }, encoding: 'utf8',
   });
@@ -223,6 +229,12 @@ test('native barrier admits project capture warnings but rejects command inputs 
     const result = run({ PROBLEM_KIND });
     assert.equal(result.status, 0, result.stderr);
     assert.ok(result.stderr.includes(capture), result.stderr);
+    for (const PROBLEM_PATH of ['.project/link.json', '.project/directory.json', '.project/missing.json']) {
+      const blocked = run({ PROBLEM_KIND, PROBLEM_PATH });
+      assert.notEqual(blocked.status, 0, `${PROBLEM_KIND}: ${PROBLEM_PATH}`);
+      assert.doesNotMatch(blocked.stderr, /synchronization warning:/);
+    }
+    assert.notEqual(run({ PROBLEM_KIND, SOURCE_ROOT: '' }).status, 0, 'missing local source evidence');
   }
   for (const extra of [{ PROBLEM_PATH: '.project/helper.mjs' }, { PROBLEM_PATH: 'source.json' },
     { SCAN_COUNT: '1' }, { EXCLUDED: '1' }, { CYCLES: '0' }, { CONFLICTS: '1' },

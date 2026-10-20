@@ -118,6 +118,16 @@ read_test_temp_root_users() {
   while read -r observed_pid observed_group observed_state observed_uid; do
     [ "$observed_uid" = "$UID" ] || continue
     case "$observed_state" in Z*) continue ;; esac
+    # A unique allocation's binding is inherited by processes born with or
+    # after its creator. Filter older identities before reading environments,
+    # rather than walking every older same-account process on each dispatch.
+    heavyweight_read_process_token "$observed_pid"
+    case "$heavyweight_process_state" in Z|X|x) continue ;; esac
+    observed_token=$heavyweight_process_token_value
+    case "$observed_token:$2" in
+      *[!0-9:]*|:*|*:) ;;
+      *) [ "$observed_token" -ge "$2" ] || continue ;;
+    esac
     # Read only the explicit non-secret custody binding. Unknown visibility for
     # a live process in this account means no deletion, never guessed absence.
     if ! {
@@ -132,9 +142,18 @@ ${binding#TMPDIR=}" ;; esac
       # A process born before the creator cannot have inherited a binding for
       # this uniquely allocated root. Same-tick births remain conservatively
       # unknown; unreadable newer processes prevent reclamation.
-      observed_token=$(heavyweight_process_token "$observed_pid")
-      case "$observed_token:$2" in *[!0-9:]*) return 1 ;; esac
-      [ "$observed_token" -lt "$2" ] || return 1
+      heavyweight_read_process_token "$observed_pid"
+      case "$heavyweight_process_state" in Z|X|x) continue ;; esac
+      observed_token=$heavyweight_process_token_value
+      case "$observed_token:$2" in
+        *[!0-9:]*|:*|*:)
+          printf '[preferred-execution] retaining temporary scratch: process %s identity is unavailable after environment inspection failed\n' "$observed_pid" >&2
+          return 1 ;;
+      esac
+      if [ "$observed_token" -ge "$2" ]; then
+        printf '[preferred-execution] retaining temporary scratch: live process %s (state=%s, start=%s, creator=%s) has an unreadable environment\n' "$observed_pid" "$heavyweight_process_state" "$observed_token" "$2" >&2
+        return 1
+      fi
     fi
   done <<< "$1"
 }

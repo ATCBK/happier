@@ -101,7 +101,7 @@ check_sync_session_clean() {
     printf '%s\n' 'hstack-dev-target-control: MUTAGEN_DATA_DIRECTORY is required for sync inspection' >&2
     return 1
   }
-  sync_template='{{range .}}{{.Name}}|{{.Status}}|{{.Paused}}|{{.Alpha.Connected}}|{{if .Alpha.Connected}}{{if .Alpha.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.ScanProblems}}/{{.Alpha.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.TransitionProblems}}/{{.Alpha.ExcludedTransitionProblems}}{{else}}X{{end}}|{{.Beta.Connected}}|{{if .Beta.Connected}}{{if .Beta.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.ScanProblems}}/{{.Beta.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.TransitionProblems}}/{{.Beta.ExcludedTransitionProblems}}{{else}}X{{end}}|{{if .Paused}}paused|0|ok|0|0{{else}}active|{{.SuccessfulCycles}}|{{if .LastError}}error{{else}}ok{{end}}|{{len .Conflicts}}|{{.ExcludedConflicts}}{{end}}|{{.Alpha.Watch.Mode}}|{{.Beta.Watch.Mode}}{{println}}{{range .Alpha.TransitionProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Beta.TransitionProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Alpha.ScanProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Beta.ScanProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{end}}'
+  sync_template='{{range .}}{{.Name}}|{{.Status}}|{{.Paused}}|{{.Alpha.Connected}}|{{if .Alpha.Connected}}{{if .Alpha.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.ScanProblems}}/{{.Alpha.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.TransitionProblems}}/{{.Alpha.ExcludedTransitionProblems}}{{else}}X{{end}}|{{.Beta.Connected}}|{{if .Beta.Connected}}{{if .Beta.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.ScanProblems}}/{{.Beta.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.TransitionProblems}}/{{.Beta.ExcludedTransitionProblems}}{{else}}X{{end}}|{{if .Paused}}paused|0|ok|0|0{{else}}active|{{.SuccessfulCycles}}|{{if .LastError}}error{{else}}ok{{end}}|{{len .Conflicts}}|{{.ExcludedConflicts}}{{end}}|{{.Alpha.Watch.Mode}}|{{.Beta.Watch.Mode}}|{{.Alpha.Path}}{{println}}{{range .Alpha.TransitionProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Beta.TransitionProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Alpha.ScanProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Beta.ScanProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{end}}'
   if ! status_output=$(mutagen sync list "$session_name" --template "$sync_template" 2>/dev/null); then
     printf '%s\n' "hstack-dev-target-control: $session_name synchronization status inspection failed" >&2
     return 1
@@ -111,7 +111,7 @@ check_sync_session_clean() {
     return 1
   }
   status_line=$(printf '%s\n' "$status_output" | sed -n '1p')
-  IFS='|' read -r s_name s_status s_paused s_alpha_connected s_alpha_scanned s_alpha_scan s_alpha_trans s_beta_connected s_beta_scanned s_beta_scan s_beta_trans s_active s_cycles s_error s_conflicts s_excluded s_alpha_watch s_beta_watch <<EOF
+  IFS='|' read -r s_name s_status s_paused s_alpha_connected s_alpha_scanned s_alpha_scan s_alpha_trans s_beta_connected s_beta_scanned s_beta_scan s_beta_trans s_active s_cycles s_error s_conflicts s_excluded s_alpha_watch s_beta_watch s_alpha_path <<EOF
 $status_line
 EOF
   [ "$s_name" = "$session_name" ] || {
@@ -178,7 +178,7 @@ EOF
         printf '%s\n' "hstack-dev-target-control: $session_name synchronization has malformed problem evidence" >&2
         return 1
       fi
-      if is_mutagen_project_data_path "$problem_path"; then
+      if is_mutagen_project_data_path "$problem_path" "$s_alpha_path"; then
         printf '%s\n' "hstack-dev-target-control: $session_name synchronization warning: $problem_path: $problem_error" >&2
       elif [ "$problem_index" -le "$expected_transition_count" ]; then
         blocking_transition_count=$((blocking_transition_count + 1))
