@@ -30,6 +30,7 @@ import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { act, renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { SessionStopResultSchema, isSessionStopConfirmed } from '@happier-dev/protocol/sessions/control/contract';
+import { readSessionExplicitStopV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
 // A real product platform is required for executing-client evidence. The
 // generic Node RN stub intentionally has no client category.
@@ -816,10 +817,19 @@ describe('default Action executor mode and catalog contracts', () => {
     expect(outgoing).toEqual([]);
   });
   it('preserves current daemon stop confirmation and failure detail through the real Action adapter', async () => {
-    installSession('stop-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    const readRow = installSession('stop-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
     const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
 
-    daemonAnswer = () => ({ status: 'stopped' });
+    daemonAnswer = () => {
+      const row = readRow();
+      const envelope = SessionOwnerMetadataEnvelopeV1Schema.parse(row.ownerMetadata);
+      expect(envelope.t).toBe('plain');
+      if (envelope.t !== 'plain') throw new Error('Expected plain owner metadata');
+      expect(readSessionExplicitStopV1FromMetadata(envelope.v.runtime)).toMatchObject({
+        v: 1, cause: 'explicit_stop', requestId: expect.any(String), requestedAtMs: expect.any(Number),
+      });
+      return { status: 'stopped' };
+    };
     await expect(executeSessionLifecycleAction('session.stop', 'stop-session', { serverId }))
       .resolves.toEqual({ success: true });
     const publicStop = await createDefaultActionExecutor().execute('session.stop', { sessionId: 'stop-session' }, context());
@@ -839,6 +849,16 @@ describe('default Action executor mode and catalog contracts', () => {
         code: 'session_stop_failed',
         message: 'Session stop incomplete: destroy_failed',
       });
+  });
+  it('preserves automatic Stop authorship without creating a person hold through the real Action adapter', async () => {
+    const readRow = installSession('automatic-stop', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
+    daemonAnswer = () => ({ status: 'stopped' });
+    const result = await createDefaultActionExecutor().execute('session.stop', { sessionId: 'automatic-stop' }, {
+      ...context(), authority: 'account_automation', actionCaller: { kind: 'host' },
+    });
+    expect(result).toMatchObject({ ok: true, result: { stopped: true, success: true } });
+    expect(readRow().metadataLayoutVersion).toBe(0);
+    expect(readSessionExplicitStopV1FromMetadata(JSON.parse(readRow().metadata))).toBeNull();
   });
   it.each([true, false])('confirms an already-stopped Session through a fresh Home read after exact daemon absence (cached active=%s)', async (cachedActive) => {
     const sessionId = 'stop-already-inactive';
