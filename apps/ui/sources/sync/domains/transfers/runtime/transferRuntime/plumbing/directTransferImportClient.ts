@@ -38,6 +38,7 @@ export type DirectTransferImportOpenRequest = Readonly<{
         path: unknown;
         sizeBytes: unknown;
         overwrite: unknown;
+        expectedHash?: unknown;
         sha256?: unknown;
     }>
     | SessionAttachmentUploadInitRequestV1
@@ -431,7 +432,9 @@ export async function prepareDirectImportSession(params: Readonly<{
             serverId: params.serverId, timeoutMs, signal: params.signal,
             accountId: params.accountId,
             input: params.filesystemCopyInput ?? { rootPath: params.request.workingDirectory, path: params.request.path,
-                overwrite: params.request.overwrite, source: { sourceId, sizeBytes: params.request.sizeBytes,
+                overwrite: params.request.overwrite,
+                ...(params.request.expectedHash === undefined ? {} : { expectedHash: params.request.expectedHash }),
+                source: { sourceId, sizeBytes: params.request.sizeBytes,
                     ...(typeof params.request.sha256 === 'string' ? { sha256: params.request.sha256 } : {}) } },
         });
         const receipt = FilesystemUploadOutputSchema.safeParse(response);

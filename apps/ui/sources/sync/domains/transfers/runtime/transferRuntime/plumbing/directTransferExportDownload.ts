@@ -446,6 +446,8 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
     callAdmittedAction?: typeof callFilesystemTransferAction;
     /** Existing publication custody is held by the enclosing tree copy operation. */
     preparedExport?: Extract<FilesystemDownloadOutput, { success: true; status: 'accepted' }>['prepared'];
+    /** A one-file caller owns this publication; tree copies retain their enclosing custody. */
+    releasePreparedExport?: boolean;
     request: DirectTransferExportPrepareRequest;
     destination: BulkTransferFileDestination;
     cleanupOnFailure?: boolean;
@@ -471,6 +473,8 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
     }
 
     if (params.signal?.aborted) {
+        if (params.preparedExport && params.releasePreparedExport) await releasePreparedDirectTransferExport({
+            machineId: params.machineId, serverId: params.serverId, transferId: params.preparedExport.transferId, timeoutMs: params.timeoutMs });
         return await returnCanceled();
     }
 
@@ -713,6 +717,8 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
     await cleanupFailedDestination(new Error(failure.error));
     return { ok: false, ...failure };
     } finally {
+        if (params.preparedExport && params.releasePreparedExport) await releasePreparedDirectTransferExport({
+            machineId: params.machineId, serverId: params.serverId, transferId: params.preparedExport.transferId, timeoutMs: params.timeoutMs });
         if (prepared.filesystemDestinationId && !destinationClosed) {
             const outcome = {
                 destinationId: prepared.filesystemDestinationId, success: false,

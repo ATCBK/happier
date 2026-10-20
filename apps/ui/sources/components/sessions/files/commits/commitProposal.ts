@@ -2,7 +2,8 @@ import { isScmCommitPlanApplicationLocked, type ScmCommitPlanApplication, type S
 import type { ScmComparison } from '@happier-dev/protocol/scm/comparison';
 import type { ScmDiffSummaryCommitPlan } from '@happier-dev/protocol/scm/diffSummary';
 
-import { countHunkLines, locateComparisonOccurrences, type LocatedOccurrence } from '@/components/sessions/files/comparison/comparisonOccurrences';
+import { locateComparisonOccurrences, type LocatedOccurrence } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 
 /**
  * The Commits view's projection of one commit proposal over its exact pending comparison (Walkthrough lab
@@ -106,7 +107,8 @@ function changesFor(refs: readonly string[], occurrences: ReturnType<typeof loca
         const hunks = occurrences.hunksByPath.get(file.path) ?? [];
         const lines = entries.reduce((sum, entry) => {
             if (entry.hunkIndex === null) return sum;
-            const next = countHunkLines(hunks[entry.hunkIndex] ?? '');
+            const body = parseUnifiedDiffHunks(hunks[entry.hunkIndex] ?? '').flatMap((hunk) => hunk.lines);
+            const next = { added: body.filter((line) => line.kind === 'add').length, removed: body.filter((line) => line.kind === 'remove').length };
             return { added: sum.added + next.added, removed: sum.removed + next.removed };
         }, { added: 0, removed: 0 });
         const of = file.occurrences.length;

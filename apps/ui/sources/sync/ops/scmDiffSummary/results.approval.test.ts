@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { encodeBase64StoredJsonContentEnvelope } from '@/sync/encryption/base64StoredJsonContent';
-import type { ScmComparison } from '@happier-dev/protocol/scm';
+import { applyScmReviewedMarkIntent, buildScmReviewScopeId, buildScmReviewedMarksKey, type ScmComparison } from '@happier-dev/protocol/scm';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 const rpc = vi.hoisted(() => vi.fn());
@@ -68,12 +68,12 @@ describe('commit proposal approval through the default Action executor', () => {
     }) } });
     const comparison: ScmComparison = { id: 'c'.repeat(64), source: { kind }, repository: { rootPath: '/repo' },
       endpoints: { before: 'before', after: 'after' }, inventory: { state: 'complete', reasons: [], files: [{ path: 'a.ts',
-        changeKind: 'modified', binary: false, generated: false, lockfile: false, evidence: { state: 'available', unifiedDiff: 'patch' },
+        changeKind: 'modified', binary: false, generated: false, lockfile: false, evidence: { state: 'available', unifiedDiff: '@@ -1 +1 @@\n-old\n+new\n' },
         occurrences: [{ id: 'exact', alias: 'c0', path: 'a.ts', position: 0, before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 } }],
       }] } };
-    const key = `workspace:scm-reviewed:v1:${comparison.id}`;
+    const key = buildScmReviewedMarksKey(buildScmReviewScopeId({ repositoryRootPath: comparison.repository.rootPath, source: comparison.source }));
     harness.answer(serverId, `/v1/kv/${encodeURIComponent(key)}`, { body: { key, version: 1,
-      value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, comparisonId: comparison.id, reviewedChangeRefs: [] } }) } });
+      value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: applyScmReviewedMarkIntent(comparison, null, [], true) }) } });
     harness.answer(serverId, 'POST /v1/kv', { body: { success: true, results: [{ key, version: 2 }] } });
     machineRpc.mockImplementation(async ({ method }) => method === 'scm.diffSummary.capture'
       ? { success: true, comparison, metadata: { source: comparison.source, sourceKey: comparison.id,
@@ -84,10 +84,10 @@ describe('commit proposal approval through the default Action executor', () => {
       serverId, accountId: 'account', shouldContinue: () => true });
     expectReceipt(await operations.setReviewed({ v: 2, cwd: '/repo', comparisonId: comparison.id, source: comparison.source,
       ...(sessionId ? { sessionId } : {}), changeRefs: ['exact'] }, true))
-      .toMatchObject({ success: true, record: { comparisonId: comparison.id, reviewedChangeRefs: ['exact'] } });
+      .toMatchObject({ success: true, record: applyScmReviewedMarkIntent(comparison, null, ['exact'], true) });
     expect(machineRpc.mock.calls.every(([request]) => request.method === 'scm.diffSummary.capture')).toBe(true);
     expect(harness.requestsFor('/v1/kv').map(request => request.input)).toEqual([{ mutations: [{ key, version: 1,
-      value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, comparisonId: comparison.id, reviewedChangeRefs: ['exact'] } }),
+      value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: applyScmReviewedMarkIntent(comparison, null, ['exact'], true) }),
     }] }]);
   });
   it('holds a no-Session manual commit behind its configured Action approval before dispatch', async () => {

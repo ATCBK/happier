@@ -56,6 +56,19 @@ async function createManifestHash(payloadBytes: Uint8Array): Promise<string> {
 }
 
 describe('directTransferExportDownload', () => {
+    it('releases a caller-owned revision export when its download was cancelled before it starts', async () => {
+        const cancellation = new AbortController(); cancellation.abort();
+        callGuardedMachineRpcWithPolicyMock.mockResolvedValue({ success: true });
+        const destination = createBufferedTransferDestination(4);
+        const result = await downloadBulkPayloadViaDirectExportToDestination({ machineId: 'machine',
+            request: { t: 'workspace_file_download_v1', workingDirectory: '/workspace', path: 'image.png', asZip: false },
+            preparedExport: { transferId: 'revision-export', name: 'image.png', sizeBytes: 4,
+                manifestHash: `sha256:${'a'.repeat(64)}`, expiresAt: Date.now() + 60_000, endpointCandidates: [] },
+            releasePreparedExport: true, destination: destination.destination, signal: cancellation.signal });
+        expect(result).toMatchObject({ ok: false });
+        expect(callGuardedMachineRpcWithPolicyMock).toHaveBeenCalledWith(expect.objectContaining({
+            method: 'daemon.directTransfer.export.release', payload: { transferId: 'revision-export' } }));
+    });
     it('retains a typed Found source rejection through the existing prepare transport', async () => {
         callGuardedMachineRpcWithPolicyMock.mockResolvedValue({ success: false, error: 'Skill no longer found', code: 'not_found' });
         expect(await downloadBulkJsonPayloadViaDirectExport({ machineId: 'machine', request: {

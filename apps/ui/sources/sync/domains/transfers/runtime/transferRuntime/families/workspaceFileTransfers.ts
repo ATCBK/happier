@@ -44,6 +44,7 @@ type WorkspaceFileUploadInitRequest = Readonly<{
     path: string;
     sizeBytes: number;
     overwrite?: boolean;
+    expectedHash?: string | null;
     sha256?: string;
 }>;
 
@@ -148,6 +149,7 @@ export async function uploadDaemonWorkspaceFileFromReader(params: Readonly<{
             path: absolutePath,
             sizeBytes: params.fileReader.sizeBytes,
             overwrite: params.request.overwrite === true,
+            ...(params.request.expectedHash === undefined ? {} : { expectedHash: params.request.expectedHash }),
             ...(typeof params.request.sha256 === 'string' ? { sha256: params.request.sha256 } : {}),
         },
         onProgress: params.onProgress ?? null,
@@ -162,6 +164,7 @@ async function downloadWorkspaceFileToDestination(params: Readonly<{
     agentRootPath?: string | null;
     request: Readonly<{ path: string; asZip: boolean }>;
     destination: TransferFileDestination;
+    preparedExport?: Parameters<typeof downloadBulkPayloadViaDirectExportToDestination>[0]['preparedExport'];
     callAdmittedAction?: Parameters<typeof downloadBulkPayloadViaDirectExportToDestination>[0]['callAdmittedAction'];
     confinedToWorkingDirectory?: boolean;
     onInit?: ((init: Readonly<{ name: string; sizeBytes: number }>) => Promise<void | TransferFailureResponse>) | null;
@@ -185,6 +188,11 @@ async function downloadWorkspaceFileToDestination(params: Readonly<{
     } as const;
 
     if (params.signal?.aborted) {
+        if (params.preparedExport) return await downloadBulkPayloadViaDirectExportToDestination({
+            machineId: params.machineId, serverId: params.serverId, request: directExportRequest,
+            preparedExport: params.preparedExport, releasePreparedExport: true,
+            destination: params.destination, signal: params.signal,
+        });
         await params.destination.cleanup();
         return { ok: false, error: 'Download canceled' };
     }
@@ -213,6 +221,7 @@ async function downloadWorkspaceFileToDestination(params: Readonly<{
             accountId: captured.accountId,
             request: directExportRequest,
             destination: params.destination,
+            ...(params.preparedExport ? { preparedExport: params.preparedExport, releasePreparedExport: true } : {}),
             callAdmittedAction: params.callAdmittedAction,
             onInit: params.onInit ?? null,
             signal: captured.signal,
