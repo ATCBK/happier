@@ -1,3 +1,4 @@
+import { PaneMainRestoreChip, usePaneMainRestoreChipVisible } from './mainColumn/PaneMainColumnControls';
 import * as React from 'react';
 import { Platform, View, useWindowDimensions, type StyleProp, type TextStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -162,6 +163,11 @@ export type PaneHeaderProps = PaneHeaderContent & Readonly<{
     /** Shows the close button. */
     onClose?: () => void;
     /**
+     * This pane is the hidden main column's neighbour: while main is hidden its restore chip leads
+     * the band (lab ade-shell H1–H3).
+     */
+    mainRestoreChip?: boolean;
+    /**
      * `band` (default): the side pane's header, in the session header's band. `large`: a phone
      * screen's large title over the same live line, below the navigation bar.
      */
@@ -181,12 +187,14 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
     const testID = props.testID ?? 'pane-header';
     const large = props.size === 'large';
     const line = props.line ?? (props.subtitle ? { segments: [props.subtitle] } : null);
-    const hasTitle = props.title.trim().length > 0 || Boolean(props.leading) || Boolean(props.titleControl);
+    const chipVisible = usePaneMainRestoreChipVisible() && props.mainRestoreChip === true;
+    const hasTitle = props.title.trim().length > 0 || Boolean(props.leading) || Boolean(props.titleControl) || chipVisible;
     return (
         <View testID={testID} style={[large ? styles.large : [styles.band, { height }], { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
             <View style={styles.titleBlock}>
                 {/* A host that already names the thing (a breadcrumb ending on it) passes no title: the live line stands alone. */}
                 {hasTitle ? <View style={styles.titleRow}>
+                {chipVisible ? <PaneMainRestoreChip /> : null}
                 {props.leading ? <View style={styles.identityMark}>{props.leading}</View> : null}
                 {props.titleControl ?? (
                 <Text

@@ -57,6 +57,7 @@ export const DetailsPaneHost = React.memo(function DetailsPaneHost(props: Detail
                 {details.header ? (
                     <PaneHeader
                         testID={`${testID}.header`}
+                        mainRestoreChip
                         title={details.header.title}
                         subtitle={details.header.subtitle}
                         line={details.header.line}

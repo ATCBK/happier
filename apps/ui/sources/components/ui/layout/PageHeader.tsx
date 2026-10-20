@@ -1,3 +1,4 @@
+import { PaneMainHideButton, usePaneMainHideAvailable } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
 import * as React from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -174,7 +175,10 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
     // Inside the desktop app shell the stack header is not drawn; the actions its route put there
     // (an "Add friend") come here instead (`stackHeaderActions`). Elsewhere there are none.
     const routeActions = useClaimedStackHeaderActions();
-    const pageActions = chromeShowsTitle && props.actionsPlacement !== 'page' ? null : props.actions;
+    // A page that is a pane host's main column offers "Hide <page>" as its header's last control.
+    const hideMain = usePaneMainHideAvailable() ? <PaneMainHideButton /> : null;
+    const ownActions = chromeShowsTitle && props.actionsPlacement !== 'page' ? null : props.actions;
+    const pageActions = hideMain ? <>{ownActions}{hideMain}</> : ownActions;
     const actions = pageButtons || routeActions
         ? <View style={stylesheet.actions}>{pageActions}{routeActions}{pageButtons}</View>
         : pageActions;

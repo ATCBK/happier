@@ -71,6 +71,7 @@ describe('MultiPaneHost modal-pane boundary', () => {
         const scrim = requireElement(`multi-pane-${kind}-scrim`);
         const firstAction = requireElement<HTMLButtonElement>(`${kind}-modal-first-action`);
         const lastFocusableControl = requireElement<HTMLInputElement>(`${kind}-modal-editable`);
+        const resizeHandle = modal.querySelector<HTMLElement>('[role="slider"]');
 
         expect(modal.getAttribute('role')).toBe('dialog');
         expect(modal.getAttribute('aria-modal')).toBe('true');
@@ -78,10 +79,14 @@ describe('MultiPaneHost modal-pane boundary', () => {
         expect(requireElement('multi-pane-main-underlay').hasAttribute('inert')).toBe(true);
         expect(scrim.getAttribute('aria-label')).toBe(`Close ${label}`);
         expect(document.activeElement).toBe(modal);
+        expect(modal.contains(firstAction)).toBe(true);
+        expect(resizeHandle).not.toBeNull();
 
-        lastFocusableControl.focus();
-        dispatchTab();
-        expect(document.activeElement).toBe(firstAction);
+        // The real leading resize handle participates in the same modal cycle.
+        await act(async () => { lastFocusableControl.focus(); dispatchTab(); });
+        expect(document.activeElement).toBe(resizeHandle);
+        await act(async () => { dispatchTab(true); });
+        expect(document.activeElement).toBe(lastFocusableControl);
 
         await surface.render(false);
         expect(document.activeElement).toBe(trigger);
@@ -195,9 +200,10 @@ function requireElement<TElement extends HTMLElement = HTMLElement>(testId: stri
     return element;
 }
 
-function dispatchTab(): void {
+function dispatchTab(shiftKey = false): void {
     document.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Tab',
+        shiftKey,
         bubbles: true,
         cancelable: true,
     }));

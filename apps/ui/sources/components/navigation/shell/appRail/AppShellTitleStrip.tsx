@@ -22,6 +22,8 @@ import { useDesktopSidebarHistoryNavigationAvailability } from '../desktopChrome
 import { useResolvedDesktopWindowControls } from '../desktopChrome/useResolvedDesktopWindowControls';
 import { SidebarCollapseIcon, SidebarExpandIcon } from '../SidebarIcons';
 import { APP_RAIL_WIDTH_PX, APP_SHELL_TITLE_STRIP_HEIGHT_PX } from './appRailMetrics';
+import { usePaneArrangement, usePaneArrangementAvailable } from '@/components/appShell/panes/arrangement/usePaneArrangement';
+import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { AppShellThemeToggle } from './AppShellThemeToggle';
 import type { CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { WorkspaceTitleBar } from '@/components/appShell/workspace/titleBar/WorkspaceTitleBar';
@@ -155,6 +157,7 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
                         onPress={props.onToggleColumn}
                     />
                 ) : null}
+                <PaneArrangementToggle glyphColor={glyphColor} />
                 <AppShellThemeToggle
                     buttonSize={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_TARGET_SIZE_PX}
                     glyphSize={DESKTOP_SIDEBAR_CHROME_ICON_GLYPH_SIZE_PX}
@@ -181,6 +184,34 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
                 </View>
             ) : null}
         </View>
+    );
+});
+
+/**
+ * "Editor first" as a pressed/unpressed toggle (lab ade-shell T1): in the strip's layout group,
+ * right of the column button, because both say how the window is laid out. Shown only where the
+ * focused destination follows the arrangement; it is the group's last item, so nothing shifts.
+ */
+const PaneArrangementToggle = React.memo(function PaneArrangementToggle(props: Readonly<{ glyphColor: string }>) {
+    const available = usePaneArrangementAvailable();
+    const { arrangement, toggle } = usePaneArrangement();
+    const shortcut = useKeyboardShortcutLabel('panes.arrangement.toggle');
+    if (!available) return null;
+    const editorFirst = arrangement === 'editor';
+    const label = editorFirst ? t('settingsAppearance.paneArrangementSession') : t('settingsAppearance.paneArrangementEditor');
+    return (
+        <IconButton
+            testID="app-shell-arrangement-toggle"
+            variant="plain"
+            size={DESKTOP_SIDEBAR_CHROME_TOP_NAV_ICON_TARGET_SIZE_PX}
+            accessibilityLabel={t('settingsAppearance.paneArrangementEditor')}
+            checked={editorFirst}
+            selected={editorFirst}
+            tooltip={shortcut ? `${label} · ${shortcut}` : label}
+            tooltipPlacement="bottom"
+            icon={<Icon name="square-split-horizontal" size={DESKTOP_SIDEBAR_CHROME_ICON_GLYPH_SIZE_PX} color={props.glyphColor} />}
+            onPress={toggle}
+        />
     );
 });
 

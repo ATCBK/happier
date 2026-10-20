@@ -32,7 +32,7 @@ describe('AppPaneScopeHost hidden main sizing', () => {
         width = hostWidth;
         const screen = await renderScreen(<AppPaneProvider><AppPaneScopeHost
             scopeId="app" main={<Main />}
-            mainColumn={{ hideLabel: 'Hide page', showLabel: 'Show page', identity: 'Page' }}
+            mainColumn={{ hideLabel: 'Hide page', showLabel: 'Show page', identity: { name: 'Page' } }}
             rightPaneBuiltinAdapter={rightAdapter}
             destinationDetails={{ pane: <div />, onClose: () => {} }}
         /></AppPaneProvider>);

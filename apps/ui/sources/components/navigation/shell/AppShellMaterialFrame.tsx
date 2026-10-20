@@ -9,6 +9,10 @@ import type { GlassSurfaceGroup } from '@/components/ui/glass/glassMaterial';
 import { appShellColumnSurface } from './appRail/appShellColumnSurface';
 import { APP_RAIL_WIDTH_PX } from './appRail/appRailMetrics';
 import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurface';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { t } from '@/text';
+import { SidebarCollapseIcon } from './SidebarIcons';
 
 /**
  * The sheet that holds the column and the page lies on the window's canvas, inset from the window's
@@ -18,6 +22,16 @@ const CONTENT_SHEET_RADIUS_PX = 12;
 const CONTENT_SHEET_WINDOW_INSET_PX = 8;
 
 const stylesheet = StyleSheet.create((theme) => ({
+    columnContent: { flex: 1, minHeight: 0, minWidth: 0 },
+    // Armed to hide: the rows step back so the capsule's sentence leads (lab D2).
+    columnArmed: { opacity: 0.38 },
+    releaseLayer: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+    releaseCapsule: {
+        flexDirection: 'row', alignItems: 'center', gap: theme.space.s6,
+        paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s6,
+        borderRadius: 999, borderWidth: StyleSheet.hairlineWidth,
+    },
+    releaseLabel: { ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.primary },
     root: {
         flexDirection: 'column',
         minWidth: 0,
@@ -109,6 +123,26 @@ export function AppShellMaterialPlane(props: Readonly<{
 }
 
 
+/** How much the column edge follows the pointer past its bounds while dragging (lab ade-shell D2). */
+const COLUMN_RUBBER_BAND_RESISTANCE = 0.55;
+
+/**
+ * The armed collapse's hint (lab ade-shell D2): while the drag has passed half the column's minimum,
+ * the rows fade and this capsule says what releasing does; moving back disarms it.
+ */
+function ColumnReleaseToHide() {
+    const { theme } = useUnistyles();
+    const styles = stylesheet;
+    return (
+        <View pointerEvents="none" style={styles.releaseLayer} accessibilityLiveRegion="polite">
+            <View style={[styles.releaseCapsule, { backgroundColor: theme.colors.surface.base, borderColor: theme.colors.border.strong }]}>
+                <SidebarCollapseIcon size={16} color={theme.colors.text.primary} />
+                <Text numberOfLines={1} style={styles.releaseLabel}>{t('panes.mainColumn.sidebarReleaseToHide')}</Text>
+            </View>
+        </View>
+    );
+}
+
 /** Paint and geometry for the real shell, independent of navigation/settings subscriptions. */
 export function AppShellMaterialFrame(props: Readonly<{
     showChrome: boolean;
@@ -144,8 +178,14 @@ export function AppShellMaterialFrame(props: Readonly<{
             </AppShellMaterialPlane> : null}
             <View key="sheet" style={[styles.content, props.showChrome && styles.contentSheet]}>
                 {props.column ? <AppShellMaterialPlane key="column" testID="navigation-sidebar" group="sidebar" color={theme.colors.surface.inset}
-                    translucentColor={theme.colors.surface.selected} style={[appShellColumnSurface.column, { width: props.sidebarWidth }]}>
-                    {props.column}
+                    translucentColor={theme.colors.surface.selected} style={[appShellColumnSurface.column, {
+                        // Past either bound the edge gives a little (rubber band), a pure function of the drag.
+                        width: Math.max(0, props.sidebarWidth + (props.columnResizeState?.overshootPx ?? 0) * COLUMN_RUBBER_BAND_RESISTANCE),
+                    }]}>
+                    <View style={[styles.columnContent, props.columnResizeState?.collapseArmed ? styles.columnArmed : null]}>
+                        {props.column}
+                    </View>
+                    {props.columnResizeState?.collapseArmed ? <ColumnReleaseToHide /> : null}
                 </AppShellMaterialPlane> : null}
                 <AppShellMaterialPlane key="route-content" group="content" color={theme.colors.surface.base} translucentColor={theme.colors.surface.selected} style={[styles.content, styles.contentPlane]}>
                     {props.children}

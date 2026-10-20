@@ -9,6 +9,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
@@ -1268,7 +1269,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
 
 
 const zhHantOverrides: DeepPartial<typeof zhHans> = {
-  panes: { mainColumn: paneMainColumnTranslations['zh-Hant'] },
+  panes: { mainColumn: paneMainColumnTranslations['zh-Hant'], emptyEditor: paneEmptyEditorTranslations['zh-Hant'], shortcutsSheet: paneShortcutsSheetTranslations['zh-Hant'] },
   capabilities: capabilityKitTranslations.zhHant,
     resourceProposal: resourceProposalTranslations.zhHant,
     actionPresentation: { ...actionPresentationTranslations.zhHant, titles: actionTitlesZhHant },

@@ -270,8 +270,8 @@ export function createRootStackRouteOptions(newSessionPresentationMode: 'auto' |
         'auth/password/reset/[token]': options.hiddenHeader,
         'changelog': options.changelog,
         'server': options.server,
-        // Home paints its own Atmosphere picture; an opaque screen background would cover it.
-        'home': { ...options.visibleBlankBack, contentStyle: { backgroundColor: 'transparent' } },
+        // Home paints its own Atmosphere picture; neither an opaque screen background nor an opaque header may cover it.
+        'home': { ...options.visibleBlankBack, contentStyle: { backgroundColor: 'transparent' }, headerStyle: { backgroundColor: 'transparent' } },
         'homes/index': options.accountHomes,
         'artifacts/index': options.artifactsIndex,
         'artifacts/[id]': options.artifactsId,

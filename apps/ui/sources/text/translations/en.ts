@@ -8,6 +8,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -21811,7 +21812,7 @@ const enConversationSearch = {
 
 export const en: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations.en,
-  panes: { mainColumn: paneMainColumnTranslations['en'] },
+  panes: { mainColumn: paneMainColumnTranslations['en'], emptyEditor: paneEmptyEditorTranslations['en'], shortcutsSheet: paneShortcutsSheetTranslations['en'] },
     sessionCoordinator: {
         make: {
             title: "Make this session a coordinator",
@@ -22551,7 +22552,7 @@ type EnglishNamespaces10 = TranslationOverlay<
     readonly sessionRemotePermissionGrants: typeof enSessionRemotePermissionGrants;
     readonly pluginSurfaces: typeof enPluginSurfaces;
     readonly settingsKeyboard: typeof enSettingsKeyboard;
-    readonly panes: Readonly<{ mainColumn: typeof paneMainColumnTranslations.en }>;
+    readonly panes: Readonly<{ mainColumn: typeof paneMainColumnTranslations.en; emptyEditor: typeof paneEmptyEditorTranslations.en; shortcutsSheet: typeof paneShortcutsSheetTranslations.en }>;
     readonly tabs: typeof enTabs;
     readonly transcript: typeof enTranscript;
     readonly inbox: typeof enInbox;

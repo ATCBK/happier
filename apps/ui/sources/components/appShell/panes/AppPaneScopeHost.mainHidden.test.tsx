@@ -33,7 +33,7 @@ function Main() {
 }
 function Harness(props: Readonly<{ detailsOpen: boolean; unnamed?: boolean; unavailableSide?: boolean }>) {
     return <AppPaneProvider><AppPaneScopeHost scopeId="app"
-        mainColumn={props.unnamed ? undefined : { hideLabel: 'Hide page', showLabel: 'Show page', identity: 'Page' }}
+        mainColumn={props.unnamed ? undefined : { hideLabel: 'Hide page', showLabel: 'Show page', identity: { name: 'Page' } }}
         main={<Main />}
         rightSidebarAdapter={props.unavailableSide ? { available: false, render: () => null } : undefined}
         destinationDetails={props.detailsOpen ? { pane: <div />, onClose: () => {} } : null}
@@ -44,12 +44,12 @@ describe('AppPaneScopeHost main column', () => {
     it('lets only the focused app destination offer an arrangement when multi-pane is enabled', async () => {
         storage.getState().applyLocalSettings({ uiMultiPanePanelsEnabled: false }, { source: 'ui' });
         await renderScreen(<AppPaneProvider><AppPaneScopeHost scopeId="app" arrangement="honour"
-            mainColumn={{ hideLabel: 'Hide page', showLabel: 'Show page', identity: 'Page' }}
+            mainColumn={{ hideLabel: 'Hide page', showLabel: 'Show page', identity: { name: 'Page' } }}
             main={<Main />} /></AppPaneProvider>);
         expect(readShellColumnActionOwner('main')?.arrangementAvailable).toBe(false);
     });
     it('lets only the focused app destination reconcile the shared hide preference', async () => {
-        const mainColumn = { hideLabel: 'Hide page', showLabel: 'Show page', identity: 'Page' };
+        const mainColumn = { hideLabel: 'Hide page', showLabel: 'Show page', identity: { name: 'Page' } };
         function RetainedPage(props: Readonly<{ focused: boolean; detailsOpen: boolean }>) {
             const navigation = useRouter();
             return <DestinationInstanceContext.Provider value={{ tabId: props.focused ? 'active' : 'retained',
@@ -88,7 +88,7 @@ describe('AppPaneScopeHost main column', () => {
         function FoldedHost() {
             paneRef.current = useAppPaneScope('app');
             return <AppPaneScopeHost scopeId="app" arrangement="honour"
-                mainColumn={{ hideLabel: 'Hide session', showLabel: 'Show session', identity: 'Session' }}
+                mainColumn={{ hideLabel: 'Hide session', showLabel: 'Show session', identity: { name: 'Session' } }}
                 main={<div />} emptyEditorPane={<div />} wrapScopeContent={wrap}
                 onMainColumnControlsChange={receiveMain} />;
         }

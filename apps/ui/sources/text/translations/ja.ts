@@ -10,6 +10,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -1262,7 +1263,7 @@ const settingsSessionHandoffTranslationExtensions = {
 
 const jaValues = {
     fileReviewNote: fileReviewNoteTranslations['ja'],
-  panes: { mainColumn: paneMainColumnTranslations['ja'] },
+  panes: { mainColumn: paneMainColumnTranslations['ja'], emptyEditor: paneEmptyEditorTranslations['ja'], shortcutsSheet: paneShortcutsSheetTranslations['ja'] },
   sessionCoordinator: {
     make: {
       title: "このセッションをコーディネーターにする",

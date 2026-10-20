@@ -26,6 +26,10 @@ export type PageHeaderMenuAction = Readonly<{
     onSelect: () => void | Promise<void>;
     /** A chooser one level in ("Move to folder" → its folders): the row opens these instead of selecting itself. */
     children?: readonly PageHeaderMenuAction[];
+    /** Why a disabled row can't run now ("MacBook Pro isn't answering"), under its title. */
+    subtitle?: string;
+    /** Rows of one kind sit together; the menu draws a divider between kinds. */
+    category?: string;
 }>;
 
 /**
@@ -59,6 +63,8 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
         ...(action.testID ? { testID: action.testID } : {}),
         ...(action.disabled || action.loading ? { disabled: true } : {}),
         ...(action.destructive ? { destructive: true } : {}),
+        ...(action.subtitle ? { subtitle: action.subtitle } : {}),
+        ...(action.category ? { category: action.category } : {}),
         ...(action.checked === undefined ? {} : { checked: action.checked }),
         ...(action.loading
             ? { rightElement: <ActivitySpinner size="small" color={theme.colors.text.secondary} /> }

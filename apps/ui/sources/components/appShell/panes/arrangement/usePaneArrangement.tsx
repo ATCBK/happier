@@ -2,6 +2,7 @@ import * as React from 'react';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
 import type { PaneArrangement } from '@/components/ui/panels/paneBreakpoints';
+import { readShellColumnActionOwner, readShellColumnActionOwnersVersion, subscribeShellColumnActionOwners } from '@/sync/ops/actions/scopeActionFamily';
 
 export function usePaneArrangement() {
     const value = useLocalSetting('paneArrangement');
@@ -12,4 +13,14 @@ export function usePaneArrangement() {
     }, [applyLocalSettings]);
     const toggle = React.useCallback(() => setArrangement(arrangement === 'editor' ? 'session' : 'editor'), [arrangement, setArrangement]);
     return React.useMemo(() => ({ arrangement, setArrangement, toggle }), [arrangement, setArrangement, toggle]);
+}
+
+/**
+ * Whether the focused destination follows the arrangement (Session and Project pages on a
+ * multi-pane device). Chrome outside the pane hosts, such as the title strip's toggle, shows itself
+ * only then; it re-reads when the focused host's facts change.
+ */
+export function usePaneArrangementAvailable(): boolean {
+    React.useSyncExternalStore(subscribeShellColumnActionOwners, readShellColumnActionOwnersVersion, readShellColumnActionOwnersVersion);
+    return readShellColumnActionOwner('main')?.arrangementAvailable === true;
 }

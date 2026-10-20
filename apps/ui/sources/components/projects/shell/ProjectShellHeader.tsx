@@ -1,3 +1,4 @@
+import { PaneMainHideButton } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
 import * as React from 'react';
 import {
   Platform,
@@ -234,6 +235,8 @@ export const ProjectShellHeader = React.memo(function ProjectShellHeader(
       {props.menuActions.length > 0 ? (
         <PageHeaderMenu actions={props.menuActions} testID={`${testID}.menu`} />
       ) : null}
+      {/* "Hide project": the main column's own header holds it (lab ade-shell HB). */}
+      <PaneMainHideButton testID={`${testID}.hideMain`} />
     </View>
   );
 

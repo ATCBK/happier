@@ -25,6 +25,8 @@ export type AppPaneFindSeedContextValue = Pick<AppPaneContextValue, 'fileFindSee
 export const AppPaneFindSeedContext = createContext<AppPaneFindSeedContextValue | null>(null);
 // File origins need the stable transient focus owner, rather than every pane-state update.
 export const AppPaneFocusReturnContext = createContext<PaneOverlayFocusReturnOwner | null>(null);
+// Command-time driver lookup is stable; it must not subscribe the workspace to pane edits.
+export const AppPaneDriverContext = createContext<AppPaneContextValue['getDriver'] | null>(null);
 
 type FileTabFrontSubscription = Readonly<{
     subscribe: (listener: () => void) => () => void;
@@ -68,4 +70,8 @@ export function useOptionalAppPaneFindSeedContext(): AppPaneFindSeedContextValue
 
 export function useOptionalPaneFocusReturnOwner(): PaneOverlayFocusReturnOwner | null {
     return useContext(AppPaneFocusReturnContext);
+}
+
+export function useOptionalPaneDriverReader(): AppPaneContextValue['getDriver'] | null {
+    return useContext(AppPaneDriverContext);
 }

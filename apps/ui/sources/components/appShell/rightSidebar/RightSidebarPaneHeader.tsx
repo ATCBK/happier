@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
 import { PaneHeader } from '@/components/appShell/panes/PaneHeader';
 import { usePublishedPaneHeaderContent } from '@/components/appShell/panes/paneHeaderSlot';
 import { PaneHeaderActions } from '@/components/appShell/panes/PaneHeaderActions';
@@ -25,11 +26,15 @@ export function RightSidebarPaneHeader(props: Readonly<{
 }>): React.ReactElement | null {
     const tab = props.activeTabId ? props.tabs.find((candidate) => candidate.id === props.activeTabId) : undefined;
     const published = usePublishedPaneHeaderContent(tab ? tab.id : null);
+    // With no editor column beside it, the side panel's header carries a hidden main column's
+    // restore chip at its leading edge (lab H3).
+    const showMainChip = useOptionalAppPaneScopeLayout()?.effectiveDetailsOpen === false;
     if (!tab) return null;
     const title = getRightSidebarTabLabel(tab);
     return (
         <PaneHeader
             testID={props.testID}
+            mainRestoreChip={showMainChip}
             title={title}
             line={published?.line ?? null}
             actions={<PaneHeaderActions published={published} title={title} paneMenuActions={props.menuActions} testID={props.testID} />}

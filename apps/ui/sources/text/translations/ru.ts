@@ -10,6 +10,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -1292,7 +1293,7 @@ function plural({
  */
 const ruValues = {
     fileReviewNote: fileReviewNoteTranslations['ru'],
-  panes: { mainColumn: paneMainColumnTranslations['ru'] },
+  panes: { mainColumn: paneMainColumnTranslations['ru'], emptyEditor: paneEmptyEditorTranslations['ru'], shortcutsSheet: paneShortcutsSheetTranslations['ru'] },
   sessionCoordinator: {
     make: {
       title: "Сделать эту сессию координатором",

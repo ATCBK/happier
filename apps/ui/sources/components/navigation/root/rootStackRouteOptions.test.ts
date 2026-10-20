@@ -37,6 +37,8 @@ describe('root route identity ownership', () => {
         expect(options['workflows/index'].headerShown).toBe(false);
     });
     it('lets the phone Home route show the Atmosphere wallpaper instead of painting an opaque sheet over it', () => {
-        expect(createRootStackRouteOptions('auto')['home']).toMatchObject({ contentStyle: { backgroundColor: 'transparent' } });
+        expect(createRootStackRouteOptions('auto')['home']).toMatchObject({
+            contentStyle: { backgroundColor: 'transparent' }, headerStyle: { backgroundColor: 'transparent' },
+        });
     });
 });

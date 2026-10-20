@@ -2,7 +2,8 @@ import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { PANE_ACTION_RAIL_WIDTH } from '@/components/appShell/panes/PaneActionRailContext';
+import Color from 'color';
+import { PANE_ACTION_RAIL_WIDTH, PaneActionRailContext } from '@/components/appShell/panes/PaneActionRailContext';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { TabBadge } from '@/components/ui/navigation/tabBadge/TabBadge';
@@ -50,8 +51,9 @@ const styles = StyleSheet.create((theme) => ({
         height: StyleSheet.hairlineWidth,
         backgroundColor: theme.colors.border.default,
     },
+    // The active action's 2 px ink edge sits on the rail's inner side, toward its panel.
     marker: {
-        position: 'absolute', left: -9, top: 0, bottom: 0,
+        position: 'absolute', top: 0, bottom: 0,
         width: 2, borderRadius: 1, backgroundColor: theme.colors.text.primary,
     },
 }));
@@ -64,6 +66,16 @@ export function RightSidebarActionRail(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const prefix = props.testIDPrefix ?? 'right-sidebar-action-rail';
+    // The rail mirrors with its column (Editor first puts it at the window's left edge).
+    const mirrored = React.useContext(PaneActionRailContext)?.mirrored === true;
+    const tooltipPlacement = mirrored ? 'right' : 'left';
+    // Inactive glyphs sit one ink step down so the rail reads as its panel's tab strip and the app
+    // rail stays the primary navigation (lab ade-shell RL decision C): halfway between secondary and
+    // tertiary ink, which keeps non-text contrast where tertiary alone would fail.
+    const inactiveGlyphColor = React.useMemo(
+        () => Color(theme.colors.text.secondary).mix(Color(theme.colors.text.tertiary), 0.5).rgb().string(),
+        [theme.colors.text.secondary, theme.colors.text.tertiary],
+    );
     const { preferences } = useNavigationSurfacePlacement(props.surfaceId);
     const [height, setHeight] = React.useState<number | null>(null);
     const [moreOpen, setMoreOpen] = React.useState(false);
@@ -114,7 +126,7 @@ export function RightSidebarActionRail(props: Readonly<{
                     accessibilityLabel={action.label}
                     tooltip={action.label}
                     tooltipContent={action.tooltipContent}
-                    tooltipPlacement="left"
+                    tooltipPlacement={tooltipPlacement}
                     selected={action.active}
                     selectedBackground={false}
                     disabled={action.disabled}
@@ -125,8 +137,8 @@ export function RightSidebarActionRail(props: Readonly<{
                     iconSize={18}
                     icon={(
                         <View pointerEvents="none">
-                            {action.active ? <View style={styles.marker} /> : null}
-                            <Icon name={action.icon} size={18} color={action.active ? theme.colors.text.primary : theme.colors.text.secondary} />
+                            {action.active ? <View style={[styles.marker, mirrored ? { right: -9 } : { left: -9 }]} /> : null}
+                            <Icon name={action.icon} size={18} color={action.active ? theme.colors.text.primary : inactiveGlyphColor} />
                             {action.badge}
                             {(action.badgeCount ?? 0) > 0 ? <TabBadge size="compact" variant="count" value={action.badgeCount ?? 0} tone="neutral" testID={`${prefix}:${action.id}:badge`} /> : null}
                         </View>
@@ -140,13 +152,13 @@ export function RightSidebarActionRail(props: Readonly<{
                 items={moreItems}
                 selectedId={visible.overflow.find((action) => action.active)?.id ?? null}
                 onSelect={(id) => { setMoreOpen(false); if (id === 'customize') customize(); else visible.overflow.find((action) => action.id === id)?.onPress(); }}
-                placement="left"
+                placement={tooltipPlacement}
                 matchTriggerWidth={false}
                 trigger={({ toggle, open }) => <IconButton
                     testID={`${prefix}:more`}
                     accessibilityLabel={t('common.more')}
                     tooltip={t('common.more')}
-                    tooltipPlacement="left"
+                    tooltipPlacement={tooltipPlacement}
                     expanded={open}
                     selected={visible.overflow.some((action) => action.active)}
                     selectedBackground={false}

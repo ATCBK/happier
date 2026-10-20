@@ -22,6 +22,8 @@ import {
 import { resolveMultiPaneDeviceType } from './layout/resolveMultiPaneDeviceType';
 import { useReportSessionCockpitActionRailRect } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { PaneActionRailContext, PANE_ACTION_RAIL_WIDTH } from './PaneActionRailContext';
+import { captureArrangementTravelStart, playArrangementTravel, type ArrangementTravelStart } from './arrangement/arrangementTravel';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 /**
  * The one pane primitive: a main column plus the side columns every destination shares — the
@@ -106,6 +108,20 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
 
     const arrangement = props.arrangement === 'editor' && multiPaneEnabled && multiPaneDeviceType !== 'phone' ? 'editor' : 'session';
     const mirrored = arrangement === 'editor';
+    // The swap travels (lab FL): read the columns where they are before the new order commits, then
+    // slide each from there once it has.
+    const reducedMotion = useReducedMotionPreference();
+    const committedArrangementRef = React.useRef(arrangement);
+    const travelStartRef = React.useRef<ArrangementTravelStart | null>(null);
+    if (Platform.OS === 'web' && committedArrangementRef.current !== arrangement && travelStartRef.current === null) {
+        travelStartRef.current = captureArrangementTravelStart(hostRef.current);
+    }
+    React.useLayoutEffect(() => {
+        committedArrangementRef.current = arrangement;
+        const start = travelStartRef.current;
+        travelStartRef.current = null;
+        if (start) playArrangementTravel(hostRef.current, start, reducedMotion);
+    }, [arrangement, reducedMotion]);
     const [mainDrawerOpen, setMainDrawerOpen] = React.useState(false);
     const mainDrawerOpenRef = React.useRef(mainDrawerOpen);
     mainDrawerOpenRef.current = mainDrawerOpen;
@@ -546,6 +562,7 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
             {showActionRail ? (
                 <View
                     ref={railColumnRef}
+                    testID="pane-action-rail-column"
                     onLayout={reportRailRect}
                     style={[styles.railColumn, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}
                 >

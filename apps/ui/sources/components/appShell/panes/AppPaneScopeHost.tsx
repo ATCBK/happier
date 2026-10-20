@@ -26,7 +26,7 @@ import { usePaneArrangement } from './arrangement/usePaneArrangement';
 import { useOptionalAppPaneScopeLayout } from './hooks/useAppPaneScopeLayout';
 import { PaneMainColumnContext, type PaneMainColumnDescriptor, type PaneMainColumnState } from './mainColumn/usePaneMainColumn';
 import { RightSidebarActionsContext, type RightSidebarActions } from '@/components/appShell/rightSidebar/rightSidebarActions';
-import { registerShellColumnActionOwner, type ShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
+import { registerShellColumnActionOwner, notifyShellColumnActionOwnersChanged, type ShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import type { ResolvedPaneLayout } from '@/components/ui/panels/paneBreakpoints';
 import { resolvePluginUiRuntimeFormFactor } from './layout/resolveMultiPaneDeviceType';
@@ -152,6 +152,10 @@ function AppPaneScopeControls(props: Readonly<{
         props.onControlsChange?.(value);
         return () => props.onControlsChange?.(null);
     }, [props.onControlsChange, value]);
+    const arrangementAvailable = props.arrangementHonoured && layout?.multiPaneEnabled === true && layout.deviceType !== 'phone';
+    React.useEffect(() => {
+        if (props.focused) notifyShellColumnActionOwnersChanged();
+    }, [arrangementAvailable, props.focused]);
     React.useEffect(() => {
         if (!props.focused) return;
         const unregisterMain = registerShellColumnActionOwner('main', (): ShellColumnActionOwner => {

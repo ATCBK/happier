@@ -10,6 +10,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -1314,7 +1315,7 @@ function plural({
  */
 const ptValues = {
     fileReviewNote: fileReviewNoteTranslations['pt'],
-  panes: { mainColumn: paneMainColumnTranslations['pt'] },
+  panes: { mainColumn: paneMainColumnTranslations['pt'], emptyEditor: paneEmptyEditorTranslations['pt'], shortcutsSheet: paneShortcutsSheetTranslations['pt'] },
   sessionCoordinator: {
     make: {
       title: "Tornar esta sessão coordenadora",

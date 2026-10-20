@@ -10,6 +10,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -1070,7 +1071,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  */
 export const de: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations.de,
-  panes: { mainColumn: paneMainColumnTranslations['de'] },
+  panes: { mainColumn: paneMainColumnTranslations['de'], emptyEditor: paneEmptyEditorTranslations['de'], shortcutsSheet: paneShortcutsSheetTranslations['de'] },
   sessionCoordinator: {
     make: {
       title: "Diese Sitzung zum Koordinator machen",

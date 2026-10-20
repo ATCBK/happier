@@ -145,6 +145,7 @@ const DetailsPaneSlotBodyView = React.memo(function DetailsPaneSlotBodyView(prop
                         ? { subtitle: props.frame.subtitle }
                         : { line: { leading: body.subtitleLeading, segments: props.frame.subtitle ? [props.frame.subtitle] : [] } })}
                     leading={body?.leading}
+                    mainRestoreChip
                     actions={body?.actions}
                     headingRef={body?.headingRef}
                     onClose={props.store.close}

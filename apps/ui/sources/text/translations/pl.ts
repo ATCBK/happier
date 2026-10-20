@@ -10,6 +10,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -1291,7 +1292,7 @@ function plural({
  */
 const plValues = {
     fileReviewNote: fileReviewNoteTranslations['pl'],
-  panes: { mainColumn: paneMainColumnTranslations['pl'] },
+  panes: { mainColumn: paneMainColumnTranslations['pl'], emptyEditor: paneEmptyEditorTranslations['pl'], shortcutsSheet: paneShortcutsSheetTranslations['pl'] },
   sessionCoordinator: {
     make: {
       title: "Ustaw tę sesję jako koordynatora",

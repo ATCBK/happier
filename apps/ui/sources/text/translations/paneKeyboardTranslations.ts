@@ -1,19 +1,19 @@
 import type { SupportedLanguage } from '../_all';
 
 export const paneArrangementTranslations = {
-  en: { paneArrangement: 'Pane arrangement', paneArrangementDescription: 'Choose whether the session or editor sits in the middle.' },
-  fr: { paneArrangement: 'Disposition des volets', paneArrangementDescription: 'Choisissez si la session ou l’éditeur occupe le centre.' },
-  de: { paneArrangement: 'Bereichsanordnung', paneArrangementDescription: 'Wähle, ob die Sitzung oder der Editor in der Mitte steht.' },
-  es: { paneArrangement: 'Disposición de paneles', paneArrangementDescription: 'Elige si la sesión o el editor ocupa el centro.' },
-  it: { paneArrangement: 'Disposizione dei pannelli', paneArrangementDescription: 'Scegli se posizionare al centro la sessione o l’editor.' },
-  pt: { paneArrangement: 'Disposição dos painéis', paneArrangementDescription: 'Escolha se a sessão ou o editor fica no centro.' },
-  ca: { paneArrangement: 'Disposició dels taulers', paneArrangementDescription: 'Tria si la sessió o l’editor ocupa el centre.' },
-  pl: { paneArrangement: 'Układ paneli', paneArrangementDescription: 'Wybierz, czy na środku ma być sesja, czy edytor.' },
-  ru: { paneArrangement: 'Расположение панелей', paneArrangementDescription: 'Выберите, что будет в центре: сессия или редактор.' },
-  ja: { paneArrangement: 'ペインの配置', paneArrangementDescription: 'セッションとエディターのどちらを中央に配置するか選択します。' },
-  'zh-Hans': { paneArrangement: '面板布局', paneArrangementDescription: '选择将会话还是编辑器放在中间。' },
-  'zh-Hant': { paneArrangement: '面板配置', paneArrangementDescription: '選擇將工作階段或編輯器放在中央。' },
-} as const satisfies Record<SupportedLanguage, Readonly<{ paneArrangement: string; paneArrangementDescription: string }>>;
+  en: { paneArrangement: 'Pane arrangement', paneArrangementDescription: 'Choose whether the session or editor sits in the middle.' , paneArrangementSession: 'Session first', paneArrangementEditor: 'Editor first', paneArrangementSessionCaption: 'Chat in the middle', paneArrangementEditorCaption: 'Code in the middle' },
+  fr: { paneArrangement: 'Disposition des volets', paneArrangementDescription: 'Choisissez si la session ou l’éditeur occupe le centre.' , paneArrangementSession: 'Session d’abord', paneArrangementEditor: 'Éditeur d’abord', paneArrangementSessionCaption: 'La discussion au centre', paneArrangementEditorCaption: 'Le code au centre' },
+  de: { paneArrangement: 'Bereichsanordnung', paneArrangementDescription: 'Wähle, ob die Sitzung oder der Editor in der Mitte steht.' , paneArrangementSession: 'Sitzung zuerst', paneArrangementEditor: 'Editor zuerst', paneArrangementSessionCaption: 'Chat in der Mitte', paneArrangementEditorCaption: 'Code in der Mitte' },
+  es: { paneArrangement: 'Disposición de paneles', paneArrangementDescription: 'Elige si la sesión o el editor ocupa el centro.' , paneArrangementSession: 'Sesión primero', paneArrangementEditor: 'Editor primero', paneArrangementSessionCaption: 'El chat en el centro', paneArrangementEditorCaption: 'El código en el centro' },
+  it: { paneArrangement: 'Disposizione dei pannelli', paneArrangementDescription: 'Scegli se posizionare al centro la sessione o l’editor.' , paneArrangementSession: 'Prima la sessione', paneArrangementEditor: 'Prima l’editor', paneArrangementSessionCaption: 'La chat al centro', paneArrangementEditorCaption: 'Il codice al centro' },
+  pt: { paneArrangement: 'Disposição dos painéis', paneArrangementDescription: 'Escolha se a sessão ou o editor fica no centro.' , paneArrangementSession: 'Sessão primeiro', paneArrangementEditor: 'Editor primeiro', paneArrangementSessionCaption: 'O chat no centro', paneArrangementEditorCaption: 'O código no centro' },
+  ca: { paneArrangement: 'Disposició dels taulers', paneArrangementDescription: 'Tria si la sessió o l’editor ocupa el centre.' , paneArrangementSession: 'Primer la sessió', paneArrangementEditor: 'Primer l’editor', paneArrangementSessionCaption: 'El xat al centre', paneArrangementEditorCaption: 'El codi al centre' },
+  pl: { paneArrangement: 'Układ paneli', paneArrangementDescription: 'Wybierz, czy na środku ma być sesja, czy edytor.' , paneArrangementSession: 'Najpierw sesja', paneArrangementEditor: 'Najpierw edytor', paneArrangementSessionCaption: 'Czat na środku', paneArrangementEditorCaption: 'Kod na środku' },
+  ru: { paneArrangement: 'Расположение панелей', paneArrangementDescription: 'Выберите, что будет в центре: сессия или редактор.' , paneArrangementSession: 'Сначала сессия', paneArrangementEditor: 'Сначала редактор', paneArrangementSessionCaption: 'Чат в центре', paneArrangementEditorCaption: 'Код в центре' },
+  ja: { paneArrangement: 'ペインの配置', paneArrangementDescription: 'セッションとエディターのどちらを中央に配置するか選択します。' , paneArrangementSession: 'セッション優先', paneArrangementEditor: 'エディター優先', paneArrangementSessionCaption: 'チャットを中央に', paneArrangementEditorCaption: 'コードを中央に' },
+  'zh-Hans': { paneArrangement: '面板布局', paneArrangementDescription: '选择将会话还是编辑器放在中间。' , paneArrangementSession: '会话优先', paneArrangementEditor: '编辑器优先', paneArrangementSessionCaption: '聊天居中', paneArrangementEditorCaption: '代码居中' },
+  'zh-Hant': { paneArrangement: '面板配置', paneArrangementDescription: '選擇將工作階段或編輯器放在中央。' , paneArrangementSession: '工作階段優先', paneArrangementEditor: '編輯器優先', paneArrangementSessionCaption: '聊天置中', paneArrangementEditorCaption: '程式碼置中' },
+} as const satisfies Record<SupportedLanguage, Readonly<{ paneArrangement: string; paneArrangementDescription: string; paneArrangementSession: string; paneArrangementEditor: string; paneArrangementSessionCaption: string; paneArrangementEditorCaption: string }>>;
 
 export const paneRegionLabels = {
   en: { rail: 'App navigation', navigation: 'Navigation column', right: 'Side panel', details: 'Editor and details', main: 'Main column', bottom: 'Bottom panel' },

@@ -1,9 +1,19 @@
 import * as React from 'react';
 
+/**
+ * What the restore chip shows for a hidden main column (lab H1–H3): the host's mark and name, and
+ * its live state from the host's own lifecycle projection (`working` ring, `attention` = Needs you).
+ */
+export type PaneMainIdentity = Readonly<{
+    mark?: React.ReactNode;
+    name: string;
+    state?: 'working' | 'attention';
+}>;
+
 export type PaneMainColumnDescriptor = Readonly<{
     hideLabel: string;
     showLabel: string;
-    identity: React.ReactNode;
+    identity: PaneMainIdentity;
 }>;
 
 export type PaneMainColumnState = Readonly<{
@@ -11,7 +21,7 @@ export type PaneMainColumnState = Readonly<{
     canHide: boolean;
     folded: boolean;
     labels: Readonly<{ hideLabel: string; showLabel: string }>;
-    identity: React.ReactNode;
+    identity: PaneMainIdentity;
     setHidden(hidden: boolean): void;
     toggle(): void;
 }>;

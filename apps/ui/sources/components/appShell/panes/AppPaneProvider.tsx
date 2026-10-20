@@ -28,9 +28,9 @@ import { parseProjectPaneScopeId } from '@/components/projects/detail/projectPan
 import { isTerminalDetailsTab } from '@/components/terminal/terminalDetailsTabModel';
 import { applyCloseDetailsTab } from './details/workspace/detailsWorkspaceReducer';
 import { LocalSettingsPersistenceError } from '@/sync/domains/state/settingsPersistence';
-import { AppPaneContext, AppPaneFindSeedContext, AppPaneFocusReturnContext, AppPaneFileFrontContext, createFileTabFrontSubscription, type AppPaneContextValue } from './AppPaneContext';
+import { AppPaneContext, AppPaneFindSeedContext, AppPaneFocusReturnContext, AppPaneFileFrontContext, AppPaneDriverContext, createFileTabFrontSubscription, type AppPaneContextValue } from './AppPaneContext';
 
-export { useAppPaneContext, useOptionalAppPaneContext, useOptionalAppPaneFindSeedContext, useOptionalPaneFocusReturnOwner } from './AppPaneContext';
+export { useAppPaneContext, useOptionalAppPaneContext, useOptionalAppPaneFindSeedContext, useOptionalPaneFocusReturnOwner, useOptionalPaneDriverReader } from './AppPaneContext';
 
 /** Private terminal labels/paths become visible only under their actual persisted Account owner. */
 function qualifyProjectTerminalPane(scopeId: string, pane: PaneScopeState, scope: ServerAccountScope | null): PaneScopeState {
@@ -374,6 +374,6 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
     const findSeedValue = useMemo(() => ({ fileFindSeedHandoff, fileFindSeedAccountBindings }),
         [fileFindSeedHandoff, fileFindSeedAccountBindings]);
     return <AppPaneContext.Provider value={value}><AppPaneFindSeedContext.Provider value={findSeedValue}><AppPaneFocusReturnContext.Provider value={overlayFocusReturnOwner}><AppPaneFileFrontContext.Provider value={fileFrontSubscription}>
-        {props.children}
+        <AppPaneDriverContext.Provider value={getDriver}>{props.children}</AppPaneDriverContext.Provider>
     </AppPaneFileFrontContext.Provider></AppPaneFocusReturnContext.Provider></AppPaneFindSeedContext.Provider></AppPaneContext.Provider>;
 });

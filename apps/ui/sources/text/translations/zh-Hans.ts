@@ -10,6 +10,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -1278,7 +1279,7 @@ function plural({
 
 const zhHansValues = {
     fileReviewNote: fileReviewNoteTranslations['zh-Hans'],
-  panes: { mainColumn: paneMainColumnTranslations['zh-Hans'] },
+  panes: { mainColumn: paneMainColumnTranslations['zh-Hans'], emptyEditor: paneEmptyEditorTranslations['zh-Hans'], shortcutsSheet: paneShortcutsSheetTranslations['zh-Hans'] },
   sessionCoordinator: {
     make: {
       title: "将此会话设为协调者",

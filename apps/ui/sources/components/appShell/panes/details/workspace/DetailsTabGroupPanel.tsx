@@ -1,3 +1,5 @@
+import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
+import { PaneMainRestoreChip } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -181,6 +183,7 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
     useStackHeaderActionsPublisher(headerActionsScopeKey, lendsControls ? renderLentControls : null);
     const controlsTakenByTab = useStackHeaderActionsClaimed(headerActionsScopeKey);
     const showStrip = !(lendsControls && controlsTakenByTab);
+    const mainColumnEdge = useOptionalAppPaneScopeLayout()?.arrangement === 'editor' ? 'end' : 'start';
     const { unsavedKeys, chromeFor } = useDetailsTabUnsavedKeys(props.pane.pinDetailsTab);
     // Every diff drawn in this group applies the one split-width rule against the group's width. Only
     // crossing the threshold is state: resizing the pane does not re-render its tabs per pixel.
@@ -205,6 +208,8 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
             <PopoverScope boundaryRef={rootRef}>
             {showStrip ? <View style={[styles.header, { paddingTop: headerPaddingTop, backgroundColor }]}>
                 {props.renderHeaderLeadingActions ? props.renderHeaderLeadingActions() : null}
+                {/* A hidden main column's restore chip, at the strip edge the column went to (lab H1–H3). */}
+                {props.group.isFocused && mainColumnEdge === 'start' ? <PaneMainRestoreChip /> : null}
                 {!forceEmptyState ? (
                     <DetailsTabStrip
                         sessionId={props.sessionId}
@@ -220,6 +225,7 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
                 ) : (
                     <View style={{ flex: 1, minHeight: 0, minWidth: 0 }} />
                 )}
+                {props.group.isFocused && mainColumnEdge === 'end' ? <PaneMainRestoreChip /> : null}
                 {props.renderStripActions ? props.renderStripActions() : null}
                 {props.renderHeaderActions ? props.renderHeaderActions() : null}
             </View> : null}

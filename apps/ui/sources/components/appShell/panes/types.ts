@@ -4,6 +4,7 @@ import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projecti
 import type { PluginUiProjectionPhase } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import type { WorkspaceFileOpenInput } from '@happier-dev/protocol/actions/workspaceActionFamily';
 
 export type PaneId = 'right' | 'details' | 'bottom';
 
@@ -69,10 +70,9 @@ export type PaneRightSidebarAdapter = Readonly<{
 }>;
 
 export type PaneResource =
-    | Readonly<{ kind: 'file'; path: string }>
+    | Readonly<{ kind: 'file' } & Omit<WorkspaceFileOpenInput, 'target'>>
     | Readonly<{ kind: 'commit'; commitHash: string }>
-    | Readonly<{ kind: 'diff'; path: string; baseRef?: string | null }>
-    | Readonly<{ kind: string; [key: string]: unknown }>;
+    | Readonly<{ kind: 'diff'; path: string; baseRef?: string | null }>;
 
 export type PaneDriver = Readonly<{
     scopeId: PaneScopeId;
@@ -84,6 +84,6 @@ export type PaneDriver = Readonly<{
     rightSidebarAdapter?: PaneRightSidebarAdapter;
     detailsPaneBuiltinAdapter?: PaneBuiltinAdapter;
     bottomPaneBuiltinAdapter?: PaneBuiltinAdapter;
-    openResource?: (resource: PaneResource) => void;
+    openResource?: (resource: PaneResource, options?: Readonly<{ intent?: 'preview' | 'pinned'; present?: boolean }>) => boolean;
     onScopeDeactivated?: () => void;
 }>;

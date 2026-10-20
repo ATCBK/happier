@@ -10,6 +10,7 @@ import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
 import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { paneEmptyEditorTranslations, paneShortcutsSheetTranslations } from './paneEmptyEditorTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -1278,7 +1279,7 @@ function plural({
  */
 const esValues = {
     fileReviewNote: fileReviewNoteTranslations['es'],
-  panes: { mainColumn: paneMainColumnTranslations['es'] },
+  panes: { mainColumn: paneMainColumnTranslations['es'], emptyEditor: paneEmptyEditorTranslations['es'], shortcutsSheet: paneShortcutsSheetTranslations['es'] },
   sessionCoordinator: {
     make: {
       title: "Convertir esta sesión en coordinadora",
