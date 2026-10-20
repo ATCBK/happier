@@ -38,8 +38,11 @@ export const TeamCredentialResourceReadinessV1Schema = lazyZodSchema(() => z.dis
   z.strictObject({ kind: z.literal('source_unavailable') }),
   z.strictObject({
     kind: z.literal('broker_unavailable'),
-    // Diagnostic only: omitted unless all evaluated candidates report the same refusal.
-    reason: z.optional(z.enum(['application_unavailable', 'model_unavailable'])),
+    // Content-free observation only; never grants resource or broker authority.
+    reason: z.optional(z.enum([
+      'application_unavailable', 'model_unavailable',
+      'projection_unavailable', 'response_invalid', 'not_granted', 'incompatible', 'catalog_empty',
+    ])),
   }),
   z.strictObject({ kind: z.literal('update_required') }),
   z.strictObject({ kind: z.literal('policy_denied') }),

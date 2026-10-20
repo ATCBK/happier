@@ -88,7 +88,10 @@ describe('Runner broker readiness protocol', () => {
   it('accepts only safe optional broker refusal reasons without requiring them from existing producers', () => {
     expect(TeamCredentialResourceReadinessV1Schema.parse({ kind: 'broker_unavailable' }))
       .toEqual({ kind: 'broker_unavailable' });
-    for (const reason of ['application_unavailable', 'model_unavailable']) {
+    for (const reason of [
+      'application_unavailable', 'model_unavailable', 'projection_unavailable',
+      'response_invalid', 'not_granted', 'incompatible', 'catalog_empty',
+    ]) {
       const readiness = { kind: 'broker_unavailable', reason };
       expect(TeamCredentialResourceReadinessV1Schema.parse(readiness)).toEqual(readiness);
     }
