@@ -5,8 +5,6 @@ import { createInboxItemRoute, readInboxApprovalServerId, resolveInboxItemPageRo
 import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
 import type { SessionQuestionContextV1 } from '@happier-dev/protocol/sessions/permissions/questionV1';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
-import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import type { DiscussionAttentionResultV1 } from '@happier-dev/protocol/discussions/actions';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
 import type { DiscussionAnchorV1 } from '@happier-dev/protocol/discussions/replyTargets';
 import { readApprovalQuickActions, type ApprovalQuickActions } from '@/components/approvals/approvalQuickActions';
@@ -14,17 +12,9 @@ import { resolveAccountActorPresentation } from '@/sync/domains/account/accountA
 import { readDiscussionMessagePreview } from '@/components/discussions/discussionTimelineProjection';
 import { readInboxSessionTitle } from './sessionAttention/inboxSessionPrivacy';
 import { presentInboxWorkflowRun } from './inboxWorkflowRunPresentation';
-
-export type InboxDiscussionSource = Readonly<{
-    scope: ServerAccountScope;
-    entries: DiscussionAttentionResultV1['discussions'];
-    /** Exact-Home names from the existing batched Session title projection. */
-    sessionDisplayNames?: ReadonlyMap<string, string | null>;
-}>;
-
-export type InboxItemView = 'needs_you' | 'updates' | 'mentions';
+import { admittedInboxDiscussionOccurrences, inboxItemView, type InboxDiscussionSource, type InboxItemView, type InboxItemType } from './inboxItemProjection';
+export { inboxItemView, type InboxDiscussionSource, type InboxItemView, type InboxItemType } from './inboxItemProjection';
 export const INBOX_ITEM_VIEWS = ['needs_you', 'updates', 'mentions'] as const satisfies readonly InboxItemView[];
-export type InboxItemType = 'decision' | 'approval' | 'blocked' | 'update' | 'mention';
 export function getInboxNeedsYouItemTypes() {
     return ['approval', 'decision', 'blocked'] as const;
 }
@@ -72,6 +62,7 @@ export type InboxItemsInput = Readonly<{
     approvalSourceDisplayNames?: ReadonlyMap<string, string | null>;
     discussions?: InboxDiscussionSource | null;
 }>;
+
 
 /** One transient row projection over live owners and private Account notice Artifacts. */
 export function buildInboxItems(input: InboxItemsInput, previous: readonly InboxItem[] = []): readonly InboxItem[] {
@@ -152,35 +143,28 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
     }
     if (input.discussions) {
         const { scope } = input.discussions;
-        for (const { discussion, occurrences } of input.discussions.entries) {
-            if (discussion.archivedAt !== null || !discussion.keyReadiness) continue;
-            for (const { message, type } of occurrences) {
-                if (message.content === null
-                    || message.discussionId !== discussion.id
-                    || message.messageRef.discussion.serverId !== scope.serverId
-                    || message.messageRef.discussion.discussionId !== discussion.id) continue;
-                const producerName = message.producerV1 ? input.discussions.sessionDisplayNames?.get(message.producerV1.sessionId) : null;
-                const focus = { kind: 'discussion', serverId: scope.serverId, id: discussion.id, messageId: message.id } as const;
-                rows.push({ key: `discussion:${scope.serverId}:${discussion.id}:${message.id}`, producer: 'live',
-                    type, view: inboxItemView(type), title: discussion.title ?? discussion.id, context: null,
-                    createdAt: message.createdAt, read: discussion.lastReadSeq !== null && message.seq <= discussion.lastReadSeq,
-                    focus, pageRoute: resolveInboxItemPageRoute(focus),
-                    source: { kind: 'discussion', id: discussion.id, serverId: scope.serverId, displayName: discussion.title },
-                    author: message.producerV1 ? producerName ? { name: producerName } : null
-                        : message.accountActor && message.accountActor.accountId === message.authorAccountId
-                            ? resolveAccountActorPresentation({ ...message.accountActor, serverId: scope.serverId }, scope) : null,
-                    excerpt: readDiscussionMessagePreview(message.content, {
-                        account: accountId => {
-                            const actor = discussion.participantAccounts?.find(candidate => candidate.accountId === accountId)
-                                ?? (message.accountActor?.accountId === accountId ? message.accountActor : null);
-                            return actor ? resolveAccountActorPresentation({ ...actor, serverId: scope.serverId }, scope).name : null;
-                        },
-                        session: sessionId => input.discussions?.sessionDisplayNames?.get(sessionId) ?? null,
-                    }),
-                    discussion: { accountId: scope.accountId, messageRef: message.messageRef, seq: message.seq, anchor: discussion.anchor,
-                        ...(message.replyTarget ? { replyTarget: message.replyTarget } : {}),
-                        ...(message.docEditProposalDispositionV1 ? { proposalDisposition: message.docEditProposalDispositionV1 } : {}) } });
-            }
+        for (const { discussion, message, type } of admittedInboxDiscussionOccurrences(input.discussions)) {
+            const producerName = message.producerV1 ? input.discussions.sessionDisplayNames?.get(message.producerV1.sessionId) : null;
+            const focus = { kind: 'discussion', serverId: scope.serverId, id: discussion.id, messageId: message.id } as const;
+            rows.push({ key: `discussion:${scope.serverId}:${discussion.id}:${message.id}`, producer: 'live',
+                type, view: inboxItemView(type), title: discussion.title ?? discussion.id, context: null,
+                createdAt: message.createdAt, read: discussion.lastReadSeq !== null && message.seq <= discussion.lastReadSeq,
+                focus, pageRoute: resolveInboxItemPageRoute(focus),
+                source: { kind: 'discussion', id: discussion.id, serverId: scope.serverId, displayName: discussion.title },
+                author: message.producerV1 ? producerName ? { name: producerName } : null
+                    : message.accountActor && message.accountActor.accountId === message.authorAccountId
+                        ? resolveAccountActorPresentation({ ...message.accountActor, serverId: scope.serverId }, scope) : null,
+                excerpt: readDiscussionMessagePreview(message.content, {
+                    account: accountId => {
+                        const actor = discussion.participantAccounts?.find(candidate => candidate.accountId === accountId)
+                            ?? (message.accountActor?.accountId === accountId ? message.accountActor : null);
+                        return actor ? resolveAccountActorPresentation({ ...actor, serverId: scope.serverId }, scope).name : null;
+                    },
+                    session: sessionId => input.discussions?.sessionDisplayNames?.get(sessionId) ?? null,
+                }),
+                discussion: { accountId: scope.accountId, messageRef: message.messageRef, seq: message.seq, anchor: discussion.anchor,
+                    ...(message.replyTarget ? { replyTarget: message.replyTarget } : {}),
+                    ...(message.docEditProposalDispositionV1 ? { proposalDisposition: message.docEditProposalDispositionV1 } : {}) } });
         }
     }
     const old = new Map(previous.map(row => [row.key, row]));
@@ -189,10 +173,6 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
         return before && sameItem(before, row) ? before : row;
     });
     return previous.length === reconciled.length && reconciled.every((row, index) => row === previous[index]) ? previous : reconciled;
-}
-
-export function inboxItemView(type: InboxItemType): InboxItemView {
-    return type === 'mention' ? 'mentions' : type === 'update' ? 'updates' : 'needs_you';
 }
 
 export function selectInboxItemsForView(items: readonly InboxItem[], view: InboxItemView): readonly InboxItem[] {
