@@ -498,7 +498,7 @@ function CatalogToolsBand(props: Readonly<{ open: boolean; children: React.React
 
 /**
  * The pinned footer of the Add dialog: a quiet note (or the failure) at the start, the actions at the end. Where the
- * details are a phone page (`stacked`) the note reads on its own line and the actions share the full width. A mode that
+ * details are a phone page (`stacked`) the note reads on its own line and the actions share the full width (each child takes an equal share). A mode that
  * is not a Collection's details (Link, Upload, Paste) is a phone page exactly when the dialog is presented as one, so
  * `stacked` defaults to the device class that decides that presentation.
  */
@@ -512,7 +512,11 @@ export function CapabilityAddFooter(
     return (
       <View testID={props.testID} style={[styles.footer, styles.footerStacked, edge]}>
         {props.start === null || props.start === undefined ? null : props.start}
-        <View style={styles.footerActionsStacked}>{props.children}</View>
+        <View style={styles.footerActionsStacked}>
+          {React.Children.toArray(props.children).map((child, index) => (
+            <View key={index} style={styles.footerSlot}>{child}</View>
+          ))}
+        </View>
       </View>
     );
   }
@@ -562,7 +566,7 @@ function CapabilityAddDetail<Item>(
     }
   }, [footer.primary, props]);
   const afterAdd = props.added ? footer.afterAdd : undefined;
-  // On a phone page each action takes an equal share of the row (lab aa Xp).
+  // On a phone page each after-add action takes an equal share of the row (lab aa Xp); the footer slots its children.
   const slot = (node: React.ReactNode) => (props.pushed ? <View style={styles.footerSlot}>{node}</View> : node);
   const primary = afterAdd !== undefined ? (
     <RoundButtonSizeScope size="normal" presentation="uniform">
@@ -590,7 +594,7 @@ function CapabilityAddDetail<Item>(
       )}
     </View>
     </RoundButtonSizeScope>
-  ) : slot(
+  ) : (
     <RoundButton
       title={props.added ? t('capabilities.add.added') : footer.primary.label}
       size="normal"
@@ -603,7 +607,7 @@ function CapabilityAddDetail<Item>(
         void press();
       }}
       testID={`${props.config.testID}:primary`}
-    />,
+    />
   );
   const footerRow = (
     <CapabilityAddFooter
