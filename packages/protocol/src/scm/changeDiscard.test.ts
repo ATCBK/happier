@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/mini';
 import { ScmChangeDiscardEntrySchema, ScmChangeDiscardResponseSchema } from './index.js';
-import { ScmEntryKindSchema } from './workingSnapshot.js';
-import { ScmSelectedMutationPathSchema } from './selectedMutationPath.js';
 
 const comparison = { path: 'src/app.ts', kind: 'comparison', against: { source: { kind: 'workingTree' } }, changeKeys: ['key'], includeUndo: true };
 
@@ -13,8 +11,11 @@ describe('comparison discard contract', () => {
     expect(ScmChangeDiscardEntrySchema.safeParse({ ...comparison, changeKeys: ['key', 'key'] }).success).toBe(false);
     expect(ScmChangeDiscardEntrySchema.safeParse({ ...comparison, kind: 'modified' }).success).toBe(false);
     expect(ScmChangeDiscardEntrySchema.safeParse({ path: 'src/app.ts', kind: 'modified' }).success).toBe(true);
-    // Predecessor shape from ../0.2's unchanged closed status vocabulary.
-    const predecessor = z.object({ path: ScmSelectedMutationPathSchema, kind: ScmEntryKindSchema });
+    // ../0.2 HEAD 715e6bbfdabdd7c24b18ceb8904ab2e80370cb05,
+    // packages/protocol/src/scm.ts:118,375 (clean relevant paths).
+    const predecessor = z.object({ path: z.string(), kind: z.enum([
+      'modified', 'added', 'deleted', 'renamed', 'copied', 'untracked', 'conflicted',
+    ]) });
     expect(predecessor.safeParse(comparison).success).toBe(false);
   });
 
