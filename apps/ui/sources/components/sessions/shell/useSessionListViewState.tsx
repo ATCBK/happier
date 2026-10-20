@@ -1903,7 +1903,7 @@ export function useSessionListViewStateFromPaneState(
         stopErrorMessage: t('sessionInfo.failedToStopSession'),
         archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
         stopSession: async (target) => await executeSessionLifecycleAction('session.stop', target.sessionId, { serverId: target.serverId ?? null }),
-        archiveSession: async (target) => await executeSessionLifecycleAction('session.archive', target.sessionId, { serverId: target.serverId ?? null }),
+        archiveSession: async (target, archiveOperation) => await executeSessionLifecycleAction('session.archive', target.sessionId, { serverId: target.serverId ?? null, archiveOperation }),
         unarchiveSession: async (target) => await executeSessionLifecycleAction('session.unarchive', target.sessionId, { serverId: target.serverId ?? null }),
         setManualReadState: async (target, readState) => await sessionSetManualReadStateWithServerScope(
             target.sessionId,

@@ -10,6 +10,19 @@ export function resolveSessionArchiveAddress(address: SessionAddress): SessionAd
     return normalizeSessionAddress(resolveServerProfileScopeIdForIdentifier(address.serverId), address.sessionId);
 }
 
+/** Only the exact admitted object may borrow an existing Session's archive operation. */
+export function isSessionArchiveOperationCurrent(
+    state: Readonly<{ sessionArchiveOperations?: SessionArchiveOperations }>,
+    operation: SessionArchiveOperation,
+    address: SessionAddress = operation,
+): boolean {
+    if (state.sessionArchiveOperations?.[operation.serverId]?.[operation.sessionId] !== operation) return false;
+    const target = resolveSessionArchiveAddress(address);
+    const captured = resolveSessionArchiveAddress(operation);
+    return target !== null && captured !== null
+        && target.serverId === captured.serverId && target.sessionId === captured.sessionId;
+}
+
 export function readSessionArchivePending(
     state: Readonly<{ sessionArchiveOperations?: SessionArchiveOperations }>,
     address: SessionAddress,

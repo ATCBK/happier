@@ -1,5 +1,6 @@
 import type { FeatureDecision } from '@happier-dev/protocol';
 import type { SessionStopRecovery } from '@/sync/ops/sessionStopContract';
+import type { SessionArchiveOperation } from '@/sync/domains/session/listing/sessionArchiveState';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import type { SessionFolderWorkspaceRefV1 } from '@/sync/domains/session/folders';
@@ -120,7 +121,7 @@ export type SessionBulkStopAndArchiveOperation = (
         isPinned: boolean;
         archiveAfterStop: 'always';
         stopSession: () => Promise<SessionBulkMutationResult>;
-        archiveSession: () => Promise<SessionBulkMutationResult>;
+        archiveSession: (operation?: SessionArchiveOperation) => Promise<SessionBulkMutationResult>;
         stopErrorMessage: string;
         archiveErrorMessage: string;
     }>,
@@ -155,7 +156,7 @@ export type SessionBulkActionExecutionContext = Readonly<{
 
     hideInactiveSessions?: boolean;
     stopSession?: SessionBulkOperation;
-    archiveSession?: SessionBulkOperation;
+    archiveSession?: (target: SessionBulkActionTarget, operation?: SessionArchiveOperation) => Promise<SessionBulkMutationResult>;
     unarchiveSession?: SessionBulkOperation;
     setManualReadState?: SessionBulkReadStateOperation;
     stopSessionAndMaybeArchive?: SessionBulkStopAndArchiveOperation;

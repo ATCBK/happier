@@ -572,7 +572,7 @@ describe('UI MCP Actions through captured Home persistence', () => {
         // Native randomness is supplied by the UI platform adapter; Web Crypto is not required.
         vi.stubGlobal('crypto', undefined);
         expect(await executor.execute('mcp.servers.create', { entry, expectedRevision: 1 }, context))
-            .toEqual({ ok: true, result: { status: 'updated', revision: 2, cursor: 2 } });
+            .toEqual({ ok: true, result: { status: 'updated', revision: 2, cursor: 2, serverId: entry.id } });
         const read = await executor.execute('mcp.servers.read', { serverId: 'server' }, context);
         expect(read).toMatchObject({ ok: true,
             result: { status: 'present', server: entry, revision: 2, complete: true, authority: 'active', installLink: expect.any(String) } });

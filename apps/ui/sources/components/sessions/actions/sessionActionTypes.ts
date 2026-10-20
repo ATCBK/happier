@@ -2,6 +2,7 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionReadStateAction } from '@/sync/domains/session/readState/sessionReadState';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { SessionStopRecovery } from '@/sync/ops/sessionStopContract';
+import type { SessionArchiveOperation } from '@/sync/domains/session/listing/sessionArchiveState';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { SessionArchiveActionResultV1 } from '@happier-dev/protocol/sessions/control/contract';
 
@@ -126,12 +127,12 @@ export type SessionActionExecutionOperations = Readonly<{
         isPinned: boolean;
         archiveAfterStop: 'always' | 'never';
         stopSession: () => Promise<SessionActionOperationResult>;
-        archiveSession: () => Promise<SessionActionOperationResult>;
+        archiveSession: (operation?: SessionArchiveOperation) => Promise<SessionActionOperationResult>;
         stopErrorMessage: string;
         archiveErrorMessage: string;
     }) => Promise<void | false>;
     stopSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
-    archiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null; alsoArchiveReports?: boolean }>) => Promise<SessionActionOperationResult>;
+    archiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null; alsoArchiveReports?: boolean; archiveOperation?: SessionArchiveOperation }>) => Promise<SessionActionOperationResult>;
     unarchiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
     setSessionAnswersWorkerQuestions?: (sessionId: string, enabled: boolean, opts?: Readonly<{ serverId?: string | null }>) => Promise<Readonly<{ ok: boolean; error?: string }>>;
     renameSession?: (sessionId: string, title: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;

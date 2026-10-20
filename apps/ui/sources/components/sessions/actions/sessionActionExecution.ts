@@ -1,4 +1,4 @@
-import { resolveSessionArchiveAddress } from '@/sync/domains/session/listing/sessionArchiveState';
+import { resolveSessionArchiveAddress, type SessionArchiveOperation } from '@/sync/domains/session/listing/sessionArchiveState';
 import { roleActions } from '@/sync/ops/roles/roleActions';
 import { readSessionAnswersWorkerQuestionsV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { showPutUnderSessionModal } from '@/components/sessions/work/PutUnderSessionModal';
@@ -85,6 +85,7 @@ export async function executeSessionLifecycleAction(
     options?: Readonly<{
         serverId?: string | null;
         alsoArchiveReports?: boolean;
+        archiveOperation?: SessionArchiveOperation;
         presentUserConfirmation?: SessionDeletePresentUserConfirmation;
     }>,
     title?: string,
@@ -93,6 +94,7 @@ export async function executeSessionLifecycleAction(
         ...(actionId === 'session.archive' && options?.alsoArchiveReports !== undefined ? { alsoArchiveReports: options.alsoArchiveReports } : {}) }, {
         surface: 'ui',
         defaultSessionId: sessionId,
+        ...(options?.archiveOperation ? { archiveOperation: options.archiveOperation } : {}),
         ...(options?.serverId ? { serverId: options.serverId } : {}),
         ...(options?.presentUserConfirmation ? {
             authority: 'present_user' as const,
@@ -102,8 +104,9 @@ export async function executeSessionLifecycleAction(
     });
     if (!outcome.ok) {
         const details = outcome.details;
-        const message = details && typeof details === 'object' && 'error' in details && typeof details.error === 'string'
-            ? details.error : outcome.error;
+        const message = outcome.errorCode === 'session_archive_timeout' ? undefined
+            : details && typeof details === 'object' && 'error' in details && typeof details.error === 'string'
+                ? details.error : outcome.error;
         return { success: false, message, code: outcome.errorCode,
             ...(details === undefined ? {} : { details }) };
     }
@@ -286,7 +289,7 @@ async function runStopArchiveFlow(params: Readonly<{
             }
             return result;
         },
-        archiveSession: async () => await archiveSession(params.address.sessionId, { serverId: params.address.serverId,
+        archiveSession: async (archiveOperation) => await archiveSession(params.address.sessionId, { serverId: params.address.serverId, archiveOperation,
             ...(params.alsoArchiveReports !== undefined ? { alsoArchiveReports: params.alsoArchiveReports } : {}) }),
         stopErrorMessage: t('sessionInfo.failedToStopSession'),
         archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
@@ -306,7 +309,8 @@ async function executeArchiveAction(
     if (target.isActive || target.hasRecoverableTerminalHost) {
         return await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
     }
-    const result = await archiveSessionWithPendingState(address, () => archiveSession(address.sessionId, {
+    const result = await archiveSessionWithPendingState(address, (archiveOperation) => archiveSession(address.sessionId, {
+        archiveOperation,
         serverId: address.serverId,
         ...(alsoArchiveReports !== undefined ? { alsoArchiveReports } : {}),
     }));
@@ -315,7 +319,7 @@ async function executeArchiveAction(
         if (isSessionActiveArchiveResult(result)) {
             return await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
         }
-        throw new HappyError(result.message || t('sessionInfo.failedToArchiveSession'), false);
+        throwIfFailed(result, t('sessionInfo.failedToArchiveSession'));
     }
 }
 

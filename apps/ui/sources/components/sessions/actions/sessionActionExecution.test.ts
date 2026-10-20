@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { storage } from '@/sync/domains/state/storage';
 import { readSessionArchivePending } from '@/sync/domains/session/listing/sessionArchiveState';
 import { t } from '@/text';
+import { HappyError } from '@/utils/errors/errors';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 import { createSessionActionTarget } from './sessionActionContext';
@@ -60,7 +61,7 @@ describe('executeSessionAction', () => {
             input: { alsoArchiveReports: true }, context: { operations: {
                 archiveSession: async (sessionId, options) => { requests.push({ sessionId, options }); return { success: true }; },
             } } });
-        expect(requests).toEqual([{ sessionId: 'session_1', options: { serverId: 'server_1', alsoArchiveReports: true } }]);
+        expect(requests).toEqual([{ sessionId: 'session_1', options: expect.objectContaining({ serverId: 'server_1', alsoArchiveReports: true }) }]);
     });
     it('forwards the exact completed host confirmation to Delete only', async () => {
         const deleteSession = vi.fn(async () => ({ success: true as const }));

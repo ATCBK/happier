@@ -1,23 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit';
-import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import { storage } from '@/sync/domains/state/storage';
 import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { stopSessionAndMaybeArchive } from './sessionStopArchiveFlow';
 
-const modalConfirmSpy = vi.fn(async () => true);
+const { modalConfirmSpy } = vi.hoisted(() => ({ modalConfirmSpy: vi.fn(async () => true) }));
 
 function address(sessionId: string, serverId = 'server-a') {
     return { serverId, sessionId } as const;
 }
 
-vi.mock('@/modal', () => createModalModuleMock({
-    spies: {
-        confirm: modalConfirmSpy,
-    },
-}).module);
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ spies: { confirm: modalConfirmSpy } }).module;
+});
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');

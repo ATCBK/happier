@@ -722,7 +722,7 @@ describe('default Action executor mode and catalog contracts', () => {
     const sentInputs: unknown[] = [];
     // The endpoint HTTP adapter is the genuine boundary. Scope lifetime,
     // bootstrap, public Action transport, output parsing and the source stay real.
-    vi.spyOn(http, 'createServerFetchAtEndpoint').mockImplementation(({ endpointUrl }) => async (path, init) => {
+    vi.spyOn(http, 'createServerFetchAtEndpoint').mockImplementation(({ endpointUrl }) => async (path: string, init?: RequestInit) => {
       const url = new URL(path, endpointUrl);
       if (url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
       if (url.pathname === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
@@ -871,8 +871,8 @@ describe('default Action executor mode and catalog contracts', () => {
       if (daemonStopReturned) freshReads++;
       return { body: { session: { ...readRow(), active: !daemonStopReturned } } };
     } };
-    homes.answer(serverId, `/v2/sessions/${sessionId}`, answer);
-    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
+    homes.answer(serverId, `GET /v2/sessions/${sessionId}`, answer);
+    homes.answer(serverId, `GET /v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
     daemonAnswer = (request) => {
       if (request.method !== `machine-a:${RPC_METHODS.STOP_SESSION}`) throw new Error('No runner remains to stop');
       daemonStopReturned = true;
@@ -905,8 +905,8 @@ describe('default Action executor mode and catalog contracts', () => {
       }
       return { body: { session: { ...readRow(), active: evidence === 'unknown' && daemonStopReturned ? undefined : evidence !== 'ambiguous' } } };
     } };
-    homes.answer(serverId, `/v2/sessions/${sessionId}`, answer);
-    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
+    homes.answer(serverId, `GET /v2/sessions/${sessionId}`, answer);
+    homes.answer(serverId, `GET /v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
     daemonAnswer = (request) => {
       if (request.method === `machine-a:${RPC_METHODS.STOP_SESSION}`) {
         daemonStopReturned = true;
@@ -1165,7 +1165,7 @@ describe('default Action executor mode and catalog contracts', () => {
   );
   it('keeps the owned archive timeout code and uses the translated UI failure through the real Action front door', async () => {
     installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
-    const session = createSessionFixture({ id: 'archive-timeout-localized', serverId, owner: 'alice', active: false });
+    const session = createSessionFixture({ id: 'archive-timeout-localized', serverId, owner: 'alice', active: false, archivedAt: null });
     storage.getState().applySessions([session]);
     const row = createPlainSessionCurrentProjectionRecordFixture({ id: session.id, active: false });
     homes.answer(serverId, `/v2/sessions/${session.id}`, { body: { session: row } });
@@ -1191,6 +1191,243 @@ describe('default Action executor mode and catalog contracts', () => {
       response.resolve();
       await pending;
       vi.useRealTimers();
+    }
+  });
+
+  it('shares archive progress and admission with a report archived by the real Action cascade', async () => {
+    installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
+    const leadId = 'admitted-cascade-lead';
+    const childId = 'admitted-cascade-child';
+    const sessions = [leadId, childId].map(id => createSessionFixture({
+      id, serverId, owner: 'alice', active: false, archivedAt: null,
+    }));
+    storage.getState().applySessions(sessions);
+    const rows = sessions.map(session => createPlainSessionCurrentProjectionRecordFixture({
+      id: session.id, active: false,
+      ...(session.id === childId ? { manager: { sessionId: leadId } } : {}),
+    }));
+    const releaseChild = createDeferred<void>();
+    let childArchiveRequests = 0;
+    for (const row of rows) {
+      homes.answer(serverId, `/v2/sessions/${row.id}`, { body: { session: row } });
+      homes.answer(serverId, `/v2/sessions/${row.id}?accessProjectionVersion=1`, { body: { session: row } });
+      homes.answer(serverId, `/v2/sessions/${row.id}/archive`, { select: () => {
+        if (row.id === childId) childArchiveRequests += 1;
+        return { body: { success: true, archivedAt: 42 },
+          ...(row.id === childId ? { respondAfter: releaseChild.promise } : {}) };
+      } });
+    }
+    homes.answer(serverId, '/v2/sessions/query', { select: input => {
+      expect(SessionListQueryV1Schema.parse(input).underSessionId).toBe(leadId);
+      return { body: SessionListQueryResponseV1Schema.parse({
+        sessions: [{ ...rows[1], viewer: createSessionViewerFixture() }],
+        nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+      }) };
+    } });
+    const { createSessionActionTarget } = await import('@/components/sessions/actions/sessionActionContext');
+    const { executeSessionAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const { isSessionArchivePending } = await import('@/components/sessions/sessionStopArchiveFlow');
+    const target = (session: typeof sessions[number]) => createSessionActionTarget({
+      session, serverId, currentUserId: 'alice', isConnected: true, isPinned: false,
+    });
+    const cascade = executeSessionAction({ actionId: 'ui.session.archive', target: target(sessions[0]!),
+      input: { alsoArchiveReports: true } });
+    let duplicate: Promise<void | false> | undefined;
+    let duplicateSettled = false;
+    let duplicateSkipped = false;
+    try {
+      await vi.waitFor(() => expect(childArchiveRequests).toBe(1));
+      const childPending = isSessionArchivePending({ serverId, sessionId: childId });
+      duplicate = executeSessionAction({ actionId: 'ui.session.archive', target: target(sessions[1]!) })
+        .then(result => { duplicateSettled = true; duplicateSkipped = result === false; return result; });
+      await vi.waitFor(() => expect(duplicateSettled || childArchiveRequests > 1).toBe(true));
+      expect({ childPending, childArchiveRequests, duplicateSkipped })
+        .toEqual({ childPending: true, childArchiveRequests: 1, duplicateSkipped: true });
+    } finally {
+      releaseChild.resolve();
+      await Promise.all([cascade, duplicate]);
+    }
+    expect(storage.getState().sessionArchiveOperations).toEqual({});
+  });
+
+  it('keeps an active report Stop inside shared archive admission', async () => {
+    installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
+    const leadId = 'admitted-stop-lead';
+    const childId = 'admitted-stop-child';
+    const lead = createSessionFixture({ id: leadId, serverId, owner: 'alice', active: false, archivedAt: null });
+    storage.getState().applySessions([lead]);
+    const readChild = installSession(childId, { machineId: 'machine-a', flavor: 'claude' });
+    const child = storage.getState().sessions[childId]!;
+    const leadRow = createPlainSessionCurrentProjectionRecordFixture({ id: leadId, active: false });
+    homes.answer(serverId, `/v2/sessions/${leadId}`, { body: { session: leadRow } });
+    homes.answer(serverId, `/v2/sessions/${leadId}?accessProjectionVersion=1`, { body: { session: leadRow } });
+    for (const id of [leadId, childId]) {
+      homes.answer(serverId, `/v2/sessions/${id}/archive`, { body: { success: true, archivedAt: 42 } });
+    }
+    homes.answer(serverId, '/v2/sessions/query', { select: input => {
+      expect(SessionListQueryV1Schema.parse(input).underSessionId).toBe(leadId);
+      return { body: SessionListQueryResponseV1Schema.parse({
+        sessions: [{ ...readChild(), manager: { sessionId: leadId }, viewer: createSessionViewerFixture() }],
+        nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+      }) };
+    } });
+    const releaseStop = createDeferred<void>();
+    let childStopRequests = 0;
+    daemonAnswer = async request => {
+      if (request.method !== `machine-a:${RPC_METHODS.STOP_SESSION}`) throw new Error(`Unexpected daemon method: ${request.method}`);
+      expect(request.params).toMatchObject({ sessionId: childId });
+      childStopRequests += 1;
+      await releaseStop.promise;
+      return { status: 'stopped' };
+    };
+    const { createSessionActionTarget } = await import('@/components/sessions/actions/sessionActionContext');
+    const { executeSessionAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const { isSessionArchivePending } = await import('@/components/sessions/sessionStopArchiveFlow');
+    const target = (session: typeof lead) => createSessionActionTarget({
+      session, serverId, currentUserId: 'alice', isConnected: true, isPinned: false,
+    });
+    const cascade = executeSessionAction({ actionId: 'ui.session.archive', target: target(lead),
+      input: { alsoArchiveReports: true } });
+    let duplicate: Promise<void | false> | undefined;
+    let duplicateSettled = false;
+    let duplicateSkipped = false;
+    try {
+      await vi.waitFor(() => expect(childStopRequests).toBe(1));
+      const childPending = isSessionArchivePending({ serverId, sessionId: childId });
+      duplicate = executeSessionAction({ actionId: 'ui.session.archive', target: target(child) })
+        .then(result => { duplicateSettled = true; duplicateSkipped = result === false; return result; });
+      await vi.waitFor(() => expect(duplicateSettled || childStopRequests > 1).toBe(true));
+      expect({ childPending, childStopRequests, duplicateSkipped })
+        .toEqual({ childPending: true, childStopRequests: 1, duplicateSkipped: true });
+    } finally {
+      releaseStop.resolve();
+      await Promise.all([cascade, duplicate]);
+    }
+    expect(storage.getState().sessionArchiveOperations).toEqual({});
+  });
+
+  it.each(['ui', 'action'] as const)('ends a completed report archive while another report is still pending (%s)', async (entry) => {
+    installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
+    const leadId = 'settled-report-lead';
+    const firstId = 'settled-report-first';
+    const secondId = 'settled-report-second';
+    const sessions = [leadId, firstId, secondId].map(id => createSessionFixture({
+      id, serverId, owner: 'alice', active: false, archivedAt: null,
+    }));
+    storage.getState().applySessions(sessions);
+    const rows = sessions.map(session => createPlainSessionCurrentProjectionRecordFixture({
+      id: session.id, active: false, ...(session.id === leadId ? {} : { manager: { sessionId: leadId } }),
+    }));
+    const releaseSecond = createDeferred<void>();
+    let secondArchiveRequests = 0;
+    for (const row of rows) {
+      homes.answer(serverId, `/v2/sessions/${row.id}`, { body: { session: row } });
+      homes.answer(serverId, `/v2/sessions/${row.id}?accessProjectionVersion=1`, { body: { session: row } });
+      homes.answer(serverId, `/v2/sessions/${row.id}/archive`, { select: () => {
+        if (row.id === secondId) secondArchiveRequests += 1;
+        return { body: { success: true, archivedAt: 42 },
+          ...(row.id === secondId ? { respondAfter: releaseSecond.promise } : {}) };
+      } });
+    }
+    homes.answer(serverId, '/v2/sessions/query', { select: input => {
+      expect(SessionListQueryV1Schema.parse(input).underSessionId).toBe(leadId);
+      return { body: SessionListQueryResponseV1Schema.parse({
+        sessions: rows.slice(1).map(row => ({ ...row, viewer: createSessionViewerFixture() })),
+        nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+      }) };
+    } });
+    const { createSessionActionTarget } = await import('@/components/sessions/actions/sessionActionContext');
+    const { executeSessionAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const { isSessionArchivePending } = await import('@/components/sessions/sessionStopArchiveFlow');
+    const cascade = entry === 'ui'
+      ? executeSessionAction({ actionId: 'ui.session.archive', input: { alsoArchiveReports: true },
+        target: createSessionActionTarget({ session: sessions[0]!, serverId, currentUserId: 'alice', isConnected: true, isPinned: false }) })
+      : createDefaultActionExecutor().execute('session.archive', { sessionId: leadId, alsoArchiveReports: true }, context());
+    try {
+      await vi.waitFor(() => expect(secondArchiveRequests).toBe(1));
+      expect({ lead: isSessionArchivePending({ serverId, sessionId: leadId }),
+        first: isSessionArchivePending({ serverId, sessionId: firstId }),
+        second: isSessionArchivePending({ serverId, sessionId: secondId }) }).toEqual({ lead: true, first: false, second: true });
+    } finally {
+      releaseSecond.resolve();
+      await cascade;
+    }
+    expect(storage.getState().sessionArchiveOperations).toEqual({});
+  });
+
+  it('borrows an inherited archive proof after its Home identity is promoted', async () => {
+    installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
+    const serverUrl = 'https://archive-proof-promotion.test';
+    const legacyId = await homes.addHome({ name: 'Archive proof Home', serverUrl, accountId: 'alice', active: false,
+      credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) } });
+    // The focused Account restore's single-origin boundary does not own this remote Home.
+    installHomeGovernanceBoundaries(homes);
+    homes.answer(legacyId, '/v2/account/settings', { body: { content: { t: 'plain', v: storage.getState().settings }, version: 1 } });
+    const sessionId = 'promoted-archive-proof';
+    const row = createPlainSessionCurrentProjectionRecordFixture({ id: sessionId, active: false });
+    homes.answer(legacyId, `/v2/sessions/${sessionId}`, { body: { session: row } });
+    homes.answer(legacyId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, { body: { session: row } });
+    const releaseArchive = createDeferred<void>();
+    let archiveRequests = 0;
+    homes.answer(legacyId, `/v2/sessions/${sessionId}/archive`, { select: () => {
+      archiveRequests += 1;
+      return { body: { success: true, archivedAt: 42 }, respondAfter: releaseArchive.promise };
+    } });
+    const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+    const { archiveSessionWithPendingState } = await import('@/components/sessions/sessionStopArchiveFlow');
+    const canonicalId = 'srv_archive_proof_promoted';
+    const pending = archiveSessionWithPendingState({ serverId: legacyId, sessionId }, async operation => {
+      expect(operation.serverId).toBe(legacyId);
+      await setServerProfileIdentityForUrl(serverUrl, canonicalId);
+      const result = await createDefaultActionExecutor().execute('session.archive', { sessionId }, {
+        surface: 'ui', serverId: canonicalId, archiveOperation: operation,
+      });
+      // The inner Action borrows the exact proof; its caller still owns completion.
+      expect(storage.getState().sessionArchiveOperations[legacyId]?.[sessionId]).toBe(operation);
+      return result;
+    }).then(result => ({ result }), (error: unknown) => ({ error }));
+    try {
+      await vi.waitFor(() => expect(archiveRequests).toBe(1));
+    } finally {
+      releaseArchive.resolve();
+      const outcome = await pending;
+      if ('error' in outcome) throw outcome.error;
+    }
+    const outcome = await pending;
+    if ('error' in outcome) throw outcome.error;
+    expect(outcome.result).toMatchObject({ ok: true, result: { success: true, sessionId } });
+    expect(archiveRequests).toBe(1);
+    expect(storage.getState().sessionArchiveOperations).toEqual({});
+  });
+
+  it('refuses a retired archive proof without borrowing or finishing its replacement', async () => {
+    installActionSettings({ 'session.archive': { disabledSurfaces: [], approvalRequiredSurfaces: [] } });
+    const sessionId = 'retired-archive-proof';
+    const session = createSessionFixture({ id: sessionId, serverId, owner: 'alice', active: false, archivedAt: null });
+    storage.getState().applySessions([session]);
+    const row = createPlainSessionCurrentProjectionRecordFixture({ id: sessionId, active: false });
+    homes.answer(serverId, `/v2/sessions/${sessionId}`, { body: { session: row } });
+    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, { body: { session: row } });
+    const address = { serverId, sessionId };
+    const retired = storage.getState().beginSessionArchive(address);
+    if (!retired) throw new Error('Expected initial archive admission');
+    storage.getState().clearSessionArchiveOperations(serverId);
+    const replacement = storage.getState().beginSessionArchive(address);
+    if (!replacement) throw new Error('Expected replacement archive admission');
+    let archiveRequests = 0;
+    homes.answer(serverId, `/v2/sessions/${sessionId}/archive`, { select: () => {
+      archiveRequests += 1;
+      return { body: { success: true, archivedAt: 42 } };
+    } });
+    try {
+      const result = await createDefaultActionExecutor().execute('session.archive', { sessionId }, {
+        ...context(), archiveOperation: retired,
+      });
+      expect(result).toMatchObject({ ok: false, errorCode: 'archive_pending' });
+      expect(archiveRequests).toBe(0);
+      expect(storage.getState().sessionArchiveOperations[replacement.serverId]?.[sessionId]).toBe(replacement);
+    } finally {
+      storage.getState().finishSessionArchive(replacement);
     }
   });
 

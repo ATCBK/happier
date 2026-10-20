@@ -3,7 +3,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import type { SessionStopRecovery } from '@/sync/ops/sessionStopContract';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
-import { readSessionArchivePending } from '@/sync/domains/session/listing/sessionArchiveState';
+import { readSessionArchivePending, type SessionArchiveOperation } from '@/sync/domains/session/listing/sessionArchiveState';
 
 type SessionMutationResult = Readonly<{
     success: boolean;
@@ -31,7 +31,7 @@ export type StopSessionAndMaybeArchiveParams = Readonly<{
     isPinned: boolean;
     archiveAfterStop: 'never' | 'always';
     stopSession: () => Promise<SessionMutationResult>;
-    archiveSession: () => Promise<SessionMutationResult>;
+    archiveSession: (operation?: SessionArchiveOperation) => Promise<SessionMutationResult>;
     stopErrorMessage: string;
     archiveErrorMessage: string;
 }>;
@@ -65,19 +65,19 @@ export function isSessionArchivePending(address: SessionAddress): boolean {
 /** Call after confirmation; every archive entry point shares synchronous admission. */
 export async function archiveSessionWithPendingState<T>(
     address: SessionAddress,
-    archiveSession: () => Promise<T>,
+    archiveSession: (operation: SessionArchiveOperation) => Promise<T>,
 ): Promise<T | false> {
     const operation = storage.getState().beginSessionArchive(address);
     if (!operation) return false;
     try {
-        return await archiveSession();
+        return await archiveSession(operation);
     } finally {
         storage.getState().finishSessionArchive(operation);
     }
 }
 
 export async function stopSessionAndMaybeArchive(params: StopSessionAndMaybeArchiveParams): Promise<void | false> {
-    const run = async () => {
+    const run = async (operation?: SessionArchiveOperation) => {
         const stopResult = await params.stopSession();
         // A missing runner permits one authoritative Archive attempt. Accepted
         // Stop or disconnect alone does not establish process termination.
@@ -87,7 +87,7 @@ export async function stopSessionAndMaybeArchive(params: StopSessionAndMaybeArch
             throw new HappyError(resolveSessionStopFailureMessage(stopResult, params.stopErrorMessage), false);
         }
         if (params.archiveAfterStop === 'never') return;
-        const archiveResult = await params.archiveSession();
+        const archiveResult = await params.archiveSession(operation);
         if (!archiveResult.success) {
             const message = isSessionActiveArchiveResult(archiveResult)
                 ? params.archiveErrorMessage

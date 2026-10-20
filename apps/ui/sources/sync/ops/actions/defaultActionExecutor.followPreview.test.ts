@@ -77,6 +77,31 @@ it('resolves matching through every ordinary and attention page without changing
     expect(getStorage().getState().ordinarySessionListMembershipByServerId).toEqual(before);
 });
 
+it('previews portable-Home rules and Matching against the same captured local Home', async () => {
+    const portable = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+    const serverUrl = 'https://portable-preview.test';
+    const serverId = await homes.addHome({ name: 'Portable', serverUrl, serverIdentityId: portable, accountId: 'alice', currentAccount: true });
+    restoredAccount = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+    const { sync } = await import('@/sync/sync');
+    await sync.awaitBootstrapForegroundAcquisition();
+    await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
+    const candidate = createSessionFixture({ id: 'portable-project-member', serverId,
+        metadata: { path: '/payments', host: 'test', projectId: 'payments' } });
+    homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
+    homes.answer(serverId, '/v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({ sessions: [queryRow(candidate)],
+        hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null }) });
+    const filter = normalizeSessionListFilterV1({ show: 'sessions', homeServerIds: [portable], scope: 'all_accessible',
+        startedBy: ['you', 'agents', 'triggers'], projects: { include: [{ serverId: portable, projectKey: 'payments' }], exclude: [] } });
+    const executor = createDefaultActionExecutor();
+    const context = { surface: 'ui' as const, serverId, expectedAccountId: 'alice' };
+    expect(await executor.execute('follow.preview', { receiver: { kind: 'account' }, filter }, context))
+        .toMatchObject({ ok: true, result: { coverage: 'complete', matchCount: 1,
+            matches: [{ source: { kind: 'session', sessionId: candidate.id } }] } });
+    expect(await executor.previewSessionTargets({ selector: 'matching', filter }, context))
+        .toMatchObject({ coverage: 'complete', addresses: [{ sessionId: candidate.id }] });
+});
+
 it.each(['network', 'repeated_cursor', 'metadata_unavailable'] as const)('refuses matching for %s incompleteness', async reason => {
     const serverId = await addAppliedHome('Incomplete', 'https://incomplete-preview.test');
     homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
@@ -172,7 +197,7 @@ it('offers overlaps only with other Session receivers, not personal rules or the
         attentionHasNext: false, attentionNextCursor: null,
     }) });
     expect(await createDefaultActionExecutor().execute('follow.preview', { receiver, filter }, { surface: 'ui', serverId }))
-        .toMatchObject({ ok: true, result: { coverage: 'partial', matchCount: 1,
+        .toMatchObject({ ok: true, result: { coverage: 'complete', matchCount: 1,
             overlaps: [{ ruleId: 'other', matches: [{ serverId, source: { kind: 'session', sessionId: session.id } }] }] } });
 });
 

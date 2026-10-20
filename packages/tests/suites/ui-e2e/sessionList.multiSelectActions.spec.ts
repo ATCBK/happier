@@ -121,7 +121,7 @@ async function seedSessions(params: Readonly<{
     sessionIds.push(await createPlainSession({
       baseUrl: params.baseUrl,
       token: params.token,
-      title: `${params.titlePrefix} ${index + 1} ${run.runId}`,
+      title: `${params.titlePrefix} ${index + 1}`,
       rootPath,
       machineId: SEEDED_MACHINE_ID,
       tagPrefix: 'session-list-multi-select',
@@ -352,7 +352,7 @@ test.describe('ui e2e: session list multi-select actions', () => {
       baseUrl: server.baseUrl,
       token,
       count: 4,
-      titlePrefix: 'multi-select archive',
+      titlePrefix: 'Fix account sign-in',
     });
 
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -373,6 +373,10 @@ test.describe('ui e2e: session list multi-select actions', () => {
     for (const sessionId of rangeIds) {
       await expectSessionSelectionState(page, sessionId, true);
     }
+
+    await test.info().attach('archive-selected-wide', {
+      body: await page.screenshot(), contentType: 'image/png',
+    });
 
     const archiveGate = createDeferred();
     let delayedFirstArchive = false;
@@ -396,13 +400,26 @@ test.describe('ui e2e: session list multi-select actions', () => {
       expect(pendingSessionId).not.toBeNull();
       const pendingRow = page.getByTestId(`session-list-item-${pendingSessionId}`);
       await expect(pendingRow.getByRole('img', { name: /archiving/i })).toBeVisible({ timeout: 60_000 });
-
+      for (const view of [
+        { name: 'wide-light', width: 1440, height: 900, colorScheme: 'light' },
+        { name: 'wide-dark', width: 1440, height: 900, colorScheme: 'dark' },
+        { name: 'phone-dark', width: 390, height: 844, colorScheme: 'dark' },
+        { name: 'phone-light', width: 390, height: 844, colorScheme: 'light' },
+      ] as const) {
+        await page.emulateMedia({ colorScheme: view.colorScheme });
+        await page.setViewportSize({ width: view.width, height: view.height });
+        await test.info().attach(`archive-pending-${view.name}`, {
+          body: await page.screenshot(), contentType: 'image/png',
+        });
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.emulateMedia({ colorScheme: 'light' });
       archiveGate.resolve();
 
       await expectBulkResult({ page, actionId: 'ui.session.archive', succeeded: rangeIds.length });
     } finally {
       archiveGate.resolve();
-      await page.unroute(archiveUrl).catch(() => {});
+      await page.unrouteAll({ behavior: 'wait' });
     }
 
     for (const sessionId of rangeIds) {

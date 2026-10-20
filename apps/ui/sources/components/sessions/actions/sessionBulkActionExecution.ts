@@ -416,7 +416,7 @@ async function executeArchiveAction(params: Readonly<{
                     isPinned: target.pinned === true,
                     archiveAfterStop: 'always',
                     stopSession: () => stopSession(target),
-                    archiveSession: () => archiveSession(target),
+                    archiveSession: (operation) => archiveSession(target, operation),
                     stopErrorMessage: params.context.stopErrorMessage ?? DEFAULT_STOP_ERROR_MESSAGE,
                     archiveErrorMessage: params.context.archiveErrorMessage ?? DEFAULT_ARCHIVE_ERROR_MESSAGE,
                 });
@@ -426,10 +426,10 @@ async function executeArchiveAction(params: Readonly<{
 
             const address = normalizeSessionAddress(target.serverId, target.sessionId);
             if (!address) return createTargetResult(target, 'failed', { reasonCode: 'missing_session_address' });
-            const result = await archiveSessionWithPendingState(address, () => archiveSession(target));
+            const result = await archiveSessionWithPendingState(address, (operation) => archiveSession(target, operation));
             return result === false
                 ? createTargetResult(target, 'skipped', { reasonCode: 'archive_pending' })
-                : resultFromMutation(target, result, DEFAULT_ARCHIVE_ERROR_MESSAGE);
+                : resultFromMutation(target, result, params.context.archiveErrorMessage ?? DEFAULT_ARCHIVE_ERROR_MESSAGE);
         },
     });
 }

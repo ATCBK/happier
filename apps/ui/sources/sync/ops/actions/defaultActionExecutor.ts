@@ -1,3 +1,6 @@
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { SessionArchiveActionInputV1Schema } from '@happier-dev/protocol/sessions/control/contract';
+import { isSessionArchiveOperationCurrent, resolveSessionArchiveAddress, type SessionArchiveOperation } from '@/sync/domains/session/listing/sessionArchiveState';
 import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 import type { ApprovalStaleReason } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { SessionMessageReplyMutationResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
@@ -52,6 +55,8 @@ import {
   type SessionUsageLimitRecoveryOperationResult,
 } from '@/sync/ops/sessionUsageLimitRecovery';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createTargetActionApprovalDecision } from '@happier-dev/protocol/actions/targetActionApprovalDecision';
+import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import type { ActionSessionAddress } from '@happier-dev/protocol/actions/executor/types';
 import { SessionTargetPreviewV1Schema, type SessionTargetPreviewV1, type SessionTargetSelectorV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
@@ -602,7 +607,37 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   previewSessionTargets: (target: SessionTargetSelectorV1, context?: ActionExecutorContext) => Promise<UiSessionTargetPreview>;
 }>;
 
+type SessionArchiveInvocation = {
+  readonly inherited?: SessionArchiveOperation;
+  readonly owned: SessionArchiveOperation[];
+  readonly includeReportStops: boolean;
+  readonly reportLead?: SessionAddress;
+};
+
+function createSessionArchiveInvocation(
+  actionId: ActionId | undefined,
+  input: unknown,
+  inherited: SessionArchiveOperation | undefined,
+  serverId: string,
+  defaultSessionId?: string | null,
+): SessionArchiveInvocation | undefined {
+  if (actionId !== 'session.archive') return undefined;
+  // Archive's canonical input names one lead; its catalog has no selector fanout.
+  // Contextual defaults and an enclosing UI flow already carry the same exact target.
+  const parsed = SessionArchiveActionInputV1Schema.safeParse(input);
+  const sessionId = parsed.success ? parsed.data.sessionId : inherited?.sessionId ?? defaultSessionId;
+  return { inherited, owned: [],
+    includeReportStops: input !== null && typeof input === 'object' && 'alsoArchiveReports' in input && input.alsoArchiveReports === true,
+    reportLead: sessionId ? resolveSessionArchiveAddress({ serverId, sessionId }) ?? undefined : undefined };
+}
+
+function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | undefined): void {
+  for (const operation of invocation?.owned ?? []) storage.getState().finishSessionArchive(operation);
+}
+
   function buildDefaultActionExecutor(opts?: Readonly<{
+  /** Fresh invocation's exact Session admission objects; never serialized or shared by cached executors. */
+  archiveInvocation?: SessionArchiveInvocation;
   /** Private presentation leaf for this invocation; never enters Action custody. */
   openRoute?: (route: string) => void | Promise<void>;
   /** Mounted output host presentation; admission and operation lookup remain Action-owned. */
@@ -724,6 +759,38 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     readWidgetMovementAdmission(ref: WidgetInstanceRefV1, surface: WidgetSurfaceRefV1, context: ActionExecutorContext): ReturnType<typeof readWidgetEntityMovementAdmission>;
     readWidgetInputDescriptor(request: Parameters<NonNullable<ReturnType<typeof createWidgetInputActionDepsV1>['readWidgetInputDescriptor']>>[0]): ReturnType<NonNullable<ReturnType<typeof createWidgetInputActionDepsV1>['readWidgetInputDescriptor']>>;
   }> {
+  const claimSessionArchive = (sessionId: string, serverId: string | null | undefined) => {
+    const home = serverId ?? accountContext?.serverId;
+    if (!home) return null;
+    const address = resolveSessionArchiveAddress({ serverId: home, sessionId });
+    if (!address) return null;
+    const state = storage.getState();
+    const invocation = opts?.archiveInvocation;
+    if (invocation?.inherited) {
+      // Account retirement may remove the captured object and admit a successor.
+      if (!isSessionArchiveOperationCurrent(state, invocation.inherited)) return null;
+      if (isSessionArchiveOperationCurrent(state, invocation.inherited, address)) return invocation.inherited;
+    }
+    const retained = invocation?.owned.find(operation => {
+      const captured = resolveSessionArchiveAddress(operation);
+      return captured?.serverId === address.serverId && captured.sessionId === address.sessionId;
+    });
+    if (retained) return isSessionArchiveOperationCurrent(state, retained, address) ? retained : null;
+    const operation = state.beginSessionArchive(address);
+    if (operation) invocation?.owned.push(operation);
+    return operation;
+  };
+  const finishOwnedSessionArchive = (operation: SessionArchiveOperation) => {
+    const invocation = opts?.archiveInvocation;
+    const owned = invocation?.owned;
+    const index = owned?.indexOf(operation) ?? -1;
+    // The enclosing UI flow, rather than this Action, owns an inherited lead.
+    if (owned && index < 0) return;
+    if (invocation && (!invocation.reportLead
+      || isSessionArchiveOperationCurrent(storage.getState(), operation, invocation.reportLead))) return;
+    storage.getState().finishSessionArchive(operation);
+    if (owned) owned.splice(index, 1);
+  };
   const isSettingsOwnerCurrent = () => accountContext
     ? accountContext.accountLifetime.isCurrent() : getActiveServerAccountScope() === null;
   // Signal-free UI/tool invocations belong to the captured Account; mounted
@@ -873,6 +940,41 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
   }) : null;
 
   const connectedServiceAction = accountContext ? createUiConnectedServiceAction(accountContext) : undefined;
+  const updateApprovalArtifact = async ({ artifactId, request }: Readonly<{
+    artifactId: string; request: ApprovalRequest | TargetActionApprovalRequestV1;
+  }>) => {
+    // Only the known Home-open ACK may outlive presentation focus; target
+    // decisions keep their captured Account lifetime throughout the CAS.
+    const settlement = accountContext && request.v === 2
+      ? await captureHomeOpenApprovalSettlementAccount(accountContext, request) : null;
+    const artifactAccount = settlement ?? accountContext;
+    try {
+      const written = await writeApprovalRequestArtifact({
+        artifactId, request,
+        read: async id => await (artifactAccount ? artifactAccount.fetchArtifact(id) : sync.fetchArtifactWithBody(id)),
+        write: async (basis, header, body) => {
+          if (artifactAccount) {
+            await artifactAccount.updateArtifact(artifactId, header, body, basis);
+            return;
+          }
+          // Focused Sync borrows this validated read as its expected CAS basis.
+          storage.getState().updateArtifact(basis);
+          try { await sync.updateArtifactWithHeader(artifactId, header, body); }
+          catch (error) {
+            const latest = await sync.fetchArtifactWithBody(artifactId);
+            if (latest) storage.getState().updateArtifact(latest);
+            throw error;
+          }
+        },
+      });
+      if (written.ok) {
+        approvalCoordinator.notifyApprovalUpdated({ artifactId, request });
+        // Background Home readers observe consent through the existing feed.
+        if (artifactAccount) publishHomeAccountChange(artifactAccount.serverId, [artifactId], { changeKinds: ['artifact'] });
+      }
+      return written;
+    } finally { settlement?.dispose(); }
+  };
   let deps: ActionExecutorDeps = {
     buildApprovalPreview: async ({ actionId, input, context, defaultPreview }) => {
       if (actionId !== 'session.spawn_new' || !accountContext || !machineAccessAction) return defaultPreview;
@@ -1999,10 +2101,24 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return result ?? { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     }),
 
-    sessionStop: async ({ sessionId, serverId, signal, context }) =>
-      await withAccountLifetime(signal, signal => sessionStopWithServerScope(sessionId, { serverId, signal, actionContext: context,
-        ...(accountContext ? { scope: accountContext.accountLifetime.scope,
-          isCurrent: accountContext.accountLifetime.isCurrent } : {}) })),
+    sessionStop: async ({ sessionId, serverId, signal, context }) => {
+      // Report Stop and Archive form one UI invocation. Keep the same admission
+      // across both effects; its invocation finally also covers Stop/approval failure.
+      const operation = opts?.archiveInvocation?.includeReportStops ? claimSessionArchive(sessionId, serverId) : null;
+      if (opts?.archiveInvocation?.includeReportStops && !operation) {
+        return { ok: false, errorCode: 'archive_pending', error: 'archive_pending' };
+      }
+      try {
+        const result = await withAccountLifetime(signal, signal => sessionStopWithServerScope(sessionId, { serverId, signal, actionContext: context,
+          ...(accountContext ? { scope: accountContext.accountLifetime.scope,
+            isCurrent: accountContext.accountLifetime.isCurrent } : {}) }));
+        if (!result.success && operation) finishOwnedSessionArchive(operation);
+        return result;
+      } catch (error) {
+        if (operation) finishOwnedSessionArchive(operation);
+        throw error;
+      }
+    },
 
     sessionControlSwitch: async ({ sessionId, to, serverId, signal }) => withAccountLifetime(signal, async signal => {
       const switched = await sessionSwitch(sessionId, to, { serverId, signal,
@@ -2013,11 +2129,21 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
     }),
 
     sessionArchiveSet: async ({ sessionId, archived, serverId, context }) => {
-      const result = archived
-        ? await withAccountLifetime(context?.signal, signal => sessionArchiveWithServerScope(sessionId, { serverId, signal }))
-        : await sessionUnarchiveWithServerScope(sessionId, { serverId });
-      return result.success ? result : { ok: false, errorCode: result.code ?? 'unknown_error',
-        error: result.message ?? 'unknown_error', details: result };
+      const operation = archived ? claimSessionArchive(sessionId, serverId) : null;
+      if (archived && !operation) return { ok: false, errorCode: 'archive_pending', error: 'archive_pending' };
+      let pendingStop = false;
+      try {
+        const result = archived
+          ? await withAccountLifetime(context?.signal, signal => sessionArchiveWithServerScope(sessionId, { serverId, signal }))
+          : await sessionUnarchiveWithServerScope(sessionId, { serverId });
+        // The report cascade may now Stop and retry this same Session.
+        pendingStop = opts?.archiveInvocation?.includeReportStops === true
+          && result.success === false && result.code === 'session_active';
+        return result.success ? result : { ok: false, errorCode: result.code ?? 'unknown_error',
+          error: result.message ?? 'unknown_error', details: result };
+      } finally {
+        if (operation && !pendingStop) finishOwnedSessionArchive(operation);
+      }
     },
 
     sessionPermissionModeSet: async ({ sessionId, permissionMode, applyTiming, serverId }) => {
@@ -3945,47 +4071,18 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return null;
     },
 
-    approvalsUpdate: async ({ artifactId, request }) => {
-      // A known authorized Home focus may retire presentation custody, but
-      // only this exact claimed Artifact may settle at its original Home.
-      const settlement = accountContext ? await captureHomeOpenApprovalSettlementAccount(accountContext, request) : null;
-      const artifactAccount = settlement ?? accountContext;
-      try {
-        const written = await writeApprovalRequestArtifact({
-          artifactId,
-          request,
-          read: async (id) => await (artifactAccount ? artifactAccount.fetchArtifact(id) : sync.fetchArtifactWithBody(id)),
-          write: async (basis, header, body) => {
-            if (artifactAccount) {
-              await artifactAccount.updateArtifact(artifactId, header, body, basis);
-              return;
-            }
-            // The focused-sync writer takes its expected versions from the cached
-            // row synchronously when called; seed it with the validated read and
-            // call it in the same tick so that read stays the CAS basis.
-            storage.getState().updateArtifact(basis);
-            try {
-              await sync.updateArtifactWithHeader(artifactId, header, body);
-            } catch (error) {
-              // A lost CAS means another writer committed after that read. Put the
-              // durable row back in the cache the executor rereads, so the loser
-              // observes the winner's claim or terminal result, never its own basis.
-              const latest = await sync.fetchArtifactWithBody(artifactId);
-              if (latest) storage.getState().updateArtifact(latest);
-              throw error;
-            }
-          },
-        });
-        if (written.ok) {
-          approvalCoordinator.notifyApprovalUpdated({ artifactId, request });
-          // An exact background Home cannot publish into the focused Artifact
-          // store. Wake its reader after the accepted CAS, not after replay, so
-          // consent is visible even while the approved effect is still running.
-          if (artifactAccount) publishHomeAccountChange(artifactAccount.serverId, [artifactId], { changeKinds: ['artifact'] });
-        }
-        return written;
-      } finally { settlement?.dispose(); }
-    },
+    approvalsUpdate: updateApprovalArtifact,
+
+    targetActionApprovalReplay: createTargetActionApprovalDecision({
+      read: async artifactId => {
+        const parsed = TargetActionApprovalRequestV1Schema.safeParse(await deps.approvalsGet?.({ artifactId, serverId: null }));
+        // This client records consent for an Account invocation, never replays
+        // Machine-bound effects or asserts another process's waiter is stale.
+        return parsed.success && parsed.data.approvalInputCustody === 'live_only'
+          && !parsed.data.executionOriginV1 && !parsed.data.replayPlacement ? parsed.data : null;
+      },
+      update: updateApprovalArtifact,
+    }),
 
     approvalsResolveBlockingDecision: async ({ artifactId, request, decision, decisionAuthority }) =>
       await approvalCoordinator.resolveBlockingDecision({ artifactId, request, decision, decisionAuthority }),
@@ -4239,6 +4336,8 @@ type DefaultActionExecutorOptions = Parameters<typeof buildDefaultActionExecutor
 /** UI-only projection qualifier; the captured Account owner enforces it before admission. */
 export type UiActionExecutorContext = ActionExecutorContext & Readonly<{
   expectedAccountId?: string;
+  /** Exact object admitted by the enclosing UI stop/archive lifecycle. */
+  archiveOperation?: SessionArchiveOperation;
   /** Destination-owner navigation leaf, consumed only in this invocation. */
   openRoute?: (route: string) => void | Promise<void>;
 }>;
@@ -4246,7 +4345,8 @@ type DefaultActionExecutor = Omit<UiProtocolActionExecutor, 'execute' | 'prepare
   execute: (actionId: ActionId, input: unknown, context?: UiActionExecutorContext) => ReturnType<ReturnType<typeof createActionExecutor>['execute']>;
   prepare: (actionId: ActionId, input: unknown, context?: UiActionExecutorContext) => ReturnType<ReturnType<typeof createActionExecutor>['prepare']>;
 }>;
-type DefaultActionExecuteContext = Pick<UiActionExecutorContext, 'expectedAccountId' | 'externalActionCredential' | 'openRoute'> & Readonly<{
+type DefaultActionExecuteContext = Pick<UiActionExecutorContext, 'expectedAccountId' | 'externalActionCredential' | 'openRoute' | 'archiveOperation' | 'defaultSessionId'> & Readonly<{
+  archiveInput?: unknown;
   serverId: string;
   signal?: AbortSignal;
   /** Synchronously consumes a failure only while this captured Account is still current. */
@@ -4483,13 +4583,14 @@ export async function withDefaultActionExecuteContext<TResult>(
   executedActionId?: ActionId,
 ): Promise<TResult> {
   const account = await captureLazyActionAccountContext(context.serverId, context.signal);
+  const archiveInvocation = createSessionArchiveInvocation(executedActionId, context.archiveInput, context.archiveOperation, context.serverId, context.defaultSessionId);
   try {
     try {
       assertExpectedActionAccount(account, context);
       const settings = await readActionAdmissionSettings(account);
       account.assertCurrent();
       context.signal?.throwIfAborted();
-      const result = await work(buildDefaultActionExecutor({ ...opts, ...(context.openRoute ? { openRoute: context.openRoute } : {}) }, { ...account, settings }), account, settings);
+      const result = await work(buildDefaultActionExecutor({ ...opts, archiveInvocation, ...(context.openRoute ? { openRoute: context.openRoute } : {}) }, { ...account, settings }), account, settings);
       const effectClass = executedActionId ? getActionSpec(executedActionId).sideEffectClass : undefined;
       // Return an effect's actual disposition to its captured invoker. Retirement
       // suppresses Account projection publication, but cannot rewrite an acknowledgement.
@@ -4507,6 +4608,7 @@ export async function withDefaultActionExecuteContext<TResult>(
       throw error;
     }
   } finally {
+    finishSessionArchiveInvocation(archiveInvocation);
     account.dispose();
   }
 }
@@ -4523,8 +4625,10 @@ export async function executeDefaultActionInCapturedAccount(
     const settings = await readActionAdmissionSettings(account);
     account.assertCurrent();
     signal?.throwIfAborted();
+    const { archiveOperation, ...actionContext } = context ?? {};
+    const archiveInvocation = createSessionArchiveInvocation(actionId, input, archiveOperation, account.serverId, context?.defaultSessionId);
     const admittedContext = {
-      ...context,
+      ...actionContext,
       signal,
       serverId: account.serverId,
       ...(account.serverIdentityId ? { serverIdentityId: account.serverIdentityId } : {}),
@@ -4532,9 +4636,13 @@ export async function executeDefaultActionInCapturedAccount(
     };
     account.assertCurrent();
     signal?.throwIfAborted();
-    const result = await buildDefaultActionExecutor(undefined, { ...account, settings }).execute(actionId, input, admittedContext);
-    account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
-    return result;
+    try {
+      const result = await buildDefaultActionExecutor({ archiveInvocation }, { ...account, settings }).execute(actionId, input, admittedContext);
+      account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
+      return result;
+    } finally {
+      finishSessionArchiveInvocation(archiveInvocation);
+    }
   };
   const native = resolveNativeManagedAction(actionId);
   return native ? withManagedMachineNativeReadLifetime(native, context?.signal, execute) : execute(context?.signal);
@@ -4677,7 +4785,7 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       }
     },
     execute: async (actionId, input, context) => {
-      const { openRoute, ...actionContext } = context ?? {};
+      const { openRoute, archiveOperation, ...actionContext } = context ?? {};
       const custodyFailure = opts?.filesystemActionDelivery?.actionId === actionId ? null : resolveUiFilesystemTransferCustodyFailure(actionId, input);
       if (custodyFailure) return custodyFailure;
       const api = await apiTokenTransport();
@@ -4689,7 +4797,7 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       if (!serverId) return await ordinary().execute(actionId, input, actionContext);
       try {
         const native = resolveNativeManagedAction(actionId, opts);
-        const execute = (signal?: AbortSignal) => withDefaultActionExecuteContext(opts, { ...actionContext, signal, openRoute, serverId }, async (executor, account) => {
+        const execute = (signal?: AbortSignal) => withDefaultActionExecuteContext(opts, { ...actionContext, signal, openRoute, archiveOperation, archiveInput: input, serverId }, async (executor, account) => {
           const capturedContext = {
             ...actionContext,
             signal,
@@ -4710,7 +4818,7 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       }
     },
     prepare: async (actionId, input, context) => {
-      const { openRoute, ...actionContext } = context ?? {};
+      const { openRoute, archiveOperation, ...actionContext } = context ?? {};
       const custodyFailure = opts?.filesystemActionDelivery?.actionId === actionId ? null : resolveUiFilesystemTransferCustodyFailure(actionId, input);
       if (custodyFailure) return { kind: 'settled', result: custodyFailure };
       const api = await apiTokenTransport();
@@ -4722,12 +4830,13 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       const serverId = resolveDefaultActionInvocationServerId(actionId, input, context);
       if (!serverId) return await ordinary().prepare(actionId, input, actionContext);
       const account = await captureLazyActionAccountContext(serverId, context?.signal);
+      const archiveInvocation = createSessionArchiveInvocation(actionId, input, archiveOperation, account.serverId, context?.defaultSessionId);
       try {
         assertExpectedActionAccount(account, context);
         const settings = await readActionAdmissionSettings(account);
         account.assertCurrent();
         context?.signal?.throwIfAborted();
-        const executor = buildDefaultActionExecutor({ ...opts, ...(openRoute ? { openRoute } : {}) }, { ...account, settings });
+        const executor = buildDefaultActionExecutor({ ...opts, archiveInvocation, ...(openRoute ? { openRoute } : {}) }, { ...account, settings });
         const capturedContext = {
           ...actionContext,
           serverId,
@@ -4744,18 +4853,25 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
           : await executor.prepare(actionId, input, capturedContext);
         account.assertCurrent();
         account.dispose();
-        if (prepared.kind === 'settled') return prepared;
+        if (prepared.kind === 'settled') {
+          finishSessionArchiveInvocation(archiveInvocation);
+          return prepared;
+        }
         let result: ReturnType<typeof prepared.invocation.run> | undefined;
         return {
           kind: 'ready',
           invocation: {
             run: () => {
-              result ??= account.runPrepared(() => prepared.invocation.run(), getActionSpec(actionId).sideEffectClass);
+              result ??= account.runPrepared(async () => {
+                try { return await prepared.invocation.run(); }
+                finally { finishSessionArchiveInvocation(archiveInvocation); }
+              }, getActionSpec(actionId).sideEffectClass);
               return result;
             },
           },
         };
       } catch (error) {
+        finishSessionArchiveInvocation(archiveInvocation);
         account.dispose();
         const failure = accountScopeFailure(error);
         if (failure) return { kind: 'settled', result: failure };
