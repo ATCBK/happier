@@ -50,6 +50,24 @@ import {
 const REPOSITORY_KEY = `${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`.toLowerCase();
 
 describe('registered GitHub REST → Triage source contract', () => {
+  it('projects configured repository selection for filters through a registered safe Action without provider reads', async () => {
+    const transport = createStubGithubTransport({ respond: () => { throw new Error('Configured projection must not read GitHub'); } });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
+    } });
+    const instance = configuredInstance({ scope: 'account' });
+    const selection = { kind: 'selected', unitIds: ['11', '22'] };
+    const units = [{ id: '11', label: 'org/app', collisionScope: 'github:11' }, { id: '22', label: 'org/api', collisionScope: 'github:22' }];
+    try {
+      const result = await plugin.invokeAction('triage/list-github-scope-units', { v: 1, mode: 'configured', draft: {
+        v: 1, binding: instance.binding, localInstanceKey: instance.localInstanceKey, keyStability: 'locatorDerived',
+        configuration: { v: 1, token: JSON.stringify({ v: 1, selection, units }) }, locator: { v: 1, displayLabel: 'Account' },
+      } }, { surface: 'agent', sessionId: 'source-selection-session' });
+      expect(result).toEqual({ kind: 'page', status: 'complete', selection, units });
+      expect(transport.materializeCount()).toBe(0);
+      expect(transport.requests).toEqual([]);
+    } finally { await plugin.dispose(); }
+  });
   it('scans both selected repositories through the registered Action without an account-wide query', async () => {
     const transport = createStubGithubTransport({ respond: (request) => new URL(request.url).pathname === '/search/issues'
       ? { status: 200, body: githubSearchResponse({ items: [] }) } : undefined });

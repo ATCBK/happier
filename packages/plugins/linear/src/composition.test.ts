@@ -1,12 +1,43 @@
 import { describe, expect, it } from 'vitest';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { assertTriageSourceContributionV1 } from '@happier-dev/triage-protocol/testing/v1';
-import { TriageScanResultV1Schema, TriageTaskWriteResultV1Schema } from '@happier-dev/triage-protocol/v1';
+import { TriageListScopeUnitsResultV1Schema, TriageScanResultV1Schema, TriageTaskWriteResultV1Schema } from '@happier-dev/triage-protocol/v1';
 import { runTriageScanPass } from '../../triage/src/projection/scanPass.js';
 import { LINEAR_PLUGIN } from './manifest.js';
 import { host, instance, issue, page } from './fixtures.test-support.js';
 
 describe('public Linear source composition', () => {
+  it('lists searchable, paged teams through the safe registered source role and projects configuration without HTTP', async () => {
+    const h = host(({ operationName, variables }) => {
+      expect(operationName).toBe('LinearTeams');
+      expect(variables.filter).toEqual({ or: [{ name: { containsIgnoreCase: 'ops' } }, { key: { containsIgnoreCase: 'ops' } }] });
+      return { teams: variables.after ? page([{ id: 'team-3', name: 'Ops Europe', key: 'OPE' }])
+        : page([{ id: 'team-2', name: 'Operations', key: 'OPS' }], true, 'teams-next') };
+    });
+    const kit = await createPluginTestkit({ manifest: LINEAR_PLUGIN.manifest, module: LINEAR_PLUGIN, services: h.context.services });
+    const draft = { v: 1, binding: instance.binding, localInstanceKey: 'linear', keyStability: 'stable',
+      configuration: { v: 1, token: JSON.stringify({ v: 1, involvement: 'mine', teams: { kind: 'selected', unitIds: ['team-2'] },
+        teamUnits: [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS' }] }) }, locator: { v: 1, displayLabel: 'Linear workspace' } };
+    try {
+      const contribution = LINEAR_PLUGIN.manifest.contributes.targetedPluginContributions[0]!;
+      expect(contribution.operations.listScopeUnits).toBeTypeOf('string');
+      const action = contribution.operations.listScopeUnits!;
+      const configured = TriageListScopeUnitsResultV1Schema.parse(await kit.invokeAction(action, { v: 1, draft, mode: 'configured' }));
+      expect(configured).toEqual({ kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['team-2'] },
+        units: [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS' }] });
+      expect(h.request).not.toHaveBeenCalled();
+      expect(h.materializeListedAccount).not.toHaveBeenCalled();
+      const first = TriageListScopeUnitsResultV1Schema.parse(await kit.invokeAction(action, { v: 1, draft, query: 'ops' }));
+      expect(first).toMatchObject({ kind: 'page', status: 'partial', units: [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS' }],
+        nextCursor: { v: 1, token: 'teams-next' } });
+      if (first.kind !== 'page' || first.status !== 'partial') throw new Error('expected a continuation');
+      expect(await kit.invokeAction(action, { v: 1, draft, query: 'ops', cursor: first.nextCursor }))
+        .toMatchObject({ kind: 'page', status: 'complete', units: [{ id: 'team-3', label: 'Ops Europe' }] });
+      expect(LINEAR_PLUGIN.manifest.contributes.actions.find((entry) => entry.id === action))
+        .toMatchObject({ dangerLevel: 'safe', surfaces: expect.arrayContaining(['agent', 'mcp', 'cli', 'ui']) });
+    } finally { await kit.dispose(); }
+  });
+
   it('exposes the canonical create role as the registered outward-write Action', async () => {
     let created = false;
     const h = host(({ operationName }) => {

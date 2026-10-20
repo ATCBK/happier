@@ -9,6 +9,9 @@ import {
   type TriageScanResultV1,
 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { activate } from '../activate.js';
+import { PLUGIN_MANIFEST } from '../manifest.js';
 
 import issueList from './__fixtures__/issueList.json' with { type: 'json' };
 import mergeRequestList from './__fixtures__/mergeRequestList.json' with { type: 'json' };
@@ -119,6 +122,22 @@ function harness(
 }
 
 type ScanSeam = ReturnType<typeof harness>;
+
+it('projects configured GitLab projects through its admitted Action without credential or provider reads', async () => {
+  const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
+  const selection = { kind: 'selected', unitIds: ['11', '22'] };
+  const units = [{ id: '11', label: 'group/app' }, { id: '22', label: 'group/api' }];
+  try {
+    const result = await plugin.invokeAction('triage/list-gitlab-scope-units', { v: 1, mode: 'configured', draft: {
+      v: 1, binding: { purpose: GITLAB_CONNECTED_ACCOUNT_PURPOSE, account: ACCOUNT }, localInstanceKey: 'https://gitlab.com',
+      keyStability: 'locatorDerived', configuration: { v: 1, token: JSON.stringify({ v: 1, selection, units }) },
+      locator: { v: 1, displayLabel: 'GitLab account' },
+    } }, { surface: 'agent', sessionId: 'source-selection-session' });
+    expect(result).toMatchObject({ kind: 'page', status: 'complete', selection, units: units.map((unit) => ({ ...unit,
+      collisionScope: `gitlab:${Buffer.from('https://gitlab.com', 'utf8').toString('base64url')}:${unit.id}`,
+    })) });
+  } finally { await plugin.dispose(); }
+});
 
 it('scans every selected GitLab project through project-scoped provider lanes', async () => {
   const seam = harness({ '/api/v4/user': { body: VIEWER },

@@ -2,6 +2,7 @@ import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
   TriageGetResultV1Schema,
   TriageListInstancesResultV1Schema,
+  TriageListScopeUnitsResultV1Schema,
   TriageScanResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
@@ -122,6 +123,47 @@ function configuredInstance(origin: string) {
 }
 
 describe('Sentry Triage source operations', () => {
+  it('exposes searchable project pages and provider-silent configured selection through the registered Action', async () => {
+    const harness = host({ responses: [{
+      status: 200,
+      headers: { link: '<https://us.sentry.io/api/0/organizations/7701/projects/?cursor=next>; rel="next"; results="true"; cursor="next"' },
+      body: [{ id: '9001', name: 'Checkout', slug: 'checkout', hasAccess: true }],
+    }, {
+      status: 200,
+      headers: { link: '<https://us.sentry.io/api/0/organizations/7701/projects/>; rel="next"; results="false"' },
+      body: [{ id: '9002', name: 'Checkout worker', slug: 'checkout-worker', hasAccess: true }],
+    }] });
+    const register = vi.fn();
+    await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
+    const list = register.mock.calls.find(([id]) => id === 'sentry/list-projects')?.[1];
+    expect(list).toBeTypeOf('function');
+    const current = configuredInstance('https://us.sentry.io');
+    const draft = {
+      v: 1, binding: current.binding, localInstanceKey: current.localInstanceKey,
+      keyStability: 'locatorDerived', locator: { v: 1, displayLabel: 'Organization' },
+      configuration: { v: 1, token: JSON.stringify({
+        v: 1, organizationId: ORGANIZATION_ID, environmentScope: { kind: 'all' },
+        projectScope: { kind: 'selected', unitIds: ['9001'] },
+        projectUnits: [{ id: '9001', label: 'Checkout', secondaryText: 'checkout' }],
+      }) },
+    };
+    const configured = TriageListScopeUnitsResultV1Schema.parse(await list({ v: 1, draft, mode: 'configured' }, harness.context));
+    expect(configured).toMatchObject({ kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['9001'] }, units: [{ id: '9001', label: 'Checkout' }] });
+    expect(harness.materializeListedAccount).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+    const first = TriageListScopeUnitsResultV1Schema.parse(await list({ v: 1, draft, query: 'check' }, harness.context));
+    expect(first).toMatchObject({ kind: 'page', status: 'partial', units: [{ id: '9001', label: 'Checkout' }] });
+    if (first.kind !== 'page' || first.status !== 'partial') throw new Error('expected project continuation');
+    const last = TriageListScopeUnitsResultV1Schema.parse(await list({ v: 1, draft, query: 'check', cursor: first.nextCursor }, harness.context));
+    expect(last).toMatchObject({ kind: 'page', status: 'complete', units: [{ id: '9002', label: 'Checkout worker' }] });
+    const urls = harness.request.mock.calls.map(([request]) => new URL(request.url));
+    expect(urls.map((url) => url.pathname)).toEqual(['/api/0/organizations/7701/projects/', '/api/0/organizations/7701/projects/']);
+    expect(urls.map((url) => url.searchParams.get('query'))).toEqual(['check', 'check']);
+    expect(urls[1]?.searchParams.get('cursor')).toBe('next');
+    expect(PLUGIN_MANIFEST.contributes.actions.find(({ id }) => id === 'sentry/list-projects'))
+      .toMatchObject({ dangerLevel: 'safe', surfaces: expect.arrayContaining(['ui', 'agent', 'mcp', 'cli']) });
+  });
+
   it('keeps selected projects on the registered scan Action across continuation pages', async () => {
     const harness = host({ responses: [issuesListPage1, {
       ...issuesListPage1,

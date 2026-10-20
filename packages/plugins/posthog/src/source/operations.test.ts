@@ -9,6 +9,7 @@ import {
     TriageGetResultV1Schema,
     TriageListInstancesResultV1Schema,
     TriageScanResultV1Schema,
+    TriageListScopeUnitsResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import { describe, expect, it, vi } from 'vitest';
@@ -216,6 +217,31 @@ describe('PostHog Triage source operations', () => {
             v: 1, instance: allEnvironmentsInstance(), page: { kind: 'initial', limit: 10 },
         }, host.value);
         expect(result).toMatchObject({ kind: 'failed', failure: { code: POSTHOG_FAILURE_CODES.malformedRows } });
+    });
+
+    it('lists live environment scope units by immutable UUID through the registered read Action', async () => {
+        const register = vi.fn();
+        await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
+        const handler = register.mock.calls.find(([id]) => id === 'posthog/list-scope-units')?.[1];
+        expect(handler).toBeTypeOf('function');
+        const host = context([{ next: null, results: [{
+            ...projectsPage.results[0], organization: '00000000-0000-4000-8000-0000000000a1',
+        }] }]);
+        const { instance: _instance, ...draft } = configuredInstance();
+        const result = TriageListScopeUnitsResultV1Schema.parse(await handler({ v: 1, draft }, host.value));
+        expect(result).toMatchObject({ kind: 'page', status: 'complete', units: [{
+            id: '00000000-0000-4000-8000-0000000000d1',
+            label: 'Storefront production',
+            collisionScope: 'posthog:https://eu.posthog.com:00000000-0000-4000-8000-0000000000d1',
+        }] });
+        const configured = TriageListScopeUnitsResultV1Schema.parse(await handler({
+            v: 1, draft, mode: 'configured',
+        }, context([]).value));
+        expect(configured).toMatchObject({ kind: 'page', status: 'complete', units: [{
+            id: '00000000-0000-4000-8000-0000000000d1',
+        }] });
+        expect(PLUGIN_MANIFEST.contributes.actions.find(({ id }) => id === 'posthog/list-scope-units'))
+            .toMatchObject({ dangerLevel: 'safe', surfaces: expect.arrayContaining(['ui', 'agent', 'mcp', 'cli']) });
     });
 
     it('routes an All write by live immutable environment identity inside its organization', async () => {
