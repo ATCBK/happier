@@ -5,10 +5,11 @@ buffer and device-local draft; the Machine owns the file bytes. A Save crosses
 that boundary with the hash of the bytes the person last saw.
 
 This page describes the unreleased 0.3 editor contract. The state hook, conflict
-projection and compact draft reader are present in development source; their
-composed behavior remains unverified. Guarded writes, Markdown, Actions and
-rendered surfaces must be checked together before treating the complete workflow
-as available. This is not a released-client or completed live-validation claim.
+projection and compact draft reader are present in development source with
+composed owner-level test coverage. The loaded-runtime journey through guarded
+writes, Markdown, Actions and rendered surfaces still needs integrated validation
+before treating the complete workflow as available. This is not a released-client
+or completed live-validation claim.
 
 ## Owners
 

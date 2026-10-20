@@ -1,559 +1,381 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
-
-import { WORKSPACE_WRITE_FILE_TOO_LARGE_ERROR, workspaceWriteFile } from '@/sync/domains/workspaces/files/workspaceFileReadWrite';
-import { t } from '@/text';
-import { Modal } from '@/modal';
-import { showDaemonUnavailableAlert, tryShowDaemonUnavailableAlertForRpcError } from '@/utils/errors/daemonUnavailableAlert';
-import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import { FilesystemWriteFileOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { workspaceWriteFile, classifyWorkspaceWriteFileFailure, type WorkspaceWriteFileResponse } from '@/sync/domains/workspaces/files/workspaceFileReadWrite';
+import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { createAdvancedDebounce } from '@/utils/timing/debounce';
-import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
-import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
-import { buildWorkspaceFileEditorDraftKey, readWorkspaceFileEditorDraft, workspaceFileEditorDraftCache, type WorkspaceFileEditorDraft } from './workspaceFileEditorDraftCache';
+import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { readWorkspaceFileEditorDraft, type WorkspaceFileEditorDraft } from './workspaceFileEditorDraft';
 import type { FileDisplayMode } from '@/components/workspaces/files/file/FileActionToolbar';
-import { showWorkspaceFileEditorComparison } from './WorkspaceFileEditorComparison';
+import { deriveWorkspaceFileEditorConflict, type WorkspaceFileEditorConflict } from './workspaceFileEditorConflict';
+import { publishPresentationNotice, readPresentationNotice, retirePresentationNotice, subscribePresentationNotices } from '@/components/sessions/presentation/presentationNotices';
+import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
+import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
+import { encodeBase64 } from '@/encryption/base64';
+import { t } from '@/text';
+import { hapticsError, hapticsSuccess } from '@/components/ui/theme/haptics';
+import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
+import { useWorkspaceFileEditorComparison, type EditorComparisonResolution, type WorkspaceFileEditorComparisonController } from './useWorkspaceFileEditorComparison';
+import type { WorkspaceFileDetailsFileContent } from './refreshWorkspaceFileDetails';
 
-function isGuardedWriteConflictError(error: string | undefined): boolean {
-    if (!error) return false;
-    return error.startsWith('File hash mismatch.')
-        || error === 'File does not exist but hash was provided'
-        || error === 'File already exists but was expected to be new';
-}
-
-export type WorkspaceFileEditorState = Readonly<{
-    editorSurfaceEnabled: boolean;
-    isEditingFile: boolean;
-    editorResetKey: number;
-    editorOriginalText: string;
-    editorOriginalHash: string | null;
-    editorSeedText: string;
-    editorHandleRef: Readonly<React.MutableRefObject<CodeEditorHandle | null>>;
-    onEditorChange: (value: string) => void;
-    getEditorText: () => string;
-    isSavingEdits: boolean;
-    editorDirty: boolean;
-    fileChangedExternally: boolean;
-    editorTooLarge: boolean;
-    editorChunkTooLarge: boolean;
-    startEditingFile: () => void;
-    cancelEditingFile: () => void;
-    saveFileEdits: () => void;
-    compareFileEdits: () => void;
+export type WorkspaceFileEditorLiveValue = Readonly<{ get(): string; subscribe(listener: () => void): () => void }>;
+export type WorkspaceFileEditorRefusal = Readonly<{ kind: 'unreachable' | 'unsupported' | 'awaitingApproval' | 'failed'; message?: string }>;
+type Encoding = NonNullable<WorkspaceFileDetailsFileContent['encoding']>;
+type Base = Readonly<{ text: string | null; hash: string | null; encoding?: Encoding }>;
+type SetAside = Readonly<{ kind: 'draft'; text: string; base: Base }> | Readonly<{ kind: 'disk'; text: string; hash: string; encoding?: Encoding }>;
+type Input = Readonly<{
+    scope: WorkspaceScopeBase; accountId: string | null; filePath: string; displayMode: FileDisplayMode;
+    fileText: string | null; fileHash: string | null; encoding?: Encoding; unreachable?: boolean;
+    fileWriteSupported: boolean; setFileWriteSupported(value: boolean): void;
+    fileEditorFeatureEnabled: boolean; filesEditorWebMonacoEnabled: boolean; filesEditorNativeCodeMirrorEnabled: boolean;
+    filesEditorAutoSave: boolean; filesEditorChangeDebounceMs: number; mountedRef: Readonly<{ current: boolean }>;
+    refreshAll(): Promise<void>; publishSavedFile?(value: { text: string; hash: string }): void;
+    persistedDraft?: WorkspaceFileEditorDraft | null; persistDraft?(draft: WorkspaceFileEditorDraft | null): void;
+    panePersistenceFailed?: boolean;
+    requestApproval?(registration: ActionApprovalRegistration): void;
 }>;
 
-export function useWorkspaceFileEditorState(input: Readonly<{
-    scope: WorkspaceScopeBase;
-    accountId: string | null;
-    filePath: string;
-    displayMode: FileDisplayMode;
-    fileText: string | null;
-    fileHash: string | null;
-    fileWriteSupported: boolean;
-    setFileWriteSupported: (value: boolean) => void;
-    fileEditorFeatureEnabled: boolean;
-    filesEditorWebMonacoEnabled: boolean;
-    filesEditorNativeCodeMirrorEnabled: boolean;
-    filesEditorAutoSave: boolean;
-    filesEditorChangeDebounceMs: number;
-    filesEditorMaxFileBytes: number;
-    filesEditorBridgeMaxChunkBytes: number;
-    mountedRef: Readonly<{ current: boolean }>;
-    refreshAll: () => Promise<void>;
-    persistedDraft?: WorkspaceFileEditorDraft | null;
-    persistDraft?: (draft: WorkspaceFileEditorDraft | null) => void;
-}>): WorkspaceFileEditorState {
-    const [isEditingFile, setIsEditingFile] = React.useState(false);
-    const [pendingStartEditing, setPendingStartEditing] = React.useState(false);
+export type WorkspaceFileEditorState = Readonly<{
+    editorSurfaceEnabled: boolean; isEditingFile: boolean; editorResetKey: number;
+    editorOriginalText: string | null; editorOriginalHash: string | null; editorSeedText: string;
+    editorHandleRef: React.MutableRefObject<TextEditorHandle | null>; onEditorChange(value: string): void; getEditorText(): string;
+    liveValue: WorkspaceFileEditorLiveValue; isSavingEdits: boolean; editorDirty: boolean;
+    editorStatus: 'clean' | 'dirty' | 'saving' | 'conflict'; conflict: WorkspaceFileEditorConflict | null;
+    refusal: WorkspaceFileEditorRefusal | null; draftPersistenceFailed: boolean; savedAtMs: number | null;
+    lineEndingNormalization: 'lf' | 'crlf' | null;
+    initialLine: number | undefined; onEditorReady(): void; startEditingFile(at?: { line: number }): void;
+    cancelEditingFile(): void; doneEditingFile(): Promise<void>; saveFileEdits(): Promise<boolean>;
+    resolveConflict(choice: 'useMine' | 'useTheirs'): Promise<void>; undoSetAside(): Promise<void>;
+    isComparing: boolean; startComparison(): void; backToEditing(): void;
+    rebaseMergedDraft(text: string, shown?: Omit<EditorComparisonResolution, 'text'>): void;
+    readSnapshot(): Readonly<{ isEditingFile: boolean; hash: string | null; encoding?: Encoding; dirty: boolean; conflict: WorkspaceFileEditorConflict | null }>;
+}> & Pick<WorkspaceFileEditorComparisonController, 'comparison' | 'usePlaceMine' | 'usePlaceTheirs' | 'useAllMine' | 'useAllTheirs'>;
+
+export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorState {
+    const ownerKey = JSON.stringify([input.accountId, buildWorkspaceCacheKey(input.scope), input.filePath]);
+    const latest = React.useRef(input); latest.current = input;
+    const currentOwner = React.useRef(ownerKey); currentOwner.current = ownerKey;
+    const isCurrentOwner = React.useCallback(() => currentOwner.current === ownerKey, [ownerKey]);
+    const [stateOwner, setStateOwner] = React.useState(ownerKey);
+    const draft = readWorkspaceFileEditorDraft(input.persistedDraft, input.accountId);
+    const [isEditingFile, setIsEditingFile] = React.useState(draft?.isEditingFile === true);
+    const editing = React.useRef(isEditingFile);
+    const initialBase: Base = { text: draft && draft.editorOriginalHash !== input.fileHash ? null : input.fileText,
+        hash: draft ? draft.editorOriginalHash : input.fileHash, encoding: input.encoding };
+    const [base, setBase] = React.useState<Base>(initialBase);
+    const baseRef = React.useRef(base);
+    const text = React.useRef(draft?.editorText ?? input.fileText ?? '');
+    const [editorSeedText, setEditorSeedText] = React.useState(text.current);
     const [editorResetKey, setEditorResetKey] = React.useState(0);
-    const [editorOriginalText, setEditorOriginalText] = React.useState('');
-    const [editorOriginalHash, setEditorOriginalHash] = React.useState<string | null>(null);
-    const [editorSeedText, setEditorSeedText] = React.useState('');
+    const [editorDirty, setEditorDirty] = React.useState(Boolean(draft && text.current !== initialBase.text));
     const [isSavingEdits, setIsSavingEdits] = React.useState(false);
-    const [editorDirty, setEditorDirty] = React.useState(false);
-    const [fileChangedExternally, setFileChangedExternally] = React.useState(false);
-    const [editorByteSize, setEditorByteSize] = React.useState(0);
-    const hydratedFromPersistedRef = React.useRef(false);
-    const workspaceCacheKey = React.useMemo(() => buildWorkspaceCacheKey(input.scope), [input.scope]);
-    const draftKey = buildWorkspaceFileEditorDraftKey(input.accountId, workspaceCacheKey, input.filePath);
-    const [editorOwnerKey, setEditorOwnerKey] = React.useState(draftKey);
+    const [refusal, setRefusal] = React.useState<WorkspaceFileEditorRefusal | null>(draft && input.unreachable ? { kind: 'unreachable' } : null);
+    const refusalRef = React.useRef(refusal);
+    const [draftPersistenceFailed, setDraftPersistenceFailed] = React.useState(false);
+    const [savedAtMs, setSavedAtMs] = React.useState<number | null>(null);
+    const [initialLine, setInitialLine] = React.useState<number>();
+    const [pendingStart, setPendingStart] = React.useState(false);
+    const editorHandleRef = React.useRef<TextEditorHandle | null>(null);
+    const saving = React.useRef<AbortController | null>(null);
+    const setAside = React.useRef<SetAside | null>(null);
+    // An exact pre-write observation is superseded by the returned write version. No TTL.
+    const supersededDisk = React.useRef<{ text: string | null; hash: string | null } | null>(null);
+    const noticeKey = 'file-editor:' + ownerKey;
+    const retireUndo = React.useCallback(() => {
+        if (!isCurrentOwner()) return;
+        setAside.current = null; retirePresentationNotice(noticeKey);
+    }, [isCurrentOwner, noticeKey]);
+    const liveValue = React.useMemo(() => {
+        let value = draft?.editorText ?? input.fileText ?? '';
+        const listeners = new Set<() => void>();
+        return { get: () => isCurrentOwner() ? value : '',
+            subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+            publish(next: string) { if (value === next) return; value = next; for (const listener of listeners) listener(); } };
+    }, [ownerKey, isCurrentOwner]);
+    const updateBase = React.useCallback((next: Base) => { baseRef.current = next; setBase(next); }, []);
+    const updateRefusal = React.useCallback((next: WorkspaceFileEditorRefusal | null) => { refusalRef.current = next; setRefusal(next); }, []);
+    const persist = React.useCallback(() => {
+        if (!isCurrentOwner() || !latest.current.accountId) return;
+        try {
+            latest.current.persistDraft?.(editing.current && text.current !== baseRef.current.text
+                ? { accountId: latest.current.accountId, isEditingFile: true, editorOriginalHash: baseRef.current.hash, editorText: text.current } : null);
+            setDraftPersistenceFailed(false);
+        } catch { setDraftPersistenceFailed(true); }
+    }, [isCurrentOwner]);
+    const publishDebounce = React.useMemo(() => createAdvancedDebounce<string>(value => {
+        if (!isCurrentOwner()) return;
+        liveValue.publish(value); persist();
+    }, { delay: input.filesEditorChangeDebounceMs }), [input.filesEditorChangeDebounceMs, isCurrentOwner, liveValue, persist]);
+    const conflictNow = React.useCallback(() => {
+        const disk = latest.current;
+        if (supersededDisk.current?.text === disk.fileText && supersededDisk.current.hash === disk.fileHash) return null;
+        return deriveWorkspaceFileEditorConflict({ isEditingFile: editing.current, baseHash: baseRef.current.hash,
+            diskHash: disk.fileHash, diskText: disk.fileText, draftText: text.current });
+    }, []);
+    const conflict = conflictNow();
+    const saveRef = React.useRef<((automatic: boolean, shown?: Readonly<{ hash: string; encoding?: Encoding }>) => Promise<boolean>) | null>(null);
+    const autoSave = React.useMemo(() => createAdvancedDebounce<void>(() => {
+        if (!isCurrentOwner() || !latest.current.filesEditorAutoSave || latest.current.unreachable || refusalRef.current || conflictNow()) return;
+        void saveRef.current?.(true);
+    }, { delay: input.filesEditorChangeDebounceMs, immediateCount: 0 }), [input.filesEditorChangeDebounceMs, isCurrentOwner, conflictNow]);
 
-    const editorHandleRef = React.useRef<CodeEditorHandle | null>(null);
-    const editorTextRef = React.useRef('');
-    const editorOriginalTextRef = React.useRef('');
-    const editorOriginalHashRef = React.useRef<string | null>(null);
-    const isEditingFileRef = React.useRef(false);
-    const fileChangedExternallyRef = React.useRef(false);
-    const savingRef = React.useRef<AbortController | null>(null);
-    const saveEditsRef = React.useRef<((autoSave: boolean) => void) | null>(null);
-    const persistDraftRef = React.useRef(input.persistDraft);
-    const latestInputRef = React.useRef(input);
-    latestInputRef.current = input;
-    const isDraftOwnerCurrent = React.useCallback(() => {
-        const latest = latestInputRef.current;
-        return buildWorkspaceFileEditorDraftKey(latest.accountId, buildWorkspaceCacheKey(latest.scope), latest.filePath) === draftKey;
-    }, [draftKey]);
-
-    const autoSaveDebounce = React.useMemo(() => createAdvancedDebounce<boolean>(() => {
-        if (!isDraftOwnerCurrent()) return;
-        const latestInput = latestInputRef.current;
-        if (!latestInput.filesEditorAutoSave || !latestInput.mountedRef.current) return;
-        if (!isEditingFileRef.current || fileChangedExternallyRef.current) return;
-        saveEditsRef.current?.(true);
-    }, { delay: input.filesEditorChangeDebounceMs, immediateCount: 0 }), [input.filesEditorChangeDebounceMs, isDraftOwnerCurrent]);
-
-    React.useEffect(() => {
-        hydratedFromPersistedRef.current = false;
-    }, [draftKey]);
-
-    React.useEffect(() => () => {
-        savingRef.current?.abort();
-        savingRef.current = null;
-    }, [draftKey]);
-
-    React.useEffect(() => {
-        editorOriginalTextRef.current = editorOriginalText;
-    }, [editorOriginalText]);
-
-    React.useEffect(() => {
-        editorOriginalHashRef.current = editorOriginalHash;
-    }, [editorOriginalHash]);
-
-    React.useEffect(() => {
-        isEditingFileRef.current = isEditingFile;
-    }, [isEditingFile]);
-
-    React.useEffect(() => {
-        fileChangedExternallyRef.current = fileChangedExternally;
-    }, [fileChangedExternally]);
-
-    React.useEffect(() => {
-        persistDraftRef.current = input.persistDraft;
-    }, [input.persistDraft]);
-
-    const sizeAndPersistDebounce = React.useMemo(
-        () =>
-            createAdvancedDebounce<string>(
-                (value) => {
-                    if (!isDraftOwnerCurrent()) return;
-                    setEditorByteSize(() => {
-                        try {
-                            return new Blob([value]).size;
-                        } catch {
-                            return value.length;
-                        }
-                    });
-                    const persist = persistDraftRef.current;
-                    if (!persist) return;
-                    if (!isEditingFileRef.current) return;
-                    const accountId = latestInputRef.current.accountId;
-                    if (!accountId) return;
-                    persist({
-                        accountId,
-                        isEditingFile: true,
-                        editorOriginalText: editorOriginalTextRef.current,
-                        editorOriginalHash: editorOriginalHashRef.current,
-                        editorText: value,
-                    });
-                },
-                { delay: input.filesEditorChangeDebounceMs },
-            ),
-        [input.filesEditorChangeDebounceMs, isDraftOwnerCurrent],
-    );
-    React.useEffect(() => () => {
-        autoSaveDebounce.cancel();
-        sizeAndPersistDebounce.cancel();
-    }, [autoSaveDebounce, sizeAndPersistDebounce]);
-
-    // Reset before committing a render for another Account, not one effect later.
-    if (editorOwnerKey !== draftKey) {
-        autoSaveDebounce.cancel();
-        sizeAndPersistDebounce.cancel();
-        hydratedFromPersistedRef.current = false;
-        const fileText = input.fileText ?? '';
-        editorHandleRef.current = null;
-        editorTextRef.current = fileText;
-        editorOriginalTextRef.current = fileText;
-        editorOriginalHashRef.current = input.fileHash;
-        isEditingFileRef.current = false;
-        fileChangedExternallyRef.current = false;
-        setEditorOwnerKey(draftKey);
-        setIsEditingFile(false);
-        setPendingStartEditing(false);
-        setIsSavingEdits(false);
-        setEditorDirty(false);
-        setFileChangedExternally(false);
-        setEditorOriginalText(fileText);
-        setEditorOriginalHash(input.fileHash);
-        setEditorSeedText(fileText);
-        setEditorByteSize(new Blob([fileText]).size);
-        setEditorResetKey(key => key + 1);
+    if (stateOwner !== ownerKey) {
+        saving.current?.abort(); saving.current = null; autoSave.cancel(); publishDebounce.cancel(); setStateOwner(ownerKey);
+        const nextBase: Base = { text: draft && draft.editorOriginalHash !== input.fileHash ? null : input.fileText,
+            hash: draft ? draft.editorOriginalHash : input.fileHash, encoding: input.encoding };
+        baseRef.current = nextBase; setBase(nextBase); text.current = draft?.editorText ?? input.fileText ?? '';
+        editing.current = draft?.isEditingFile === true; setIsEditingFile(editing.current); setEditorSeedText(text.current);
+        setEditorDirty(editing.current && text.current !== nextBase.text);
+        editorHandleRef.current = null; supersededDisk.current = null; setAside.current = null;
+        refusalRef.current = draft && input.unreachable ? { kind: 'unreachable' } : null; setRefusal(refusalRef.current);
+        setIsSavingEdits(false); setSavedAtMs(null); setDraftPersistenceFailed(false);
+        setPendingStart(false); setInitialLine(undefined); setEditorResetKey(key => key + 1);
     }
-
+    React.useEffect(() => { liveValue.publish(text.current); }, [liveValue, ownerKey]);
+    React.useEffect(() => () => {
+        saving.current?.abort(); saving.current = null; autoSave.cancel(); publishDebounce.flush(); publishDebounce.cancel();
+        persist(); retirePresentationNotice(noticeKey);
+    }, [autoSave, noticeKey, persist, publishDebounce]);
+    React.useEffect(() => subscribePresentationNotices(() => {
+        if (readPresentationNotice()?.key !== noticeKey) setAside.current = null;
+    }), [noticeKey]);
     React.useEffect(() => {
-        if (input.displayMode !== 'file') {
-            setIsEditingFile(false);
+        if (savedAtMs === null) return;
+        const timer = setTimeout(() => setSavedAtMs(null), 2000); return () => clearTimeout(timer);
+    }, [savedAtMs]);
+    React.useEffect(() => {
+        if (input.unreachable && editing.current) { updateRefusal({ kind: 'unreachable' }); autoSave.cancel(); }
+    }, [autoSave, input.unreachable, isEditingFile, updateRefusal]);
+    const reseed = React.useCallback((value: string) => {
+        text.current = value; setEditorSeedText(value); liveValue.publish(value); setEditorResetKey(key => key + 1);
+        setEditorDirty(editing.current && value !== baseRef.current.text);
+    }, [liveValue]);
+    const rebaseMergedDraft = React.useCallback((value: string, shown?: Omit<EditorComparisonResolution, 'text'>) => {
+        if (!isCurrentOwner()) return; const disk = latest.current;
+        if (!shown && (disk.fileText === null || disk.fileHash === null)) return;
+        updateBase({ text: shown?.baseText ?? disk.fileText, hash: shown?.baseHash ?? disk.fileHash,
+            encoding: shown ? shown.baseEncoding : disk.encoding });
+        if (editorHandleRef.current?.runCommand) { editorHandleRef.current.runCommand({ replaceDocument: value }); text.current = value; liveValue.publish(value); setEditorDirty(value !== baseRef.current.text); }
+        else reseed(value);
+        persist();
+    }, [isCurrentOwner, liveValue, persist, reseed, updateBase]);
+    const acceptComparison = React.useCallback((resolution: EditorComparisonResolution) => {
+        rebaseMergedDraft(resolution.text, resolution);
+    }, [rebaseMergedDraft]);
+    const comparisonController = useWorkspaceFileEditorComparison({ ownerKey, onAccept: acceptComparison });
+    const { comparison, usePlaceMine, usePlaceTheirs, useAllMine, useAllTheirs, backToEditing } = comparisonController;
+    React.useEffect(() => {
+        if (typeof input.fileText !== 'string') return;
+        // A save can normalize disk line endings without changing the editor's
+        // admitted document or its undo stack. The returned raw-byte hash owns
+        // that version; its later decoded read is not an external replacement.
+        if (editing.current && input.fileHash !== null && input.fileHash === baseRef.current.hash) return;
+        if (supersededDisk.current?.text === input.fileText && supersededDisk.current.hash === input.fileHash) return;
+        supersededDisk.current = null;
+        if (!editing.current || text.current === baseRef.current.text || text.current === input.fileText) {
+            backToEditing();
+            const retain = editing.current && text.current !== baseRef.current.text;
+            updateBase({ text: input.fileText, hash: input.fileHash, encoding: input.encoding });
+            if (!retain) reseed(input.fileText);
             setEditorDirty(false);
-            setFileChangedExternally(false);
+            if (retain) persist();
         }
-    }, [input.displayMode]);
-
+    }, [backToEditing, input.fileText, input.fileHash, input.encoding, updateBase, persist, reseed]);
     React.useEffect(() => {
-        if (typeof input.fileText !== 'string') return;
-        const fileText = input.fileText;
-        if (isEditingFileRef.current || editorTextRef.current !== editorOriginalTextRef.current) {
-            const originalHash = editorOriginalHashRef.current;
-            const nextHash = input.fileHash;
-            if (typeof originalHash === 'string' && typeof nextHash === 'string') {
-                setFileChangedExternally(originalHash !== nextHash);
-            } else if (fileText !== editorOriginalTextRef.current) {
-                setFileChangedExternally(true);
-            }
-            return;
-        }
-        setEditorOriginalText(fileText);
-        setEditorOriginalHash(input.fileHash);
-        setEditorSeedText(fileText);
-        editorTextRef.current = fileText;
-        setEditorByteSize(new Blob([fileText]).size);
-        setFileChangedExternally(false);
-        setEditorResetKey((key) => key + 1);
-    }, [input.fileHash, input.fileText]);
-
-    React.useEffect(() => {
-        if (hydratedFromPersistedRef.current) return;
-        hydratedFromPersistedRef.current = true;
-        if (!input.accountId) return;
-        const draft = workspaceFileEditorDraftCache.getDraft({ accountId: input.accountId, workspaceCacheKey, filePath: input.filePath })
-            ?? readWorkspaceFileEditorDraft(input.persistedDraft, input.accountId);
-        if (!draft) return;
-        if (typeof draft.editorText !== 'string' || typeof draft.editorOriginalText !== 'string') return;
-        const draftOriginalHash = typeof draft.editorOriginalHash === 'string' ? draft.editorOriginalHash : null;
-        const isEditingDraft = Boolean(draft.isEditingFile);
-        const externallyChanged = isEditingDraft
-            && typeof input.fileText === 'string'
-            && (
-                typeof draftOriginalHash === 'string' && typeof input.fileHash === 'string'
-                    ? draftOriginalHash !== input.fileHash
-                    : input.fileText !== draft.editorOriginalText
-            );
-        isEditingFileRef.current = isEditingDraft;
-        editorOriginalTextRef.current = draft.editorOriginalText;
-        editorOriginalHashRef.current = draftOriginalHash;
-        fileChangedExternallyRef.current = externallyChanged;
-        setIsEditingFile(isEditingDraft);
-        setEditorOriginalText(draft.editorOriginalText);
-        setEditorOriginalHash(draftOriginalHash);
-        setEditorSeedText(draft.editorText);
-        editorTextRef.current = draft.editorText;
-        setEditorDirty(isEditingDraft && draft.editorText !== draft.editorOriginalText);
-        setFileChangedExternally(externallyChanged);
-        setEditorResetKey((key) => key + 1);
-    }, [draftKey, input.accountId, input.fileHash, input.filePath, input.fileText, input.persistedDraft, workspaceCacheKey]);
-
-    React.useEffect(() => {
-        return () => {
-            if (!isDraftOwnerCurrent()) return;
-            const persist = input.persistDraft;
-            if (!persist) return;
-            if (!input.accountId) return;
-            if (!isEditingFile && !editorDirty) return;
-            sizeAndPersistDebounce.flush();
-            persist({
-                accountId: input.accountId,
-                isEditingFile,
-                editorOriginalText: editorOriginalTextRef.current,
-                editorOriginalHash: editorOriginalHashRef.current,
-                editorText: editorTextRef.current,
-            });
-        };
-    }, [editorDirty, editorOriginalHash, editorOriginalText, input.accountId, input.persistDraft, isDraftOwnerCurrent, isEditingFile, sizeAndPersistDebounce]);
-
-    const editorSurfaceEnabled = input.fileWriteSupported
-        && input.fileEditorFeatureEnabled === true
-        && (Platform.OS === 'web' ? input.filesEditorWebMonacoEnabled === true : input.filesEditorNativeCodeMirrorEnabled === true);
-
-    React.useEffect(() => {
-        if (!pendingStartEditing) return;
-        if (!editorSurfaceEnabled) return;
-        if (input.displayMode !== 'file') return;
-        if (typeof input.fileText !== 'string') return;
-        const fileText = input.fileText;
-
-        setIsEditingFile(true);
-        setEditorOriginalText(fileText);
-        setEditorOriginalHash(input.fileHash);
-        setEditorSeedText(fileText);
-        editorTextRef.current = fileText;
-        workspaceFileEditorDraftCache.setDraft({
-            accountId: input.accountId,
-            workspaceCacheKey,
-            filePath: input.filePath,
-            draft: input.accountId ? {
-                accountId: input.accountId,
-                isEditingFile: true,
-                editorOriginalText: fileText,
-                editorOriginalHash: input.fileHash,
-                editorText: fileText,
-            } : null,
-        });
-        setEditorByteSize(new Blob([fileText]).size);
-        setEditorDirty(false);
-        setFileChangedExternally(false);
-        setEditorResetKey((key) => key + 1);
-        setPendingStartEditing(false);
-    }, [editorSurfaceEnabled, input.accountId, input.displayMode, input.fileHash, input.filePath, input.fileText, pendingStartEditing, workspaceCacheKey]);
-
-    const startEditingFile = React.useCallback(() => {
-        if (!isDraftOwnerCurrent()) return;
-        if (!editorSurfaceEnabled) return;
-        if (input.displayMode !== 'file' || typeof input.fileText !== 'string') {
-            setPendingStartEditing(true);
-            return;
-        }
-        const fileText = input.fileText;
-        setIsEditingFile(true);
-        setEditorOriginalText(fileText);
-        setEditorOriginalHash(input.fileHash);
-        setEditorSeedText(fileText);
-        editorTextRef.current = fileText;
-        workspaceFileEditorDraftCache.setDraft({
-            accountId: input.accountId,
-            workspaceCacheKey,
-            filePath: input.filePath,
-            draft: input.accountId ? {
-                accountId: input.accountId,
-                isEditingFile: true,
-                editorOriginalText: fileText,
-                editorOriginalHash: input.fileHash,
-                editorText: fileText,
-            } : null,
-        });
-        setEditorByteSize(new Blob([fileText]).size);
-        setEditorDirty(false);
-        setFileChangedExternally(false);
-        setEditorResetKey((key) => key + 1);
-    }, [editorSurfaceEnabled, input.accountId, input.displayMode, input.fileHash, input.filePath, input.fileText, isDraftOwnerCurrent, workspaceCacheKey]);
-
-    const cancelEditingFile = React.useCallback(() => {
-        if (!isDraftOwnerCurrent()) return;
-        setPendingStartEditing(false);
-        setIsEditingFile(false);
-        setEditorSeedText(editorOriginalText);
-        editorTextRef.current = editorOriginalText;
-        setFileChangedExternally(false);
-        workspaceFileEditorDraftCache.setDraft({
-            accountId: input.accountId,
-            workspaceCacheKey,
-            filePath: input.filePath,
-            draft: null,
-        });
-        setEditorByteSize(() => new Blob([editorOriginalText]).size);
-        setEditorDirty(false);
-        setEditorResetKey((key) => key + 1);
-        if (input.accountId) input.persistDraft?.(null);
-    }, [editorOriginalText, input.accountId, input.filePath, input.persistDraft, isDraftOwnerCurrent, workspaceCacheKey]);
-
+        if (input.filesEditorAutoSave && isEditingFile && editorDirty && !conflict && !refusal && !input.unreachable) autoSave.debounced();
+        else autoSave.cancel();
+        return () => autoSave.cancel();
+    }, [autoSave, editorDirty, isEditingFile, input.filesEditorAutoSave, input.unreachable, conflict?.theirsHash, refusal]);
+    const editorSurfaceEnabled = input.fileEditorFeatureEnabled && input.encoding?.editable !== false
+        && (input.fileWriteSupported || input.unreachable === true)
+        && (Platform.OS === 'web' ? input.filesEditorWebMonacoEnabled : input.filesEditorNativeCodeMirrorEnabled);
+    const startEditingFile = React.useCallback((at?: { line: number }) => {
+        if (!isCurrentOwner() || !editorSurfaceEnabled) return;
+        const line = at && Number.isFinite(at.line) ? Math.max(1, Math.trunc(at.line)) : undefined;
+        retireUndo(); if (line !== undefined) setInitialLine(line);
+        if (editing.current) { if (line !== undefined) editorHandleRef.current?.revealLine?.(line, { focus: true }); return; }
+        if (latest.current.fileText === null || latest.current.displayMode !== 'file') { setPendingStart(true); return; }
+        updateBase({ text: latest.current.fileText, hash: latest.current.fileHash, encoding: latest.current.encoding });
+        editing.current = true; setIsEditingFile(true); reseed(latest.current.fileText); setEditorDirty(false); setPendingStart(false);
+        if (latest.current.unreachable) updateRefusal({ kind: 'unreachable' });
+    }, [editorSurfaceEnabled, isCurrentOwner, reseed, retireUndo, updateBase, updateRefusal]);
+    React.useEffect(() => { if (pendingStart && input.displayMode === 'file' && input.fileText !== null) startEditingFile(); }, [pendingStart, input.displayMode, input.fileText, startEditingFile]);
+    const onEditorReady = React.useCallback(() => {
+        if (isCurrentOwner() && initialLine !== undefined) editorHandleRef.current?.revealLine?.(initialLine, { focus: true });
+    }, [initialLine, isCurrentOwner]);
     const onEditorChange = React.useCallback((value: string) => {
-        if (!isDraftOwnerCurrent()) return;
-        editorTextRef.current = value;
-        const nextDirty = isEditingFile && value !== editorOriginalTextRef.current;
-        setEditorDirty((previous) => (previous === nextDirty ? previous : nextDirty));
-        workspaceFileEditorDraftCache.setDraft({
-            accountId: input.accountId,
-            workspaceCacheKey,
-            filePath: input.filePath,
-            draft: input.accountId ? {
-                accountId: input.accountId,
-                isEditingFile: true,
-                editorOriginalText: editorOriginalTextRef.current,
-                editorOriginalHash: editorOriginalHashRef.current,
-                editorText: value,
-            } : null,
-        });
-        sizeAndPersistDebounce.debounced(value);
-        if (latestInputRef.current.filesEditorAutoSave && isEditingFile && value !== editorOriginalTextRef.current) {
-            autoSaveDebounce.debounced(true);
+        if (!isCurrentOwner()) return;
+        backToEditing(); retireUndo(); text.current = value;
+        if (latest.current.fileText === value && latest.current.fileHash !== null && latest.current.fileHash !== baseRef.current.hash) {
+            updateBase({ text: value, hash: latest.current.fileHash, encoding: latest.current.encoding });
         }
-    }, [autoSaveDebounce, input.accountId, input.filePath, isDraftOwnerCurrent, isEditingFile, sizeAndPersistDebounce, workspaceCacheKey]);
+        const dirty = editing.current && value !== baseRef.current.text;
+        setEditorDirty(previous => previous === dirty ? previous : dirty); publishDebounce.debounced(value);
+        if (dirty && latest.current.filesEditorAutoSave && !latest.current.unreachable && !refusalRef.current && !conflictNow()) autoSave.debounced();
+        else autoSave.cancel();
+    }, [autoSave, backToEditing, conflictNow, isCurrentOwner, publishDebounce, retireUndo, updateBase]);
+    const getEditorText = React.useCallback(() => isCurrentOwner() ? text.current : '', [isCurrentOwner]);
 
-    const getEditorText = React.useCallback(() => {
-        return isDraftOwnerCurrent() ? editorTextRef.current : '';
-    }, [isDraftOwnerCurrent]);
+    // Mounted result custody is shared by Save and its guarded inverse. The
+    // filesystem Action remains the sole admission and write owner.
+    const writeWithApproval = React.useCallback(async (target: Input, content: string, expectedHash: string | null, signal: AbortSignal) => {
+        const response = await workspaceWriteFile({ scope: target.scope, path: target.filePath, content, expectedHash, signal });
+        if (signal.aborted || response.success || response.kind !== 'approval_required'
+            || !response.approvalArtifactId || !target.accountId || !target.requestApproval) return response;
+        updateRefusal({ kind: 'awaitingApproval' });
+        const artifactId = response.approvalArtifactId;
+        const accountId = target.accountId;
+        return await awaitActionApprovalResult<unknown, WorkspaceWriteFileResponse>({
+            signal,
+            execute: async callbacks => {
+                target.requestApproval?.(createActionApprovalContinuation({ artifactId, actionId: 'daemon.filesystem.writeFile',
+                    scope: { serverId: target.scope.serverId, accountId }, signal,
+                    expectedInput: { rootPath: target.scope.rootPath,
+                        path: resolveMachineAbsolutePath({ rootPath: target.scope.rootPath, requestPath: target.filePath, pathKind: 'workspace_entry' }),
+                        content: encodeBase64(new TextEncoder().encode(content), 'base64'), expectedHash },
+                    onSucceeded: callbacks.onApprovalSucceeded, onFailed: callbacks.onApprovalFailed,
+                }));
+                return { approvalPending: true };
+            },
+            succeeded: value => {
+                const parsed = FilesystemWriteFileOutputSchema.safeParse(value);
+                if (!parsed.success) return classifyWorkspaceWriteFileFailure({ success: false, error: 'invalid_action_output' });
+                return parsed.data.success ? parsed.data : classifyWorkspaceWriteFileFailure(parsed.data);
+            },
+            failed: (code, failure) => classifyWorkspaceWriteFileFailure({ success: false, error: failure?.error ?? code, errorCode: code }),
+            aborted: () => classifyWorkspaceWriteFileFailure({ success: false, error: 'aborted' }),
+        });
+    }, [updateRefusal]);
 
-    const saveEdits = React.useCallback((autoSave: boolean) => {
-        void (async () => {
-            const latestInput = latestInputRef.current;
-            if (!isDraftOwnerCurrent()) return;
-            if (!editorSurfaceEnabled) return;
-            if (!latestInput.filePath) return;
-            if (editorTextRef.current === editorOriginalTextRef.current) return;
-            if (savingRef.current) return;
-
-            const saveIdentity = new AbortController();
-            savingRef.current = saveIdentity;
-            const isCurrentSave = () => savingRef.current === saveIdentity && !saveIdentity.signal.aborted
-                && latestInputRef.current.mountedRef.current && isDraftOwnerCurrent();
-            setIsSavingEdits(true);
-            let writeSucceeded = false;
-            try {
-                await editorHandleRef.current?.flushPendingChange?.();
-                if (!isCurrentSave()) return;
-                const latestText = editorHandleRef.current?.getValue?.() ?? editorTextRef.current;
-                editorTextRef.current = latestText;
-                sizeAndPersistDebounce.flush();
-                if (latestText === editorOriginalTextRef.current) return;
-                if (fileChangedExternallyRef.current) {
-                    Modal.alert(t('common.error'), t('files.fileChangedExternally'));
-                    return;
-                }
-
-                const expectedHash = editorOriginalHashRef.current ?? undefined;
-                const response = await workspaceWriteFile({
-                    scope: latestInput.scope,
-                    path: latestInput.filePath,
-                    content: latestText,
-                    expectedHash,
-                    signal: saveIdentity.signal,
-                });
-                if (!isCurrentSave()) return;
-
-                if (!response.success) {
-                    if (expectedHash !== undefined && isGuardedWriteConflictError(response.error)) {
-                        setFileChangedExternally(true);
-                        Modal.alert(t('common.error'), t('files.fileChangedExternally'));
-                        return;
-                    }
-                    const code = response.errorCode;
-                    if (code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE && response.error !== WORKSPACE_WRITE_FILE_TOO_LARGE_ERROR) {
-                        showDaemonUnavailableAlert({
-                            titleKey: 'errors.daemonUnavailableTitle',
-                            bodyKey: 'errors.daemonUnavailableBody',
-                            machine: null,
-                            onRetry: () => {
-                                saveEdits(autoSave);
-                            },
-                            shouldContinue: () => latestInputRef.current.mountedRef.current,
-                        });
-                        return;
-                    }
-                    if (code === RPC_ERROR_CODES.METHOD_NOT_FOUND) {
-                        latestInput.setFileWriteSupported(false);
-                        setIsEditingFile(false);
-                        Modal.alert(t('common.error'), t('files.fileEditingUnsupported'));
-                        return;
-                    }
-                    Modal.alert(t('common.error'), response.error || t('files.fileWriteFailed'));
-                    return;
-                }
-
-                writeSucceeded = true;
-                editorOriginalTextRef.current = latestText;
-                editorOriginalHashRef.current = response.hash;
-                setEditorOriginalText(latestText);
-                setEditorOriginalHash(response.hash);
-                setFileChangedExternally(false);
-                const liveTextAfterWrite = editorHandleRef.current?.getValue?.() ?? editorTextRef.current;
-                editorTextRef.current = liveTextAfterWrite;
-                const draft = latestInput.accountId && isEditingFileRef.current && (autoSave || liveTextAfterWrite !== latestText) ? {
-                    accountId: latestInput.accountId,
-                    isEditingFile: true,
-                    editorOriginalText: latestText,
-                    editorOriginalHash: response.hash,
-                    editorText: liveTextAfterWrite,
-                } : null;
-                workspaceFileEditorDraftCache.setDraft({
-                    accountId: latestInput.accountId,
-                    workspaceCacheKey,
-                    filePath: latestInput.filePath,
-                    draft,
-                });
-                if (latestInput.accountId) latestInput.persistDraft?.(draft);
-                if (liveTextAfterWrite !== latestText) {
-                    // The user kept typing while the write was in flight. Seeding the editor
-                    // with the saved snapshot would replace the live document and reset the
-                    // cursor. Keep editing dirty; the newer text saves on the next pass.
-                    setEditorDirty(true);
-                    return;
-                }
-                setEditorSeedText(latestText);
-                setEditorByteSize(() => new Blob([latestText]).size);
-                if (!autoSave) setIsEditingFile(false);
-                setEditorDirty(false);
-                await latestInput.refreshAll();
-            } catch (err) {
-                if (!isCurrentSave()) return;
-                const shown = tryShowDaemonUnavailableAlertForRpcError({
-                    error: err,
-                    machine: null,
-                    onRetry: () => {
-                        saveEdits(autoSave);
-                    },
-                    shouldContinue: () => latestInputRef.current.mountedRef.current,
-                });
-                if (!shown) {
-                    const message = err instanceof Error ? err.message : t('files.fileWriteFailed');
-                    Modal.alert(t('common.error'), message);
-                }
-            } finally {
-                const stillCurrent = isCurrentSave();
-                if (savingRef.current === saveIdentity) savingRef.current = null;
-                if (stillCurrent) setIsSavingEdits(false);
-                if (stillCurrent && writeSucceeded && isEditingFileRef.current) {
-                    const liveText = editorHandleRef.current?.getValue?.() ?? editorTextRef.current;
-                    editorTextRef.current = liveText;
-                    if (liveText !== editorOriginalTextRef.current) {
-                        setEditorDirty(true);
-                        if (latestInputRef.current.filesEditorAutoSave) autoSaveDebounce.debounced(true);
-                    }
-                }
+    const saveEdits = React.useCallback(async (automatic: boolean, shown?: Readonly<{ hash: string; encoding?: Encoding }>): Promise<boolean> => {
+        if (!isCurrentOwner() || !editing.current || !editorSurfaceEnabled || saving.current) return false;
+        if (automatic && (latest.current.unreachable || refusalRef.current || conflictNow())) return false;
+        backToEditing(); retireUndo(); const identity = new AbortController(); saving.current = identity;
+        const isCurrentSave = () => saving.current === identity && !identity.signal.aborted && isCurrentOwner() && latest.current.mountedRef.current;
+        setIsSavingEdits(true); let succeeded = false;
+        try {
+            await editorHandleRef.current?.flushPendingChange(); if (!isCurrentSave()) return false;
+            const sent = editorHandleRef.current?.getValue() ?? text.current; text.current = sent; publishDebounce.flush();
+            if (!shown && (conflictNow() || sent === baseRef.current.text)) return false;
+            const encoding = shown ? shown.encoding : baseRef.current.encoding ?? latest.current.encoding;
+            const normalized = encoding ? sent.replace(/\r\n|\r|\n/g, encoding.eol === 'crlf' ? '\r\n' : '\n') : sent;
+            const content = (encoding?.hasBom ? '\uFEFF' : '') + normalized;
+            const expectedHash = shown?.hash ?? baseRef.current.hash;
+            const target = latest.current;
+            const response = await writeWithApproval(target, content, expectedHash, identity.signal);
+            if (!isCurrentSave()) return false;
+            if (!response.success) {
+                if (Platform.OS !== 'web') void hapticsError();
+                if (response.kind === 'conflict') { await target.refreshAll(); return false; }
+                if (response.kind === 'unsupported') target.setFileWriteSupported(false);
+                updateRefusal({ kind: response.kind === 'approval_required' ? 'awaitingApproval' : response.kind, message: response.error }); return false;
             }
-        })();
-    }, [autoSaveDebounce, editorSurfaceEnabled, isDraftOwnerCurrent, sizeAndPersistDebounce, workspaceCacheKey]);
-    saveEditsRef.current = saveEdits;
-
-    const saveFileEdits = React.useCallback(() => saveEdits(false), [saveEdits]);
-    const compareFileEdits = React.useCallback(() => {
-        if (!isDraftOwnerCurrent()) return;
-        const latestInput = latestInputRef.current;
-        if (!isEditingFileRef.current || typeof latestInput.fileText !== 'string') return;
-        showWorkspaceFileEditorComparison({
-            oldText: latestInput.fileText,
-            newText: editorHandleRef.current?.getValue?.() ?? editorTextRef.current,
-            filePath: latestInput.filePath,
-        });
-    }, [isDraftOwnerCurrent]);
-
-    React.useEffect(() => {
-        if (input.filesEditorAutoSave && editorDirty && isEditingFile && !fileChangedExternally) {
-            autoSaveDebounce.debounced(true);
-        } else {
-            autoSaveDebounce.cancel();
+            supersededDisk.current = { text: latest.current.fileText, hash: latest.current.fileHash };
+            updateBase({ text: sent, hash: response.hash, encoding });
+            const live = editorHandleRef.current?.getValue() ?? text.current;
+            text.current = live; setEditorDirty(live !== sent); liveValue.publish(live);
+            updateRefusal(null); setSavedAtMs(Date.now()); target.publishSavedFile?.({ text: normalized, hash: response.hash });
+            if (Platform.OS !== 'web') void hapticsSuccess();
+            persist(); succeeded = true; await target.refreshAll(); return true;
+        } catch (error) {
+            if (succeeded) return true;
+            if (isCurrentSave()) {
+                const failure = classifyWorkspaceWriteFileFailure({ success: false,
+                    error: error instanceof Error ? error.message : String(error), errorCode: readRpcErrorCode(error) });
+                updateRefusal({ kind: failure.kind === 'unreachable' ? 'unreachable' : 'failed', message: failure.error });
+                if (Platform.OS !== 'web') void hapticsError();
+            }
+            return false;
+        } finally {
+            const current = isCurrentSave(); if (saving.current === identity) saving.current = null;
+            if (current) { setIsSavingEdits(false); if (succeeded && text.current !== baseRef.current.text && latest.current.filesEditorAutoSave) autoSave.debounced(); }
         }
-        return () => autoSaveDebounce.cancel();
-    }, [autoSaveDebounce, editorDirty, fileChangedExternally, input.filesEditorAutoSave, isEditingFile]);
-
-    const editorTooLarge = editorByteSize > input.filesEditorMaxFileBytes;
-    const editorChunkTooLarge = editorByteSize > input.filesEditorBridgeMaxChunkBytes;
-
-    return {
-        editorSurfaceEnabled,
-        isEditingFile,
-        editorResetKey,
-        editorOriginalText,
-        editorOriginalHash,
-        editorSeedText,
-        editorHandleRef,
-        onEditorChange,
-        getEditorText,
-        isSavingEdits,
-        editorDirty,
-        fileChangedExternally,
-        editorTooLarge,
-        editorChunkTooLarge,
-        startEditingFile,
-        cancelEditingFile,
-        saveFileEdits,
-        compareFileEdits,
-    };
+    }, [autoSave, backToEditing, conflictNow, editorSurfaceEnabled, isCurrentOwner, liveValue, persist, publishDebounce, retireUndo, updateBase, updateRefusal, writeWithApproval]);
+    saveRef.current = saveEdits;
+    const saveFileEdits = React.useCallback(() => saveEdits(false), [saveEdits]);
+    const undoSetAside = React.useCallback(async () => {
+        if (!isCurrentOwner() || saving.current || readPresentationNotice()?.key !== noticeKey) return;
+        const snapshot = setAside.current; if (!snapshot) return; retireUndo();
+        if (snapshot.kind === 'draft') { updateBase(snapshot.base); reseed(snapshot.text); persist(); return; }
+        const target = latest.current;
+        const identity = new AbortController(); saving.current = identity; setIsSavingEdits(true);
+        const isCurrentWrite = () => saving.current === identity && !identity.signal.aborted && isCurrentOwner() && target.mountedRef.current;
+        try {
+            const response = await writeWithApproval(target, (snapshot.encoding?.hasBom ? '\uFEFF' : '') + snapshot.text, snapshot.hash, identity.signal);
+            if (!isCurrentWrite()) return;
+            if (!response.success) {
+                if (response.kind !== 'conflict') updateRefusal({ kind: response.kind === 'approval_required' ? 'awaitingApproval' : response.kind, message: response.error });
+                if (response.kind === 'unsupported') target.setFileWriteSupported(false);
+                if (Platform.OS !== 'web') void hapticsError();
+                await target.refreshAll(); return;
+            }
+            supersededDisk.current = { text: target.fileText, hash: target.fileHash };
+            updateBase({ text: snapshot.text, hash: response.hash, encoding: snapshot.encoding }); reseed(snapshot.text);
+            updateRefusal(null);
+            target.publishSavedFile?.({ text: snapshot.text, hash: response.hash }); persist(); await target.refreshAll();
+        } catch (error) {
+            if (isCurrentWrite()) {
+                const failure = classifyWorkspaceWriteFileFailure({ success: false,
+                    error: error instanceof Error ? error.message : String(error), errorCode: readRpcErrorCode(error) });
+                updateRefusal({ kind: failure.kind === 'unreachable' ? 'unreachable' : 'failed', message: failure.error });
+                if (Platform.OS !== 'web') void hapticsError();
+            }
+        } finally {
+            const current = isCurrentWrite(); if (saving.current === identity) saving.current = null;
+            if (current) setIsSavingEdits(false);
+        }
+    }, [isCurrentOwner, noticeKey, persist, reseed, retireUndo, updateBase, updateRefusal, writeWithApproval]);
+    const resolveConflict = React.useCallback(async (choice: 'useMine' | 'useTheirs') => {
+        if (!isCurrentOwner()) return; await editorHandleRef.current?.flushPendingChange(); if (!isCurrentOwner()) return;
+        const shown = conflictNow(); if (!shown) return;
+        backToEditing();
+        const displaced: SetAside = { kind: 'draft', text: editorHandleRef.current?.getValue() ?? text.current, base: baseRef.current };
+        retireUndo();
+        if (choice === 'useTheirs') {
+            updateBase({ text: shown.theirsText, hash: shown.theirsHash, encoding: latest.current.encoding }); reseed(shown.theirsText); setAside.current = displaced; persist();
+        } else {
+            const encoding = latest.current.encoding; if (!await saveEdits(false, { hash: shown.theirsHash, encoding })) return;
+            setAside.current = { kind: 'disk', text: shown.theirsText, hash: baseRef.current.hash!, encoding };
+        }
+        publishPresentationNotice({ key: noticeKey, severity: 'info', message: t('common.done'), sticky: true,
+            undo: { label: t('common.undo'), run: () => { void undoSetAside(); } } });
+    }, [backToEditing, conflictNow, isCurrentOwner, noticeKey, persist, reseed, retireUndo, saveEdits, undoSetAside, updateBase]);
+    const cancelEditingFile = React.useCallback(() => {
+        if (!isCurrentOwner()) return; retireUndo(); autoSave.cancel(); publishDebounce.cancel();
+        editing.current = false; setIsEditingFile(false); setPendingStart(false); backToEditing();
+        reseed(latest.current.fileText ?? baseRef.current.text ?? ''); setEditorDirty(false); updateRefusal(null); persist();
+    }, [autoSave, backToEditing, isCurrentOwner, persist, publishDebounce, reseed, retireUndo, updateRefusal]);
+    const doneEditingFile = React.useCallback(async () => {
+        if (!isCurrentOwner() || !editing.current || saving.current) return;
+        await editorHandleRef.current?.flushPendingChange();
+        if (!isCurrentOwner() || !editing.current || saving.current) return;
+        onEditorChange(editorHandleRef.current?.getValue() ?? text.current);
+        if (text.current !== baseRef.current.text) return;
+        retireUndo(); editing.current = false; setIsEditingFile(false); persist();
+    }, [isCurrentOwner, onEditorChange, persist, retireUndo]);
+    const startComparison = React.useCallback(() => {
+        void (async () => {
+            if (!isCurrentOwner() || !editing.current) return;
+            await editorHandleRef.current?.flushPendingChange();
+            const disk = latest.current;
+            if (!isCurrentOwner() || !editing.current || disk.fileText === null || disk.fileHash === null) return;
+            retireUndo(); autoSave.cancel();
+            const mineText = editorHandleRef.current?.getValue() ?? text.current;
+            text.current = mineText;
+            comparisonController.startComparison({ baseText: baseRef.current.text, mineText, theirsText: disk.fileText,
+                theirsHash: disk.fileHash, theirsEncoding: disk.encoding });
+        })();
+    }, [autoSave, comparisonController.startComparison, isCurrentOwner, retireUndo]);
+    const readSnapshot = React.useCallback(() => ({ isEditingFile: isCurrentOwner() && editing.current,
+        hash: isCurrentOwner() ? baseRef.current.hash : null, encoding: isCurrentOwner() ? baseRef.current.encoding : undefined,
+        dirty: isCurrentOwner() && editing.current && text.current !== baseRef.current.text,
+        conflict: isCurrentOwner() ? conflictNow() : null }), [conflictNow, isCurrentOwner]);
+    return { editorSurfaceEnabled, isEditingFile, editorResetKey, editorOriginalText: base.text, editorOriginalHash: base.hash,
+        editorSeedText, editorHandleRef, onEditorChange, getEditorText, liveValue, isSavingEdits, editorDirty,
+        editorStatus: conflict ? 'conflict' : isSavingEdits ? 'saving' : editorDirty ? 'dirty' : 'clean', conflict, refusal,
+        draftPersistenceFailed: editorDirty && (draftPersistenceFailed || input.panePersistenceFailed === true),
+        savedAtMs, initialLine, onEditorReady, startEditingFile, cancelEditingFile, doneEditingFile,
+        lineEndingNormalization: editorDirty && base.encoding?.mixedEol ? base.encoding.eol : null,
+        saveFileEdits, resolveConflict, undoSetAside, isComparing: comparison !== null, comparison, startComparison,
+        usePlaceMine, usePlaceTheirs, useAllMine, useAllTheirs, backToEditing, rebaseMergedDraft, readSnapshot };
 }
