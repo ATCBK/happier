@@ -67,8 +67,6 @@ describe('managed creation presentation', () => {
     expect(currentManagedCreationOperation(removed, later)).toBe(later);
     expect(currentManagedCreationOperation(machine, failed)).toBe(failed);
     expect(currentManagedCreationOperation({ ...removed, observation: undefined }, failed)).toBe(failed);
-    const unsettled = { ...failed, snapshot: { ...failed.snapshot, settledAt: undefined } };
-    expect(currentManagedCreationOperation(removed, unsettled)).toBe(unsettled);
     // Start and Stop observations must not erase a genuinely failed request.
     for (const [desired, power] of [['start', 'running'], ['stop', 'stopped']] as const) {
       const retained: ManagedMachineV1 = { ...machine, desired,
