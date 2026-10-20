@@ -70,6 +70,22 @@ function comparisonPath(id: string, sessionId?: string): string {
   return join(configuration.activeServerDir, 'runtime', 'scm', 'comparisons', comparisonNamespace(sessionId), `${id}.json`);
 }
 
+async function readStoredComparison(input: Readonly<{ comparisonId: string; sessionId?: string }>) {
+  let content: string;
+  try { content = await readFile(comparisonPath(input.comparisonId, input.sessionId), 'utf8'); }
+  catch (error) {
+    // A repository capture belongs to this Machine/Home, rather than one Session.
+    // Never search other Session namespaces or hide a corrupt/private capture.
+    if (!input.sessionId || !(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+    content = await readFile(comparisonPath(input.comparisonId), 'utf8');
+    const stored = StoredComparisonReadSchema.parse(JSON.parse(content));
+    if (stored.sessionId !== undefined || stored.comparison.source.kind === 'session'
+      || stored.comparison.source.kind === 'turnCheckpoint') throw new Error('Repository capture has Session-only scope');
+    return { stored, sessionId: undefined };
+  }
+  return { stored: StoredComparisonReadSchema.parse(JSON.parse(content)), sessionId: input.sessionId };
+}
+
 /** The capture owner supplies both immutable surrounding-file endpoints to an analysis Run. */
 export async function prepareCapturedScmComparisonInvestigation(input: Readonly<{
   cwd: string; comparisonId: string; sessionId?: string; directory: string;
@@ -85,8 +101,8 @@ export async function prepareCapturedScmComparisonInvestigation(input: Readonly<
       const repository = captured.comparison.repository.rootPath;
       let index: string | undefined;
       if (captured.comparison.source.kind === 'workingTree') {
-        const stored = StoredComparisonReadSchema.parse(JSON.parse(await readFile(comparisonPath(input.comparisonId, input.sessionId), 'utf8')));
-        const indexRef = `refs/happier/comparisons/${comparisonNamespace(input.sessionId)}/${input.comparisonId}/index`;
+        const { stored } = await readStoredComparison(input);
+        const indexRef = `refs/happier/comparisons/${comparisonNamespace(stored.sessionId)}/${input.comparisonId}/index`;
         index = stored.retainedRefs.find(ref => ref.ref === indexRef)?.oid;
         if (!index) throw new Error('Captured staged lineage is unavailable');
       }
@@ -174,7 +190,12 @@ export async function readCapturedScmComparison(input: Readonly<{
   turnId?: string; checkpointReceiptId?: string; turnEvidenceMode?: ScmDiffSummaryTurnEvidenceMode;
 }>): Promise<CapturedScmComparison> {
   let stored: z.infer<typeof StoredComparisonSchema>;
-  try { stored = StoredComparisonReadSchema.parse(JSON.parse(await readFile(comparisonPath(input.comparisonId, input.sessionId), 'utf8'))); }
+  let storageSessionId: string | undefined;
+  try {
+    const captured = await readStoredComparison(input);
+    stored = captured.stored;
+    storageSessionId = captured.sessionId;
+  }
   catch (error) { throw Object.assign(new Error('Captured comparison evidence is unavailable', { cause: error }), { code: 'DIFF_UNAVAILABLE' }); }
   const projectedSourceIdentity = (source: ScmComparisonSource) => buildScmComparisonIdentity({ source,
     repositoryRootPath: stored.comparison.repository.rootPath, beforeOid: stored.comparison.endpoints.before,
@@ -184,7 +205,7 @@ export async function readCapturedScmComparison(input: Readonly<{
   const context = await resolveGitCheckpointBackendContext({ cwd: input.cwd });
   if ((context?.detection.rootPath ?? resolve(input.cwd)) !== stored.comparison.repository.rootPath
     || stored.comparison.id !== input.comparisonId || stored.metadata.sourceKey !== input.comparisonId
-    || stored.sessionId !== input.sessionId
+    || stored.sessionId !== storageSessionId
     || ((requestedSource?.kind === 'session' || requestedSource?.kind === 'turnCheckpoint')
       && requestedSource.sessionId !== undefined && requestedSource.sessionId !== stored.sessionId)
     || (requestedSource && projectedSourceIdentity(requestedSource) !== projectedSourceIdentity(stored.comparison.source))

@@ -274,7 +274,7 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
   ] as const)('resumes a completed idle retained review after runner disposal and replacement ($outcome, $operation, publication held=$holdPublication, narration=$narration)', async ({ outcome, operation, holdPublication, narration }) => {
     execFileSync('git', ['init', directory], { stdio: 'ignore' });
     writeFileSync(join(directory, 'code.ts'), 'export const enabled = true;\n');
-    const comparison = narration ? await captureScmComparison({ cwd: directory, source: { kind: 'workingTree' }, sessionId: 'session-1' }) : null;
+    const comparison = narration ? await captureScmComparison({ cwd: directory, source: { kind: 'workingTree' } }) : null;
     let sequence = 0;
     const requests: AgentSessionOpenRequest[] = [];
     const disposedThreads: AgentSessionOpenRequest[] = [];

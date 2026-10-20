@@ -54,6 +54,7 @@ import { createExecutionRunHostBackendFromConversationRuntime,
     type AgentRuntime, type AgentExecutionRunConversationEventV1, type AgentSessionSendRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
 import { createMutableApiSessionClientFixture, createSessionRecordFixture, type MutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import type { ExecutionRunAdmittedPendingInputV1 } from '@/api/session/client/transport/sessionClientInteractionApi';
 import { UserMessageSchema } from '@/api/types';
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -399,7 +400,8 @@ describe('SCM generation through real host admission', () => {
                 const durableAcceptance = new Map<string, DurableProviderInputAcceptanceV1>();
                 // Pending custody is the parent Session's network/persistence boundary.
                 // Its real retained consumer, delivery, native codec and publisher run below.
-                const session: MutableApiSessionClientFixture = createMutableApiSessionClientFixture({ sessionId, overrides: {
+                const session: MutableApiSessionClientFixture = createMutableApiSessionClientFixture({ sessionId,
+                    metadata: createTestMetadata({ path: fixture.rootPath, flavor: 'claude' }), overrides: {
                     enqueueSessionUserMessageWithDisposition: async input => {
                         if (input.recipient?.kind !== 'execution_run') throw new Error('Expected exact Run recipient');
                         observedPrompts.push(input.text);
@@ -724,6 +726,12 @@ describe('SCM generation through real host admission', () => {
             const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ request, cwd: fixture.rootPath, sessionId });
             const result = await startExecutionRun({
                 params: { ...request, ...prepared, sessionId, cwd: fixture.rootPath,
+                    // This fake native runtime emits JSON. Static descriptors
+                    // supply model ids, while its native catalog supplies capability evidence.
+                    readNativeOfferedModel: async ({ modelId: offeredId }) => {
+                        const model = getAgentStaticModels('claude', { catalogOnly: true }).find(model => model.id === offeredId);
+                        return model ? { ...model, capabilities: { structuredOutput: 'supported' } } : undefined;
+                    },
                     backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, actionRequestId: `client-${client}` },
                 parentProvider: 'claude', sendAcp: async () => {}, streamedTranscriptSession: null,
                 createRuntime, getNowMs: Date.now, budgetRegistry: null, runs, controllers,

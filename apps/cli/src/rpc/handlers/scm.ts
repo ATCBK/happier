@@ -143,11 +143,14 @@ export function registerScmHandlers(
                 const scoped = root ? resolveCwd(root, workingDirectory, machinePolicy) : null;
                 // A selected root can narrow Machine access, never expand it.
                 // Resolve this on the receiving filesystem, including symlinks.
+                if (scoped && !scoped.ok) {
+                    return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.INVALID_PATH, error: scoped.error };
+                }
                 const accessPolicy: FilesystemAccessPolicy = scoped
-                    ? { kind: 'restrictedRoots', roots: scoped.ok ? [scoped.cwd] : [] } : machinePolicy;
+                    ? { kind: 'restrictedRoots', roots: [scoped.cwd] } : machinePolicy;
                 return (
                 scmRpcOperationContextStorage.run(
-                    { context: operationContext, workingDirectory: scoped?.ok ? scoped.cwd : workingDirectory, accessPolicy },
+                    { context: operationContext, workingDirectory: scoped?.cwd ?? workingDirectory, accessPolicy },
                     // Raw SCM methods consume semantic input; Action-spec RPCs
                     // retain the same envelope for their canonical target parser.
                     () => handler((unwrapTarget && target?.success ? target.data.input : request) as TRequest, operationContext),

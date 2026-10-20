@@ -16,6 +16,50 @@ describe('captured SCM comparison storage', () => {
   const directories: string[] = [];
   afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
+  it('lets a Session investigate a Machine capture without exposing another Session capture', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-machine-review-' });
+    directories.push(fixture.rootPath);
+    await writeFile(join(fixture.rootPath, fixture.trackedPath), 'Machine change\n');
+    const machine = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
+    const sessionId = randomUUID();
+    const investigationDirectory = join(configuration.activeServerDir, 'tmp', randomUUID());
+    directories.push(investigationDirectory);
+    try {
+      expect(await readCapturedScmComparison({ cwd: fixture.rootPath, sessionId, comparisonId: machine.comparison.id }))
+        .toEqual(machine);
+      const pinned = await prepareCapturedScmComparisonInvestigation({ cwd: fixture.rootPath, sessionId,
+        comparisonId: machine.comparison.id, directory: investigationDirectory });
+      expect(await readFile(join(pinned.afterDirectory, fixture.trackedPath), 'utf8')).toBe('Machine change\n');
+      await expect(readCapturedScmComparison({ cwd: fixture.rootPath, sessionId,
+        comparisonId: machine.comparison.id, source: { kind: 'commit', commit: 'HEAD' } }))
+        .rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
+      const scoped = await captureScmComparison({ cwd: fixture.rootPath, sessionId, source: { kind: 'workingTree' } });
+      expect(scoped.comparison.id).toBe(machine.comparison.id);
+      const scopedPath = join(configuration.activeServerDir, 'runtime', 'scm', 'comparisons',
+        encodeRepositoryCheckpointScope(sessionId), `${scoped.comparison.id}.json`);
+      const content = await readFile(scopedPath, 'utf8');
+      try {
+        const stored = JSON.parse(content) as Record<string, unknown>;
+        delete stored.sessionId;
+        await writeFile(scopedPath, JSON.stringify(stored));
+        await expect(readCapturedScmComparison({ cwd: fixture.rootPath, sessionId, comparisonId: scoped.comparison.id }))
+          .rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
+        await writeFile(scopedPath, '{');
+        await expect(readCapturedScmComparison({ cwd: fixture.rootPath, sessionId, comparisonId: scoped.comparison.id }))
+          .rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
+      } finally {
+        await writeFile(scopedPath, content);
+        await deleteCapturedScmComparison({ cwd: fixture.rootPath, sessionId, comparisonId: scoped.comparison.id });
+      }
+      await writeFile(join(fixture.rootPath, fixture.trackedPath), 'Private change\n');
+      const privateCapture = await captureScmComparison({ cwd: fixture.rootPath, sessionId, source: { kind: 'workingTree' } });
+      try {
+        await expect(readCapturedScmComparison({ cwd: fixture.rootPath, sessionId: randomUUID(),
+          comparisonId: privateCapture.comparison.id })).rejects.toMatchObject({ code: 'DIFF_UNAVAILABLE' });
+      } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, sessionId, comparisonId: privateCapture.comparison.id }); }
+    } finally { await deleteCapturedScmComparison({ cwd: fixture.rootPath, comparisonId: machine.comparison.id }); }
+  });
+
   it('isolates reviewed content by resolved turn selectors in new and retained captures', async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-review-turn-scope-' });
     directories.push(fixture.rootPath);

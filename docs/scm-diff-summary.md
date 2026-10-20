@@ -7,6 +7,14 @@ open; the presentation gaps below must not be documented as completed flows.
 
 ## Owners and data flow
 
+Machine-captured repository comparisons are readable by a Session Review on that
+same Machine and Home. The capture reader first checks the Session namespace,
+then uses the repository capture only when that Session capture is absent.
+Repository, comparison and source checks still apply; corrupt captures do not
+fall back, and another Session's private capture is never searched. Investigation
+uses the retained pins from the actual capture namespace. Explicit deletion keeps
+its original namespace rather than deleting a Machine capture through a Session.
+
 ### Pull request description drafts (unreleased 0.3)
 
 `scm.diffSummary.draftPullRequest` requests a summary whose `suggestedPrBody` is
