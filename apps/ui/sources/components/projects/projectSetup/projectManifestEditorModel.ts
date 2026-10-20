@@ -17,10 +17,9 @@ import {
 import type { ProjectDefinitionWorkspace } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import {
-  workspaceFileEditorDraftCache,
   readWorkspaceFileEditorDraft,
   type WorkspaceFileEditorDraft,
-} from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraftCache';
+} from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft';
 
 // The qualified workspace remains captured by the editor; focus never selects a write target.
 export type ProjectManifestEditorWorkspace = ProjectDefinitionWorkspace;
@@ -43,7 +42,14 @@ export type ProjectManifestEditorSnapshot = Readonly<{
   error: Readonly<{ code: string; message?: string }> | null;
 }>;
 
-const filePath = '.happier/project.json';
+type RetainedManifestDraft = Readonly<{
+  basis: ProjectManifestFileSnapshot['basis'];
+  originalText: string | null;
+  text: string;
+}>;
+// Back unmounts this editor. Retain only its dirty project-manifest draft, qualified
+// by Account and checkout; file-pane drafts remain owned by persisted pane state.
+const retainedManifestDrafts = new Map<string, RetainedManifestDraft>();
 const creationBytes = '{\n  "version": 1\n}\n';
 function bytesOf(definition: ProjectManifestFileSnapshot): string {
   return definition.document?.bytes ?? '';
@@ -68,27 +74,21 @@ export function createProjectManifestEditorModel(
     persistDraft?: (draft: WorkspaceFileEditorDraft | null) => void;
   }>,
 ) {
-  const workspaceCacheKey = buildWorkspaceCacheKey(input.workspace);
-  const cached =
-    workspaceFileEditorDraftCache.getDraft({
-      accountId: input.expectedAccountId,
-      workspaceCacheKey,
-      filePath,
-    }) ??
-    readWorkspaceFileEditorDraft(input.persistedDraft, input.expectedAccountId);
-  let basis = input.definition;
+  const draftKey = JSON.stringify([input.expectedAccountId, buildWorkspaceCacheKey(input.workspace)]);
+  const cached = retainedManifestDrafts.get(draftKey);
+  const persisted = readWorkspaceFileEditorDraft(input.persistedDraft, input.expectedAccountId);
+  const restored = cached ?? (persisted?.isEditingFile ? {
+    basis: persisted.editorOriginalHash === null
+      ? { kind: 'absent' as const }
+      : { kind: 'present' as const, hash: persisted.editorOriginalHash },
+    originalText: null,
+    text: persisted.editorText,
+  } : null);
+  let basis = restored?.basis ?? input.definition.basis;
+  let originalText = restored?.originalText ?? (sameBasis(basis, input.definition.basis) ? bytesOf(input.definition) : null);
   let current = input.definition;
-  const restored = cached?.isEditingFile ? cached : null;
-  if (restored) {
-    basis = restored.editorOriginalHash
-      ? {
-          basis: { kind: 'present', hash: restored.editorOriginalHash },
-          document: readProjectManifestDocument(restored.editorOriginalText),
-        }
-      : { basis: { kind: 'absent' }, document: null };
-  }
   const draft = readProjectManifestDocument(
-    restored?.editorText ?? input.definition.document?.bytes ?? creationBytes,
+    restored?.text ?? input.definition.document?.bytes ?? creationBytes,
   );
   let snapshot: ProjectManifestEditorSnapshot = {
     draft,
@@ -96,10 +96,10 @@ export function createProjectManifestEditorModel(
     formEnabled: draft.status === 'valid',
     dirty:
       input.definition.basis.kind === 'absent' ||
-      draft.bytes !== bytesOf(basis),
+      draft.bytes !== originalText,
     saving: false,
     conflict:
-      restored && !sameBasis(basis.basis, current.basis) ? current : null,
+      restored && !sameBasis(basis, current.basis) ? current : null,
     error: null,
   };
   const listeners = new Set<() => void>();
@@ -109,22 +109,17 @@ export function createProjectManifestEditorModel(
     for (const listener of listeners) listener();
   }
   function persist() {
+    if (snapshot.dirty) retainedManifestDrafts.set(draftKey, { basis, originalText, text: snapshot.draft.bytes });
+    else retainedManifestDrafts.delete(draftKey);
     const value: WorkspaceFileEditorDraft | null = snapshot.dirty
       ? {
           accountId: input.expectedAccountId,
           isEditingFile: true,
-          editorOriginalText: bytesOf(basis),
           editorOriginalHash:
-            basis.basis.kind === 'present' ? basis.basis.hash : null,
+            basis.kind === 'present' ? basis.hash : null,
           editorText: snapshot.draft.bytes,
         }
       : null;
-    workspaceFileEditorDraftCache.setDraft({
-      accountId: input.expectedAccountId,
-      workspaceCacheKey,
-      filePath,
-      draft: value,
-    });
     input.persistDraft?.(value);
   }
   function replaceDraft(next: ProjectManifestDocument) {
@@ -138,7 +133,7 @@ export function createProjectManifestEditorModel(
       draft: next,
       formEnabled: next.status === 'valid',
       mode: next.status === 'invalid' ? 'raw' : snapshot.mode,
-      dirty: basis.basis.kind === 'absent' || next.bytes !== bytesOf(basis),
+      dirty: basis.kind === 'absent' || next.bytes !== originalText,
       error: null,
     });
     persist();
@@ -271,11 +266,12 @@ export function createProjectManifestEditorModel(
     },
     receiveDefinition(definition: ProjectManifestFileSnapshot) {
       current = definition;
-      if (sameBasis(basis.basis, definition.basis)) return;
+      if (sameBasis(basis, definition.basis)) return;
       if (snapshot.dirty || snapshot.saving)
         publish({ ...snapshot, conflict: definition });
       else {
-        basis = definition;
+        basis = definition.basis;
+        originalText = bytesOf(definition);
         const next = readProjectManifestDocument(
           definition.document?.bytes ?? creationBytes,
         );
@@ -292,21 +288,23 @@ export function createProjectManifestEditorModel(
     },
     reviewCurrentBasis() {
       if (!snapshot.conflict) return;
-      basis = snapshot.conflict;
-      current = basis;
+      current = snapshot.conflict;
+      basis = current.basis;
+      originalText = bytesOf(current);
       publish({
         ...snapshot,
         conflict: null,
         dirty:
-          basis.basis.kind === 'absent' ||
-          snapshot.draft.bytes !== bytesOf(basis),
+          basis.kind === 'absent' ||
+          snapshot.draft.bytes !== originalText,
         error: null,
       });
       persist();
     },
     reloadCurrent() {
       current = snapshot.conflict ?? current;
-      basis = current;
+      basis = current.basis;
+      originalText = bytesOf(current);
       const next = readProjectManifestDocument(
         current.document?.bytes ?? creationBytes,
       );
@@ -330,7 +328,7 @@ export function createProjectManifestEditorModel(
       )
         return null;
       const bytes = snapshot.draft.bytes;
-      const expectedBasis = basis.basis;
+      const expectedBasis = basis;
       publish({ ...snapshot, saving: true, error: null });
       try {
         const result = await input.actions.update({
@@ -339,14 +337,15 @@ export function createProjectManifestEditorModel(
           bytes,
         });
         if (result.status === 'saved') {
-          basis = { basis: result.basis, document: result.document };
+          basis = result.basis;
+          originalText = result.document.bytes;
           // An observed outside edit during the request remains a real conflict.
           const outsideEdit = getSnapshot().conflict;
           const conflict =
             outsideEdit && !sameBasis(outsideEdit.basis, result.basis)
               ? outsideEdit
               : null;
-          current = conflict ?? basis;
+          current = conflict ?? { basis: result.basis, document: result.document };
           const draft =
             snapshot.draft.bytes === bytes ? result.document : snapshot.draft;
           publish({

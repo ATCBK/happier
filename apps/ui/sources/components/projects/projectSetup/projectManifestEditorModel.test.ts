@@ -1,9 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { readProjectManifestDocument } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 // Keep the pure draft owner independent of the testkit barrel's rendered surface graph.
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
-import { workspaceFileEditorDraftCache } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraftCache';
 
 import {
   createProjectManifestEditorModel,
@@ -16,7 +14,6 @@ const workspace = {
   machineId: 'machine',
   rootPath: '/project',
 };
-const filePath = '.happier/project.json';
 const originalHash = 'a'.repeat(64);
 const outsideHash = 'b'.repeat(64);
 const savedHash = 'c'.repeat(64);
@@ -53,17 +50,71 @@ function boundary(initial = present(initialBytes)) {
   return { actions, writes, read: () => disk };
 }
 
-afterEach(() => {
-  for (const accountId of ['alice', 'bob'])
-    workspaceFileEditorDraftCache.setDraft({
-      accountId,
-      workspaceCacheKey: buildWorkspaceCacheKey(workspace),
-      filePath,
-      draft: null,
-    });
+let workspaceSequence = 0;
+beforeEach(() => {
+  workspace.rootPath = `/project/${++workspaceSequence}`;
 });
 
 describe('project manifest editor model', () => {
+  it('restores a compact persisted draft against its matching disk basis without persisting original bytes', () => {
+    const persisted: unknown[] = [];
+    const draftBytes = '{"version":1,"future":"restored"}';
+    const model = createProjectManifestEditorModel({
+      workspace,
+      expectedAccountId: 'alice',
+      definition: present(initialBytes),
+      actions: boundary().actions,
+      persistedDraft: { accountId: 'alice', isEditingFile: true, editorOriginalHash: originalHash, editorText: draftBytes },
+      persistDraft: value => persisted.push(value),
+    });
+    expect(model.getSnapshot()).toMatchObject({ draft: { bytes: draftBytes }, dirty: true, conflict: null });
+    model.setRaw(initialBytes);
+    expect(model.getSnapshot().dirty).toBe(false);
+    expect(persisted.at(-1)).toBeNull();
+    model.setRaw(draftBytes);
+    expect(persisted.at(-1)).toEqual({ accountId: 'alice', isEditingFile: true, editorOriginalHash: originalHash, editorText: draftBytes });
+  });
+
+  it('restores a compact draft with an unavailable original as a conflict and saves only after reviewing the shown basis', async () => {
+    const current = present('{"version":1,"future":"outside"}', outsideHash);
+    const transport = boundary(current);
+    const draftBytes = '{"version":1,"future":"persisted"}';
+    const model = createProjectManifestEditorModel({
+      workspace,
+      expectedAccountId: 'alice',
+      definition: current,
+      actions: transport.actions,
+      persistedDraft: { accountId: 'alice', isEditingFile: true, editorOriginalHash: originalHash, editorText: draftBytes },
+    });
+    expect(model.getSnapshot()).toMatchObject({ draft: { bytes: draftBytes }, dirty: true, conflict: current });
+    expect(await model.save()).toBeNull();
+    expect(transport.writes).toHaveLength(0);
+    model.reviewCurrentBasis();
+    await model.save();
+    expect(transport.writes[0]).toMatchObject({ expectedBasis: current.basis, bytes: draftBytes });
+  });
+
+  it('recovers the original bytes when reopening a retained compact draft after disk returns to its base', () => {
+    const transport = boundary();
+    const model = createProjectManifestEditorModel({
+      workspace,
+      expectedAccountId: 'alice',
+      definition: present('{"version":1,"future":"outside"}', outsideHash),
+      actions: transport.actions,
+      persistedDraft: { accountId: 'alice', isEditingFile: true, editorOriginalHash: originalHash, editorText: '{"version":1,"future":"restored"}' },
+    });
+    model.setRaw('{"version":1,"future":"retained"}');
+    const reopened = createProjectManifestEditorModel({
+      workspace,
+      expectedAccountId: 'alice',
+      definition: present(initialBytes),
+      actions: transport.actions,
+    });
+    expect(reopened.getSnapshot().conflict).toBeNull();
+    reopened.setRaw(initialBytes);
+    expect(reopened.getSnapshot().dirty).toBe(false);
+  });
+
   it('shares a lossless Form/raw draft and saves reference imports, removal and declaration order through one Action', async () => {
     const transport = boundary();
     const model = createProjectManifestEditorModel({
