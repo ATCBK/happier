@@ -87,12 +87,15 @@ it.each([true, false])('recovers demanded Vitals after consecutive transport dea
     } finally { release(); store.reset(); }
 });
 
-it('recognizes unavailable predecessor vitals operations on reads, history, and parked watches', async () => {
+it('distinguishes unavailable transport from missing predecessor vitals operations on reads, history, and parked watches', async () => {
     for (const code of [RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, RPC_ERROR_CODES.METHOD_NOT_FOUND]) {
         network.execute.mockRejectedValue(new RpcError('Unavailable operation', code));
-        expect.soft(await fetchMachineVitalsViaMachineRpc(key)).toEqual({ ok: false, reason: 'older_happier' });
-        expect.soft(await fetchMachineVitalsHistoryViaMachineRpc({ ...key, range: '1h' })).toEqual({ ok: false, reason: 'older_happier' });
-        expect.soft(await watchMachineVitalsViaMachineRpc(key)).toEqual({ ok: false, reason: 'older_happier' });
+        const expected = code === RPC_ERROR_CODES.METHOD_NOT_FOUND
+            ? { ok: false, reason: 'older_happier' }
+            : { ok: false, reason: 'request_failed', errorCode: code };
+        expect.soft(await fetchMachineVitalsViaMachineRpc(key)).toEqual(expected);
+        expect.soft(await fetchMachineVitalsHistoryViaMachineRpc({ ...key, range: '1h' })).toEqual(expected);
+        expect.soft(await watchMachineVitalsViaMachineRpc(key)).toEqual(expected);
     }
 });
 

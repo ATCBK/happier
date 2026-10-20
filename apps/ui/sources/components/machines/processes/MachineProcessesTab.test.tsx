@@ -390,9 +390,9 @@ describe('MachineProcessesTab', () => {
       && (rpc.method === RPC_METHODS.MACHINES_PROCESSES_LIST || rpc.method === RPC_METHODS.DAEMON_PROCESSES_WATCH))).toBe(false);
   });
 
-  it('explains the unavailable predecessor process operation instead of a failed request', async () => {
+  it('explains a connected predecessor missing the process operation instead of a failed request', async () => {
     const { screen } = await mount({ waitForRows: false, reply: (rpc) => {
-      if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_LIST) throw new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
+      if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_LIST) throw new RpcError('Method not found', RPC_ERROR_CODES.METHOD_NOT_FOUND);
     } });
     await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-older')).not.toBeNull()); });
     expect(screen.findByTestId('machine-processes-error')).toBeNull();

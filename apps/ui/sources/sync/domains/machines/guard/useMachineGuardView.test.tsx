@@ -47,18 +47,19 @@ it('decodes the registered Guard Action answer without admitting an unknown resu
     expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: false, reason: 'invalid_response' });
 });
 
-it('distinguishes unavailable Guard operations from access refusal across reads, watches and Keep running', async () => {
+it('distinguishes unavailable transport from missing Guard operations across reads, watches and Keep running', async () => {
     const serverId = await home.addHome({ name: 'Guard predecessor', serverUrl: 'https://guard-predecessor.test',
         serverIdentityId: 'srv_guard_predecessor', accountId: 'owner', currentAccount: true });
     const input = { serverId, machineId: 'machine', expectedAccountId: 'owner' };
     for (const errorCode of [RPC_ERROR_CODES.METHOD_NOT_FOUND, RPC_ERROR_CODES.METHOD_NOT_AVAILABLE]) {
         network.rpc.mockRejectedValue(new RpcError('Unavailable operation', errorCode));
-        expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: false, reason: 'older_happier' });
+        const reason = errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND ? 'older_happier' : 'request_failed';
+        expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: false, reason });
         expect(await guardRpc.fetchMachineGuardActivityViaAction({ ...input, range: 'today', filter: 'all' }))
-            .toEqual({ ok: false, reason: 'older_happier' });
-        expect(await guardRpc.watchMachineGuardViaMachineRpc(input)).toEqual({ ok: false, reason: 'older_happier' });
+            .toEqual({ ok: false, reason });
+        expect(await guardRpc.watchMachineGuardViaMachineRpc(input)).toEqual({ ok: false, reason });
         expect(await guardRpc.keepMachineGuardWorkRunningViaAction({ ...input, terminalKey: 'terminal' }))
-            .toEqual({ ok: false, reason: 'older_happier' });
+            .toEqual({ ok: false, reason });
     }
     network.rpc.mockRejectedValue(new RpcError('Forbidden', RPC_ERROR_CODES.FORBIDDEN));
     expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: false, reason: 'request_failed' });

@@ -16,11 +16,12 @@ import {
 import { MachineResourcesPolicyMutationResultV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import type { MachineStorageActionId } from '@happier-dev/protocol/actions/specs/storage';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
-import { createRpcCallError, readRpcErrorCode, isRpcMethodNotAvailableError, isRpcMethodNotFoundError, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, readRpcErrorCode, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { isMachineDaemonRpcUnsupportedError } from '../machineDaemonRpcErrors';
 
 export type MachineStorageKey = Readonly<{ machineId: string; serverId?: string | null; expectedAccountId?: string | null; daemonStateVersion?: number | null }>;
 export type MachineStorageReadInput = MachineStorageKey & Readonly<{
@@ -83,7 +84,7 @@ async function result<T>(input: MachineStorageReadInput, request: () => Promise<
         const parsed = parse(raw);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        return { ok: false, reason: isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error) ? 'older_happier'
+        return { ok: false, reason: isMachineDaemonRpcUnsupportedError(error) ? 'older_happier'
             : isActionApprovalDeclinedErrorCode(readRpcErrorCode(error)) ? 'declined'
             : readRpcErrorCode(error) === 'invalid_action_output' ? 'invalid_response' : 'request_failed' };
     }

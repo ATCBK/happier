@@ -42,7 +42,7 @@ const { subscribeLocalServiceInventoryStore, getLocalServiceInventoryState, rese
 const { DEFAULT_BROWSER_CAPABILITIES } = await import('@happier-dev/protocol/features/payload/capabilities/browserCapabilities');
 const { useLocalServiceInventoryState } = await import('@/sync/domains/local/services/inventory/useLocalServiceInventoryState');
 
-type MachineCall = Readonly<{ method: string; requestId: string; params: unknown; reply(value: unknown): Promise<void> }>;
+type MachineCall = Readonly<{ method: string; requestId: string; params: unknown; reply(value: unknown): Promise<void>; refuse(errorCode: string): void }>;
 
 // This is the existing family harness: physical Home readiness, real Socket.IO, codec and Action wiring.
 async function withMachineHome(run: (home: Readonly<{
@@ -81,7 +81,8 @@ async function withMachineHome(run: (home: Readonly<{
         socket.on(SOCKET_RPC_EVENTS.CALL, async (raw: { method: string; params: unknown; requestId: string }, acknowledge: (reply: unknown) => void) => {
             const request = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, raw.params, raw.method);
             const call: MachineCall = { method: raw.method.split(':').slice(1).join(':'), requestId: raw.requestId, params: request.params,
-                reply: async value => { acknowledge({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, value, request.callId) }); } };
+                reply: async value => { acknowledge({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, value, request.callId) }); },
+                refuse: errorCode => { acknowledge({ ok: false, error: 'RPC method not available', errorCode }); } };
             calls.push(call);
             await answer(call);
         });
@@ -132,6 +133,36 @@ afterEach(async () => {
     await serverScopedRpcSocketPool.stopAll();
     resetScopedMachineTransportCacheForTests();
     await homes.reset();
+});
+
+it('retains supported Vitals through unavailable transport and recovers on Retry without a daemon version change', async () => {
+    await withMachineHome(async home => {
+        const input = { machineId: 'shared-machine', serverId: home.serverId, expectedAccountId: 'owner', view: 'overview' as const };
+        const initial = vitals();
+        const fresh = { ...initial.sample!, sampledAt: initial.sample!.sampledAt + 2000 };
+        let recovering = false;
+        let recoveredWatch: MachineCall | undefined;
+        home.setAnswer(async call => {
+            if (call.method === RPC_METHODS.MACHINES_VITALS_GET) await call.reply(initial);
+            if (call.method === RPC_METHODS.DAEMON_VITALS_WATCH) {
+                if (recovering) recoveredWatch = call;
+                else call.refuse(RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
+            }
+        });
+        const release = machineResourceStore.demand(input);
+        try {
+            await vi.waitFor(() => expect(['error', 'not_reported']).toContain(machineResourceStore.getState(input).status));
+            expect(machineResourceStore.getState(input)).toMatchObject({ status: 'error', snapshot: initial,
+                errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+            recovering = true;
+            await machineResourceStore.retry(input);
+            expect(machineResourceStore.getState(input).status).toBe('ready');
+            await vi.waitFor(() => expect(recoveredWatch).toBeDefined());
+            await recoveredWatch!.reply({ changed: true, samples: [fresh] });
+            await vi.waitFor(() => expect(machineResourceStore.getState(input).snapshot?.sample?.sampledAt).toBe(fresh.sampledAt));
+            expect(machineResourceStore.getState(input).status).toBe('ready');
+        } finally { release(); }
+    });
 });
 
 it('cancels a parked inventory snapshot at last unsubscribe and loads again on new demand', async () => {

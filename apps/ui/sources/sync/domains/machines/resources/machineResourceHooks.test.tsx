@@ -91,7 +91,7 @@ describe('machine resource visibility and demand', () => {
         await hook.unmount();
     });
 
-    it('projects an unavailable vitals method into the row older-Happier state', async () => {
+    it('projects a missing vitals method into the row older-Happier state', async () => {
         const { useMachineResourceLiveDemand } = await import('./useMachineResourceLiveDemand');
         const { useMachineResourceSummary } = await import('./useMachineResourceSummary');
         const { storage } = await import('@/sync/domains/state/storageStore');
@@ -100,7 +100,7 @@ describe('machine resource visibility and demand', () => {
             resources: { v: 1, vitals: { state: 'reporting' }, host: { logicalCores: 4, memoryTotalBytes: 100, bootedAt: 1 }, attention: { level: 'calm', reasons: [] } },
         } });
         storage.setState({ machineListByServerId: { [homeA]: [machine] }, machineListStatusByServerId: { [homeA]: 'idle' } });
-        boundary.rpc.mockRejectedValue(new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE));
+        boundary.rpc.mockRejectedValue(new RpcError('Method not found', RPC_ERROR_CODES.METHOD_NOT_FOUND));
         const keys = [{ serverId: homeA, machineId: 'machine-a' }];
         const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
         const Presentation = ({ children }: React.PropsWithChildren) => React.createElement(PluginSurfaceFocusEligibilityProvider, {
@@ -131,7 +131,7 @@ describe('machine resource visibility and demand', () => {
         const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
         const machine = createMachineFixture({ id: 'machine-a', active: true, activeAt: Date.now(), daemonStateVersion: 1 });
         storage.setState({ machineListByServerId: { [homeA]: [machine] }, machineListStatusByServerId: { [homeA]: 'idle' } });
-        boundary.rpc.mockRejectedValue(new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE));
+        boundary.rpc.mockRejectedValue(new RpcError('Method not found', RPC_ERROR_CODES.METHOD_NOT_FOUND));
         // No Summary helper is mounted: the Overview/Metric demand must carry its own version.
         const hook = await renderHook(() => useMachineVitalsOverview({ serverId: homeA, machineId: machine.id, range: '1h' }));
         try {

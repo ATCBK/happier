@@ -9,7 +9,7 @@ import {
 } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { MachineVitalsHistoryV1Schema, type MachineVitalsHistoryV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
-import { createRpcCallError, readRpcErrorCode, isRpcMethodNotAvailableError, isRpcMethodNotFoundError, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, readRpcErrorCode, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { MachineVitalsActionId } from '@happier-dev/protocol/actions/specs/machineVitals';
 import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -17,6 +17,7 @@ import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntime
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 import { resolveMachineDaemonReadServerId } from '../useMachineDaemonReadTarget';
+import { isMachineDaemonRpcUnsupportedError } from '../machineDaemonRpcErrors';
 
 export type MachineResourceKey = Readonly<{ machineId: string; serverId?: string | null; expectedAccountId?: string | null; daemonStateVersion?: number | null }>;
 export type MachineVitalsView = 'summary' | 'overview';
@@ -54,7 +55,7 @@ async function read<T>(input: MachineResourceKey & Readonly<{ signal?: AbortSign
         const parsed = parse(raw);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        if (isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error)) return { ok: false, reason: 'older_happier' };
+        if (isMachineDaemonRpcUnsupportedError(error)) return { ok: false, reason: 'older_happier' };
         const errorCode = readRpcErrorCode(error);
         return { ok: false, reason: errorCode === 'invalid_action_output' ? 'invalid_response' : 'request_failed',
             ...(errorCode ? { errorCode } : {}) };

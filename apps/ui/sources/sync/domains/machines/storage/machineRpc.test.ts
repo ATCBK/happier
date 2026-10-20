@@ -55,7 +55,7 @@ describe('storage Action and Machine RPC boundary', () => {
         const item = reviewed();
         expect(await storageRpc.deleteMachineStorageNowViaAction({ ...key, items: [item] })).toEqual({ ok: false, reason: 'declined' });
         expect(Modal.confirm).toHaveBeenCalledOnce();
-        Modal.confirm.mockClear();
+        vi.mocked(Modal.confirm).mockClear();
         homes.answer(key.serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'machines.storage.deleteNow': { approvalRequiredSurfaces: ['ui'] } } }),
         } }, version: 1 } });
@@ -129,12 +129,13 @@ describe('storage Action and Machine RPC boundary', () => {
         expect(boundary.rpc.mock.calls[0][0].payload).toEqual({ machineId: key.machineId, serverId: HOME, view: { tab: 'old', depth: 1, olderThanDays: 1000 } });
     });
 
-    it('degrades a predecessor missing operation through the Action front door without issuing a fallback RPC', async () => {
+    it('distinguishes unavailable transport from a predecessor missing operation without issuing a fallback RPC', async () => {
         for (const code of [RPC_ERROR_CODES.METHOD_NOT_FOUND, RPC_ERROR_CODES.METHOD_NOT_AVAILABLE]) {
             boundary.rpc.mockReset().mockRejectedValue(new RpcError('Unavailable operation', code));
-            expect(await fetchMachineStorageSummaryViaAction(key)).toEqual({ ok: false, reason: 'older_happier' });
-            expect(await fetchMachineStorageCategoryViaAction({ ...key, categoryId: 'logs', cursor: 'daemon-cursor' })).toEqual({ ok: false, reason: 'older_happier' });
-            expect(await refreshMachineStorageSizeViaAction({ ...key, categoryId: 'logs' })).toEqual({ ok: false, reason: 'older_happier' });
+            const reason = code === RPC_ERROR_CODES.METHOD_NOT_FOUND ? 'older_happier' : 'request_failed';
+            expect(await fetchMachineStorageSummaryViaAction(key)).toEqual({ ok: false, reason });
+            expect(await fetchMachineStorageCategoryViaAction({ ...key, categoryId: 'logs', cursor: 'daemon-cursor' })).toEqual({ ok: false, reason });
+            expect(await refreshMachineStorageSizeViaAction({ ...key, categoryId: 'logs' })).toEqual({ ok: false, reason });
             expect(boundary.rpc.mock.calls.map(([input]) => input.method)).toEqual([
                 RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, RPC_METHODS.DAEMON_STORAGE_SIZE_REFRESH,
             ]);

@@ -21,11 +21,12 @@ beforeEach(async () => {
 });
 afterEach(async () => { await homes.reset(); });
 
-it('recognizes an unregistered predecessor operation on both initial reads and parked watches', async () => {
+it('distinguishes unavailable transport from an unregistered predecessor operation on both initial reads and parked watches', async () => {
     for (const errorCode of [RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, RPC_ERROR_CODES.METHOD_NOT_FOUND]) {
         network.execute.mockRejectedValue(new RpcError('Unavailable operation', errorCode));
-        expect(await fetchMachineProcessesViaMachineRpc(key)).toEqual({ ok: false, reason: 'older_happier' });
-        expect(await watchMachineProcessesViaMachineRpc(key)).toEqual({ ok: false, reason: 'older_happier' });
+        const reason = errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND ? 'older_happier' : 'request_failed';
+        expect(await fetchMachineProcessesViaMachineRpc(key)).toEqual({ ok: false, reason });
+        expect(await watchMachineProcessesViaMachineRpc(key)).toEqual({ ok: false, reason });
     }
 });
 

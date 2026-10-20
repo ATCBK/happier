@@ -2,9 +2,10 @@ import { MachineProcessesAnswerV1Schema, MachineProcessesListInputV1Schema, Mach
     MachineProcessesWatchResultV1Schema, type MachineProcessesAnswerV1, type MachineProcessesWatchResultV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { createRpcCallError, readRpcErrorCode, isRpcMethodNotAvailableError, isRpcMethodNotFoundError, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, readRpcErrorCode, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { isMachineDaemonRpcUnsupportedError } from '../machineDaemonRpcErrors';
 
 export type MachineProcessesKey = Readonly<{ serverId?: string | null; machineId: string; scope: 'happier' | 'all'; view: 'tree' | 'owners'; detailToken?: string;
     /** Captured credential/cache scope; never caller authority or an RPC payload field. */
@@ -24,8 +25,7 @@ async function read<T>(input: MachineProcessesReadInput, request: () => Promise<
         const parsed = parse(raw);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        // Older daemons never register this operation, so the Home rejects it before a handler can return Method not found.
-        return { ok: false, reason: isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error) ? 'older_happier'
+        return { ok: false, reason: isMachineDaemonRpcUnsupportedError(error) ? 'older_happier'
             : readRpcErrorCode(error) === 'invalid_action_output' ? 'invalid_response' : 'request_failed' };
     }
 }

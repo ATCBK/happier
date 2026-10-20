@@ -6,13 +6,14 @@ import { MachineGuardActivityListV1Schema, type MachineGuardActivityListV1 } fro
 import type { MachineGuardActionId } from '@happier-dev/protocol/machines/guard/actionIdsV1';
 import { MachineGuardKeepRunningResultV1Schema } from '@happier-dev/protocol/actions/specs/machineGuard';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
-import { createRpcCallError, readRpcErrorCode, isRpcMethodNotAvailableError, isRpcMethodNotFoundError, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, readRpcErrorCode, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
 import type { MachineDaemonReadKey } from '../useMachineDaemonReadTarget';
+import { isMachineDaemonRpcUnsupportedError } from '../machineDaemonRpcErrors';
 
 /**
  * The Guard's reads and its two person-facing writes, through the published Actions (lane 50a's stable
@@ -43,7 +44,7 @@ async function result<T>(input: Readonly<{ signal?: AbortSignal }>, request: () 
         const parsed = parse(raw);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false, reason: 'invalid_response' };
     } catch (error) {
-        return { ok: false, reason: isRpcMethodNotFoundError(error) || isRpcMethodNotAvailableError(error) ? 'older_happier'
+        return { ok: false, reason: isMachineDaemonRpcUnsupportedError(error) ? 'older_happier'
             : readRpcErrorCode(error) === 'invalid_action_output' ? 'invalid_response' : 'request_failed' };
     }
 }
