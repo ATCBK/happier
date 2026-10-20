@@ -26,6 +26,50 @@ vi.mock('react-native-keyboard-controller', () => ({
 import { BaseModal } from '@/modal/components/BaseModal';
 import { DropdownMenu } from './DropdownMenu';
 
+it('opens the Item trigger with Enter and Space and closes with Escape without selecting', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const onSelect = vi.fn();
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 100, y: 100, width: 200, height: 40, top: 100, left: 100, right: 300, bottom: 140, toJSON: () => ({}),
+    });
+    function Harness() {
+        const [open, setOpen] = React.useState(false);
+        return <DropdownMenu open={open} search onOpenChange={setOpen} onSelect={onSelect}
+            items={[{ id: 'default', title: 'Default manifest', testID: 'keyboard-manifest-option' }]}
+            itemTrigger={{ title: 'Manifest', itemProps: { testID: 'keyboard-manifest-trigger' } }} />;
+    }
+    try {
+        await act(async () => { root.render(<Harness />); });
+        const trigger = document.querySelector<HTMLElement>('[data-testid="keyboard-manifest-trigger"]')!;
+        expect(trigger).not.toBeNull();
+        for (const key of ['Enter', ' ']) {
+            trigger.focus();
+            await act(async () => {
+                trigger.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+                trigger.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }));
+            });
+            await vi.waitFor(() => expect(document.querySelector('[data-testid="keyboard-manifest-option"]')).not.toBeNull());
+            expect(trigger.getAttribute('aria-expanded')).toBe('true');
+            const search = document.querySelector<HTMLInputElement>('input')!;
+            expect(search).not.toBeNull();
+            await act(async () => {
+                search.focus();
+                search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+            });
+            expect(document.querySelector('[data-testid="keyboard-manifest-option"]')).toBeNull();
+            expect(trigger.getAttribute('aria-expanded')).toBe('false');
+            expect(document.activeElement).toBe(trigger);
+            expect(onSelect).not.toHaveBeenCalled();
+        }
+    } finally {
+        await act(async () => root.unmount());
+        measure.mockRestore();
+        container.remove();
+    }
+});
+
 it('keeps focus on a discovery operation while its models arrive in an open searchable menu', async () => {
     const container = document.createElement('div');
     document.body.append(container);
