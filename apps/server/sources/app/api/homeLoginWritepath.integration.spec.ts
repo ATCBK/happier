@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type LightMyRequestResponse } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import tweetnacl from 'tweetnacl';
@@ -119,7 +119,7 @@ it.each([false, true])('prepares file continuity outside token issuance and reje
             return result;
         },
     } });
-    let request: ReturnType<typeof app.inject> | undefined;
+    let request: Promise<LightMyRequestResponse> | undefined;
     db.$transaction = observedTransaction;
     try {
         await app.ready();

@@ -71,7 +71,7 @@ describe('machine launch readiness', () => {
             selectedMachineId: machine.id, selectedMachine: machine, capabilityServerId: home.id,
             runtimeCarrierAgentId: agentId, externalSessionsFeatureEnabled: false,
             settings: { ...settingsDefaults, sessionTerminalHost: hasDependency ? 'tmux' : 'none', sessionUseTmux: hasDependency },
-            pluginProjectionV2: { familiesById: { managedDependencies: { entriesById: Object.fromEntries(
+            pluginProjectionV2: { familiesById: { managedDependencies: { family: 'managedDependencies', entriesById: Object.fromEntries(
                 ['acme.tool', 'unrelated.tool'].map((key) => [key, { id: key, key, capabilityId: `dep.${key}`,
                     sourceKind: 'github_release_binary', display: { name: key },
                     defaultPolicy: { autoInstallWhenNeeded: true, autoUpdateMode: 'auto' }, experimental: false }]),

@@ -86,9 +86,11 @@ vi.mock('@/components/ui/avatar/Avatar', () => ({
     Avatar: () => null,
 }));
 
+await initializeRealAppRuntimeForTests();
+const { SearchFriendsScreen } = await import('@/app/(app)/friends/search');
+
 describe('SearchFriendsScreen', () => {
     it('updates the user row status after sending a friend request', async () => {
-        await initializeRealAppRuntimeForTests();
         const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://friends-screen.example',
             accountId: 'viewer', settings: { actionsSettingsV1: { v: 1,
                 approvalWaivedSurfaces: { 'friends.add': ['ui'] } } } }],
@@ -102,7 +104,6 @@ describe('SearchFriendsScreen', () => {
             } });
         const disposeExecutor = await installRealActionExecutorModuleLoader();
         try {
-            const { SearchFriendsScreen } = await import('@/app/(app)/friends/search');
             const screen = await renderScreen(<SearchFriendsScreen />);
             await flushHookEffects({ cycles: 4, turns: 2 });
 

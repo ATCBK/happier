@@ -1582,7 +1582,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       allowedTargetServerIds: [context.scope.serverId], draftId: 'requester-start-draft', launchUserAttemptId: userAttemptId,
       promptStore: createNewSessionPromptStore('One requester prompt'), router,
     })));
-    let createPromise: Promise<void> | undefined;
+    let createPromise: ReturnType<ReturnType<typeof hook.getCurrent>['handleCreateSession']> | undefined;
     try {
       await act(async () => {
         createPromise = hook.getCurrent().handleCreateSession({ onAfterCreatedSettled: settlement });
