@@ -138,3 +138,59 @@ describe('Save as decision from a Discussion message', () => {
     } finally { await screen.unmount(); await f.home.dispose(); }
   });
 });
+
+describe('Session-owned Save-to default', () => {
+  it.each(['writable', 'unavailable', 'readonly', 'explicit'] as const)(
+    'never substitutes a same-label Project for the qualified Session Project (%s)', async access => {
+      const f = await createMemoryDecisionHomeFixture({ sessionProject: true });
+      const { memoryDocumentActions, readMemoryCreationReceipt } = await import('@/sync/ops/promptLibrary/memoryDocuments');
+      const initial = await memoryDocumentActions.rememberInScope({ scope: 'project',
+        projectRef: { serverId: f.serverId, projectKey: 'core-payments' } },
+      { text: 'Established delivery policy.' }, f.serverId);
+      const receipt = readMemoryCreationReceipt(initial);
+      if (!receipt) throw new Error(`Missing Project A memory: ${JSON.stringify(initial)}`);
+      expect(receipt.attachment).toBe('attached');
+      const before = f.home.boundary.readPlainBody(receipt.ref.artifactId);
+      f.setSessionProjectAccess(access === 'explicit' ? 'unavailable' : access);
+      const { storage } = await import('@/sync/domains/state/storage');
+      await act(async () => { storage.getState().applySessions([f.session]); });
+      const source: CoordinationMessageRefV1 = { kind: 'session',
+        session: { serverId: f.serverId, sessionId: f.session.id }, messageId: 'committed-source' };
+      const onSaved = vi.fn();
+      const screen = await renderScreen(<SaveMemoryDecisionForm
+        seed={seedMemoryDecisionFromMessage(source, 'Retry cap stays at 5\nBackoff ran out too early.')}
+        onClose={vi.fn()} onSaved={onSaved} />);
+      try {
+        await vi.waitFor(() => expect(screen.findByTestId('save-memory-decision.target')).toBeTruthy());
+        if (access === 'explicit') {
+          // The unavailable default does not prevent the person from deliberately choosing B.
+          f.recover();
+          const choice = screen.find(node => node.props?.testID === `save-memory-decision.target:project:${f.serverId}:payments`
+            && typeof node.props.onPress === 'function');
+          await act(async () => { choice.props.onPress(); });
+          await save(screen);
+          const attachment = f.readSource().attachments?.[0];
+          if (attachment?.purpose !== 'context') throw new Error('Expected explicitly chosen Project B attachment');
+          const body = MemoryDocBodyV1Schema.parse(JSON.parse(f.home.boundary.readPlainBody(attachment.entry.ref.artifactId)!));
+          expect(body.index[0]).toMatchObject({ text: 'Retry cap stays at 5', decision: { sourceMessageRef: source } });
+          expect(f.home.boundary.readPlainBody(receipt.ref.artifactId)).toBe(before);
+          expect(f.home.boundary.list()).toHaveLength(2);
+          expect(onSaved).toHaveBeenCalledTimes(1);
+          return;
+        }
+        await save(screen);
+        // A display-label collision must neither create B's memory nor attach anything there.
+        expect(f.readSource().attachments).toEqual([]);
+        expect(f.home.boundary.list()).toHaveLength(1);
+        if (access === 'unavailable') {
+          expect(f.home.boundary.readPlainBody(receipt.ref.artifactId)).toBe(before);
+          expect(onSaved).not.toHaveBeenCalled();
+        } else {
+          expect(onSaved).toHaveBeenCalledTimes(1);
+          const body = MemoryDocBodyV1Schema.parse(JSON.parse(f.home.boundary.readPlainBody(receipt.ref.artifactId)!));
+          expect(body.index).toContainEqual(expect.objectContaining({ text: 'Retry cap stays at 5',
+            decision: expect.objectContaining({ sourceMessageRef: source }) }));
+        }
+      } finally { await screen.unmount(); await f.home.dispose(); }
+    });
+});
