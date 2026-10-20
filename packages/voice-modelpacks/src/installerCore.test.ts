@@ -43,6 +43,31 @@ function runInstall(
 }
 
 describe('installModelPackWithHost (shared core)', () => {
+  it('withdraws rejected existing bytes before downloading their replacement', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const memory = createMemoryModelPackInstallerHost();
+    const url = 'https://example.com/model.onnx';
+    const manifest = manifestFor([
+      { path: 'model.onnx', url, sha256: sha256Hex(bytes), sizeBytes: bytes.length },
+    ]);
+    memory.seedPartialDownload('example/model.onnx', new Uint8Array(bytes.length).fill(9), deriveModelPackStagingPlan(manifest).key);
+    memory.serveFile(url, bytes, { chunks: [bytes.slice(0, 2), bytes.slice(2)] });
+    const progress: unknown[] = [];
+    let replacementStartedAt: unknown;
+    await installModelPackWithHost({
+      host: { ...memory.host, openDownload: async request => {
+        replacementStartedAt = progress.at(-1);
+        return memory.host.openDownload(request);
+      } },
+      packId: manifest.packId, manifest, signal: new AbortController().signal,
+      onProgress: event => progress.push(event),
+    });
+    expect(replacementStartedAt).toMatchObject({ loaded: 0, verified: 0, filesDone: 0 });
+    expect(progress).toContainEqual(expect.objectContaining({ loaded: 2, verified: 2, filesDone: 0 }));
+    expect(progress.at(-1)).toMatchObject({ loaded: bytes.length, verified: bytes.length, filesDone: 1 });
+    expect(memory.read('example/model.onnx')).toEqual(bytes);
+  });
+
   it.each([0, 2])('keeps progress monotonic when transport completes before verification with prefix %i', async (prefixLength) => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
     const host = createMemoryModelPackInstallerHost();

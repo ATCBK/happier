@@ -298,6 +298,8 @@ async function downloadFileResumable(opts: {
   signal: AbortSignal;
   /** `verifiedForFile` is set once bytes are hashed; a restarted pass reports it from 0 again. */
   onFileProgress: (loadedForFile: number, verifiedForFile?: number) => void;
+  /** Previously reported existing bytes were discarded and must no longer contribute to progress. */
+  onExistingRejected: () => void;
   urlPolicy?: ModelPackUrlPolicy;
   transferUrl?: string;
 }): Promise<void> {
@@ -328,6 +330,7 @@ async function downloadFileResumable(opts: {
       throwIfAborted(signal);
       if (reported !== streamed || streamed !== existing) {
         await staging.resetPartial(entry.path);
+        opts.onExistingRejected();
         return downloadFileResumable({ ...opts, onFileProgress: opts.onFileProgress });
       } else {
         loaded = streamed;
@@ -336,6 +339,7 @@ async function downloadFileResumable(opts: {
       // Cancelling verification does not invalidate the existing resumable prefix.
       throwIfAborted(signal);
       await staging.resetPartial(entry.path);
+      opts.onExistingRejected();
       if (error instanceof ModelPackInstallError) {
         throw error;
       }
@@ -344,6 +348,7 @@ async function downloadFileResumable(opts: {
   } else if (existing > expectedSize) {
     // Corrupt/overlong partial — start over.
     await staging.resetPartial(entry.path);
+    opts.onExistingRejected();
   }
 
   // Already complete? Verify hash and skip the network entirely.
@@ -353,6 +358,7 @@ async function downloadFileResumable(opts: {
       return;
     }
     await staging.resetPartial(entry.path);
+    opts.onExistingRejected();
     // Fall through to a clean re-download.
     return downloadFileResumable({ ...opts, onFileProgress: opts.onFileProgress });
   }
@@ -540,6 +546,13 @@ export async function installModelPackWithHost(opts: {
           }
           await downloadFileResumable({
             host: opts.host, packId, staging, entry, signal: pack.signal, urlPolicy: opts.urlPolicy, transferUrl,
+            onExistingRejected: () => {
+              loadedTotal -= loadedThisFile;
+              verifiedTotal -= verifiedThisFile;
+              loadedThisFile = 0;
+              verifiedThisFile = 0;
+              report(entry.path);
+            },
             onFileProgress: (loadedForFile, verifiedForFile) => {
               const nextLoaded = Math.max(loadedThisFile, loadedForFile);
               loadedTotal += nextLoaded - loadedThisFile;

@@ -28,6 +28,14 @@ describe('parseDownloadProgress', () => {
     });
   });
 
+  it('parses verified bytes within the transfer size', () => {
+    expect(parseDownloadProgress({ loaded: 200, total: 200, verified: 150 }).verifiedBytes).toBe(150);
+    expect(parseDownloadProgress({ loaded: 200, total: 200, verified: 900 }).verifiedBytes).toBe(200);
+    expect(parseDownloadProgress({ loaded: 200, total: 200, verified: -1 }).verifiedBytes).toBe(0);
+    expect(parseDownloadProgress({ loaded: 200, total: 200, verified: Number.NaN }).verifiedBytes).toBeNull();
+    expect(parseDownloadProgress({ loaded: 200, total: 200 }).verifiedBytes).toBeNull();
+  });
+
   it('ignores file counts that cannot describe a transfer', () => {
     expect(parseDownloadProgress({ loaded: 1, total: 2, filesDone: 0, filesTotal: 0 }).files).toBeNull();
     expect(parseDownloadProgress({ loaded: 1, total: 2, filesDone: Number.NaN, filesTotal: 4 }).files).toBeNull();

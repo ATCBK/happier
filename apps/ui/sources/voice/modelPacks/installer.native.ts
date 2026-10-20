@@ -1,6 +1,6 @@
 import { parseModelPackManifest, type ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { getOptionalHappierSherpaNativeModule } from '@happier-dev/sherpa-native';
-import { installModelPackWithHost, type ModelPackPromotionPriorInstallV1 } from '@happier-dev/voice-modelpacks';
+import { installModelPackWithHost, type ModelPackCoreProgress, type ModelPackPromotionPriorInstallV1 } from '@happier-dev/voice-modelpacks';
 
 import { uriToFilePath } from '@/platform/fileUri';
 import { forgetSpeakerCountForAssetsDir } from '@/voice/kokoro/runtime/kokoroSpeakerCountCache';
@@ -73,7 +73,7 @@ async function installViaHost(opts: {
   signal: AbortSignal;
   priorInstall: ModelPackPromotionPriorInstallV1;
   priorManifest?: ModelPackManifest;
-  onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
+  onProgress?: (p: ModelPackCoreProgress) => void;
 }): Promise<{ packDirUri: string; manifest: ModelPackManifest }> {
   const host = createExpoModelPackInstallerHost({
     fs: opts.fs,
@@ -99,7 +99,7 @@ export async function ensureModelPackInstalled(
     manifestUrl: string | null;
     timeoutMs: number | null;
     signal: AbortSignal;
-    onProgress?: (p: { loaded: number; total: number; file?: string }) => void;
+    onProgress?: (p: ModelPackCoreProgress) => void;
     updatePolicy?: UpdatePolicy;
   },
   overrides: InstallerOverrides = {},

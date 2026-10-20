@@ -465,7 +465,8 @@ From settings, users can:
 - remove downloaded assets to free storage
 
 In 0.3 development builds, native downloads show transferred bytes and verified
-file counts. Stopping or interrupting a download keeps resumable files; retry to
+file counts. Once all bytes have arrived, any remaining integrity checks appear
+as **Verifying** with checked-byte progress. Stopping or interrupting a download keeps resumable files; retry to
 continue, or use the remove action to discard the unfinished download and free
 storage. Updates reuse unchanged files after verifying them and keep the
 installed pack in place while downloading.

@@ -80,6 +80,42 @@ async function createNativeSentenceFixture(text: string, controller = new AbortC
 }
 
 describe('synthesizeKokoroWav (native)', () => {
+  it('preserves verification and file progress through native Kokoro preparation', async () => {
+    const { fs: memoryFs } = createMemFs();
+    class File extends memoryFs.File {
+      override open() {
+        const handle = super.open();
+        return { ...handle, readBytes: (length: number) => handle.readBytes(Math.min(length, 2)) };
+      }
+    }
+    const fs = { ...memoryFs, File, Paths: { ...memoryFs.Paths, cache: 'file:///tmp/' } };
+    const bytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const packId = 'kokoro-verification-progress';
+    const manifest: ModelPackManifest = {
+      packId, kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sizeBytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex') }],
+    };
+    const fetchImpl: typeof fetch = async input => new URL(String(input)).pathname.endsWith('manifest.json')
+      ? Response.json(manifest) : new Response(bytes);
+    const progress: unknown[] = [];
+    await prepareKokoroTts({ assetSetId: packId, timeoutMs: null, signal: new AbortController().signal,
+      onProgress: event => progress.push(event) }, {
+      fs,
+      resolveManifestUrl: () => 'https://example.com/manifest.json',
+      // Bind only the filesystem/network boundaries; preparation, installation,
+      // shared-core verification and progress forwarding remain the real path.
+      ensureInstalled: (options, overrides) => ensureModelPackInstalled(options,
+        { ...overrides, fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl) }),
+      kokoroNativeModule: { initialize: async () => {}, listVoices: async () => [],
+        synthesizeToWavFile: async () => ({ wavPath: 'file:///unused.wav', sampleRate: 24_000 }), cancel: async () => {} },
+    });
+    expect(progress).toContainEqual(expect.objectContaining({
+      loaded: bytes.length, total: bytes.length, verified: 2, filesDone: 0, filesTotal: 1,
+    }));
+    expect(progress.at(-1)).toMatchObject({ verified: bytes.length, filesDone: 1, filesTotal: 1 });
+  });
+
   it('streams one native WAV per sentence, in order, through the installed runtime', async () => {
     const { stream, native, wavs } = await createNativeSentenceFixture('Alpha. Beta. Gamma.');
     const out: string[] = [];
@@ -878,7 +914,9 @@ describe('synthesizeKokoroWav (native)', () => {
       },
     );
 
-    expect(onProgress).toHaveBeenCalledWith({ loaded: 1, total: 4, file: 'onnx/model_quantized.onnx' });
+    expect(onProgress).toHaveBeenCalledWith({
+      loaded: 1, total: 4, file: 'onnx/model_quantized.onnx', verified: 0, filesDone: 0, filesTotal: 1,
+    });
     expect(files.get('file:///docs/happier/voice/modelPacks/kokoro-test/onnx/model_quantized.onnx')).toEqual(bytes);
     } finally {
       vi.unstubAllGlobals();
