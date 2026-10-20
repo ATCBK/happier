@@ -7,6 +7,7 @@ import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { createOrRejoinLayout1SessionByTag } from "./createOrRejoinLayout1SessionByTag";
+import { createFreshBoundLayout1SessionInTx } from "./createFreshBoundLayout1Session";
 import { prepareLayout1SessionCreate } from "./prepareLayout1SessionCreate";
 import { deleteSessionOrganizationFolder, deleteSessionOrganizationTag } from "@/app/session/organization/organizationMutations";
 
@@ -33,6 +34,33 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("t
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it.each(["tag", "reserved"] as const)("creates a grandchild beside an existing sibling through %s admission", async entry => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        try {
+            const lead = await db.session.create({ data: {
+                accountId: account.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain", active: true,
+            } });
+            const manager = await createOrRejoinLayout1SessionByTag(prepared(account.id, lead.id), authentication);
+            const sibling = await createOrRejoinLayout1SessionByTag(prepared(account.id, lead.id), authentication);
+            if (manager.kind !== "created" || sibling.kind !== "created") throw new Error("Expected reporting Session fixtures");
+            const input = prepared(account.id, manager.session.id);
+            const reservedSessionId = randomUUID();
+            const created = entry === "tag"
+                ? await createOrRejoinLayout1SessionByTag(input, authentication)
+                : await inTx(tx => createFreshBoundLayout1SessionInTx(tx, { prepared: input, sessionId: reservedSessionId, authentication }));
+            expect(created.kind).toBe("created");
+            if (created.kind !== "created") throw new Error("Expected grandchild birth");
+            expect(await db.sessionFollowEdge.findUnique({ where: { managerSourceSessionId: created.session.id } }))
+                .toMatchObject({ sourceSessionId: created.session.id, destinationSessionId: manager.session.id, relation: "manager" });
+            await expect(createOrRejoinLayout1SessionByTag(input, authentication))
+                .resolves.toMatchObject({ kind: "rejoined", session: { id: created.session.id } });
+            expect(await db.session.count({ where: { accountId: account.id, tag: input.tag } })).toBe(1);
+        } finally {
+            await db.session.deleteMany({ where: { accountId: account.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
 
     it.each(["create", "create-placement", "create-placement-private", "rejoin", "rejoin-global", "rejoin-empty-access", "rejoin-empty-triggers", "rejoin-empty-team-bindings", "disabled", "mode-change"] as const)("settles %s after a concurrent Account publisher commits", async operation => {
         const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });

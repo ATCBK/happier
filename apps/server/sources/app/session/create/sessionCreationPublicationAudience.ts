@@ -13,6 +13,7 @@ export type SessionCreationPublicationInput = Pick<PreparedLayout1SessionCreate,
     | "discussionParticipant" | "originSessionId" | "initialTriggers">;
 
 export interface SessionCreationPublicationAudience {
+    readonly seedSessionIds: readonly string[];
     readonly sessionIds: readonly string[];
     readonly accountIds: readonly string[];
     readonly incumbentSessionId: string | null;
@@ -35,13 +36,14 @@ export async function readLayout1SessionCreatePublicationAudienceInTx(tx: Tx, in
     const lifecycle = incumbent && (!incumbent.active || incumbent.archivedAt !== null)
         ? await getSessionLifecycleAutomationPublicationAudienceInTx(tx, [incumbent.id])
         : { sessionIds: [], accountIds: [] };
-    const audience = await readSessionAccountCursorAudienceInTx(tx, [
+    const seedSessionIds = [
         ...(incumbent ? [incumbent.id] : []),
         ...(input.manager ? [input.manager.sessionId] : []),
         ...(input.originSessionId ? [input.originSessionId] : []),
         ...lifecycle.sessionIds,
-    ], [...accounts, ...lifecycle.accountIds]);
-    return { sessionIds: audience.projectionSessionIds, accountIds: audience.accountIds, incumbentSessionId: incumbent?.id ?? null };
+    ];
+    const audience = await readSessionAccountCursorAudienceInTx(tx, seedSessionIds, [...accounts, ...lifecycle.accountIds]);
+    return { seedSessionIds, sessionIds: audience.projectionSessionIds, accountIds: audience.accountIds, incumbentSessionId: incumbent?.id ?? null };
 }
 
 async function validateCreationAudienceInTx(tx: Tx, input: SessionCreationPublicationInput, captured: SessionCreationPublicationAudience): Promise<void> {
@@ -60,7 +62,9 @@ async function fenceCreationAudienceInTx(tx: Tx, input: SessionCreationPublicati
     await validateCreationAudienceInTx(tx, input, captured);
     await fenceSessionAccountCursorAudienceInTx(tx,
         { projectionSessionIds: captured.sessionIds, accountIds: captured.accountIds },
-        captured.sessionIds, captured.accountIds);
+        // Revalidate the original census roots. Expanding its projection again
+        // would add another relation hop even when no audience changed.
+        captured.seedSessionIds, captured.accountIds);
     beforeAccountChangePublication(tx, captured.accountIds, async client => {
         const audience = await readLayout1SessionCreatePublicationAudienceInTx(client, input);
         assertAccountChangePublicationAudienceInTx(client, audience.accountIds);
