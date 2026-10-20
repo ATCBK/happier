@@ -33,7 +33,12 @@ import {
 } from "./teamIdentityConnectionLifecycle";
 import { publishCommittedHomeProviderMutationInTx } from "@/app/home/governance/homeManagedIdentityProviders";
 import type { TeamOperationAuthenticationContext } from "../actorContext";
-import { acquireTeamIdentityConnectionMutationAdmissionInTx, authorizeTeamIdentityConnectionAdministrationInTx as authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
+import {
+    acquireTeamIdentityConnectionMutationAdmissionInTx,
+    authorizeTeamIdentityAdministrationInTx as authorizeIdentityAdministrationPreflightInTx,
+    authorizeTeamIdentityConnectionAdministrationInTx as authorizeTeamIdentityAdministrationInTx,
+    identityConnectionOwner,
+} from "./teamIdentityAdministrationAuthority";
 import { projectCurrentTeamIdentityConnectionV1InTx, projectIdentityConnectionResult, type ScopedIdentityConnectionV1 as IdentityConnectionV1 } from "./teamIdentityConnectionProjection";
 import { resolveTeamIdentityConnectionReturnUrl } from "./teamIdentityConnectionUrls";
 
@@ -71,7 +76,7 @@ async function preflightWorkosConnectionInTx(
         expectedRevision?: number;
     }>,
 ): Promise<Result<WorkosConnectionPreflight>> {
-    const authority = await authorizeTeamIdentityAdministrationInTx(tx, input);
+    const authority = await authorizeIdentityAdministrationPreflightInTx(tx, input);
     if (!authority.ok) return authority;
 
     const [home, resolved, team, directorySource] = await Promise.all([
@@ -302,6 +307,7 @@ export async function createTeamWorkosAdminPortalLink(
             return { ok: false, error: mapWorkosError(error) };
         }
         const persisted = await inTx(async (tx) => {
+            await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, input);
             const current = await preflightWorkosConnectionInTx(tx, {
                 ...input,
                 expectedRevision: initialConnectionRevision,
@@ -470,6 +476,7 @@ export async function reconcileTeamWorkosConnection(
     }
     if (candidates.length === 0) {
         const observed = await inTx(async (tx) => {
+            await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, input);
             const current = await preflightWorkosConnectionInTx(tx, input);
             if (!current.ok) return current;
 
@@ -514,6 +521,7 @@ export async function reconcileTeamWorkosConnection(
 
     const now = (dependencies.now ?? (() => new Date()))();
     const recorded = await inTx(async (tx) => {
+        await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, input);
         const current = await preflightWorkosConnectionInTx(tx, input);
         if (!current.ok) return current;
         const result = await recordWorkosCandidateInTx(tx, {
@@ -567,6 +575,7 @@ export async function setTeamWorkosConnection(
     }
     const now = (dependencies.now ?? (() => new Date()))();
     return await inTx(async (tx) => {
+        await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, input);
         const current = await preflightWorkosConnectionInTx(tx, input);
         if (!current.ok) return current;
         const result = await recordWorkosCandidateInTx(tx, {

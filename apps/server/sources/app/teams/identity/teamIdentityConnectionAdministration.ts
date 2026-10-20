@@ -65,7 +65,12 @@ import type { TeamIdentityConnectionView as LifecycleConnectionView } from "./te
 import { isSameProviderContext } from "@/app/auth/providers/providerReference";
 import { publishCommittedHomeProviderMutationInTx } from "@/app/home/governance/homeManagedIdentityProviders";
 import type { TeamOperationAuthenticationContext } from "../actorContext";
-import { authorizeTeamIdentityConnectionAdministrationInTx as authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
+import {
+    acquireTeamIdentityConnectionMutationAdmissionInTx,
+    authorizeTeamIdentityAdministrationInTx as authorizeIdentityAdministrationPreflightInTx,
+    authorizeTeamIdentityConnectionAdministrationInTx as authorizeTeamIdentityAdministrationInTx,
+    identityConnectionOwner,
+} from "./teamIdentityAdministrationAuthority";
 import {
     projectCurrentTeamIdentityConnectionV1InTx,
     projectIdentityConnectionResult,
@@ -107,7 +112,7 @@ async function resolveTeamIdentityConnectionRemovalPreflightInTx(
         env: NodeJS.ProcessEnv;
     }>,
 ): Promise<Result<IdentityConnectionRemovalPreflightV1>> {
-    const authority = await authorizeTeamIdentityAdministrationInTx(tx, input);
+    const authority = await authorizeIdentityAdministrationPreflightInTx(tx, input);
     if (!authority.ok) return authority;
     const resolved = await readTeamIdentityConnectionInTx(tx, {
         id: input.connectionId,
@@ -232,7 +237,7 @@ export async function startTeamIdentityConnectionTestForActor(
     }>,
 ): Promise<Result<TeamIdentityConnectionTestStartResultV1>> {
     const preflight = await inTx(async (tx) => {
-        const authority = await authorizeTeamIdentityAdministrationInTx(tx, input);
+        const authority = await authorizeIdentityAdministrationPreflightInTx(tx, input);
         if (!authority.ok) return authority;
         const result = await readTeamIdentityConnectionInTx(tx, {
             id: input.connectionId,
@@ -532,7 +537,7 @@ export async function setTeamIdentityConnectionEnabledForActor(
 ): Promise<Result<IdentityConnectionV1>> {
     if (input.enabled) {
         const preflight = await inTx(async (tx) => {
-            const authority = await authorizeTeamIdentityAdministrationInTx(tx, input);
+            const authority = await authorizeIdentityAdministrationPreflightInTx(tx, input);
             if (!authority.ok) return authority;
             const resolved = await readTeamIdentityConnectionInTx(tx, {
                 id: input.connectionId,
@@ -762,6 +767,7 @@ export async function removeTeamIdentityConnectionForActor(
     }
 
     return await inTx(async (tx) => {
+        await acquireTeamIdentityConnectionMutationAdmissionInTx(tx, input);
         const preflight = await resolveTeamIdentityConnectionRemovalPreflightInTx(tx, {
             ...input,
             expectedRevision: prepared.connection.revision,
