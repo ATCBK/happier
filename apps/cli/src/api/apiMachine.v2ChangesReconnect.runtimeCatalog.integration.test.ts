@@ -2190,8 +2190,11 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const client = new ApiMachineClient('token', machine);
         client.onAccountSettingsVersionHint(onAccountSettingsVersionHint);
         client.onConnectedServicesProjection(async () => {});
+        const onSessionFollowRulesChanged = vi.fn();
+        client.onSessionFollowRulesChanged(onSessionFollowRulesChanged);
         await (client as any).syncChangesOnConnect({ reason: 'reconnect' });
 
+        expect(onSessionFollowRulesChanged).toHaveBeenCalledExactlyOnceWith({ full: true, workflowRunIds: [] });
         expect(onAccountSettingsVersionHint).toHaveBeenCalledTimes(1);
         expect(onAccountSettingsVersionHint).toHaveBeenCalledWith({
             settingsVersion: null,

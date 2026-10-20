@@ -4,7 +4,7 @@ import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveSessionFollowActionRequest, parseSessionFollowActionResponse } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { ListSessionFollowSourcesResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
-import { DeliveryMuteErrorResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { DeliveryMuteErrorResponseV1Schema, FollowReceiverRefV1Schema } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { ListAccountSessionFollowsResponseV1Schema, ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
 import { projectSessionFollowSourceKeyPreparationAfterSetV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
 import { FollowRuleSetActionInputV1Schema, SessionFollowActionInputSchemasV1 } from '@happier-dev/protocol/sessions/follow/actions';
@@ -160,15 +160,16 @@ export function createSessionFollowActionDeps(input: Readonly<{
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
       const parsedInput = SessionFollowActionInputSchemasV1[actionId].parse(actionInput);
-      const privateRuleOperation = 'source' in parsedInput && parsedInput.source.kind === 'rule'
-        || 'direction' in parsedInput && parsedInput.direction === 'following';
+      const source = 'source' in parsedInput ? parsedInput.source : null;
+      const direction = 'direction' in parsedInput ? parsedInput.direction : null;
+      const privateRuleOperation = source?.kind === 'rule' || direction === 'following';
       const { assertCurrent, authorize, captureRuleStorage, openRule, readRules } = ruleAccess(context, actionId, privateRuleOperation, signal);
-      const ruleTarget = 'source' in parsedInput && 'receiver' in parsedInput && parsedInput.source.kind === 'rule'
-        ? { ruleId: parsedInput.source.ruleId, receiver: parsedInput.receiver } : null;
+      const ruleTarget = source?.kind === 'rule' && 'receiver' in parsedInput
+        ? { ruleId: source.ruleId, receiver: FollowReceiverRefV1Schema.parse(parsedInput.receiver) } : null;
       const storage = ruleTarget && actionId !== 'follow.remove' ? await captureRuleStorage() : null;
       const ruleSet = ruleTarget && actionId === 'follow.set' ? FollowRuleSetActionInputV1Schema.parse(actionInput) : null;
       const ruleContent = ruleSet && storage
-        ? sealSessionFollowRuleContentV1({ ruleId: ruleSet.source.ruleId, receiver: ruleSet.receiver,
+        ? sealSessionFollowRuleContentV1({ ruleId: ruleSet.source.ruleId, receiver: FollowReceiverRefV1Schema.parse(ruleSet.receiver),
           definition: SessionFollowRuleDefinitionV1Schema.parse({ ...ruleSet.ruleDefinition, policy: ruleSet.policy }),
           mode: storage.mode, material: storage.material }) : undefined;
       const request = resolveSessionFollowActionRequest(actionId, actionInput, { ...(ruleContent ? { ruleContent } : {}) });
@@ -206,10 +207,11 @@ export function createSessionFollowActionDeps(input: Readonly<{
       }
       const listInput = actionId === 'follow.list' ? SessionFollowActionInputSchemasV1['follow.list'].parse(actionInput) : null;
       if (listInput?.direction === 'following') {
+        const receiver = FollowReceiverRefV1Schema.parse(listInput.receiver);
         // The rule owner supplies a complete private census on the first page;
         // continuation belongs to the source list and must not repeat rules.
         const rules = listInput.cursor === undefined
-          ? (await readRules()).filter(rule => equalFollowRuleReceiverV1(rule.receiver, listInput.receiver)) : [];
+          ? (await readRules()).filter(rule => equalFollowRuleReceiverV1(rule.receiver, receiver)) : [];
         const rows = listInput.receiver.kind === 'account'
           ? { ...ListAccountSessionFollowsResponseV1Schema.parse(response.data), sources: [] }
           : { follows: [], ...ListSessionFollowSourcesResponseSchema.parse(response.data) };
@@ -225,7 +227,7 @@ export function createSessionFollowActionDeps(input: Readonly<{
           try {
             preparation = await prepare({
               sourceSessionId: setInput.source.sessionId,
-              destinationSessionId: setInput.receiver.sessionId,
+              destinationSessionId: parsed.source.destinationSessionId,
               context,
               ...(signal ? { signal } : {}),
             });

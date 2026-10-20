@@ -4846,7 +4846,7 @@ export class ApiMachineClient {
         }
 
         if (result.status === 'cursor-gone') {
-            this.notifySessionFollowRulesChanged();
+            void this.notifySessionFollowRulesChanged({ full: true, workflowRunIds: [] });
             publishSessionFollowWakeInvalidation();
             this.applyResourceSessionAccessWitness({ accountId });
             signal.throwIfAborted();

@@ -71,10 +71,10 @@ export async function resolveSessionActivityNotificationAdmission(params: Readon
   // Ongoing explicit/rule interest may still select other channels.
   const once = viewer.follow.onceDelivery;
   const requestId = event.topic === 'permission_request' || event.topic === 'user_action_request' ? event.requestId
-    : event.topic === 'follow_update' && 'sourceRequests' in event.follow && event.follow.sourceRequests.requests.length === 1
+    : event.topic === 'follow_update' && event.follow.sourceRequests?.requests.length === 1
       ? event.follow.sourceRequests.requests[0]?.requestId : undefined;
   const transcriptSeq = event.topic === 'ready' ? event.committedSequence
-    : event.topic === 'follow_update' && 'sourceMessage' in event.follow ? event.follow.sourceMessage.seq : undefined;
+    : event.topic === 'follow_update' ? event.follow.sourceMessage?.seq : undefined;
   const matchesOnceEvent = once?.event === personalEvent || event.topic === 'follow_update'
     && event.follow.event.kind === 'failed_or_stopped' && once?.event === 'cancelled';
   const homeOwnsPush = matchesOnceEvent && (requestId !== undefined
