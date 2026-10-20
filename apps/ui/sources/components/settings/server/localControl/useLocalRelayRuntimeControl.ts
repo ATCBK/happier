@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { SystemTaskResult, SystemTaskSpec } from '@happier-dev/protocol';
-import { redactSensitiveSystemTaskJsonValue } from '@happier-dev/cli-common/systemTasks';
+import { redactSensitiveSystemTaskJsonValue } from '@happier-dev/cli-common/systemTasks/interactiveTaskKinds';
 import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { getDefaultSystemTaskRunner, useSystemTaskSnapshot, waitForSystemTaskResult } from '@/components/systemTasks';

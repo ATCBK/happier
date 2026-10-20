@@ -1,7 +1,7 @@
 import {
     getRelayAccessProviderDescriptor,
 } from '@happier-dev/cli-common/relayAccess/catalog';
-import { normalizeRelayAccessCanonicalPublicServerUrl } from '@happier-dev/cli-common/relayAccess';
+import { normalizeRelayAccessCanonicalPublicServerUrl } from '@happier-dev/cli-common/relayAccess/normalizePublicServerUrl';
 import type {
     RelayAccessConfig,
     RelayAccessProviderId,
