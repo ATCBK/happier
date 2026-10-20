@@ -12,9 +12,10 @@ import {
 import type { Prisma } from "@prisma/client";
 
 import { materializePluginCollectionContractsFromManifestTx } from "./contracts";
-import { queryPluginCollection } from "./uiQuery";
+import { getPluginCollection, queryPluginCollection, queryPluginCollectionUiQuery } from "./uiQuery";
 import { db, initDbMysql, initDbPostgres } from "@/storage/db";
-import { inTx } from "@/storage/inTx";
+import { inTx, type Tx } from "@/storage/inTx";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 
 type ContractProvider = "postgres" | "mysql";
 
@@ -52,6 +53,8 @@ const BINARY_INDEX_COLLECTION_MANIFEST = {
                     { field: "fourth", direction: "asc" },
                 ],
             }],
+            uiQueries: [{ id: "all", indexId: "by-four-strings", parameters: {}, prefix: [],
+                order: "asc", pageSize: 10, projectedFields: ["first", "fourth"] }],
             relations: [],
             migrations: [],
             identityFields: [],
@@ -294,6 +297,110 @@ describe("PluginCollectionIndexEntry binary compound-key DB contract", () => {
     it("uses the exact native binary column definition", async () => {
         await assertPhysicalColumnContract(provider);
     });
+
+    it.skipIf(provider !== "postgres").each(["get", "query", "ui"] as const)(
+        "captures %s Collection rows with their original cursor without predicate locks and rechecks availability", async kind => {
+            const accountId = `collection-capture-${randomUUID()}`;
+            const { readerContext, firstRowId } = await seedBinaryIndexCollectionAccount(accountId);
+            const transaction = db.$transaction;
+            let releaseWriter!: () => void;
+            const writerReleased = new Promise<void>(resolve => { releaseWriter = resolve; });
+            let writerReady!: () => void;
+            const ready = new Promise<void>(resolve => { writerReady = resolve; });
+            const writer = Reflect.apply(transaction, db, [async (tx: Tx) => {
+                await tx.account.update({ where: { id: accountId }, data: { seq: 92 } });
+                await tx.pluginCollectionRow.updateMany({ where: { accountId, rowId: firstRowId }, data: { revision: 4 } });
+                await tx.pluginCollectionProjection.updateMany({ where: { accountId, rowId: firstRowId }, data: { rowRevision: 4 } });
+                await tx.pluginCollectionIndexEntry.updateMany({ where: { indexState: { accountId }, rowId: firstRowId }, data: { rowRevision: 4 } });
+                writerReady();
+                await writerReleased;
+            }, { isolationLevel: "Serializable" }]) as Promise<void>;
+            const writerOutcome = Promise.allSettled([writer]);
+            await Promise.race([ready, writer]);
+            let releaseKeeper!: () => void;
+            const keeperReleased = new Promise<void>(resolve => { releaseKeeper = resolve; });
+            let keeperReady!: () => void;
+            const keeperStarted = new Promise<void>(resolve => { keeperReady = resolve; });
+            // A prior overlapping Serializable reader retains the first
+            // capture's SSI predicates after the publisher has committed.
+            const keeper = Reflect.apply(transaction, db, [async (tx: Tx) => {
+                await tx.account.count();
+                keeperReady();
+                await keeperReleased;
+            }, { isolationLevel: "Serializable" }]) as Promise<void>;
+            const keeperOutcome = Promise.allSettled([keeper]);
+            await Promise.race([keeperStarted, keeper]);
+            let captured = false;
+            let predicateLocks = -1;
+            db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+                const callback = args[0];
+                if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+                return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                    const result = await callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                        if (property !== "account") return Reflect.get(inner, property, innerReceiver);
+                        return new Proxy(inner.account, { get(model, method, modelReceiver) {
+                            if (method !== "findUnique") return Reflect.get(model, method, modelReceiver);
+                            return async (...queryArgs: unknown[]) => {
+                                const result = await Reflect.apply(model.findUnique, model, queryArgs);
+                                if (!captured) { captured = true; releaseWriter(); await writer; }
+                                return result;
+                            };
+                        } });
+                    } }));
+                    const [{ count }] = await tx.$queryRaw<Array<{ count: number }>>`
+                        SELECT count(*)::int AS count FROM pg_locks WHERE pid = pg_backend_pid() AND mode = 'SIReadLock'
+                    `;
+                    predicateLocks = Math.max(predicateLocks, count);
+                    return result;
+                }, ...args.slice(1)]);
+            } });
+            const request = { pluginId: readerContext.pluginId, collectionId: readerContext.collectionId, readerContext };
+            const read = () => kind === "get"
+                ? getPluginCollection({ accountId, request: { ...request, rowId: firstRowId } })
+                : kind === "query"
+                    ? queryPluginCollection({ accountId, request: { ...request, indexId: "by-four-strings", prefix: [], order: "asc", limit: 10 } })
+                    : queryPluginCollectionUiQuery({ accountId, request: { ...request, uiQueryId: "all", parameters: {} } });
+            try {
+                const before = await read();
+                const after = await read();
+                if (kind === "get") {
+                    expect(before).toMatchObject({ row: { rowId: firstRowId, revision: 1 } });
+                    expect(after).toMatchObject({ row: { rowId: firstRowId, revision: 4 } });
+                } else {
+                    const field = kind === "ui" ? "context" : undefined;
+                    expect(before).toMatchObject({ changeCursor: 91, rows: [field
+                        ? { context: { rowId: firstRowId, revision: 1 } } : { rowId: firstRowId, revision: 1 }, {}, {}] });
+                    expect(after).toMatchObject({ changeCursor: 92, rows: [field
+                        ? { context: { rowId: firstRowId, revision: 4 } } : { rowId: firstRowId, revision: 4 }, {}, {}] });
+                }
+                expect(predicateLocks).toBe(0);
+                await db.accountPluginIntent.update({ where: { accountId_pluginId: { accountId, pluginId: readerContext.pluginId } }, data: { enabled: false } });
+                await expect(read()).rejects.toMatchObject({ code: "collection_unavailable" });
+                await db.accountPluginIntent.update({ where: { accountId_pluginId: { accountId, pluginId: readerContext.pluginId } }, data: { enabled: true } });
+                // Commit a valid mode transition after materialization, before
+                // the public reader's final currentness check may disclose it.
+                db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+                    const callback = args[0];
+                    if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+                    return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                        const result = await callback(tx);
+                        await db.account.update({ where: { id: accountId }, data: {
+                            encryptionMode: "e2ee", ...createSignedAccountContentBinding(),
+                        } });
+                        return result;
+                    }, ...args.slice(1)]);
+                } });
+                await expect(read()).rejects.toMatchObject({ code: "collection_content_mode_mismatch" });
+            } finally {
+                releaseWriter();
+                releaseKeeper();
+                db.$transaction = transaction;
+                await writerOutcome;
+                await keeperOutcome;
+                await db.account.deleteMany({ where: { id: accountId } });
+            }
+        },
+    );
 
     it("persists raw ordinal compound keys byte-for-byte through the canonical reader", async () => {
         const suffix = randomUUID();

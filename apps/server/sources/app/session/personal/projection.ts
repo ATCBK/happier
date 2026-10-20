@@ -6,7 +6,7 @@ import { resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/session
 import { type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 import { projectSessionFollowDefaultRelationshipsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 import type { AccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import {
     buildSessionAccessProjectionSelect,
@@ -247,7 +247,7 @@ export function projectSessionViewer(params: Readonly<{
 
 /** Current Account/access admission also protects private read acknowledgments and push candidates. */
 export async function loadSessionViewerProjection(params: Readonly<{ accountId: string; sessionId: string; authentication: import("@/app/session/access/sessionAccessAuthentication").SessionAccessAuthentication }>): Promise<SessionViewerProjectionV1 | null> {
-    return inTx(async tx => {
+    return inReadSnapshot(async tx => {
         const account = await tx.account.findUnique({ where: { id: params.accountId }, select: { status: true } });
         if (account?.status !== "active") return null;
         const accessResolution = await resolveEffectiveSessionAccessWhere({
@@ -272,5 +272,5 @@ export async function loadSessionViewerProjection(params: Readonly<{ accountId: 
             discussion: discussion.get(params.sessionId) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
             qualifiedTeamIds: accessResolution.qualifiedTeamIds,
         });
-    }, { isolationLevel: "Serializable" /* Personal projection combines Session, Follow, read-frontier and discussion facts in one snapshot. */ });
+    });
 }
