@@ -290,7 +290,7 @@ export async function upsertAccountHomeDirectoryEntry(params: Readonly<{
             label: body.label,
             connectionDescriptor: body.connectionDescriptor,
         });
-    });
+    }, { isolationLevel: 'Serializable' /* Descriptor revision and first-Home preference predicates must survive concurrent directory writes. */ });
 }
 
 export async function deleteAccountHomeDirectoryEntry(params: Readonly<{ accountId: string; homeServerIdentityId: string }>): Promise<void> {
@@ -301,7 +301,7 @@ export async function deleteAccountHomeDirectoryEntry(params: Readonly<{ account
             where: { id: params.accountId, preferredHomeServerIdentityId: params.homeServerIdentityId },
             data: { preferredHomeServerIdentityId: null },
         });
-    });
+    }, { isolationLevel: 'Serializable' /* Clearing preference and deleting its Home must serialize with the setter's existence check. */ });
 }
 
 export async function setPreferredAccountHome(params: Readonly<{ accountId: string; homeServerIdentityId: string | null }>): ReturnType<typeof listAccountHomeDirectory> {
@@ -315,7 +315,7 @@ export async function setPreferredAccountHome(params: Readonly<{ accountId: stri
             if (!exists) throw new AccountDirectoryError("preferred_home_not_found", "Home is not present in the directory");
         }
         await tx.account.updateMany({ where: { id: params.accountId }, data: { preferredHomeServerIdentityId: params.homeServerIdentityId } });
-    });
+    }, { isolationLevel: 'Serializable' /* The selected Home must still exist when its preference commits. */ });
     return listAccountHomeDirectory(params.accountId);
 }
 
