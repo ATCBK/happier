@@ -21,7 +21,7 @@ import {
   isAuthenticationResponseStatus,
   isTerminalAuthError,
 } from '@/sync/runtime/connectivity/authErrors';
-import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
+import { isTransientConnectivityError, RetryableServerResponseError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 
 import {
   parseDecryptedSessionMetadata,
@@ -256,6 +256,7 @@ async function fetchSessionTurnsProjection(params: Readonly<{
   request: (path: string, init: RequestInit) => Promise<Response>;
   log: { log: (message: string) => void };
   prefetched?: SessionByIdPrefetchedRead;
+  required: boolean;
 }>): Promise<SessionTurnsProjectionV1 | null> {
   let status: number;
   let body: unknown;
@@ -276,6 +277,7 @@ async function fetchSessionTurnsProjection(params: Readonly<{
       });
     } catch (err) {
       if (isTerminalAuthError(err)) throw err;
+      if (params.required) throw err;
       params.log.log(`[sessionById] Failed to fetch session turns ${params.sessionId}: ${err instanceof Error ? err.message : 'unknown error'}`);
       return null;
     }
@@ -285,6 +287,7 @@ async function fetchSessionTurnsProjection(params: Readonly<{
 
   if (status < 200 || status >= 300) {
     if (isAuthenticationResponseStatus(status)) throw createNotAuthenticatedError(status);
+    if (params.required && status >= 500) throw new RetryableServerResponseError(status, 'Session turns unavailable');
     return null;
   }
 
@@ -389,7 +392,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
   getCurrentSessionListRenderable?: (sessionId: string) => SessionListRenderableSession | null | undefined;
   log: { log: (message: string) => void };
   timeoutMs?: number;
-  includeTurnsProjection?: boolean;
+  includeTurnsProjection?: boolean | 'required';
   includeMetadataTupleMutationSnapshot?: boolean;
   isCurrent?: () => boolean;
   accessProjectionVersion?: 1;
@@ -893,6 +896,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
       request: params.request,
       log: params.log,
       prefetched: params.prefetched,
+      required: params.includeTurnsProjection === 'required',
     });
   if (!isHydrationCurrent()) return staleResult();
   const rollbackEligibleTurnStarts = sessionTurns

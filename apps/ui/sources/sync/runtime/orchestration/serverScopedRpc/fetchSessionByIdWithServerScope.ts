@@ -318,7 +318,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
     getCurrentSessionListRenderable?: (sessionId: string) => SessionListRenderableSession | null | undefined;
     log: { log: (message: string) => void };
     timeoutMs?: number;
-    includeTurnsProjection?: boolean;
+    includeTurnsProjection?: boolean | 'required';
     authority?: ServerAccountRequestAuthority;
     accountCurrentness?: AccountEncryptionCurrentnessResponse;
     isCurrent?: () => boolean;

@@ -44,6 +44,7 @@ export async function readSessionSnapshotForAuthority(params: Readonly<{
             serverId: params.authority.scope.serverId,
             sessionId: params.sessionId,
             prefetched: params.prefetched,
+            includeTurnsProjection: params.requireTurns ? 'required' : undefined,
             activeCredentials: credentials,
             activeRequest: params.authority.request,
             sessionDataKeys: new Map(),

@@ -51,7 +51,7 @@ it.each(['single', 'batch'] as const)('requires admitted turns only for interval
             const optional = await read(false);
             expect(optional.session.id).toBe(sessionId);
             expect(optional.session.sessionTurns).toBeUndefined();
-            await expect(read(true)).rejects.toMatchObject({ errorCode: 'turns_unavailable' });
+            await expect(read(true)).rejects.toMatchObject({ name: 'RetryableServerResponseError', status: 503 });
             turnsOutcome = 'invalid';
             await expect(read(true)).rejects.toMatchObject({ errorCode: 'turns_unavailable' });
             turnsOutcome = 'populated';
