@@ -160,7 +160,11 @@ export function createAccountCursorRawQueryTransactionModel(params: Readonly<{
 }>) {
     return async (query: string, ...values: unknown[]): Promise<unknown[]> => {
         if (query.startsWith('SELECT "id" FROM "Account"')) {
-            const ids = values[0];
+            // The metadata fence uses a scalar binding for its one-Account
+            // query; cursor audience locking uses the array form.
+            const ids = (query === 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR KEY SHARE'
+                || query === 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE')
+                ? values : values[0];
             if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) {
                 throw new Error('Account cursor lock query requires Account ids');
             }
