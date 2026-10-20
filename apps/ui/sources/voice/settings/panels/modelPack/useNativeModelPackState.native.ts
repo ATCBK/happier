@@ -2,12 +2,19 @@ import * as React from 'react';
 
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { checkModelPackUpdateAvailable, ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
+import {
+  checkModelPackUpdateAvailable,
+  ensureModelPackInstalled,
+  findRunningModelPackInstall,
+  getModelPackInstallSummary,
+  removeModelPack,
+} from '@/voice/modelPacks/installer.native';
 import { isModelPackCancellation } from '@/voice/modelPacks/installer/network';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import {
   confirmDiscardPartialDownload,
+  describeModelPackInstallError,
   readPartialDownloadBytes,
   type ModelPackRowStatus,
 } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
@@ -66,6 +73,7 @@ export function useNativeModelPackState(params: {
 }> {
   const isStt = params.role === 'stt';
   const copy = isStt ? sttCopy : ttsCopy;
+  const kind = isStt ? 'stt_sherpa' : 'tts_sherpa';
   const networkTimeoutMs = params.role === 'tts' ? params.networkTimeoutMs : 0;
   const [modelStatus, setModelStatus] = React.useState<ModelStatus>('idle');
   const [downloadProgress, setDownloadProgress] = React.useState<unknown | null>(null);
@@ -91,45 +99,20 @@ export function useNativeModelPackState(params: {
     }
   }, [params.packId]);
 
+  // An install outlives the screen that started it; only a mounted screen reports its outcome.
+  const mountedRef = React.useRef(true);
   React.useEffect(() => {
-    void refreshInstallState();
-  }, [refreshInstallState]);
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
-  const prepareModel = React.useCallback(async () => {
-    if (!params.packId || modelStatus === 'downloading' || prepareAbortRef.current) return;
-    if (isStt && !params.manifestUrl) {
-      await Modal.alert(
-        t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
-        t('settingsVoice.local.kokoro.alerts.missingManifest.body'),
-      );
-      return;
-    }
-
+  const runInstall = React.useCallback(async (install: (signal: AbortSignal) => Promise<unknown>) => {
     const abortController = new AbortController();
     try {
       setModelStatus('downloading');
       setDownloadProgress(null);
       prepareAbortRef.current = abortController;
-
-      if (isStt) {
-        await ensureModelPackInstalled({
-          packId: params.packId,
-          mode: 'download_if_missing',
-          manifestUrl: params.manifestUrl,
-          timeoutMs: 120_000,
-          signal: abortController.signal,
-          onProgress: setDownloadProgress,
-        });
-      } else {
-        const { prepareKokoroTts } = await import('@/voice/kokoro/runtime/synthesizeKokoroWav');
-        await prepareKokoroTts({
-          assetSetId: params.packId,
-          timeoutMs: Math.max(60_000, networkTimeoutMs),
-          signal: abortController.signal,
-          onProgress: setDownloadProgress,
-        });
-      }
-
+      await install(abortController.signal);
       setModelStatus('ready');
       await refreshInstallState();
     } catch (error) {
@@ -142,7 +125,8 @@ export function useNativeModelPackState(params: {
       // Verified files stay on disk after a failure; read them so the screen can offer resume or discard.
       await refreshInstallState();
       setModelStatus('error');
-      const message = error instanceof Error ? error.message : String(error);
+      if (!mountedRef.current) return;
+      const message = describeModelPackInstallError(error);
       await Modal.alert(
         t(copy.prepareFailedTitle),
         isStt ? t('settingsVoice.local.localNeuralStt.alerts.downloadFailedBody', { message }) : message,
@@ -153,7 +137,53 @@ export function useNativeModelPackState(params: {
         setDownloadProgress(null);
       }
     }
-  }, [copy, isStt, modelStatus, params.manifestUrl, networkTimeoutMs, params.packId, refreshInstallState]);
+  }, [copy, isStt, refreshInstallState]);
+
+  React.useEffect(() => {
+    let active = true;
+    fireAndForget((async () => {
+      await refreshInstallState();
+      if (!params.packId || !active) return;
+      // A download started by an earlier visit to this screen keeps running; show it instead of its leftovers.
+      const running = findRunningModelPackInstall({ packId: params.packId });
+      if (!running || !active || prepareAbortRef.current) return;
+      await runInstall((signal) => running.follow({ signal, onProgress: setDownloadProgress }));
+    })(), { tag: 'useNativeModelPackState.followRunningInstall' });
+    return () => { active = false; };
+  }, [params.packId, refreshInstallState, runInstall]);
+
+  const prepareModel = React.useCallback(async () => {
+    if (!params.packId || modelStatus === 'downloading' || prepareAbortRef.current) return;
+    if (isStt && !params.manifestUrl) {
+      await Modal.alert(
+        t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
+        t('settingsVoice.local.kokoro.alerts.missingManifest.body'),
+      );
+      return;
+    }
+    const packId = params.packId;
+    await runInstall(async (signal) => {
+      if (isStt) {
+        await ensureModelPackInstalled({
+          packId,
+          mode: 'download_if_missing',
+          manifestUrl: params.manifestUrl,
+          timeoutMs: 120_000,
+          signal,
+          onProgress: setDownloadProgress,
+          kind,
+        });
+        return;
+      }
+      const { prepareKokoroTts } = await import('@/voice/kokoro/runtime/synthesizeKokoroWav');
+      await prepareKokoroTts({
+        assetSetId: packId,
+        timeoutMs: Math.max(60_000, networkTimeoutMs),
+        signal,
+        onProgress: setDownloadProgress,
+      });
+    });
+  }, [isStt, kind, modelStatus, params.manifestUrl, networkTimeoutMs, params.packId, runInstall]);
 
   const cancelPrepare = React.useCallback(() => {
     const controller = prepareAbortRef.current;
@@ -215,6 +245,7 @@ export function useNativeModelPackState(params: {
           manifestUrl: params.manifestUrl,
           timeoutMs: Math.max(30_000, networkTimeoutMs),
           signal: abortController.signal,
+          kind,
         });
 
         if (!status.installed) {
@@ -253,6 +284,7 @@ export function useNativeModelPackState(params: {
           timeoutMs: Math.max(120_000, networkTimeoutMs),
           signal: abortController.signal,
           onProgress: setDownloadProgress,
+          kind,
         });
 
         setModelStatus('ready');
@@ -262,10 +294,10 @@ export function useNativeModelPackState(params: {
           t(copy.updatedBody),
         );
       } catch (error) {
-        if (!isModelPackCancellation(error, abortController.signal)) {
+        if (!isModelPackCancellation(error, abortController.signal) && mountedRef.current) {
           await Modal.alert(
             t(copy.updateFailedTitle),
-            t(copy.updateFailedBody, { message: error instanceof Error ? error.message : String(error) }),
+            t(copy.updateFailedBody, { message: describeModelPackInstallError(error) }),
           );
         }
         // A failed or cancelled update leaves the installed pack in place; report what is on disk.
@@ -278,7 +310,7 @@ export function useNativeModelPackState(params: {
         }
       }
     })(), { tag: 'useNativeModelPackState.checkForUpdates' });
-  }, [copy, modelStatus, params.manifestUrl, networkTimeoutMs, params.packId, refreshInstallState]);
+  }, [copy, kind, modelStatus, params.manifestUrl, networkTimeoutMs, params.packId, refreshInstallState]);
 
   return {
     modelStatus,

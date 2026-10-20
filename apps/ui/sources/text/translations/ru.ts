@@ -9351,6 +9351,8 @@ settingsSession: {
         discardSubtitle: "Удалите незавершённую загрузку, чтобы освободить место.",
         discardConfirmTitle: "Удалить незавершённую загрузку?",
         discardConfirmBody: ({ size }: { size: string }) => `Будут удалены уже загруженные ${size}. Модель можно будет загрузить снова позже.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `Недостаточно свободного места. Для загрузки нужно ${required}, а свободно только ${available}.`,
       },
       localNeuralStt: {
         modelPack: {

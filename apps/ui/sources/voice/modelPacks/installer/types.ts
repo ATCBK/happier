@@ -17,7 +17,8 @@ export type InstallerFile = Pick<ExpoFile, 'uri' | 'exists' | 'delete' | 'write'
 export type InstallerFs = {
   Directory: new (...uris: string[]) => InstallerDirectory;
   File: new (...uris: string[]) => InstallerFile;
-  Paths: { document: string | Pick<ExpoDirectory, 'uri'> };
+  // expo-file-system reports free bytes on the document volume; iOS can report none.
+  Paths: { document: string | Pick<ExpoDirectory, 'uri'>; readonly availableDiskSpace?: number | null };
 };
 
 export type InstallerOverrides = {

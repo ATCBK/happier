@@ -7,6 +7,7 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { formatByteSize } from '@/utils/files/formatByteSize';
 import { parseDownloadProgress } from '@/voice/downloads/downloadProgress';
+import { ModelPackInsufficientStorageError } from '@/voice/modelPacks/installer/errors';
 
 /**
  * Row presentation shared by the native model pack settings screens (Kokoro TTS, streaming STT), so
@@ -138,4 +139,15 @@ export function confirmDiscardPartialDownload(partialBytes: number): Promise<boo
         t('settingsVoice.local.modelPackDownload.discardConfirmBody', { size: formatByteSize(partialBytes) }),
         { confirmText: t('common.delete'), destructive: true },
     );
+}
+
+/** The reason a download or update failed, in the user's language when the installer knows the cause. */
+export function describeModelPackInstallError(error: unknown): string {
+    if (error instanceof ModelPackInsufficientStorageError) {
+        return t('settingsVoice.local.modelPackDownload.insufficientStorage', {
+            required: formatByteSize(error.requiredBytes),
+            available: formatByteSize(error.availableBytes),
+        });
+    }
+    return error instanceof Error ? error.message : String(error);
 }

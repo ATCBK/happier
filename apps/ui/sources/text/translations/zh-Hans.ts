@@ -9074,6 +9074,8 @@ settingsSession: {
         discardSubtitle: "删除未完成的下载以释放空间。",
         discardConfirmTitle: "放弃未完成的下载？",
         discardConfirmBody: ({ size }: { size: string }) => `这将删除目前已下载的 ${size}。之后可以重新下载模型。`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `可用空间不足。此下载需要 ${required}，但仅剩 ${available} 可用。`,
       },
       localNeuralStt: {
         modelPack: {

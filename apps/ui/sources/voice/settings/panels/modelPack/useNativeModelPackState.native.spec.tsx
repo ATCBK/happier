@@ -2,7 +2,9 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, renderHook } from '@/dev/testkit';
+import { formatByteSize } from '@/utils/files/formatByteSize';
 import {
+  modelBytes,
   modelPackDevice as boundary,
   modelPackManifest,
   seedInstalledPack,
@@ -108,6 +110,59 @@ describe('useNativeModelPackState through device boundaries', () => {
     } finally {
       await act(async () => { confirmation?.find(button => button.style === 'cancel')?.onPress?.(); });
     }
+  });
+
+  it('follows a download that kept running after the screen closed instead of starting another', async () => {
+    boundary.fetch.mockResolvedValue(Response.json(modelPackManifest(packId, 'stt')));
+    const first = await renderHook(useNativeModelPackState, { initialProps: input });
+    let firstPrepare!: Promise<void>;
+    await act(async () => { firstPrepare = first.getCurrent().prepareModel(); });
+    await vi.waitFor(() => expect(boundary.transfers).toHaveLength(2));
+    await first.unmount();
+
+    const finishTransfers = () => act(async () => {
+      for (const transfer of boundary.transfers) transfer.finish(modelBytes.slice());
+      await firstPrepare;
+    });
+    const second = await renderHook(useNativeModelPackState, { initialProps: input });
+    try {
+      await vi.waitFor(() => expect(second.getCurrent().modelStatus).toBe('downloading'));
+      await act(async () => { await second.getCurrent().prepareModel(); });
+      expect(boundary.transfers).toHaveLength(2);
+    } finally {
+      // A held install would otherwise stay registered for the next test.
+      await finishTransfers();
+    }
+    await vi.waitFor(() => expect(second.getCurrent().modelStatus).toBe('ready'));
+    expect(second.getCurrent().installed).toBe(true);
+    expect(boundary.fetch).toHaveBeenCalledTimes(1);
+    expect(boundary.alert).not.toHaveBeenCalled();
+  });
+
+  it('treats a download cancelled from another screen as cancelled, not failed', async () => {
+    boundary.fetch.mockResolvedValue(Response.json(modelPackManifest(packId, 'stt')));
+    const starter = await renderHook(useNativeModelPackState, { initialProps: input });
+    let started!: Promise<void>;
+    await act(async () => { started = starter.getCurrent().prepareModel(); });
+    await vi.waitFor(() => expect(boundary.transfers).toHaveLength(2));
+    const follower = await renderHook(useNativeModelPackState, { initialProps: input });
+    await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('downloading'));
+
+    await act(async () => { starter.getCurrent().cancelPrepare(); await started; });
+    await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('idle'));
+    expect(boundary.alert).not.toHaveBeenCalled();
+  });
+
+  it('explains a download that does not fit in the free space', async () => {
+    boundary.availableDiskSpace = 1;
+    boundary.fetch.mockResolvedValue(Response.json(modelPackManifest(packId, 'stt')));
+    const hook = await renderHook(useNativeModelPackState, { initialProps: input });
+    await act(async () => { await hook.getCurrent().prepareModel(); });
+    expect(hook.getCurrent().modelStatus).toBe('error');
+    expect(boundary.transfers).toHaveLength(0);
+    const message = String(boundary.alert.mock.calls[0]?.[1]);
+    expect(message).toContain(formatByteSize(modelBytes.length * 2));
+    expect(message).not.toContain('model_pack_insufficient_storage');
   });
 
   it('reports a manifest preparation failure through the real installer', async () => {

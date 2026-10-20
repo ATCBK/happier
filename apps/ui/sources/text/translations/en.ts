@@ -8928,6 +8928,8 @@ settingsSession: {
                 discardSubtitle: "Delete the unfinished download to free up space.",
                 discardConfirmTitle: "Discard unfinished download?",
                 discardConfirmBody: ({ size }: { size: string }) => `This deletes the ${size} downloaded so far. You can download the model again later.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `Not enough free space. This download needs ${required}, but only ${available} is free.`,
             },
             localNeuralStt: {
                 modelPack: {

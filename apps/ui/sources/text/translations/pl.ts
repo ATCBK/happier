@@ -9377,6 +9377,8 @@ settingsSession: {
         discardSubtitle: "Usuń niedokończone pobieranie, aby zwolnić miejsce.",
         discardConfirmTitle: "Odrzucić niedokończone pobieranie?",
         discardConfirmBody: ({ size }: { size: string }) => `Spowoduje to usunięcie pobranych dotąd ${size}. Model możesz pobrać ponownie później.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `Za mało wolnego miejsca. To pobieranie wymaga ${required}, a wolne jest tylko ${available}.`,
       },
       localNeuralStt: {
         modelPack: {

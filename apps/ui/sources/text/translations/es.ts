@@ -9379,6 +9379,8 @@ settingsSession: {
         discardSubtitle: "Elimina la descarga sin terminar para liberar espacio.",
         discardConfirmTitle: "¿Descartar la descarga sin terminar?",
         discardConfirmBody: ({ size }: { size: string }) => `Se eliminarán los ${size} descargados hasta ahora. Podrás volver a descargar el modelo más adelante.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `No hay suficiente espacio libre. Esta descarga necesita ${required}, pero solo hay ${available} libres.`,
       },
       localNeuralStt: {
         modelPack: {

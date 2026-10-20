@@ -8896,6 +8896,8 @@ settingsSession: {
                 discardSubtitle: "Lösche den unvollständigen Download, um Speicher freizugeben.",
                 discardConfirmTitle: "Unvollständigen Download verwerfen?",
                 discardConfirmBody: ({ size }: { size: string }) => `Dadurch werden die bisher heruntergeladenen ${size} gelöscht. Du kannst das Modell später erneut herunterladen.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `Nicht genug freier Speicher. Dieser Download braucht ${required}, frei sind nur ${available}.`,
             },
             localNeuralStt: {
                 modelPack: {

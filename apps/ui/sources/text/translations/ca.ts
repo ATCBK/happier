@@ -8828,6 +8828,8 @@ settingsSession: {
                 discardSubtitle: "Elimina la descàrrega inacabada per alliberar espai.",
                 discardConfirmTitle: "Vols descartar la descàrrega inacabada?",
                 discardConfirmBody: ({ size }: { size: string }) => `S'eliminaran els ${size} descarregats fins ara. Podràs tornar a descarregar el model més endavant.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `No hi ha prou espai lliure. Aquesta baixada necessita ${required}, però només hi ha ${available} lliures.`,
             },
             localNeuralStt: {
                 modelPack: {

@@ -465,6 +465,88 @@ describe('modelPacks installer (native)', () => {
     });
   });
 
+  describe('one install per pack', () => {
+    async function heldPack() {
+      const bytes = new Uint8Array([9, 8, 7]);
+      const sha256 = await sha256Hex(bytes);
+      const remote = manifest([0, 1].map((i) => ({
+        path: `f${i}`, url: `https://example.com/f${i}`, sha256, sizeBytes: bytes.length,
+      })));
+      const fs = createFs();
+      const requested: string[] = [];
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let started!: () => void;
+      const transferStarted = new Promise<void>((resolve) => { started = resolve; });
+      useNativeDownloads(fs, () => bytes, requested, { inFlight: async () => { started(); await held; } });
+      return { fs, remote, requested, release, transferStarted };
+    }
+
+    it('joins a second caller to the running install instead of downloading the pack twice', async () => {
+      const { fs, remote, requested, release, transferStarted } = await heldPack();
+      const firstProgress: number[] = [];
+      const secondProgress: number[] = [];
+      const first = ensureModelPackInstalled({
+        ...installOptions, signal: new AbortController().signal, onProgress: (p) => firstProgress.push(p.filesDone),
+      }, { fs, fetch: fetchManifest(remote) });
+      await transferStarted;
+      const second = ensureModelPackInstalled({
+        ...installOptions, signal: new AbortController().signal, onProgress: (p) => secondProgress.push(p.filesDone),
+      }, { fs, fetch: fetchManifest(remote) });
+      // Give an independent second install time to reach its own transfers while the first is held.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      release();
+      const [a, b] = await Promise.all([first, second]);
+      expect(a).toEqual(b);
+      expect(requested.sort()).toEqual(['https://example.com/f0', 'https://example.com/f1']);
+      expect(firstProgress.at(-1)).toBe(2);
+      expect(secondProgress.at(-1)).toBe(2);
+      expect(fs.files.has(`${PACK_URI}/pack.json`)).toBe(true);
+    });
+
+    it('cancels the running install and waits for it to settle before removing the pack', async () => {
+      const { fs, remote, release, transferStarted } = await heldPack();
+      const install = ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+        fs, fetch: fetchManifest(remote),
+      });
+      const outcome = install.then(() => 'installed', (error: Error) => error.message);
+      await transferStarted;
+      const removed = removeModelPack({ packId: 'example' }, { fs });
+      release();
+      await removed;
+      expect(await outcome).toBe('aborted');
+      expect([...fs.files.keys()].filter((uri) => uri.startsWith(`${PACK_URI}/`))).toEqual([]);
+    });
+  });
+
+  it('refuses to download a pack that does not fit in the free disk space', async () => {
+    const bytes = new Uint8Array(10);
+    const sha256 = await sha256Hex(bytes);
+    const fs = createFs(new Map([[`${PACK_URI}/a.bin`, bytes]]));
+    // 10 of the 30 bytes are already on disk, so 20 more are needed.
+    Object.assign(fs.Paths, { availableDiskSpace: 19 });
+    const requested: string[] = [];
+    useNativeDownloads(fs, () => bytes, requested);
+    const remote = manifest(['a.bin', 'b.bin', 'c.bin'].map((path) => ({
+      path, url: `https://example.com/${path}`, sha256, sizeBytes: bytes.length,
+    })));
+    await expect(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
+      fs, fetch: fetchManifest(remote),
+    })).rejects.toMatchObject({ message: 'model_pack_insufficient_storage', requiredBytes: 20, availableBytes: 19 });
+    expect(requested).toEqual([]);
+
+    Object.assign(fs.Paths, { availableDiskSpace: 20 });
+    await ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, { fs, fetch: fetchManifest(remote) });
+    expect(requested.sort()).toEqual(['https://example.com/b.bin', 'https://example.com/c.bin']);
+  });
+
+  it('rejects a manifest published for a different model role', async () => {
+    const remote = { ...manifest([{ path: 'a.bin', url: 'https://example.com/a.bin', sha256: 'a'.repeat(64), sizeBytes: 1 }]), kind: 'stt_sherpa' as const };
+    await expect(ensureModelPackInstalled({ ...installOptions, kind: 'tts_sherpa', signal: new AbortController().signal }, {
+      fs: createFs(), fetch: fetchManifest(remote),
+    })).rejects.toThrow('model_pack_manifest_kind_mismatch');
+  });
+
   it('rejects pack manifests that contain unsafe paths', async () => {
     await expect(ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal }, {
       fs: createFs(), fetch: fetchManifest(manifest([

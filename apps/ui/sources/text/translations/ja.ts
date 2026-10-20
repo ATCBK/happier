@@ -9607,6 +9607,8 @@ settingsSession: {
         discardSubtitle: "未完了のダウンロードを削除して空き容量を増やします。",
         discardConfirmTitle: "未完了のダウンロードを破棄しますか？",
         discardConfirmBody: ({ size }: { size: string }) => `これまでにダウンロードした ${size} を削除します。モデルは後でもう一度ダウンロードできます。`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `空き容量が足りません。このダウンロードには ${required} が必要ですが、空きは ${available} しかありません。`,
       },
       localNeuralStt: {
         modelPack: {

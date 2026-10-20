@@ -8883,6 +8883,8 @@ settingsSession: {
                 discardSubtitle: "Supprime le téléchargement inachevé pour libérer de l'espace.",
                 discardConfirmTitle: "Abandonner le téléchargement inachevé ?",
                 discardConfirmBody: ({ size }: { size: string }) => `Les ${size} déjà téléchargés seront supprimés. Tu pourras retélécharger le modèle plus tard.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `Pas assez d'espace libre. Ce téléchargement nécessite ${required}, mais seulement ${available} sont disponibles.`,
             },
             localNeuralStt: {
                 modelPack: {

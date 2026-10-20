@@ -9700,6 +9700,8 @@ settingsSession: {
         discardSubtitle: "Elimina il download incompleto per liberare spazio.",
         discardConfirmTitle: "Scartare il download incompleto?",
         discardConfirmBody: ({ size }: { size: string }) => `Verranno eliminati i ${size} scaricati finora. Potrai scaricare di nuovo il modello in seguito.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `Spazio libero insufficiente. Questo download richiede ${required}, ma ne sono liberi solo ${available}.`,
       },
       localNeuralStt: {
         modelPack: {

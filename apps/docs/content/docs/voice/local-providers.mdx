@@ -42,6 +42,8 @@ You can choose one of these text-to-speech providers:
 - **Google Cloud Text-to-Speech**
 - **Local neural TTS**: Kokoro on web and native
 
+New setups default to **Device STT** and **Device TTS**, so Local voice works without any setup (in browsers without speech recognition, such as Firefox, pick another STT provider; see [Device STT](#device-stt)). Existing setups keep the providers they already have, including OpenAI-compatible providers saved before this default changed.
+
 You can mix providers freely. For example:
 
 - device STT + device TTS
@@ -413,9 +415,12 @@ From settings, users can:
 - download missing packs
 - see download progress
 - stop an in-progress download; stopping discards the files it had downloaded (stopping an update keeps the installed pack)
+- leave the settings screen while a download runs; it keeps going, and coming back shows its progress again
 - retry a failed download; files that were already downloaded and verified are kept, so it continues where it stopped
 - check whether a newer model-pack build is available; an update downloads only the files that changed, and if the update download fails the installed pack keeps working
 - remove downloaded assets to free storage
+
+Before a native download starts, Happier checks that the files still to download fit in the device's free space. If they do not, nothing is downloaded and settings shows how much space the pack needs.
 
 On web, Kokoro runtime files are stored in browser caches. On native, model packs are stored on the device.
 
