@@ -108,6 +108,8 @@ type SessionActionRpcSourceBinding = Readonly<{
     installationId: string;
     sourceSessionId: string;
     targetSessionId?: string;
+    /** Prepared publication already holds its Account/Session/resource parents. */
+    lockAuthority?: boolean;
 }>;
 
 /** Current persisted half of the already-admitted publisher source proof. */
@@ -118,7 +120,7 @@ export async function hasCurrentSessionActionRpcSourceBindingInTx(tx: Tx, params
     if (classifyMachineAvailabilityState(machine) !== 'available'
         || machine?.kind === 'ephemeral_session_runner' || machine?.installationId !== params.installationId
         || !await hasCurrentSessionScopedMachineAccessInTx({ tx, accountId: params.accountId,
-            machineId: params.machineId, sessionId: params.sourceSessionId })) return false;
+            machineId: params.machineId, sessionId: params.sourceSessionId, lockAuthority: params.lockAuthority })) return false;
     if (params.targetSessionId && params.targetSessionId !== params.sourceSessionId) {
         const target = await tx.session.findUnique({ where: { id: params.targetSessionId }, select: { accountId: true } });
         if (target?.accountId !== params.accountId) return false;

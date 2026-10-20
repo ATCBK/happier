@@ -3,6 +3,7 @@ import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happ
 import type { PendingSessionResumeAdmission, PendingSessionResumePort } from '../sessions/activatePendingInactiveSession';
 import { DiscussionAgentPublisherResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 import type { DiscussionAgentPublisherPrivateRequestV1 } from '@/discussions/discussionAgentPublisher';
+import { createApprovedDiscussionAgentPublisher } from '@/discussions/approvedDiscussionAgentPublisher';
 import { runTracedExternalActionStage } from '../externalActions/externalActionPhase';
 import { timeWebLatencyPhase, withWebLatencyTrace } from '../externalActions/webLatencyTrace';
 import { resolveExistingSessionAttachContext } from '../sessionEncryption/resolveExistingSessionAttachContext';
@@ -15548,6 +15549,21 @@ export async function startDaemonSessionControlRuntime(
       > = await trace('daemon.cli_factory', () => createCliActionExecutorFromCredentials({
         ...(sessionStopEffect ? { sessionStop: sessionStopEffect } : {}),
         postAgentDiscussionMessage: async (request, options) => {
+          if (options?.approvedActionReplay && !('operation' in request)) {
+            const serverHttpBaseUrl = requesterAccountContext?.serverHttpBaseUrl
+              ?? requesterRuntime?.bootstrap.serverHttpBaseUrl ?? params.serverBaseUrl;
+            if (!invocationApprovalCurrentness) return { v: 1, ok: false, error: 'discussion_post_denied' };
+            return await createApprovedDiscussionAgentPublisher({ credentials,
+              machineId: params.machineId, serverId: params.serverId, serverUrl: serverHttpBaseUrl,
+              isApprovalExecutionOriginCurrent: invocationApprovalCurrentness,
+              publish: (publication, publicationOptions) => params.getApiMachineForSessions()?.postAgentDiscussionMessage(publication, publicationOptions)
+                ?? Promise.resolve({ v: 1, ok: false, error: 'discussions_unavailable' }),
+              executeSourceAction: (sourceActionId, sourceInput, sourceContext) => executor.execute(sourceActionId, sourceInput, sourceContext),
+            })(request, { ...options, approvedActionReplay: options.approvedActionReplay,
+              callerAuthority: executionContext?.authority,
+              ...(executionContext?.requesterApprovalDecision ? { requesterApprovalDecision: executionContext.requesterApprovalDecision } : {}),
+            });
+          }
           if (options?.approvedActionReplay) {
             const serverHttpBaseUrl = requesterAccountContext?.serverHttpBaseUrl
               ?? requesterRuntime?.bootstrap.serverHttpBaseUrl ?? params.serverBaseUrl;

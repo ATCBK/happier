@@ -259,18 +259,21 @@ async function admitProducerInTx(tx: Tx, input: ExactDiscussion & Readonly<{
     const parsed = DiscussionProducerV1Schema.safeParse(producer);
     if (!parsed.success || parsed.data.replyReturn !== undefined || parsed.data.actionRequestAttributionV1 !== undefined
         || (runtime && runtime.sessionId !== parsed.data.sessionId)) return discussionFailure('discussion_post_denied');
+    if (input.draftReview) {
+        // Only the trusted publisher transport can assert the private V2
+        // review. Its reviewer remains current even when a protected Workflow
+        // original admits an implicit leaf without a participant row.
+        const reviewer = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId,
+            accountId: input.draftReview.decidingAccountId, authentication: backgroundDeliveryAuthentication() });
+        if (!reviewer?.keyReadiness || reviewer.access.level === 'view') return discussionFailure('discussion_post_denied');
+    }
     const participant = await tx.discussionParticipant.findUnique({ where: { discussionId_sessionId: { discussionId: input.discussionId, sessionId: parsed.data.sessionId } }, select: { answerPolicy: true, removedAt: true, session: { select: { accountId: true } } } });
     if (!participant && input.workflowReply?.workflow
         && input.workflowReply.discussion?.participantSessionId === parsed.data.sessionId) return discussionSuccess(parsed.data);
     if (!participant || participant.removedAt || participant.session?.accountId !== input.actorAccountId) return discussionFailure('discussion_post_denied');
-    if (participant.answerPolicy === 'drafts_for_approval') {
-        // Only the trusted publisher transport can assert the private V2
-        // review. The public post body and authored Action cannot carry it.
-        if (!input.draftReview?.artifactId) return discussionFailure('discussion_post_denied');
-        const reviewer = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId,
-            accountId: input.draftReview.decidingAccountId, authentication: backgroundDeliveryAuthentication() });
-        if (!reviewer?.keyReadiness || reviewer.access.level === 'view') return discussionFailure('discussion_post_denied');
-    } else if (participant.answerPolicy !== 'when_addressed' && participant.answerPolicy !== 'watches_and_speaks_up') return discussionFailure('discussion_post_denied');
+    if (participant.answerPolicy === 'drafts_for_approval' && !input.draftReview?.artifactId) return discussionFailure('discussion_post_denied');
+    if (participant.answerPolicy !== 'drafts_for_approval' && participant.answerPolicy !== 'when_addressed'
+        && participant.answerPolicy !== 'watches_and_speaks_up') return discussionFailure('discussion_post_denied');
     return discussionSuccess(parsed.data);
 }
 

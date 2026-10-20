@@ -215,9 +215,11 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
       const participant = roster.participants.find(row => row.participant.kind === 'session'
         ? row.participant.sessionId === params.sessionId : 'sessionId' in row && row.sessionId === params.sessionId);
       if (!participant || participant.answerPolicy === 'reads_only') return null;
-      if (participant.answerPolicy === 'drafts_for_approval') {
+      if (participant.answerPolicy === 'drafts_for_approval' || params.callerAuthority === 'present_user') {
         // The stored decision label alone is editable Account data. The exact
         // original executor must also receive authenticated human ingress.
+        // Preserve its actual reviewer even if participant policy changed
+        // after capture; transports must not infer a reviewer from credentials.
         if (params.callerAuthority !== 'present_user') return null;
         const requesterAdmission = await admitApprovalRequesterDecisionV1({ request: approval,
           context: { authority: params.callerAuthority, runtimeAccountId: origin.accountId,

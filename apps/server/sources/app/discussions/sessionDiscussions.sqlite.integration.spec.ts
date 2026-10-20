@@ -571,9 +571,10 @@ describe('First-class Discussions service (SQLite)', () => {
         const principal = runner ? await import('@/app/auth/auth').then(async ({ auth }) => (await auth.verifyToken(runner.token))?.ephemeralSessionRunnerPrincipal) : undefined;
         if (runner && !principal) throw new Error('Expected the real materialized Runner credential');
         const { socket } = await publisherSocket(owner.id, session.id, runner && principal ? { machineId: runner.machineId, principal } : undefined);
-        const publish = async (replyReturn = marker) => {
+        const publish = async (replyReturn = marker, draftReview?: { artifactId: string; decidingAccountId: string }) => {
             let result: unknown;
             await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: session.id, discussionId, replyReturn,
+                ...(draftReview ? { draftReview } : {}),
                 request: { ...postRequest('Accepted answer'), localId, replyTarget: { kind: 'message', messageId: question.id } } },
                 (value: unknown) => { result = value; });
             return DiscussionAgentPostResponseV1Schema.parse(result);
@@ -596,6 +597,16 @@ describe('First-class Discussions service (SQLite)', () => {
         await db.workflowRunInvocation.update({ where: { id: invocation.id }, data: { lifecycle: 'completed' } });
         expect(await publish({ ...marker, workflow: { ...marker.workflow, invocationAttempt: '1' } })).toMatchObject({ ok: false });
         expect(await publish({ ...marker, workflow: { ...marker.workflow, runId: 'forged-run' } })).toMatchObject({ ok: false });
+        if (mode === 'unregistered' && 'invitee' in selected) {
+            const review = { artifactId: 'reviewed-workflow-answer', decidingAccountId: selected.invitee.id };
+            expect(await publish(marker, review)).toMatchObject({ ok: true });
+            expect(await setDiscussionGrant({ authentication, actorAccountId: owner.id, discussionId,
+                request: { principal: { kind: 'account', accountId: selected.invitee.id }, accessLevel: 'view' } })).toMatchObject({ ok: true });
+            // The real protected original remains current, but it cannot
+            // bypass a supplied private review's current reviewer admission.
+            expect(await publish(marker, review)).toMatchObject({ ok: false, error: 'discussion_post_denied' });
+            expect(await db.discussionMessage.count({ where: { discussionId, localId } })).toBe(1);
+        }
         const posted = await publish();
         expect(posted).toMatchObject({ ok: true, value: { message: { addressingV1: { participantSessionIds: [] } } } });
         if (!posted.ok) throw new Error(posted.error);

@@ -288,10 +288,22 @@ export const DiscussionDraftReviewV1Schema = lazyZodSchema(() => z.strictObject(
   decidingAccountId: DiscussionIdSchema,
 }));
 export type DiscussionDraftReviewV1 = z.infer<typeof DiscussionDraftReviewV1Schema>;
-/** Current-publisher transport only; authoring requests cannot carry review authority. */
+/** Trusted host transport only; authoring requests cannot carry review authority. */
 export const DiscussionAgentPostPublicationV1Schema = lazyZodSchema(() => z.extend(DiscussionAgentPostRequestV1Schema, {
   draftReview: z.optional(DiscussionDraftReviewV1Schema),
 }));
+export type DiscussionAgentPostPublicationV1 = z.infer<typeof DiscussionAgentPostPublicationV1Schema>;
+/** The installed owning Machine replays a privately reviewed post without impersonating a live Session publisher. */
+export const DiscussionAgentApprovedReplayPublicationV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  operation: z.literal('approved_replay'),
+  machineId: z.string().check(z.minLength(1)),
+  publication: z.extend(DiscussionAgentPostPublicationV1Schema, { draftReview: DiscussionDraftReviewV1Schema }).check(z.refine(
+    publication => publication.sourceSession !== undefined || publication.replyReturn !== undefined,
+    { message: 'Reviewed replay requires its durable Session source or protected original return' },
+  )),
+}));
+export type DiscussionAgentApprovedReplayPublicationV1 = z.infer<typeof DiscussionAgentApprovedReplayPublicationV1Schema>;
 export const DiscussionAgentPublisherPublicationV1Schema = lazyZodSchema(() => z.union([
   DiscussionAgentPostPublicationV1Schema, DiscussionAgentCreateRequestV1Schema,
 ]));
@@ -452,6 +464,13 @@ export const DiscussionAgentPostResponseV1Schema = lazyZodSchema(() => z.discrim
   }),
 ]));
 export type DiscussionAgentPostResponseV1 = z.infer<typeof DiscussionAgentPostResponseV1Schema>;
+
+/** The installed Machine must surface indeterminate storage/commit results to its Action owner. */
+export const DiscussionAgentApprovedReplayResponseV1Schema = lazyZodSchema(() => z.union([
+  DiscussionAgentPostResponseV1Schema,
+  z.strictObject({ v: z.literal(1), ok: z.literal(false), error: z.literal('outcome_unknown') }),
+]));
+export type DiscussionAgentApprovedReplayResponseV1 = z.infer<typeof DiscussionAgentApprovedReplayResponseV1Schema>;
 
 export const DiscussionAgentCreateResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('ok', [
   z.strictObject({ ok: z.literal(true), v: z.literal(1), value: DiscussionCreateResponseV1Schema }),

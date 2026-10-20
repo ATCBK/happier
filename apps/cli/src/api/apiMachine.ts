@@ -5,6 +5,9 @@
 
 import axios from 'axios';
 import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentApprovedReplayPublicationV1Schema,
+    DiscussionAgentApprovedReplayResponseV1Schema, type DiscussionAgentPostPublicationV1,
+    type DiscussionAgentPostResponseV1 } from '@happier-dev/protocol/discussions/api';
 import { SESSION_PENDING_RESET_START_RELEASE_EVENT_V1, PendingResetStartReleaseRequestV1Schema, PendingResetStartReleaseResponseV1Schema, type PendingResetStartBindingV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { MachineUpdateStateResponseSchema } from '@happier-dev/protocol/machines/metadataUpdate';
@@ -3317,11 +3320,31 @@ export class ApiMachineClient {
         return handled;
     }
 
-    /**
-     * Update machine metadata
-     * Currently unused, changes from the mobile client are more likely
-     * for example to set a custom name.
-     */
+    /** The same trusted publisher, for an already-reviewed body whose runner may have exited. */
+    async postAgentDiscussionMessage(
+        publication: DiscussionAgentPostPublicationV1,
+        options?: Readonly<{ signal?: AbortSignal }>,
+    ): Promise<DiscussionAgentPostResponseV1> {
+        options?.signal?.throwIfAborted();
+        const socket = this.socket;
+        if (!socket?.connected || this.projectionSchedulingClosed) {
+            return { v: 1 as const, ok: false as const, error: 'discussions_unavailable' as const };
+        }
+        const request = DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({
+            v: 1, operation: 'approved_replay', machineId: this.machine.id, publication,
+        });
+        if (!request.success) return { v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const };
+        const raw = await emitSocketWithAck({ socket, event: DISCUSSION_AGENT_POST_EVENT_V1,
+            payload: request.data, timeoutMs: null, ...(options?.signal ? { signal: options.signal } : {}) });
+        const result = DiscussionAgentApprovedReplayResponseV1Schema.parse(raw);
+        if (!result.ok && result.error === 'outcome_unknown') {
+            // The canonical Action owner records uncertainty; it must not be
+            // converted into a no-effect refusal or left awaiting a lost ACK.
+            throw Object.assign(new Error('outcome_unknown'), { code: 'outcome_unknown' });
+        }
+        return result;
+    }
+
     async captureMachineSessionTerminal(
         sessionId: string,
     ): Promise<MachineSessionTerminalCaptureResponseV1> {

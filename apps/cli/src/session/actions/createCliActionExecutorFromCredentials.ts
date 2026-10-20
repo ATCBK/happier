@@ -1180,10 +1180,15 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         const approvedActionId = ActionIdSchema.safeParse(request.actionId);
         const clientPlaced = approvedActionId.success
           && resolveActionExecutionPlacementForInput(getActionSpec(approvedActionId.data), request.actionArgs) === 'client';
+        // A Session proposal may be app-replayable without requiring exact
+        // daemon custody. A standalone deciding CLI still has no mounted UI:
+        // reuse the recorded daemon's dispatcher, preserving the Session address.
+        const clientNeedsDaemonReplay = clientPlaced && Boolean(request.executionOriginV1.machineId)
+          && !params.clientActionExecute && !getDaemonClientActionExecutor(approvalServerId);
         if (machineAdmissionTransport || params.machineActionDirectTargetTransport
           || params.pluginActionExecutionOwner === 'current_process'
           || clientPlaced && params.clientActionExecute
-          || !requiresExactDaemonApprovalReplay(request)) return null;
+          || !requiresExactDaemonApprovalReplay(request) && !clientNeedsDaemonReplay) return null;
         if (request.v !== 2 || !request.executionOriginV1.machineId
           || !hasStoredSessionCredentialProvenance(credentials)
           || context.surface !== 'cli' || context.authority !== 'present_user'

@@ -30,7 +30,7 @@ import { emitPendingChanged } from '@/app/session/pending/publishPendingMutation
 import { executeExternalSessionHistoricalImportCommand } from "@/app/session/externalSessionHistoricalImportCommand";
 import type { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
 import { publishSessionPublisherClose } from "@/app/presence/publishSessionPublisherClose";
-import { hasCurrentSessionScopedMachineAccessInTx } from "@/app/api/socket/sessionScopedBinding";
+import { hasCurrentSessionActionRpcSourceBindingInTx, hasCurrentSessionScopedMachineAccessInTx } from "@/app/api/socket/sessionScopedBinding";
 import { scheduleSessionActivityRemoteAlerts } from "@/app/activity/remoteAlerts/submitSessionActivityRemoteAlerts";
 import { resolveCurrentSessionRecipientAccountIdsInTx } from "@/app/session/access/sessionRecipients";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
@@ -61,6 +61,10 @@ import { getDbProviderFromEnv } from "@/storage/prisma";
 import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMachineMutationV1Schema, type SessionMessageReplyMutationResultV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { mutateSessionMessageReplyForMachineInTx } from '@/app/session/messages/sessionMessageReply';
 import { createServerRpcForwarder } from './serverRpcForwarder';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentApprovedReplayPublicationV1Schema, DiscussionAgentApprovedReplayResponseV1Schema, isDiscussionRequestWithinTransportBudgetV1 } from '@happier-dev/protocol/discussions/api';
+import { postPreparedDiscussionMessageInTx, prepareDiscussionPostMutationAccounts } from '@/app/discussions/mutations';
+import { isSessionInputSourceCurrentInTx } from '@/app/session/messages/sessionMessageReply';
+import { isServerFeatureEnabledForHome } from '@/app/features/catalog/serverFeatureGate';
 
 async function acquireMachinePublicationLocksInTx(tx: Tx, machineId: string): Promise<string[]> {
     // SQLite already admits one writer. PostgreSQL/MySQL use the same ordered
@@ -206,6 +210,57 @@ export function machineUpdateHandler(
         }>) => Promise<SessionServerStartIngressResponseV1>;
     }>,
 ) {
+    // Startup installs both registrar families. Exactly one socket-profile
+    // owner may acknowledge this shared publication event.
+    if (readAuthenticatedMachineId(socket)) socket.on(DISCUSSION_AGENT_POST_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
+        const respond = (response: unknown) => callback?.(DiscussionAgentApprovedReplayResponseV1Schema.parse(response));
+        const parsed = DiscussionAgentApprovedReplayPublicationV1Schema.safeParse(data);
+        try {
+            if (!await isServerFeatureEnabledForHome('sessions.conversations')) {
+                respond({ v: 1, ok: false, error: 'discussions_unavailable' });
+                return;
+            }
+            if (!parsed.success || !isDiscussionRequestWithinTransportBudgetV1(parsed.data.publication.request)) {
+                respond({ v: 1, ok: false, error: 'discussion_invalid_content' });
+                return;
+            }
+            const machineId = readAuthenticatedMachineId(socket);
+            const installationId = readVerifiedMachineSocketInstallationIdFromSocketData(socket.data);
+            if (!machineId || machineId !== parsed.data.machineId || !installationId
+                || !await hasCurrentSocketCredential(userId, socket)) {
+                respond({ v: 1, ok: false, error: 'discussion_post_denied' });
+                return;
+            }
+            const publication = parsed.data.publication;
+            const append = { actorAccountId: userId, authentication: readSessionAccessAuthenticationFromSocket(socket),
+                discussionId: publication.discussionId, request: publication.request, draftReview: publication.draftReview,
+                ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}),
+                producer: { v: 1 as const, kind: 'agent' as const, sessionId: publication.sessionId,
+                    ...(publication.sourceSession ? { sourceSession: publication.sourceSession } : {}),
+                    ...(publication.runId ? { runId: publication.runId } : {}),
+                    ...(publication.toolCallId ? { toolCallId: publication.toolCallId } : {}) } };
+            const result = await inTx(async tx => {
+                const admission = await resolveMachineAdmissionInTx(tx, { actorAccountId: userId, machineId });
+                // This is the installed owner's reviewed replay, not a second
+                // Session publisher or an ephemeral runner's raw draft channel.
+                if (admission.kind !== 'admitted' || admission.custodianAccountId !== userId
+                    || admission.installationId !== installationId
+                    || !await hasCurrentSessionActionRpcSourceBindingInTx(tx, { accountId: userId, machineId,
+                        installationId, sourceSessionId: publication.sessionId, lockAuthority: true })) return null;
+                const session = await tx.session.findUnique({ where: { id: publication.sessionId }, select: { archivedAt: true } });
+                if (!session || session.archivedAt || publication.sourceSession
+                    && (publication.sourceSession.sourceSessionId !== publication.sessionId
+                        || !await isSessionInputSourceCurrentInTx(tx, userId, publication.sourceSession))) return null;
+                return postPreparedDiscussionMessageInTx(tx, append);
+            }, { prepare: () => prepareDiscussionPostMutationAccounts(append) });
+            respond(result ? { v: 1, ...result } : { v: 1, ok: false, error: 'discussion_post_denied' });
+        } catch {
+            log({ module: 'websocket', level: 'warn' }, 'Machine reviewed Discussion publication outcome is unknown');
+            // Storage/commit uncertainty is not a definitive no-effect refusal.
+            // The existing Action owner retains this visible unknown outcome.
+            respond({ v: 1, ok: false, error: 'outcome_unknown' });
+        }
+    });
     socket.on(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_OPERATION_RETIRE_EVENT_V1, async (
         request: unknown,
         callback?: (response: unknown) => void,

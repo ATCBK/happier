@@ -1,10 +1,14 @@
 import { createServer } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, it, onTestFailed, vi } from 'vitest';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema,
-  DiscussionAgentPostPublicationV1Schema, DiscussionAgentPublisherResponseV1Schema, type DiscussionAgentPublisherPublicationV1 } from '@happier-dev/protocol/discussions/api';
+  DiscussionAgentPostPublicationV1Schema, DiscussionAgentApprovedReplayPublicationV1Schema,
+  DiscussionAgentPublisherResponseV1Schema, type DiscussionAgentPublisherPublicationV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionSummaryV1Schema, DiscussionMessageV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionMessageContentV1Schema } from '@happier-dev/protocol/discussions/content';
 import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
@@ -15,6 +19,10 @@ import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessio
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
 import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
 import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
+import { createApprovedDiscussionAgentPublisher } from '@/discussions/approvedDiscussionAgentPublisher';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
@@ -27,6 +35,8 @@ import { deriveKey } from '@/utils/deriveKey';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import { openSessionStoredContent, sealSessionStoredContent } from '@/session/transport/encryption/sessionStoredContentCodec';
 import type { StoredCredentials } from '@/persistence';
+import { writeStoredCredentialsForServerId } from '@/persistence';
+import type { createRequesterSessionControlRuntimeFixture } from '@/daemon/testkit/requesterSessionControlRuntimeFixture';
 import { ApiSessionClient } from './sessionClient';
 import { readApprovedDiscussionPublication } from '@/discussions/approvedDiscussionPublication';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
@@ -35,15 +45,31 @@ import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/di
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { createConnectedServiceCredentialApi } from '@/api/client/connectedServiceCredentialApi';
 
-afterEach(() => { resetInMemoryAccountSettingsContextForTests(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+const io = vi.hoisted(() => vi.fn());
+// Socket.IO is the sole publication/absent-Session network boundary.
+vi.mock('socket.io-client', async original => {
+  const actual = await original<typeof import('socket.io-client')>();
+  return { ...actual, io: (...args: Parameters<typeof actual.io>) => io.getMockImplementation()
+    ? io(...args) : actual.io(...args) };
+});
+// The local daemon listener is an OS boundary; startup/replay composition stays real.
+vi.mock('@/daemon/controlServer', () => ({
+  startDaemonControlServer: async () => ({ port: 44324, stop: async () => {} }),
+}));
+
+afterEach(() => { resetInMemoryAccountSettingsContextForTests(); vi.restoreAllMocks(); vi.unstubAllGlobals(); io.mockReset(); });
 
 it.each([
   { mode: 'plain', scope: 'draft creation' }, { mode: 'e2ee', scope: 'draft creation' },
   { mode: 'plain', scope: 'publication replay' }, { mode: 'e2ee', scope: 'publication replay' },
   { mode: 'plain', scope: 'satisfied return' }, { mode: 'e2ee', scope: 'satisfied return' },
   { mode: 'plain', scope: 'pending explicit' }, { mode: 'e2ee', scope: 'pending explicit' },
+  { mode: 'plain', scope: 'inactive private Post' }, { mode: 'e2ee', scope: 'inactive private Post' },
+  { mode: 'plain', scope: 'inactive host private Post' },
 ] as const)('Discussion $scope ($mode)', async ({ mode, scope }) => {
+  const inactivePost = scope === 'inactive private Post' || scope === 'inactive host private Post';
   let phase = 'initialization';
   let failedPhase: string | undefined;
   onTestFailed(() => console.error('Discussion approval replay failed during:', mode, failedPhase ?? phase));
@@ -108,7 +134,9 @@ it.each([
         content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Actual source answer' } } } },
     ], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
     if (path === `/v2/sessions/${opinionSourceSessionId}`) return reply({ session:
-      createSessionRecordFixture({ id: opinionSourceSessionId, share: null, encryptionMode: 'plain' }) });
+      createSessionRecordFixture({ id: opinionSourceSessionId, share: null, encryptionMode: 'plain',
+        ...(inactivePost ? { active: false,
+          metadata: JSON.stringify({ machineId, path: '/repo' }) } : {}) }) });
     if (path.endsWith('/messages/by-local-id/terminal-original/reply')
       || path.endsWith('/messages/by-local-id/forged-terminal-original/reply')) return reply({ v: 1, status: 'available',
       progress: { v: 1, mode: 'return', disposition: terminalReturned ? 'returned' : 'return_pending', acceptedTurnId: 'retired-turn',
@@ -142,6 +170,8 @@ it.each([
       ownerAccountId: 'owner', encryptionMode: mode, access: 'owner', dataEncryptionKey: key.dataEncryptionKey,
       callerDataEncryptionKey: key.dataEncryptionKey, recipients: [] });
     if (path.startsWith('/v1/artifacts')) {
+      if (inactivePost && request.headers.authorization !== `Bearer ${token}`)
+        return reply({ error: 'artifact_access_denied' }, 403);
       if (path === '/v1/artifacts' && request.method === 'GET') return reply([...artifacts.values()]);
       if (path.endsWith('/access/recipients')) {
         const artifactId = decodeURIComponent(path.split('/')[3] ?? '');
@@ -213,8 +243,190 @@ it.each([
       localId: parsed.request.localId, seq: 2, authorAccountId: 'owner', accountActor: { v: 1, accountId: 'owner', profile: null },
       producerV1: { v: 1, kind: 'agent', sessionId }, content: parsed.request.content, mentionedAccountIds: [], createdAt: 1 } } };
   } });
-  if (mode === 'plain' || scope === 'publication replay') await runWithServerHttpBaseUrl(serverUrl,
+  if (mode === 'plain' || scope === 'publication replay' || inactivePost) await runWithServerHttpBaseUrl(serverUrl,
     () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking' }));
+  if (inactivePost) {
+    phase = scope;
+    const privateContent = scope === 'inactive host private Post'
+      ? { v: 1 as const, parts: [{ t: 'text' as const, text: 'The requested session failed.' }] } : content;
+    participantPolicy = 'drafts_for_approval';
+    const machinePublications: unknown[] = [];
+    const absentSessionCalls: unknown[] = [];
+    const missingSession = { ok: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND,
+      errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+    const machineSocket = createApiSessionSocketStub({
+      emit: (event, args) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        absentSessionCalls.push(args[0]);
+        const callback = args.at(-1);
+        if (typeof callback === 'function') callback(missingSession);
+      },
+      emitWithAck: async (event, payload) => {
+        if (event === SOCKET_RPC_EVENTS.CALL) { absentSessionCalls.push(payload); return missingSession; }
+        if (event === DISCUSSION_AGENT_POST_EVENT_V1) {
+          machinePublications.push(payload);
+          const { publication } = DiscussionAgentApprovedReplayPublicationV1Schema.parse(payload);
+          return { v: 1, ok: true, value: { messageSeq: 2, message: { id: 'private-committed',
+            discussionId: summary.id, localId: publication.request.localId, seq: 2, authorAccountId: 'owner',
+            accountActor: { v: 1, accountId: 'owner', profile: null }, producerV1: { v: 1, kind: 'agent', sessionId },
+            content: publication.request.content, mentionedAccountIds: [], createdAt: 1 } } };
+        }
+        return { result: 'success', version: 1 };
+      },
+    });
+    // Each real transport gets its own boundary socket. Sharing the Machine
+    // socket with the Account observer would make one owner's close retire both.
+    io.mockReset();
+    io.mockImplementation((_url: unknown, options: unknown) => {
+      const auth = options && typeof options === 'object' && 'auth' in options ? options.auth : null;
+      const clientType = auth && typeof auth === 'object' && 'clientType' in auth ? auth.clientType : null;
+      if (clientType === 'machine-scoped') return machineSocket;
+      if (clientType !== 'user-scoped') throw new Error('Unexpected inactive publication Socket scope');
+      return createApiSessionSocketStub({
+      emit: (event, args) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return;
+        absentSessionCalls.push(args[0]);
+        const callback = args.at(-1);
+        if (typeof callback === 'function') callback(missingSession);
+      },
+      emitWithAck: async (event, payload) => {
+        if (event === SOCKET_RPC_EVENTS.CALL) { absentSessionCalls.push(payload); return missingSession; }
+        return { result: 'success', version: 1 };
+      },
+      });
+    });
+    let machine: ApiMachineClient | null = null;
+    let startupFixture: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | undefined;
+    let startupDirectory: string | undefined;
+    try {
+      if (scope === 'inactive host private Post') {
+        startupDirectory = await mkdtemp(join(tmpdir(), 'happier-inactive-discussion-post-'));
+        const { createRequesterSessionControlRuntimeFixture } = await import('@/daemon/testkit/requesterSessionControlRuntimeFixture');
+        const { ConnectedServiceRuntimeRegistry } = await import('@/daemon/connectedServices/runtimeRegistry/registry');
+        startupFixture = await createRequesterSessionControlRuntimeFixture({
+          happyHomeDir: join(startupDirectory, 'home'), activeServerDir: join(startupDirectory, 'home', 'servers', serverId),
+          serverId, serverHttpBaseUrl: serverUrl, machineId, custodianAccountId: 'owner', credentials,
+          connectedServicesMaterializationBaseDir: join(startupDirectory, 'connected-services'),
+          registry: new ConnectedServiceRuntimeRegistry(), trackedSessions: new Map(), getRequester: () => null,
+          getApiMachineForSessions: () => machine, resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+          beforeStartup: async () => { await writeStoredCredentialsForServerId(serverId, credentials); },
+          startup: { resolveCurrentMachineExecutionOriginContext: async () => ({ machineId, serverIdentityId: 'srv_fixture_home' }) },
+        });
+        await runWithServerHttpBaseUrl(serverUrl, () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking' }));
+      }
+      machine = await runWithServerHttpBaseUrl(serverUrl, async () => {
+        const client = new ApiMachineClient(token, { id: machineId, encryptionMode: 'plain',
+          metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+        client.connect();
+        return client;
+      });
+      const connectedMachine = machine;
+      // Match Socket.IO's autoConnect:false lifecycle so the real Account
+      // observer receives its authenticated connection occurrence too.
+      await vi.waitFor(() => expect(machineSocket.connect).toHaveBeenCalled());
+      await runWithServerHttpBaseUrl(serverUrl, async () => {
+        phase = `${scope}: Account mode boundary`;
+        expect(await createConnectedServiceCredentialApi(credentials).getAccountEncryptionMode({ throwOnTransportError: true })).toBe(mode);
+        phase = scope;
+        const currentness = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials,
+          machineId, serverId, serverApiUrl: serverUrl,
+          // No runner remains: the existing lifecycle port has no live caller.
+          isSessionCallerCurrent: async () => false });
+        if (!currentness) throw new Error('Missing canonical inactive approval currentness');
+        const store = createCliApprovalsArtifactStore({ credentials, serverId, serverHttpBaseUrl: serverUrl });
+        const post = createApprovedDiscussionAgentPublisher({ credentials, machineId, serverId, serverUrl,
+          isApprovalExecutionOriginCurrent: currentness,
+          publish: (publication, options) => connectedMachine.postAgentDiscussionMessage(publication, options) });
+        // A different plaintext Account has no client Account encryption material
+        // and cannot open the owner's private Artifact at this real HTTP boundary.
+        const foreignCredentials: StoredCredentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: 'other-owner' })).toString('base64url')}.fixture`,
+          encryption: null };
+        const foreignPost = createApprovedDiscussionAgentPublisher({ credentials: foreignCredentials,
+          machineId, serverId, serverUrl, isApprovalExecutionOriginCurrent: currentness,
+          publish: (publication, options) => connectedMachine.postAgentDiscussionMessage(publication, options) });
+        const refused: unknown[] = [];
+        const deps = createDiscussionActionDeps({ credentials, serverId, serverHttpBaseUrl: serverUrl,
+          postAgentMessage: async (request, options) => {
+            if (!options?.approvedActionReplay) throw new Error('A private draft must be approved before publication');
+            if ('operation' in request) throw new Error('Unexpected create from private Post');
+            const reviewed = { ...options, approvedActionReplay: options.approvedActionReplay,
+              callerAuthority: 'present_user' as const };
+            refused.push(await post({ ...request, request: { ...request.request,
+              content: sealSessionStoredContent({ ...crypto, payload: { v: 1, parts: [{ t: 'text', text: 'Unapproved replacement' }] } }) } }, reviewed));
+            refused.push(await post(request, { ...reviewed, callerAuthority: 'account_automation' }));
+            if (mode === 'plain') refused.push(await foreignPost(request, reviewed));
+            expect(machinePublications).toEqual([]);
+            return post(request, reviewed);
+          } });
+        const executor = createActionExecutor({ ...createCliActionDeps({ credentials, token, sessionId,
+          serverId, serverHttpBaseUrl: serverUrl, mode: 'plain', ctx: null }), ...store, ...deps,
+          isApprovalExecutionOriginCurrent: currentness });
+        const source = { sourceSessionId: sessionId, sourceInputId: 'native-draft-input',
+          sourceTurnId: 'native-draft-turn', via: 'action' as const, discussionAddressing: {
+            discussionId: summary.id, messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId } };
+        if (scope === 'inactive host private Post') {
+          await createDiscussionReplyReturnPublisher({ credentials, machineId, serverId, serverHttpBaseUrl: serverUrl,
+            signal: new AbortController().signal, isCurrent: async () => true,
+            actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => draftAccountSettings,
+              allowEnvironmentOverride: false }) })({ serverId, requestSessionId: sessionId,
+            requestLocalId: source.sourceInputId, acceptedTurnId: source.sourceTurnId,
+            discussion: source.discussionAddressing, outcome: { kind: 'failed' }, message: privateContent.parts[0]!.text });
+        } else {
+          const { createCliActionExecutor } = await import('@/session/actions/createCliActionExecutor');
+          const draftExecutor = createCliActionExecutor({ credentials, token, sessionId, serverId,
+            serverIdentityId: 'srv_fixture_home', serverHttpBaseUrl: serverUrl, mode: 'plain', ctx: null,
+            actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => draftAccountSettings,
+              allowEnvironmentOverride: false }) });
+          const draft = await draftExecutor.execute('discussion.reply', { discussionId: summary.id,
+            localId: 'private-post', content: privateContent, replyTarget: { kind: 'message', messageId: 'question-1' } }, {
+            serverId, serverIdentityId: 'srv_fixture_home', surface: 'agent', authority: 'account_automation',
+            defaultSessionId: sessionId, defaultSessionMachineId: machineId, actionRequestId: 'private-post',
+            actionCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 }, sessionInputSource: source });
+          expect(draft, JSON.stringify(draft)).toMatchObject({ ok: true });
+        }
+        const open = await store.approvalsList({ serverId, status: 'open', limit: 10 });
+        expect(open.items).toHaveLength(1);
+        const artifactId = open.items[0]!.artifactId;
+        const captured = await store.approvalsGet({ serverId, artifactId });
+        expect(captured).toMatchObject({ v: 2, status: 'open', actionId: 'discussion.reply',
+          discussionDraftReview: true, executionOriginV1: { machineId, sessionInputSource: source,
+            discussionReplyReturn: { serverId, requestLocalId: source.sourceInputId, acceptedTurnId: source.sourceTurnId } },
+          actionArgs: { content: privateContent } });
+        if (captured?.v !== 2) throw new Error('Missing actual private draft');
+        expect(await store.approvalsUpdate({ artifactId, serverId, request: { ...captured, status: 'approved',
+          updatedAtMs: captured.updatedAtMs + 1, decision: { kind: 'approve',
+            decidedAtMs: captured.updatedAtMs + 1, authority: 'present_user' } } })).toMatchObject({ ok: true });
+        const replay = () => {
+          if (scope !== 'inactive host private Post')
+            return executor.replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' });
+          const ingress = startupFixture?.runtime.externalActionIngressOwner;
+          if (!ingress) throw new Error('Missing startup-composed approval executor');
+          return ingress.executor.replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' });
+        };
+        const result = await replay();
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'executed' } });
+        expect(refused).toEqual(Array.from({ length: scope === 'inactive host private Post' ? 0 : mode === 'plain' ? 3 : 2 },
+          () => ({ v: 1, ok: false, error: 'discussion_post_denied' })));
+        expect(absentSessionCalls).toEqual([]);
+        expect(machinePublications).toHaveLength(1);
+        expect(machinePublications[0]).toMatchObject({ v: 1, operation: 'approved_replay', machineId,
+          publication: { v: 1, sessionId, discussionId: summary.id, sourceSession: source,
+            draftReview: { artifactId, decidingAccountId: 'owner' } } });
+        const { publication } = DiscussionAgentApprovedReplayPublicationV1Schema.parse(machinePublications[0]);
+        expect(openSessionStoredContent({ ...crypto, content: publication.request.content })).toEqual(privateContent);
+        await replay();
+        expect(machinePublications).toHaveLength(1);
+        expect(await store.approvalsGet({ artifactId, serverId })).toMatchObject({ status: 'executed' });
+        expect(humanWrites).toBe(0);
+      });
+    } finally {
+      await machine?.shutdown();
+      await startupFixture?.dispose();
+      if (startupDirectory) await rm(startupDirectory, { recursive: true, force: true });
+      await new Promise<void>((resolve, reject) => home.close(error => error ? reject(error) : resolve()));
+    }
+    return;
+  }
   const client = new ApiSessionClient(token, createPlainSessionFixture({ id: sessionId }), { localMachineId: machineId,
     metadataAuthority: { kind: 'owner', credentials }, transport: { serverId, serverUrl,
       createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) } });
@@ -230,10 +442,18 @@ it.each([
     const secondKeyResults: unknown[] = [];
     const draftAutomationResults: unknown[] = [];
     const nonhumanCreateResults: unknown[] = [];
+    const reviewedActorStamps: unknown[] = [];
     let lastPublicationReplay: string | undefined;
     const deps = createDiscussionActionDeps({ credentials, serverId, serverHttpBaseUrl: serverUrl,
       postAgentMessage: async (request, options) => {
         lastPublicationReplay = options?.approvedActionReplay?.artifactId;
+        if (!('operation' in request) && participantPolicy === 'when_addressed' && options?.approvedActionReplay) {
+          const reviewed = await readApprovedDiscussionPublication({
+            artifactId: options.approvedActionReplay.artifactId, request, credentials, sessionId, serverId, serverUrl,
+            callerAuthority: 'present_user', isApprovalExecutionOriginCurrent: currentness,
+          });
+          reviewedActorStamps.push(reviewed?.draftReview);
+        }
         // JSON transport omits absent optional fields; preserve that boundary
         // shape when invoking the actual registrar in-process.
         const replay = options?.approvedActionReplay ? { approvedActionReplay: options.approvedActionReplay } : {};
@@ -441,6 +661,7 @@ it.each([
       const artifactId = await approve();
       expect(await fresh().replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' }))
         .toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(reviewedActorStamps).toEqual([{ artifactId, decidingAccountId: 'owner' }]);
       expect(secondKeyResults).toEqual([expect.objectContaining({ ok: false, error: 'discussion_post_denied' })]);
       expect(publications).toHaveLength(1);
       expect(publications[0]?.sourceSession).toEqual(request.executionOriginV1.sessionInputSource);

@@ -13,6 +13,9 @@ import {
   buildDiscussionMutationRequestBodyV1,
   DiscussionAgentPostRequestV1Schema,
   DiscussionAgentPostResponseV1Schema,
+  DiscussionAgentApprovedReplayPublicationV1Schema,
+  DiscussionAgentApprovedReplayResponseV1Schema,
+  DiscussionAgentPublisherPublicationV1Schema,
   DiscussionCreateRequestV1Schema,
   DiscussionMessagesQueryV1Schema,
   DiscussionPostRequestV1Schema,
@@ -58,6 +61,26 @@ const plainMessage = {
 };
 
 describe('session discussion content', () => {
+  it('keeps the reviewed Machine replay closed and separate from current Session publication', () => {
+    const post = { v: 1, sessionId: 'receiver', discussionId: 'discussion', request: plainMessage,
+      sourceSession: { sourceSessionId: 'receiver', sourceInputId: 'input', sourceTurnId: 'turn', via: 'action' },
+      draftReview: { artifactId: 'approved-private-body', decidingAccountId: 'owner' } };
+    const replay = { v: 1, operation: 'approved_replay', machineId: 'owner-machine', publication: post };
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.parse(replay)).toEqual(replay);
+    expect(DiscussionAgentPublisherPublicationV1Schema.parse(post)).toEqual(post);
+    expect(DiscussionAgentPublisherPublicationV1Schema.safeParse(replay).success).toBe(false);
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse(post).success).toBe(false);
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({ ...replay, approved: true }).success).toBe(false);
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({ ...replay, publication: { ...post, draftReview: undefined } }).success).toBe(false);
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({ ...replay, publication: { ...post, draftReview: { ...post.draftReview, approved: true } } }).success).toBe(false);
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({ ...replay, publication: { ...post, operation: 'create' } }).success).toBe(false);
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({ ...replay, publication: { ...post, sourceSession: undefined } }).success).toBe(false);
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({ ...replay, publication: { ...post, sourceSession: undefined,
+      replyReturn: { serverId: 'home', requestLocalId: 'input' } } }).success).toBe(true);
+    const unknown = { v: 1, ok: false, error: 'outcome_unknown' };
+    expect(DiscussionAgentApprovedReplayResponseV1Schema.parse(unknown)).toEqual(unknown);
+    expect(DiscussionAgentPostResponseV1Schema.safeParse(unknown).success).toBe(false);
+  });
   it('retains only content-free host reply cause with tolerant stored producer reads, never authored attribution', () => {
     const cause = { requestRef: 'original-input', requester: { serverId: 'home', accountId: 'bob' },
       persona: { serverId: 'home', sessionId: 'worker' },

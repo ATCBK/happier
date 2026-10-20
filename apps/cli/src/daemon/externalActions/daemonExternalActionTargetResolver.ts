@@ -254,7 +254,18 @@ export function createDaemonApprovalExecutionOriginCurrentness(input: Readonly<{
         if (!await input.isAutomationRunCurrent(origin.caller)) return stale('automation_run_changed');
       }
 
-      if (origin.caller.kind === 'session' && !hasVerifiedManagedGuestSource) {
+      // Posting a person's reviewed Discussion body consumes durable original
+      // input custody, not a new Agent turn. The publisher still reopens the
+      // executing Artifact and Home rechecks its source and owning Machine.
+      const retainedDiscussionPublication = origin.caller.kind === 'session'
+        && request?.v === 2 && request.actionId === origin.actionId
+        && (request.actionId === 'discussion.post' || request.actionId === 'discussion.reply')
+        && (request.status === 'approved' || request.status === 'executing')
+        && request.decision?.kind === 'approve' && request.decision.authority === 'present_user'
+        && request.execution === undefined
+        && origin.sessionInputSource?.sourceSessionId === origin.caller.sessionId
+        && Boolean(origin.sessionInputSource.sourceInputId && origin.sessionInputSource.sourceTurnId);
+      if (origin.caller.kind === 'session' && !hasVerifiedManagedGuestSource && !retainedDiscussionPublication) {
         if (!input.isSessionCallerCurrent) return stale('session_changed');
         if (!await input.isSessionCallerCurrent({ caller: origin.caller,
           ...(signal ? { signal } : {}) })) return stale('session_changed');

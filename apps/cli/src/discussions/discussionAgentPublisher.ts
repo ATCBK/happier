@@ -9,7 +9,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import { SessionInputSourceSessionV1Schema, type SessionInputSourceSessionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 import { AgentRuntimeDaemonServiceTurnWitnessV1Schema, projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceTurnWitness';
-import type { RpcAdmissionPredicate, RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcAdmissionPredicate, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { RunnerMcpSessionWithContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
@@ -183,16 +183,15 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
   });
 }
 
-export function registerDiscussionAgentPublisher(params: Readonly<{
-  rpcHandlerManager: RpcHandlerRegistrar;
+export function createDiscussionAgentPublisher(params: Readonly<{
   serverId: string;
   serverUrl: string;
   readOwnerAccountCredentials: () => Promise<StoredCredentials | null>;
   isApprovalExecutionOriginCurrent: NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']>;
   executeSourceAction?: ApprovedDiscussionSourceActionExecute;
   session: RunnerMcpSessionWithContext<Pick<ApiSessionClient, 'sessionId' | 'postAgentDiscussionMessage'>>;
-}>): void {
-  params.rpcHandlerManager.registerHandler(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, async (raw: unknown, context) => {
+}>) {
+  return async (raw: unknown, context?: RpcHandlerContext) => {
     let stage: RpcAdmissionPredicate = 'session_authorization';
     const refused = (error: 'discussion_post_denied' | 'discussions_unavailable') => {
       context?.reportAdmissionDenial?.(stage);
@@ -303,5 +302,11 @@ export function registerDiscussionAgentPublisher(params: Readonly<{
       if (original.status === 'available' && original.progress.workflow) return denied();
     }
     return await publish(publication, signal);
-  });
+  };
+}
+
+export function registerDiscussionAgentPublisher(params: Parameters<typeof createDiscussionAgentPublisher>[0] & Readonly<{
+  rpcHandlerManager: RpcHandlerRegistrar;
+}>): void {
+  params.rpcHandlerManager.registerHandler(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, createDiscussionAgentPublisher(params));
 }

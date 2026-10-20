@@ -580,7 +580,9 @@ export function sessionUpdateHandler(
         }
     });
 
-    registerSessionEvent(DISCUSSION_AGENT_POST_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
+    // The same event's reviewed Machine carrier belongs to machineUpdateHandler;
+    // registering both listeners would race a rejection ACK against its commit.
+    if (connection.connectionType !== 'machine-scoped') registerSessionEvent(DISCUSSION_AGENT_POST_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(DiscussionAgentPublisherResponseV1Schema.parse(response));
         const request = DiscussionAgentPublisherPublicationV1Schema.safeParse(data);
         try {
