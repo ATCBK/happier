@@ -87,14 +87,16 @@ export function useSaveMemoryDecision(props: Readonly<{
     });
     return () => retirement?.dispose();
   }, [binding, controller]);
-  const selectTarget = React.useCallback((target: MemoryScopeTargetV1) => {
-    const eligible = targets.find(row => sameTarget(row.target, target));
-    if (busy || notice === 'pending' || creationReceipt || !eligible) return;
-    setSelectedTarget(eligible.target);
+  const selectTarget = React.useCallback((target: MemoryScopeTargetV1 | null) => {
+    const eligible = target === null ? null : targets.find(row => sameTarget(row.target, target));
+    if (controller.signal.aborted || busy || notice === 'pending' || creationReceipt || target !== null && !eligible) return;
+    setSelectedTarget(eligible?.target ?? null);
     setReview(null);
     setCandidateId(null);
     setNotice(null);
-  }, [busy, creationReceipt, notice, targets]);
+  }, [busy, controller, creationReceipt, notice, targets]);
+  // Null restores the existing Session/Account Action default, not a catalog-derived replacement.
+  const clearTarget = React.useCallback(() => selectTarget(null), [selectTarget]);
   const expiresAtMs = expiry === 'date' ? resolveHappierFutureLocalDateTime(expiryDraft, nowMs) : null;
   const canSave = !busy && !controller.signal.aborted && binding?.isCurrent() === true && creationReceipt === null && notice !== 'pending' && text.trim().length > 0
     && reason.trim().length > 0 && (selectedTarget ? targetStatus === 'ready' && targets.some(row => sameTarget(row.target, selectedTarget)) : ready)
@@ -137,7 +139,7 @@ export function useSaveMemoryDecision(props: Readonly<{
 
   return { text, setText, reason, setReason, expiry, setExpiry, nowMs, expiryDraft, setExpiryDraft,
     review, choice, setChoice, candidateId, setCandidateId, notice, busy, canSave, save, creationReceipt, sessionSource,
-    targets, targetStatus, targetCoverage, selectedTarget, selectTarget, refreshTargets };
+    targets, targetStatus, targetCoverage, selectedTarget, selectTarget, clearTarget, refreshTargets };
 }
 
 function sameTarget(a: MemoryScopeTargetV1, b: MemoryScopeTargetV1) {

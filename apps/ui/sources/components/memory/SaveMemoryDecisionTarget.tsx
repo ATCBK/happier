@@ -7,6 +7,7 @@ import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWor
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { MemoryDecisionTarget } from '@/sync/ops/promptLibrary/memoryDocuments';
@@ -18,6 +19,12 @@ import type { useSaveMemoryDecision } from './useSaveMemoryDecision';
 type Model = ReturnType<typeof useSaveMemoryDecision>;
 
 const noop = () => undefined;
+
+/**
+ * The sheet's own gutter already insets its body, so its choice rows sit flush in it: their text
+ * starts on the same edge as the Decision and Reason fields instead of one row inset further in.
+ */
+export const memoryDecisionSheetRowStyle = { paddingHorizontal: 0 } as const;
 
 /** Up to this many places read as one segmented row (lab K2-Sd); more become a menu. */
 const MAX_SEGMENTS = 3;
@@ -81,7 +88,7 @@ function TargetChoice(
   props: Readonly<{ model: Model; natural: NaturalTarget }>,
 ) {
   const { model, natural } = props;
-  const { targets, selectedTarget, selectTarget, targetCoverage } = model;
+  const { targets, selectedTarget, selectTarget, clearTarget, targetCoverage } = model;
   const [menuOpen, setMenuOpen] = React.useState(false);
   const activeId = selectedTarget
     ? memoryDecisionTargetId(selectedTarget)
@@ -96,11 +103,21 @@ function TargetChoice(
       const row = targets.find(
         (candidate) => memoryDecisionTargetId(candidate.target) === id,
       );
-      if (row) selectTarget(row.target);
+      // The default is a state, not a selection: choosing it again is the way back to it.
+      if (row) {
+        if (id === natural.id) clearTarget();
+        else selectTarget(row.target);
+      }
       setMenuOpen(false);
     },
-    [selectTarget, targets],
+    [clearTarget, natural.id, selectTarget, targets],
   );
+  // A Session's own memory is the default until the person picks a place: the sheet header names it,
+  // and the chooser says it is only an optional override.
+  const sessionDefault = natural.id === null && selectedTarget === null;
+  // A Discussion's default is its own "Only me" option; a Session's is not a catalog row, so it needs its way back.
+  const sessionOverridden = natural.id === null && selectedTarget !== null;
+  const overrideNote = sessionDefault ? t('memoryContext.memory.sheetSaveToElsewhere') : undefined;
   const labels = React.useMemo(() => memoryDecisionTargetLabels(targets), [targets]);
   const options = React.useMemo(
     () =>
@@ -115,12 +132,14 @@ function TargetChoice(
       {targets.length >= 2 && targets.length <= MAX_SEGMENTS ? (
         <SegmentedChoiceItem<string>
           title={t('memoryContext.memory.sheetSaveTo')}
+          subtitle={overrideNote}
           options={options}
           value={active ? memoryDecisionTargetId(active.target) : ''}
           onChange={choose}
           testIDPrefix="save-memory-decision.target"
           accessoryLayout="adaptive"
           showDivider={false}
+          style={memoryDecisionSheetRowStyle}
           disabled={locked}
         />
       ) : targets.length > MAX_SEGMENTS ? (
@@ -141,10 +160,14 @@ function TargetChoice(
           searchPlaceholder={t('common.search')}
           itemTrigger={{
             title: t('memoryContext.memory.sheetSaveTo'),
+            // A select with nothing chosen still names where the save goes.
+            detailFormatter: (selected) => selected?.title
+              ?? (sessionDefault ? t('memoryContext.memory.sheetSaveToSessionDefault') : null),
             itemProps: {
               accessoryLayout: 'adaptive',
               disabled: locked,
               showDivider: false,
+              style: memoryDecisionSheetRowStyle,
             },
           }}
         />
@@ -153,6 +176,16 @@ function TargetChoice(
         <TargetAudienceLine
           key={memoryDecisionTargetId(active.target)}
           row={active}
+        />
+      ) : null}
+      {sessionOverridden ? (
+        <TextLinkButton
+          testID="save-memory-decision.target.default"
+          label={t('memoryContext.memory.sheetSaveToBackToSession')}
+          tone="quiet"
+          size="meta"
+          disabled={locked}
+          onPress={clearTarget}
         />
       ) : null}
       {targetCoverage === 'partial' ? (
@@ -194,6 +227,7 @@ function ChooserBody(
         testIDPrefix="save-memory-decision.target"
         accessoryLayout="adaptive"
         showDivider={false}
+        style={memoryDecisionSheetRowStyle}
         disabled
       />
     ) : null;

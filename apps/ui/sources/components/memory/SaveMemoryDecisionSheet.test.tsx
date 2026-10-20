@@ -140,6 +140,60 @@ describe('Save as decision from a Discussion message', () => {
 });
 
 describe('Session-owned Save-to default', () => {
+  it('reads the unchosen Session default as intentional, with the chooser as an optional override', async () => {
+    const f = await createMemoryDecisionHomeFixture({ sessionProject: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { t } = await import('@/text');
+    await act(async () => { storage.getState().applySessions([f.session]); });
+    const source: CoordinationMessageRefV1 = { kind: 'session',
+      session: { serverId: f.serverId, sessionId: f.session.id }, messageId: 'committed-source' };
+    const screen = await renderScreen(<SaveMemoryDecisionForm
+      seed={seedMemoryDecisionFromMessage(source, 'Retry cap stays at 5\nBackoff ran out too early.')}
+      onClose={vi.fn()} onSaved={vi.fn()} />);
+    try {
+      await vi.waitFor(() => expect(screen.findByTestId(`save-memory-decision.target:project:${f.serverId}:payments`)).toBeTruthy());
+      const segments = () => screen.findAll(node => typeof node.type === 'string' && node.props['aria-checked'] !== undefined
+        && String(node.props.testID).startsWith('save-memory-decision.target:'));
+      // Nothing is selected and nothing names a Project: the Session's own memory is the stated default.
+      expect(segments().length).toBeGreaterThan(1);
+      expect(segments().every(node => node.props['aria-checked'] === false)).toBe(true);
+      expect(screen.getTextContent()).toContain(t('memoryContext.memory.sheetTarget'));
+      expect(screen.getTextContent()).toContain(t('memoryContext.memory.sheetSaveToElsewhere'));
+      // A deliberate choice replaces the default's wording with the chosen place.
+      await act(async () => { screen.findByTestId(`save-memory-decision.target:project:${f.serverId}:payments`)!.props.onPress(); });
+      expect(screen.getTextContent()).not.toContain(t('memoryContext.memory.sheetTarget'));
+      expect(screen.getTextContent()).not.toContain(t('memoryContext.memory.sheetSaveToElsewhere'));
+    } finally { await screen.unmount(); await f.home.dispose(); }
+  });
+
+  it('offers a quiet way back to the Session default only once another place is chosen', async () => {
+    const f = await createMemoryDecisionHomeFixture({ sessionProject: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { t } = await import('@/text');
+    await act(async () => { storage.getState().applySessions([f.session]); });
+    const source: CoordinationMessageRefV1 = { kind: 'session',
+      session: { serverId: f.serverId, sessionId: f.session.id }, messageId: 'committed-source' };
+    const screen = await renderScreen(<SaveMemoryDecisionForm
+      seed={seedMemoryDecisionFromMessage(source, 'Retry cap stays at 5\nBackoff ran out too early.')}
+      onClose={vi.fn()} onSaved={vi.fn()} />);
+    try {
+      const payments = `save-memory-decision.target:project:${f.serverId}:payments`;
+      await vi.waitFor(() => expect(screen.findByTestId(payments)).toBeTruthy());
+      const checked = () => screen.findAll(node => typeof node.type === 'string' && node.props['aria-checked'] === true
+        && String(node.props.testID).startsWith('save-memory-decision.target:'));
+      // The default is already in force, so there is nothing to go back to.
+      expect(screen.findByTestId('save-memory-decision.target.default')).toBeNull();
+      await act(async () => { screen.findByTestId(payments)!.props.onPress(); });
+      expect(checked()).toHaveLength(1);
+      expect(screen.getTextContent()).toContain(t('memoryContext.memory.sheetSaveToBackToSession'));
+      await act(async () => { screen.findByTestId('save-memory-decision.target.default')!.props.onPress(); });
+      // Back on the default: nothing selected, the header names the Session's own memory again.
+      expect(checked()).toHaveLength(0);
+      expect(screen.getTextContent()).toContain(t('memoryContext.memory.sheetTarget'));
+      expect(screen.findByTestId('save-memory-decision.target.default')).toBeNull();
+    } finally { await screen.unmount(); await f.home.dispose(); }
+  });
+
   it.each(['writable', 'unavailable', 'readonly', 'explicit'] as const)(
     'never substitutes a same-label Project for the qualified Session Project (%s)', async access => {
       const f = await createMemoryDecisionHomeFixture({ sessionProject: true });

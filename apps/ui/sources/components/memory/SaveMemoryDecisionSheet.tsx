@@ -28,6 +28,7 @@ import { MemoryDuplicateChoice } from './MemoryDocumentBody';
 import { SaveMemoryDecisionSaved } from './SaveMemoryDecisionSaved';
 import {
   memoryDecisionChosenLabel,
+  memoryDecisionSheetRowStyle,
   memoryDecisionTargetId,
   SaveMemoryDecisionTargetChooser,
 } from './SaveMemoryDecisionTarget';
@@ -216,6 +217,7 @@ export function SaveMemoryDecisionForm(props: FormProps) {
           testIDPrefix="save-memory-decision.expiry"
           accessoryLayout="adaptive"
           showDivider={false}
+          style={memoryDecisionSheetRowStyle}
           disabled={busy}
         />
         {expiry === 'date' ? (

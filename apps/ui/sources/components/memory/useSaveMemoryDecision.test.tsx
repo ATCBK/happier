@@ -47,8 +47,10 @@ describe('decision sheet data through the real Action and Home boundary', () => 
       const { TokenStorage } = await import('@/auth/storage/tokenStorage');
       await act(async () => { await TokenStorage.removeCredentialsForServerUrl('https://decision-targets.test', { serverId: f.serverId }); });
       await flushHookEffects();
+      await act(async () => { hook.getCurrent().clearTarget(); });
       expect(hook.getCurrent().targets).toEqual([]);
       expect(hook.getCurrent().canSave).toBe(false);
+      expect(hook.getCurrent().notice).toBe('refused');
     } finally { await hook.unmount(); await f.home.dispose(); }
   });
 
@@ -81,6 +83,10 @@ describe('decision sheet data through the real Action and Home boundary', () => 
       const body = MemoryDocBodyV1Schema.parse(JSON.parse(f.home.boundary.readPlainBody(receipt.ref.artifactId)!));
       expect(body.index[0]).toMatchObject({ id: receipt.factId, decision: { sourceMessageRef, reason: 'Explicit destination.' } });
       expect(f.readSource().attachments).toEqual([]);
+      await act(async () => { hook.getCurrent().clearTarget(); });
+      expect(hook.getCurrent().selectedTarget).toEqual({ scope: 'project', projectRef: { serverId: f.serverId, projectKey: 'payments' } });
+      expect(hook.getCurrent().creationReceipt).toBe(receipt);
+      expect(hook.getCurrent().notice).toBe('saved_unattached');
       await act(async () => { await hook.getCurrent().save(); });
       expect(f.home.boundary.list().filter(row => row.id === receipt.ref.artifactId)).toHaveLength(1);
       // Recovery uses the already existing context attachment Action and the exact saved reference.
@@ -96,7 +102,7 @@ describe('decision sheet data through the real Action and Home boundary', () => 
     } finally { await hook.unmount(); await f.home.dispose(); }
   });
 
-  it('keeps duplicate review bound to its chosen Project and clears it on an explicit destination change', async () => {
+  it('clears a Discussion choice and its duplicate review back to the Account default', async () => {
     const f = await createMemoryDecisionHomeFixture();
     f.recover();
     const seed = { text: 'QA preserve this decision.', reason: 'Explicit destination.', sourceMessageRef: {
@@ -121,13 +127,49 @@ describe('decision sheet data through the real Action and Home boundary', () => 
         await act(async () => { await reopened.getCurrent().save(); });
         expect(reopened.getCurrent().review).toMatchObject({ ref: receipt.ref, revision: { headerVersion: 1, bodyVersion: 1 } });
         expect(onSaved).not.toHaveBeenCalled();
-        await act(async () => { reopened.getCurrent().selectTarget({ scope: 'account' }); });
-        expect(reopened.getCurrent()).toMatchObject({ text: seed.text, reason: seed.reason, review: null, selectedTarget: { scope: 'account' } });
+        await act(async () => { reopened.getCurrent().clearTarget(); });
+        expect(reopened.getCurrent()).toMatchObject({ text: seed.text, reason: seed.reason, review: null, candidateId: null, selectedTarget: null });
         await act(async () => { await reopened.getCurrent().save(); });
         expect(onSaved).toHaveBeenCalledTimes(1);
         expect(f.home.boundary.readPlainBody(receipt.ref.artifactId)).toBe(original);
         expect(f.home.boundary.list()).toHaveLength(2);
       } finally { await reopened.unmount(); }
     } finally { await first.unmount(); await f.home.dispose(); }
+  });
+
+  it('clears an explicit Session choice and review back to the qualified Project default', async () => {
+    const f = await createMemoryDecisionHomeFixture({ sessionProject: true });
+    f.recover();
+    const { memoryDocumentActions, readMemoryCreationReceipt } = await import('@/sync/ops/promptLibrary/memoryDocuments');
+    const projectA = { scope: 'project' as const, projectRef: { serverId: f.serverId, projectKey: 'core-payments' } };
+    const projectB = { scope: 'project' as const, projectRef: { serverId: f.serverId, projectKey: 'payments' } };
+    const text = 'QA preserve this decision.';
+    const initialA = readMemoryCreationReceipt(await memoryDocumentActions.rememberInScope(projectA, { text: 'Keep deployment logs.' }, f.serverId));
+    const initialB = readMemoryCreationReceipt(await memoryDocumentActions.rememberInScope(projectB, { text }, f.serverId));
+    if (!initialA || !initialB) throw new Error('Expected both Project memory documents');
+    const beforeB = f.home.boundary.readPlainBody(initialB.ref.artifactId);
+    const { storage } = await import('@/sync/domains/state/storage');
+    await act(async () => { storage.getState().applySessions([f.session]); });
+    const sourceMessageRef: CoordinationMessageRefV1 = { kind: 'session',
+      session: { serverId: f.serverId, sessionId: f.session.id }, messageId: 'committed-source' };
+    const seed = { text, reason: 'Explicit decision.', sourceMessageRef };
+    const onSaved = vi.fn();
+    const hook = await renderHook(() => useSaveMemoryDecision({ seed, onSaved }));
+    try {
+      await act(async () => { await hook.getCurrent().refreshTargets(); });
+      await act(async () => { hook.getCurrent().selectTarget(projectB); });
+      await act(async () => { await hook.getCurrent().save(); });
+      expect(hook.getCurrent().review?.ref).toEqual(initialB.ref);
+      await act(async () => { hook.getCurrent().clearTarget(); });
+      expect(hook.getCurrent()).toMatchObject({ selectedTarget: null, review: null, candidateId: null,
+        notice: null, text: seed.text, reason: seed.reason });
+      await act(async () => { await hook.getCurrent().save(); });
+      expect(onSaved).toHaveBeenCalledTimes(1);
+      const bodyA = MemoryDocBodyV1Schema.parse(JSON.parse(f.home.boundary.readPlainBody(initialA.ref.artifactId)!));
+      expect(bodyA.index).toHaveLength(2);
+      expect(bodyA.index).toContainEqual(expect.objectContaining({ text, decision: expect.objectContaining({ sourceMessageRef }) }));
+      expect(f.home.boundary.readPlainBody(initialB.ref.artifactId)).toBe(beforeB);
+      expect(f.home.boundary.list()).toHaveLength(2);
+    } finally { await hook.unmount(); await f.home.dispose(); }
   });
 });
