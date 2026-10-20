@@ -1,3 +1,4 @@
+import { projectMiniMaxModelChoices, type MiniMaxModelChoices } from '@happier-dev/protocol';
 import type { ModelMode } from '../permissions/permissionTypes';
 import { t } from '@/text';
 import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
@@ -77,6 +78,7 @@ export function resolveCanonicalModelOptionId(
 }
 
 export type PreflightModelList = Readonly<{
+    miniMaxModelChoices?: MiniMaxModelChoices;
     availableModels: ReadonlyArray<Readonly<{
         id: string;
         name: string;
@@ -215,7 +217,7 @@ function supportsDynamicSessionModelList(agentType: AgentType): boolean {
 }
 
 export function getModelOptionsForPreflightModelList(list: PreflightModelList): readonly ModelOption[] {
-    const dynamic = projectDynamicModelRows(list.availableModels ?? []);
+    const dynamic = projectDynamicModelRows(projectMiniMaxModelChoices(list.availableModels ?? [], list.miniMaxModelChoices));
 
     const withDefault: ModelOption[] = [
         { value: 'default', label: getModelLabel('default'), description: '' },
@@ -352,6 +354,10 @@ function resolveSessionModelList(
     );
     if (preflight && !sessionListIsNewer) return preflight;
     return sessionList ? {
+        ...(sessionList.miniMaxModelChoices ? { miniMaxModelChoices: {
+            ...sessionList.miniMaxModelChoices,
+            configuredModelIds: [...sessionList.miniMaxModelChoices.configuredModelIds, sessionList.currentModelId],
+        } } : {}),
         availableModels: sessionList.availableModels.map((model) => ({
             ...model,
             modelOptions: normalizeSessionConfigOptionsArray(model.modelOptions) ?? undefined,

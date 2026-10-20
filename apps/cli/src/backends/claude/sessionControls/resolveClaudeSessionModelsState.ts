@@ -37,6 +37,7 @@ export async function resolveClaudeSessionModelsState(params: Readonly<{
     provider: 'claude',
     updatedAt: resolution.observedAt ?? 0,
     currentModelId: params.currentModelId,
+    ...(resolution.miniMaxModelChoices ? { miniMaxModelChoices: resolution.miniMaxModelChoices } : {}),
     availableModels: resolution.models.map((model) => {
       const description = typeof model.description === 'string' ? model.description : '';
       return {

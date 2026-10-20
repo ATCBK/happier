@@ -102,6 +102,8 @@ export function reconcileClaudeSessionModelsState(params: Readonly<{
       params.source === 'current_model' ? existing?.updatedAt ?? 0 : 0,
     ),
     currentModelId: contributions.current_model?.currentModelId || selectedModelId,
+    // Only the catalog resolves endpoint/configuration provenance; SDK publication cannot replace it.
+    miniMaxModelChoices: contributions.catalog?.miniMaxModelChoices,
     availableModels: mergeAvailableModels(contributions),
   };
 }

@@ -1,4 +1,5 @@
 export const HAPPY_PROTOCOL_PACKAGE = '@happier-dev/protocol';
+export { MiniMaxModelChoicesSchema, resolveMiniMaxModelChoices, projectMiniMaxModelChoices, type MiniMaxModelChoices } from './providers/claude/minimaxModelChoices.js';
 export { buildRecoveryCreditConsumeIdempotencyKey } from './connect/recoveryCreditConsumeIdempotencyKey.js';
 
 export { PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT, ProviderAccountSubscriptionV1Schema, mergeProviderAccountSubscription, type ProviderAccountSubscriptionV1 } from './connect/accountSubscription.js';

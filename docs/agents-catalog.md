@@ -304,6 +304,12 @@ contribution; historical persisted unions do not establish current membership. R
 contribution removes its withdrawn rows and optional controls.
 Effective-current-model observations supply the selected model's context facts through that same
 reconciler without granting historical catalog rows membership again.
+For direct MiniMax Anthropic endpoints, optional `miniMaxModelChoices` metadata carries resolved
+configuration separately from this full membership. Both preflight and session pickers use the same
+presentation projection: Flash first, M3 next, with older MiniMax text IDs hidden from ordinary choices.
+Explicit configured, saved, current, and freeform IDs remain selectable without rewriting requests.
+Custom endpoints and non-text capability rows retain their existing presentation. This policy is
+recomputed from the effective environment even when the credential-scoped model catalog is cached.
 In development source, observed reasoning effort follows that same current-model contribution:
 statusline reports, verified terminal-control results, and explicit SDK/legacy launch effort after
 successful provider initialization update the active control value. Catalog refreshes preserve that

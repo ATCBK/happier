@@ -1,3 +1,4 @@
+import { MiniMaxModelChoicesSchema } from '@happier-dev/protocol';
 import { readExtendedContextModelId } from './modelOptions';
 import type { SessionConfigOption } from '@/sync/domains/sessionControl/configOptionsControl';
 import type { PreflightModelList } from '@/sync/domains/models/modelOptions';
@@ -9,7 +10,9 @@ export function parsePreflightModelListFromProbeModelsResult(raw: unknown): Pref
     const supportsFreeformRaw = (rec as any).supportsFreeform;
     if (!Array.isArray(modelsRaw)) return null;
 
+    const policy = MiniMaxModelChoicesSchema.safeParse(rec.miniMaxModelChoices);
     const parsed: PreflightModelList = {
+        ...(policy.success ? { miniMaxModelChoices: policy.data } : {}),
         availableModels: modelsRaw
             .filter((m: any) => m && typeof m.id === 'string' && typeof m.name === 'string')
             .map((m: any) => ({

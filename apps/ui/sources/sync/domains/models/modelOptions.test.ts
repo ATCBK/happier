@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parsePreflightModelListFromProbeModelsResult } from './parsePreflightModelListFromProbeModelsResult';
 
 import {
     findModelOptionForEffectiveModelId,
@@ -22,6 +23,30 @@ function withMetadata(overrides: Partial<Metadata>): Metadata {
 }
 
 describe('modelOptions', () => {
+    it('projects direct MiniMax recommendations without deleting membership or explicit saved choices', () => {
+        const availableModels = ['MiniMax-M2.7', 'MiniMax-M3', 'MiniMax-M3.1-Flash', 'speech-02-hd'].map(id => ({ id, name: id }));
+        const miniMaxModelChoices = { provider: 'minimax' as const, configuredModelIds: [] };
+        const preflight = parsePreflightModelListFromProbeModelsResult({ availableModels, miniMaxModelChoices, supportsFreeform: true })!;
+        expect(preflight.miniMaxModelChoices).toEqual(miniMaxModelChoices);
+        expect(getModelOptionsForPreflightModelList(preflight).map(row => row.value)).toEqual([
+            'default', 'MiniMax-M3.1-Flash', 'MiniMax-M3', 'speech-02-hd',
+        ]);
+        const metadata = withMetadata({
+            sessionModelsV1: { v: 1, provider: 'claude', updatedAt: 2, currentModelId: 'MiniMax-M3.1-Flash', availableModels, miniMaxModelChoices },
+            modelOverrideV1: { v: 1, modelId: 'MiniMax-M2.7', updatedAt: 3 },
+        });
+        expect(getModelOptionsForSession('claude', metadata).map(row => row.value)).toEqual([
+            'default', 'MiniMax-M3.1-Flash', 'MiniMax-M3', 'speech-02-hd', 'MiniMax-M2.7',
+        ]);
+        expect(getModelOptionsForSession('claude', metadata, { selectedModelId: 'private-model-exact' }).map(row => row.value)).toContain('private-model-exact');
+        expect(isModelSelectableForSession('claude', metadata, 'MiniMax-M2.5')).toBe(true);
+        const currentLegacy = withMetadata({ sessionModelsV1: {
+            v: 1, provider: 'claude', updatedAt: 2, currentModelId: 'MiniMax-M2.7', availableModels, miniMaxModelChoices,
+        } });
+        expect(getModelOptionsForSession('claude', currentLegacy).map(row => row.value)).toContain('MiniMax-M2.7');
+        expect(availableModels.map(row => row.id)).toContain('MiniMax-M2.7');
+        expect(getModelOptionsForPreflightModelList({ availableModels, supportsFreeform: true }).map(row => row.value)).toContain('MiniMax-M2.7');
+    });
     it('uses refreshed models for both session choices and non-freeform validation', () => {
         const metadata = withMetadata({
             sessionModelsV1: { v: 1, provider: 'grok', updatedAt: 1, currentModelId: 'old', availableModels: [{ id: 'old', name: 'Old' }] },
