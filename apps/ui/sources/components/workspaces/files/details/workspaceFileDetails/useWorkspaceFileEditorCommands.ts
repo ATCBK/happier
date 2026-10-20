@@ -1,3 +1,4 @@
+import type { WorkspaceFileEditStart } from './useWorkspaceFileEditorState';
 import * as React from 'react';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
@@ -17,7 +18,7 @@ export function useWorkspaceFileEditorCommands(input: Readonly<{
     serverId: string | null;
     accountId: string | null;
     focused: boolean;
-    onStart(at?: { line: number }): void;
+    onStart(at?: WorkspaceFileEditStart): void;
 }>): WorkspaceFileEditorHeaderModel {
     // A pending Action or departure retains its admitted Home/Account binding.
     const latest = React.useMemo(() => ({ current: input }), [input.serverId, input.accountId, input.tabKey]);

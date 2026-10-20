@@ -154,7 +154,7 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         const unsubscribe = ref.current!.subscribeSelection!(listener);
         const selection = { startLine: 1, endLine: 2, text: 'ne\ntw', rect: { x: 5, y: 8, width: 0, height: 18 } };
         emitEnvelope({ v: 1, type: 'selection', payload: selection });
-        expect(ref.current!.getSelection!()).toEqual(selection);
+        expect(ref.current!.getSelection!()).toEqual({ ...selection, collapsed: false });
         expect(listener).toHaveBeenCalledTimes(1);
         await screen.update(<CodeMirrorWebViewSurface ref={ref} resetKey="new-file" value="elsewhere" language="text" onChange={vi.fn()} />);
         expect(ref.current!.getSelection!()).toBeNull();

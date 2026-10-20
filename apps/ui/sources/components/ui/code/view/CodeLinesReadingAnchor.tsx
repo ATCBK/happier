@@ -1,6 +1,7 @@
 import React from 'react';
 import type { CodeLine } from '../model/codeLineTypes';
 import { mapCodeReadingAnchor } from '../model/mapCodeReadingAnchor';
+import { findVerticalScroller } from './readCodeViewReadingLine';
 
 export type NativeCodeReadingAnchor = Readonly<{ index: number; offset: number }>;
 type Props = Readonly<{
@@ -32,12 +33,7 @@ export class CodeLinesReadingAnchor extends React.Component<Props, object, Snaps
         let anchor: Snapshot = this.props.getNativeAnchor?.(previous.lines) ?? this.props.nativeAnchor?.current ?? null;
         if (typeof HTMLElement !== 'undefined' && root instanceof HTMLElement) {
             if (!this.props.viewId) return null;
-            let scroller: HTMLElement | null = root;
-            while (scroller) {
-                const overflow = getComputedStyle(scroller).overflowY;
-                if ((overflow === 'auto' || overflow === 'scroll') && scroller.scrollHeight > scroller.clientHeight) break;
-                scroller = scroller.parentElement;
-            }
+            const scroller = findVerticalScroller(root);
             if (!scroller || scroller.clientHeight === 0) return null;
             const viewportTop = scroller.getBoundingClientRect().top;
             const viewportBottom = viewportTop + scroller.clientHeight;

@@ -292,9 +292,9 @@ describe('ChangedFilesReviewDiffBlock', () => {
             diffStateSource={diffStateSource} reviewCommentsEnabled={false} reviewCommentDrafts={[]}
             hunkNotes={{ placement: 'column', columnWidth: 320, render }} />);
         const viewer = screen.findAll((node) => String(node.type) === 'DiffViewer')[0]!;
-        const { buildCodeLinesFromUnifiedDiff } = await import('@/components/ui/code/model/buildCodeLinesFromUnifiedDiff');
-        const firstLine = buildCodeLinesFromUnifiedDiff({ unifiedDiff: diff, hideFilePrelude: true }).find((line) => !line.id.startsWith('h:'))!;
-        const drawnInside = viewer.props.renderAfterLine(firstLine) as React.ReactElement<any> | null;
+        const { buildDiffHunkTable } = await import('@/components/ui/code/diff/hunks/buildDiffHunkTable');
+        const hunk = buildDiffHunkTable({ mode: 'unified', filePath: 'src/a.ts', unifiedDiff: diff }).hunks[0]!;
+        const drawnInside = viewer.props.hunks.renderNote(hunk) as React.ReactElement<{ onMeasure: (index: number, y: number) => void }> | null;
         const containsNote = (node: unknown): boolean => {
             if (!React.isValidElement(node)) return Array.isArray(node) && node.some(containsNote);
             const props = node.props as { testID?: string; children?: unknown };

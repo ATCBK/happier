@@ -121,6 +121,21 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         expect(harness.uploads[0]).toEqual(expect.objectContaining({ bytes: new Uint8Array(), finalized: false, aborted: true }));
     });
 
+    it('settles an abort that escapes preflight as a quiet cancellation, and any other escape as an error, never a rejection', async () => {
+        harness.setStatResponse({ success: true, exists: true });
+        for (const [thrown, expected, state] of [
+            [new DOMException('signal is aborted without reason', 'AbortError'), { ok: false, error: 'Upload canceled', canceled: true }, { status: 'canceled' }],
+            [new Error('Conflict prompt exploded'), { ok: false, error: 'Conflict prompt exploded' }, { status: 'error', error: 'Conflict prompt exploded' }],
+        ] as const) {
+            const hook = await renderTransfers({ onResolveUploadConflicts: async () => { throw thrown; } });
+            await act(async () => {
+                await expect(hook.getCurrent().startUploads(uploadInput())).resolves.toEqual(expected);
+            });
+            expect(hook.getCurrent().uploadState).toEqual(state);
+            expect(harness.uploads).toHaveLength(0);
+        }
+    });
+
     it('finishes the exact staged file without starting a second upload', async () => {
         harness.requireNextUploadFinalizeRecovery();
         const prompt = observeRecoveryPrompt();
@@ -183,7 +198,7 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         else if (retire === 'scope change') await hook.rerender({ workspaceScope: { ...harness.scope, rootPath: '/another-repo' } });
         else await act(async () => hook.getCurrent().cancelUploads());
         await vi.waitFor(() => expect(settled).toBe(true));
-        await expect(pending).resolves.toEqual({ ok: false, error: 'Upload canceled' });
+        await expect(pending).resolves.toEqual({ ok: false, error: 'Upload canceled', canceled: true });
         expect(harness.uploads[0]).toMatchObject({ finalized: false, aborted: false, finalizeAttempts: 1 });
         if (retire !== 'unmount') {
             if (retire === 'scope change') await hook.rerender({ workspaceScope: harness.scope });
@@ -206,7 +221,7 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         });
 
         await hook.unmount();
-        await expect(pending).resolves.toEqual({ ok: false, error: 'Upload canceled' });
+        await expect(pending).resolves.toEqual({ ok: false, error: 'Upload canceled', canceled: true });
         await act(async () => { chunk.release(); await chunk.settled; });
 
         expect(harness.uploads).toHaveLength(1);

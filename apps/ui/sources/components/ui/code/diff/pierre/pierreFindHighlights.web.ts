@@ -1,5 +1,6 @@
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
+import { codeTextRange } from '@/components/ui/code/interactions/codeTextDom';
 
 export const PIERRE_FIND_HIGHLIGHT_CSS = `
 ::highlight(happier-find) { background-color: var(--happier-find-match); }
@@ -14,50 +15,20 @@ export function pierreCodeLineSelector(line: CodeLine, attribute: 'data-line' | 
     return `:is([data-unified], [data-${removal ? 'deletions' : 'additions'}]) ${type}[${attribute}='${lineNumber}']`;
 }
 
-function textRange(element: Element, start: number, end: number): Range | null {
-    if (end <= start) return null;
-    const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-    const range = element.ownerDocument.createRange();
-    let offset = 0;
-    let started = false;
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const length = node.textContent?.length ?? 0;
-        if (!started && start < offset + length) {
-            range.setStart(node, Math.max(0, start - offset));
-            started = true;
-        }
-        if (started && end <= offset + length) {
-            range.setEnd(node, Math.max(0, end - offset));
-            return range;
-        }
-        offset += length;
-    }
-    return null;
-}
-
-/** Each mounted diff owns only its ranges in the document-wide highlight registry. */
-export function registerPierreFindHighlights(
-    root: ParentNode,
-    lines: readonly CodeLine[],
-    rangesByLineId: ReadonlyMap<string, readonly FindTextRange[]> | undefined,
+/** Each mounted diff owns only its ranges in the document-wide Find/diagnostic highlight registry. */
+export function registerPierreTextHighlights(
+    ranges: Iterable<Readonly<{ content: Element; start: number; end: number; name: string; priority?: number }>>,
 ): () => void {
-    if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined' || !rangesByLineId?.size) return () => {};
+    if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined') return () => {};
     const owned: Array<Readonly<{ name: string; highlight: Highlight; range: Range }>> = [];
-    for (const line of lines) {
-        const matches = rangesByLineId.get(line.id);
-        if (!matches?.length || line.renderIsHeaderLine) continue;
-        const content = root.querySelector(pierreCodeLineSelector(line));
-        if (!content) continue;
-        for (const match of matches) {
-            const range = textRange(content, match.start, match.end);
-            if (!range) continue;
-            const name = match.current ? 'happier-find-current' : 'happier-find';
-            const highlight = CSS.highlights.get(name) ?? new Highlight();
-            if (match.current) highlight.priority = 1;
-            highlight.add(range);
-            CSS.highlights.set(name, highlight);
-            owned.push({ name, highlight, range });
-        }
+    for (const item of ranges) {
+        const range = codeTextRange(item.content, item.start, item.end);
+        if (!range) continue;
+        const highlight = CSS.highlights.get(item.name) ?? new Highlight();
+        if (item.priority !== undefined) highlight.priority = item.priority;
+        highlight.add(range);
+        CSS.highlights.set(item.name, highlight);
+        owned.push({ name: item.name, highlight, range });
     }
     return () => {
         for (const { name, highlight, range } of owned) {
@@ -65,4 +36,23 @@ export function registerPierreFindHighlights(
             if (highlight.size === 0 && CSS.highlights.get(name) === highlight) CSS.highlights.delete(name);
         }
     };
+}
+
+export function registerPierreFindHighlights(
+    root: ParentNode,
+    lines: readonly CodeLine[],
+    rangesByLineId: ReadonlyMap<string, readonly FindTextRange[]> | undefined,
+): () => void {
+    if (!rangesByLineId?.size) return () => {};
+    const ranges: Array<Readonly<{ content: Element; start: number; end: number; name: string; priority?: number }>> = [];
+    for (const line of lines) {
+        const matches = rangesByLineId.get(line.id);
+        if (!matches?.length || line.renderIsHeaderLine) continue;
+        const content = root.querySelector(pierreCodeLineSelector(line));
+        if (!content) continue;
+        for (const match of matches) {
+            ranges.push({ content, ...match, name: match.current ? 'happier-find-current' : 'happier-find', ...(match.current ? { priority: 1 } : {}) });
+        }
+    }
+    return registerPierreTextHighlights(ranges);
 }

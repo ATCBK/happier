@@ -8,6 +8,7 @@ import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
+    answerWorkspaceFileDetailsAccountActions,
     cleanupWorkspaceFileDetailsActionBoundary,
     getWorkspaceFileDetailsActionBoundary,
     installWorkspaceFileDetailsActionBoundary,
@@ -192,7 +193,7 @@ describe('mounted file editor commands through the real editor, keyboard and Act
         const beforeCommitSaveControl = headers.get('a')!.onSave;
         const writesBeforeAccountPublication = writtenRequests();
         accountReplacement = await TokenStorage.setCredentialsForServerUrlWithRollback('https://workspace-file-details.test',
-            { serverId: scope.serverId }, { token: createAccountTokenForTests('account-b') });
+            { serverId: scope.serverId }, { token: createAccountTokenForTests('account-b', { currentAccount: true }) });
         expect(accountReplacement).not.toBeNull();
         actionBoundary.read.mockResolvedValueOnce({ success: true, hash: 'must-not-retarget' });
         await act(async () => {
@@ -203,13 +204,19 @@ describe('mounted file editor commands through the real editor, keyboard and Act
         });
         expect(writtenRequests()).toEqual(writesBeforeAccountPublication);
         expect(editorFor('a').getEditorText()).toBe('base a');
-        await act(async () => { await restoreConnectionToActiveServer({ token: createAccountTokenForTests('account-b') }); });
+        await answerWorkspaceFileDetailsAccountActions(scope.serverId, 'account-b', scope.machineId);
+        await act(async () => { await restoreConnectionToActiveServer({ token: createAccountTokenForTests('account-b', { currentAccount: true }) }); });
         actionBoundary.read.mockReset().mockResolvedValueOnce({ success: true, hash: 'saved-bob' });
         await act(async () => { editorFor('a').startEditingFile(); });
         await act(async () => { editorFor('a').onEditorChange('Bob after credential replacement'); });
+        let replacementSave: unknown;
         await act(async () => {
-            expect(await invokeScopeAction('file.editor.save', { tabId: 'file:src/a.ts' },
-                { serverId: scope.serverId, runtimeAccountId: 'account-b' })).toEqual({ status: 'saved', hash: 'saved-bob' });
+            replacementSave = await invokeScopeAction('file.editor.save', { tabId: 'file:src/a.ts' },
+                { serverId: scope.serverId, runtimeAccountId: 'account-b' });
+        });
+        expect({ result: replacementSave, refusal: editorFor('a').refusal, account: storage.getState().profileScope }).toEqual({
+            result: { status: 'saved', hash: 'saved-bob' }, refusal: null,
+            account: { serverId: scope.serverId, accountId: 'account-b' },
         });
         expect(writtenRequests().slice(writesBeforeAccountPublication.length)).toEqual([
             { path: '/repo/src/a.ts', content: 'Bob after credential replacement', expectedHash: 'base-a' },

@@ -59,6 +59,19 @@ describe('file editor entry and persisted restoration', () => {
         expect(hook.getCurrent().isEditingFile).toBe(true);
     });
 
+    it('opens on the reader\'s position: caret line plus the row kept at the top (Edit from View)', async () => {
+        const hook = await harness({ displayMode: 'file', fileText: 'a\nb\nc\nd', fileHash: 'base-hash' });
+        await act(async () => hook.getCurrent().startEditingFile({ line: 3, top: { line: 2, offset: -4 } }));
+        expect(hook.getCurrent().initialLine).toBe(3);
+        const revealLine = vi.fn();
+        hook.getCurrent().editorHandleRef.current = { revealLine } as never;
+        await act(async () => hook.getCurrent().onEditorReady());
+        expect(revealLine).toHaveBeenCalledWith(3, { focus: true, top: { line: 2, offset: -4 } });
+        // Already editing: the open engine moves to the requested line (centred when no top is given).
+        await act(async () => hook.getCurrent().startEditingFile({ line: 4 }));
+        expect(revealLine).toHaveBeenLastCalledWith(4, { focus: true });
+    });
+
     it('keeps the save callback stable across equivalent disk rerenders', async () => {
         const inputs: Inputs = { displayMode: 'file', fileText: 'base', fileHash: 'hash' };
         const hook = await harness(inputs);

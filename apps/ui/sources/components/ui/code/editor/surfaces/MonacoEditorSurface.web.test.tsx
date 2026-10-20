@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -212,7 +213,7 @@ describe('MonacoEditorSurface (web)', () => {
         });
         const ref = React.createRef<CodeEditorHandle>();
         await renderScreen(<MonacoEditorSurface ref={ref} resetKey="selection" value={text} language="text" onChange={vi.fn()} />);
-        expect(ref.current?.getSelection?.()).toEqual({ startLine: 1, endLine: 2, text: 'rst\nsecond\n', rect: { x: 120, y: 240, width: 0, height: 18 } });
+        expect(ref.current?.getSelection?.()).toEqual({ startLine: 1, endLine: 2, text: 'rst\nsecond\n', collapsed: false, rect: { x: 120, y: 240, width: 0, height: 18 } });
         const listener = vi.fn();
         const unsubscribe = ref.current!.subscribeSelection!(listener);
         selection = { startLineNumber: 2, startColumn: 3, endLineNumber: 2, endColumn: 3 };
@@ -287,6 +288,7 @@ describe('MonacoEditorSurface (web)', () => {
         const setPosition = vi.fn();
         const setSelection = vi.fn();
         const revealLineInCenter = vi.fn();
+        const setScrollTop = vi.fn();
         const focus = vi.fn();
         const model = {
             getValue: () => text, setValue: vi.fn(), dispose: vi.fn(),
@@ -298,6 +300,7 @@ describe('MonacoEditorSurface (web)', () => {
         createModelSpy.mockReturnValueOnce(model);
         createEditorSpy.mockReturnValueOnce({
             ...createEditorSpy.getMockImplementation()!(), executeEdits, trigger, setPosition, setSelection, revealLineInCenter, focus,
+            setScrollTop, getTopForLineNumber: (line: number) => 16 + (line - 1) * 22,
             pushUndoStop: vi.fn(),
             onDidCompositionStart: (cb: () => void) => { compositionStart = cb; return { dispose: vi.fn() }; },
             onDidCompositionEnd: (cb: () => void) => { compositionEnd = cb; return { dispose: vi.fn() }; },
@@ -311,6 +314,12 @@ describe('MonacoEditorSurface (web)', () => {
         expect(revealLineInCenter).toHaveBeenCalledWith(2, 1);
         expect(focus).toHaveBeenCalled();
         expect(onReady).toHaveBeenCalled();
+        // Edit from View keeps the reader's top row (cut off by 5 px) instead of centring the caret line.
+        revealLineInCenter.mockClear();
+        ref.current!.revealLine(3, { top: { line: 2, offset: -5 }, behavior: 'instant' });
+        expect(setPosition).toHaveBeenLastCalledWith({ lineNumber: 3, column: 1 });
+        expect(setScrollTop).toHaveBeenCalledWith(16 + 22 + 5, 1);
+        expect(revealLineInCenter).not.toHaveBeenCalled();
         ref.current!.runCommand({ replaceDocument: 'first\nSECOND\nlast' });
         expect(executeEdits).toHaveBeenCalledWith('happier.command', [{
             range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 7 }, text: 'SECOND', forceMoveMarkers: true,
@@ -490,6 +499,7 @@ describe('MonacoEditorSurface (web)', () => {
             editor: {
                 createModel: () => ({
                     getValue: () => currentValue,
+                    getLineCount: () => currentValue.split('\n').length,
                     setValue: () => {},
                     dispose: () => {},
                 }),
@@ -553,6 +563,7 @@ describe('MonacoEditorSurface (web)', () => {
             editor: {
                 createModel: () => ({
                     getValue: () => currentValue,
+                    getLineCount: () => currentValue.split('\n').length,
                     setValue: () => {},
                     dispose: () => {},
                 }),
@@ -618,6 +629,7 @@ describe('MonacoEditorSurface (web)', () => {
             editor: {
                 createModel: () => ({
                     getValue: () => currentValue,
+                    getLineCount: () => currentValue.split('\n').length,
                     getFullModelRange: () => ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: currentValue.length + 1 }),
                     setValue: setValueSpy,
                     dispose: () => {},

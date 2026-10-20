@@ -61,7 +61,8 @@ export type CodeEditorHandle = Readonly<{
     /** Move editing focus into the incumbent platform surface. */
     focus?: () => void;
     find?: CodeEditorFindHandle;
-    revealLine: (line: number, opts?: { focus?: boolean; select?: boolean; behavior?: 'smooth' | 'instant' }) => void;
+    /** `top` keeps a reading position instead of centring: that line sits `offset` px below the editor's top edge. */
+    revealLine: (line: number, opts?: { focus?: boolean; select?: boolean; behavior?: 'smooth' | 'instant'; top?: Readonly<{ line: number; offset: number }> }) => void;
     runCommand: (command: CodeEditorCommand) => void;
     subscribeHistory: (listener: (state: CodeEditorHistory) => void) => () => void;
     setDecorations: (layer: EditorDecorationLayer, items: readonly EditorDecoration[]) => void;

@@ -64,16 +64,18 @@ export async function readWebDroppedEntries(dataTransfer: DataTransfer): Promise
         return Array.from(dataTransfer.files ?? []).map((file) => ({ file, relativePath: file.name }));
     }
 
-    const out: WebDroppedFileEntry[] = [];
+    // The browser empties the item list once the drop event has been dispatched, so every dropped
+    // item is claimed here, before the first directory is walked.
+    const entries: FileSystemEntryLike[] = [];
     for (const item of items) {
         if (!item || item.kind !== 'file') continue;
         const getEntry = (item as any).webkitGetAsEntry;
         if (typeof getEntry !== 'function') continue;
         const entry = getEntry.call(item) as FileSystemEntryLike | null;
-        if (!entry) continue;
-        out.push(...(await walkEntry(entry, '')));
+        if (entry) entries.push(entry);
     }
 
+    const out: WebDroppedFileEntry[] = [];
+    for (const entry of entries) out.push(...(await walkEntry(entry, '')));
     return out;
 }
-

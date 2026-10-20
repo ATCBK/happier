@@ -490,7 +490,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             relativePath: file.webkitRelativePath || file.name,
         }));
         const res = await transfers.startUploads({ entries, destinationDir });
-        if (!res.ok) {
+        if (!res.ok && !res.canceled) {
             Modal.alert(t('common.error'), res.error);
         }
     }, [transfers]);
@@ -510,7 +510,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             relativePath: p.name,
         }));
         const res = await transfers.startUploads({ entries, destinationDir });
-        if (!res.ok) {
+        if (!res.ok && !res.canceled) {
             Modal.alert(t('common.error'), res.error);
         }
         return 'requested' as const;
@@ -587,7 +587,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 relativePath: entry.relativePath,
             }));
             const res = await transfers.startUploads({ entries, destinationDir });
-            if (!res.ok) {
+            if (!res.ok && !res.canceled) {
                 Modal.alert(t('common.error'), res.error);
             }
         },

@@ -21,6 +21,9 @@ interface SimpleSyntaxHighlighterProps {
    */
   wrap?: boolean;
   findRanges?: readonly FindTextRange[];
+  /** Defaults to the code-block size (14/20); compact surfaces such as hover cards pass a smaller pair. */
+  fontSize?: number;
+  lineHeight?: number;
 }
 
 function resolveTokenColor(theme: any, tokenType: string, fallback: string): string {
@@ -37,6 +40,8 @@ export const SimpleSyntaxHighlighter: React.FC<SimpleSyntaxHighlighterProps> = (
   selectable,
   wrap = false,
   findRanges,
+  fontSize = 14,
+  lineHeight = 20,
 }) => {
   const { theme } = useUnistyles();
   const fallback = theme.colors.text.primary ?? '#111';
@@ -56,8 +61,8 @@ export const SimpleSyntaxHighlighter: React.FC<SimpleSyntaxHighlighterProps> = (
         style={[
           {
             fontFamily: Typography.mono().fontFamily,
-            fontSize: 14,
-            lineHeight: 20,
+            fontSize,
+            lineHeight,
           },
           wrap ? null : { flexShrink: 0 },
           webTextWrapStyle,

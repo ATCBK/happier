@@ -69,8 +69,13 @@ export function createEntityDragDropRuntime(options: Readonly<{
         notify();
         return true;
     };
-    const cancel = (_reason?: string) => {
-        if (carry?.dispatched || snapshot.phase === 'pending') return;
+    const cancel = (reason?: string) => {
+        if (carry?.dispatched || snapshot.phase === 'pending') {
+            // A dispatched effect is the effect owner's to settle, so an ordinary cancel (a drag ending after
+            // its drop) never rewrites it. Escape and realm teardown are the person or realm retiring the
+            // feedback itself: a slow or never-answering owner must not pin the card and the dimmed source.
+            if (reason !== 'escape' && reason !== 'realm-unmount') return;
+        }
         carry = null;
         sourceFeedback = null;
         setPointer(null);
@@ -96,7 +101,9 @@ export function createEntityDragDropRuntime(options: Readonly<{
             return item !== null && sameStrictJsonValue(item, active.item);
         } catch { return false; }
     };
-    const targetCurrent = (target: EntityDropTarget) => targets.get(target.id) === target && target.isCurrent?.() !== false;
+    const targetCurrent = (target: EntityDropTarget) => {
+        try { return targets.get(target.id) === target && target.isCurrent?.() !== false; } catch { return false; }
+    };
     const accepts = (target: EntityDropTarget, item: EntityDragItemV1) => target.acceptedKinds.includes(entityDragKindV1(item));
     const resolve = (active: Carry, target: EntityDropTarget): EntityDropAdmissionV1 => {
         if (!targetCurrent(target)) return refused('target-retired');
@@ -128,11 +135,17 @@ export function createEntityDragDropRuntime(options: Readonly<{
         let selectedCapturesKind = false;
         for (const target of targets.values()) {
             if (!targetCurrent(target) || !accepts(target, active.item)) continue;
-            const bounds = target.getBounds();
-            if (!bounds || !isFiniteRect(bounds) || bounds.width <= 0 || bounds.height <= 0) continue;
-            if (pointer.x < bounds.x || pointer.x > bounds.x + bounds.width
-                || pointer.y < bounds.y || pointer.y > bounds.y + bounds.height
-                || target.containsPointer?.(pointer) === false) continue;
+            // A target whose geometry cannot be read is not under the pointer; it cannot wedge the carry.
+            let inside = false;
+            let bounds: WindowBounds | null = null;
+            try {
+                bounds = target.getBounds();
+                inside = !!bounds && isFiniteRect(bounds) && bounds.width > 0 && bounds.height > 0
+                    && pointer.x >= bounds.x && pointer.x <= bounds.x + bounds.width
+                    && pointer.y >= bounds.y && pointer.y <= bounds.y + bounds.height
+                    && target.containsPointer?.(pointer) !== false;
+            } catch { inside = false; }
+            if (!inside || !bounds) continue;
             const targetDepth = depth(target);
             const area = bounds.width * bounds.height;
             const capturesKind = target.captureKinds?.includes(entityDragKindV1(active.item)) === true;
@@ -259,6 +272,9 @@ export function createEntityDragDropRuntime(options: Readonly<{
         } catch {
             outcome = { status: 'unknown', reason: reason('effect-outcome-unknown') };
         }
+        // Escape or realm teardown retired this carry while its owner was still answering: the outcome
+        // belongs to the release promise alone and must not repaint over whatever feedback follows.
+        if (carry !== active) return outcome;
         if (snapshot.item) captureSourceFeedback(active.source);
         carry = null;
         // The release promise keeps the real outcome, but a retired realm must not
@@ -269,7 +285,13 @@ export function createEntityDragDropRuntime(options: Readonly<{
     const release = (): Promise<EntityDropOutcomeV1 | null> => {
         const active = carry;
         if (!active || active.dispatched) return Promise.resolve(null);
-        if (!active.releasePromise) active.releasePromise = finishRelease(active);
+        if (!active.releasePromise) {
+            // Whatever a target or source does while the release reads them, an undispatched carry ends here.
+            active.releasePromise = finishRelease(active).catch(() => {
+                if (carry === active && !active.dispatched) cancel('release-failed');
+                return null;
+            });
+        }
         return active.releasePromise;
     };
     const start = (sourceId: string, input: EntityDragInput): EntityDragCarry | null => {

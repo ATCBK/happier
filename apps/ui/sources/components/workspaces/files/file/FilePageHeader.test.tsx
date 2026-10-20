@@ -288,7 +288,6 @@ describe('FilePageHeader', () => {
             const [included, setIncluded] = React.useState(false);
             return <>
                 <FilePageHeader
-                    theme={theme}
                     displayMode="diff"
                     onDisplayMode={() => {}}
                     diffMode="pending"

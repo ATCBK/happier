@@ -339,6 +339,96 @@ describe('mounted entity drag owner', () => {
         events.dispatchEvent(new Event('blur'));
         expect(await third.release()).toEqual({ status: 'applied' });
     });
+    it('Escape ends a carry whose effect owner never answers: feedback clears, the next carry starts, the late answer stays quiet', async () => {
+        const f = fixture();
+        const events = new EventTarget();
+        const uninstall = installEntityDragCancellation(f.runtime, events);
+        let answer: (outcome: EntityDropOutcomeV1) => void = () => {};
+        f.runtime.registerTarget({ ...f.target, execute: () => new Promise<EntityDropOutcomeV1>(resolve => { answer = resolve; }) });
+        try {
+            const carry = f.runtime.begin('source')!;
+            carry.move({ x: 25, y: 25 });
+            const released = carry.release();
+            await Promise.resolve();
+            expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'pending', sourceId: 'source' });
+            // An ordinary cancel after the drop (the browser's dragend) never rewrites a dispatched effect.
+            carry.cancel('gesture-cancelled');
+            expect(f.runtime.getSnapshot().phase).toBe('pending');
+            events.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
+            expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'idle', sourceId: null, item: null });
+            expect(f.runtime.getPointer()).toBeNull();
+            const next = f.runtime.begin('source');
+            expect(next).not.toBeNull();
+            next!.move({ x: 25, y: 25 });
+            answer({ status: 'applied' });
+            expect(await released).toEqual({ status: 'applied' });
+            expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'carrying', sourceId: 'source' });
+        } finally { uninstall(); }
+    });
+
+    it('a refused release returning to its source ends on Escape or the next press, whatever its animation does', async () => {
+        const f = fixture();
+        const events = new EventTarget();
+        const uninstall = installEntityDragCancellation(f.runtime, events);
+        try {
+            for (const end of [
+                () => events.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' })),
+                () => events.dispatchEvent(new Event('pointerdown')),
+            ]) {
+                f.setVerdict(refusal);
+                const carry = f.runtime.begin('source')!;
+                carry.move({ x: 25, y: 25 });
+                expect(await carry.release()).toMatchObject({ status: 'refused' });
+                expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'settled', sourceId: 'source' });
+                end();
+                expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'idle', sourceId: null });
+                expect(f.runtime.getPointer()).toBeNull();
+            }
+            // A landed move keeps no returning card, so Escape is not held after it.
+            f.setVerdict(allowed);
+            const landed = f.runtime.begin('source')!;
+            landed.move({ x: 25, y: 25 });
+            expect(await landed.release()).toEqual({ status: 'applied' });
+            const closeSurface = vi.fn(() => true);
+            const unregister = registerEscapeLayer({ priority: ESCAPE_LAYER_PRIORITIES.modal, onEscape: closeSurface });
+            events.addEventListener('keydown', event => { dispatchEscapeToLayerStack(event); }, true);
+            events.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
+            expect(closeSurface).toHaveBeenCalledTimes(1);
+            unregister();
+        } finally { uninstall(); }
+    });
+
+    it('a target that throws while read, or that unmounts under a carry, leaves neither card nor dimmed source behind', async () => {
+        const f = fixture();
+        let broken = false;
+        f.runtime.registerTarget({ ...f.target, id: 'broken', getBounds: () => { if (broken) throw new Error('detached'); return { x: 0, y: 0, width: 100, height: 100 }; },
+            isCurrent: () => { if (broken) throw new Error('detached'); return true; } });
+        const carry = f.runtime.begin('source')!;
+        broken = true;
+        expect(() => carry.move({ x: 25, y: 25 })).not.toThrow();
+        // The healthy sibling still owns the place; the throwing target is simply not under the pointer.
+        expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'carrying', targetId: 'target' });
+        f.retireTarget();
+        expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'carrying', targetId: null });
+        expect(await carry.release()).toBeNull();
+        expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'idle', sourceId: null });
+        expect(f.effects).toEqual([]);
+
+        // Unmounting the selected target while its effect is already answering frees the card and the source at once.
+        const g = fixture();
+        let answer: (outcome: EntityDropOutcomeV1) => void = () => {};
+        const unmountAnswering = g.runtime.registerTarget({ ...g.target, execute: () => new Promise<EntityDropOutcomeV1>(resolve => { answer = resolve; }) });
+        const second = g.runtime.begin('source')!;
+        second.move({ x: 25, y: 25 });
+        const released = second.release();
+        await Promise.resolve();
+        unmountAnswering();
+        expect(g.runtime.getSnapshot()).toMatchObject({ sourceId: null, item: null });
+        answer({ status: 'applied' });
+        expect(await released).toEqual({ status: 'applied' });
+        expect(g.runtime.getSnapshot().phase).toBe('idle');
+    });
+
     it('Escape cancels a move in flight before the surface around it; the next Escape reaches that surface (H20)', () => {
         const f = fixture();
         const events = new EventTarget();

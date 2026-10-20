@@ -115,8 +115,20 @@ async function awaitUploadPreflight<T>(
     });
 }
 
+const UPLOAD_CANCELED_ERROR = 'Upload canceled';
+
 function uploadCanceledPlan(): { ok: false; error: string } {
-    return { ok: false, error: 'Upload canceled' };
+    return { ok: false, error: UPLOAD_CANCELED_ERROR };
+}
+
+/** A cancellation a caller may end quietly: the person's own cancel, a retired surface, or an aborted signal. */
+function uploadCanceledResult(): { ok: false; error: string; canceled: true } {
+    return { ok: false, error: UPLOAD_CANCELED_ERROR, canceled: true };
+}
+
+/** An abort (navigation, a retired Account or surface, a dismissed confirmation) is a cancellation, never a failure to word. */
+function isAbortError(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError';
 }
 
 async function openWorkspaceUploadSourceReader(entry: WorkspaceUploadEntry): Promise<{
@@ -394,7 +406,11 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                 signal: controller.signal,
             });
             if (!plan.ok) {
-                setCurrentUploadState(plan.error === 'Upload canceled' ? { status: 'canceled' } : { status: 'error', error: plan.error });
+                if (plan.error === UPLOAD_CANCELED_ERROR) {
+                    setCurrentUploadState({ status: 'canceled' });
+                    return uploadCanceledResult();
+                }
+                setCurrentUploadState({ status: 'error', error: plan.error });
                 return { ok: false, error: plan.error };
             }
 
@@ -537,7 +553,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
 
             if (uploadAbortReasonRef.current === 'user') {
                 setCurrentUploadState({ status: 'canceled' });
-                return { ok: false, error: 'Upload canceled' };
+                return uploadCanceledResult();
             }
 
             if (uploadAbortReasonRef.current === 'error') {
@@ -548,12 +564,21 @@ export function useWorkspaceFileTransfers(params: Readonly<{
 
             if (controller.signal.aborted) {
                 setCurrentUploadState({ status: 'canceled' });
-                return { ok: false, error: 'Upload canceled' };
+                return uploadCanceledResult();
             }
 
             setCurrentUploadState({ status: 'done', totalFiles: tasks.length, totalBytes });
             if (isCurrentUpload() && !controller.signal.aborted) onAfterUploadSuccess?.();
             return { ok: true };
+        } catch (error) {
+            // The batch settles as a result, never a rejection the caller would surface as the raw error.
+            if (isAbortError(error) || controller.signal.aborted) {
+                setCurrentUploadState({ status: 'canceled' });
+                return uploadCanceledResult();
+            }
+            const message = error instanceof Error ? error.message : 'Upload failed';
+            setCurrentUploadState({ status: 'error', error: message });
+            return { ok: false, error: message };
         } finally {
             if (uploadAbortRef.current === controller) {
                 uploadAbortRef.current = null;

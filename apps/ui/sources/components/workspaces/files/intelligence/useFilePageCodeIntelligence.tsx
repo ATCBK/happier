@@ -174,6 +174,8 @@ export type UseFilePageCodeIntelligenceInput = Readonly<{
   /** P4's save of this page's buffer; resolves false when nothing was saved. */
   saveFileEdits: () => Promise<unknown> | unknown;
   readSavedText: () => Readonly<{ savedText: string; unsaved: boolean }>;
+  /** Phones: bring the tapped line (1-based) into the top of the view, above the name sheet (LS2 T). */
+  revealLine?: (line: number) => void;
 }>;
 
 /** One stable selection of the controller's snapshot, re-rendering its caller only when `select` changes. */
@@ -407,6 +409,7 @@ export function useFilePageCodeIntelligence(
             onActivate: (line, character, activation) => {
               const position = { line: line - 1, character };
               if (activation.via === 'touch') {
+                latest.current.revealLine?.(line);
                 controller.inspect({
                   ...position,
                   ...(activation.rect ? { anchor: activation.rect } : {}),

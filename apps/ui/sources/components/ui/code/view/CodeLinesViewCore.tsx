@@ -16,6 +16,7 @@ import { CodeLinesReadingAnchor, type NativeCodeReadingAnchor } from './CodeLine
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { Rect } from '../editor/codeEditorTypes';
 import { CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
+import { readCodeTextPointer } from '../interactions/codeTextDom';
 
 export type CodeLinesExternalScrollView = Readonly<{
     scrollRef: React.RefObject<{ scrollTo: (options: { y: number; animated: boolean }) => void } | null>;
@@ -134,21 +135,8 @@ function resolvePointerToken(event: CodePointerEvent, lines: ReadonlyMap<string,
     const x = event.clientX ?? event.nativeEvent?.clientX;
     const y = event.clientY ?? event.nativeEvent?.clientY;
     if (typeof x !== 'number' || typeof y !== 'number') return null;
-    const caretDocument = document as Document & {
-        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-        caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    };
-    const position = caretDocument.caretPositionFromPoint?.(x, y);
-    const caretRange = position ? null : caretDocument.caretRangeFromPoint?.(x, y);
-    const node = position?.offsetNode ?? caretRange?.startContainer;
-    const offset = position?.offset ?? caretRange?.startOffset;
-    if (!node || offset === undefined || !code.contains(node)) return null;
-    const range = document.createRange();
-    range.selectNodeContents(code);
-    range.setEnd(node, offset);
-    const box = 'getBoundingClientRect' in code && typeof code.getBoundingClientRect === 'function' ? code.getBoundingClientRect() : null;
-    return { lineId: line.id, newLine: line.newLine, offset16: Math.min(line.renderCodeText.length, range.toString().length),
-        rect: box ? { x, y: box.top, width: 1, height: box.height } : null };
+    const pointer = readCodeTextPointer(code, x, y);
+    return pointer ? { lineId: line.id, newLine: line.newLine, offset16: Math.min(line.renderCodeText.length, pointer.offset16), rect: pointer.rect } : null;
 }
 
 function preventNativeTextSelection(event?: PreventableEvent): void {
@@ -263,7 +251,10 @@ export function CodeLinesViewCore(
     React.useEffect(() => {
         if (Platform.OS !== 'web' || !intelligenceEnabled || typeof document === 'undefined') return;
         const rowSelector = `[id^="${typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(lineNativeIdPrefix) : lineNativeIdPrefix}-"]`;
-        const owns = (target: EventTarget | null) => typeof Element !== 'undefined' && target instanceof Element && target.closest(rowSelector) !== null;
+        const owns = (target: EventTarget | null) => {
+            const element = target as Partial<Pick<Element, 'closest'>> | null;
+            return typeof element?.closest === 'function' && element.closest(rowSelector) !== null;
+        };
         const onClick = (event: MouseEvent) => { if (owns(event.target)) tokenClickRef.current(event as unknown as CodePointerEvent); };
         const onPointerUp = (event: PointerEvent) => { if (owns(event.target)) tokenTouchRef.current(event as unknown as CodePointerEvent); };
         document.addEventListener('click', onClick, true);

@@ -99,6 +99,29 @@ describe('language intelligence presentation', () => {
     ).toBe('failure');
   });
 
+  it('tells starting the server apart from the running server loading the project', () => {
+    const note = (servers: NonNullable<CodeIntelligenceSnapshot['servers']>) =>
+      resolveLanguageStateNote({ snapshot: { ...idle, status: 'loading', servers }, machineName: 'devbox', machineUnreachable: false });
+    const starting = note([server('starting')]);
+    const loading = note([server('ready', { loading: true })]);
+    expect(starting?.kind).toBe('progress');
+    expect(loading?.kind).toBe('progress');
+    expect(loading?.text).not.toBe(starting?.text);
+  });
+
+  it('offers Install only for a missing server the Machine can install', () => {
+    const missing = (extra: Record<string, unknown>) =>
+      resolveLanguageStateNote({
+        snapshot: { ...idle, servers: [server('unavailable', { reason: 'server_missing', ...extra })] },
+        machineName: 'devbox',
+        machineUnreachable: false,
+      });
+    expect(missing({ installable: { pluginId: 'happier.language.typescript', dependencyId: 'typescript' } }))
+      .toMatchObject({ kind: 'failure', action: 'install' });
+    expect(missing({})).toMatchObject({ kind: 'failure' });
+    expect(missing({})?.action).toBeUndefined();
+  });
+
   it('reads the signature from the first fenced block and keeps the prose as documentation', () => {
     const content = readCodeHoverContent({
       status: 'ok',

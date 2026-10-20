@@ -15,7 +15,10 @@ export function createMonacoCommands(engine: editor.IStandaloneCodeEditor, model
         const line = Math.max(1, Math.min(model.getLineCount(), Math.floor(requestedLine) || 1));
         engine.setPosition({ lineNumber: line, column: 1 });
         if (reveal?.select) engine.setSelection({ startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: model.getLineMaxColumn(line) });
-        engine.revealLineInCenter(line, reveal?.behavior === 'smooth' ? 0 : 1);
+        if (reveal?.top) {
+            const topLine = Math.max(1, Math.min(model.getLineCount(), Math.floor(reveal.top.line) || 1));
+            engine.setScrollTop(Math.max(0, engine.getTopForLineNumber(topLine) - reveal.top.offset), reveal.behavior === 'smooth' ? 0 : 1);
+        } else engine.revealLineInCenter(line, reveal?.behavior === 'smooth' ? 0 : 1);
         if (reveal?.focus) engine.focus();
     };
     const runCommand: CodeEditorHandle['runCommand'] = (command) => {

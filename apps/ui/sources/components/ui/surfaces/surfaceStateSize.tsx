@@ -13,7 +13,8 @@ export type SurfaceStateContainerSize = HappierStateSize | 'line';
  */
 const SurfaceStateSizeContext = React.createContext<SurfaceStateContainerSize | undefined>(undefined);
 
-export function SurfaceStateSizeProvider(props: Readonly<{ size: SurfaceStateContainerSize; children: React.ReactNode }>) {
+/** `size` undefined gives no step (as outside any provider), so a host can switch steps without remounting. */
+export function SurfaceStateSizeProvider(props: Readonly<{ size: SurfaceStateContainerSize | undefined; children: React.ReactNode }>) {
     return (
         <SurfaceStateSizeContext.Provider value={props.size}>
             {props.children}

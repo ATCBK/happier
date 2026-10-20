@@ -185,6 +185,11 @@ type PopoverCommonProps = Readonly<{
     sheetHeader?: 'band' | 'none';
     /** `solid`: an opaque sheet, for live content that must not show the screen through it. */
     sheetMaterial?: 'glass' | 'solid';
+    /**
+     * `none`: no scrim or blur behind the sheet, for a sheet about something on the screen (the
+     * tapped name in code) that must stay readable above it. A tap outside still closes it.
+     */
+    sheetBackdrop?: 'scrim' | 'none';
     /** Controls pinned under the sheet's scrolling body (a filter sheet's Clear and Show results). */
     sheetFooter?: React.ReactNode;
     accessibilityLabel?: string;
@@ -343,6 +348,7 @@ function PhonePopoverSheet(props: PopoverProps) {
         onClose={closeSheet}
         placement="bottom"
         scrollHost="body"
+        showBackdrop={props.sheetBackdrop !== 'none'}
         accessibilityLabel={props.accessibilityLabel}
         focusReturnRef={resolveFocusReturnRef(props)}
         focusReturnFallback="activation-time"

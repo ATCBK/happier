@@ -25,10 +25,13 @@ import { buildPierreDiffOptionsBase } from './buildPierreDiffOptionsBase.web';
 import { resolvePierreLanguageOverride } from './resolvePierreLanguageOverride.web';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { buildCodeLinesFromTextDiff } from '@/components/ui/code/model/buildCodeLinesFromTextDiff';
+import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { codeLineScrollTargetKey } from '@/components/ui/code/model/codeLineScrollTargetKey';
 import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
 import { PIERRE_FIND_HIGHLIGHT_CSS, pierreCodeLineSelector, registerPierreFindHighlights } from './pierreFindHighlights.web';
+import { bindPierreIntelligence, PIERRE_DIAGNOSTIC_HIGHLIGHT_NAMES } from './pierreIntelligence.web';
+import { formatCodeEditorDiagnosticCss } from '@/components/ui/code/editor/editorTheme';
 import { HappierUnifiedDiffViewer } from '../happier/HappierUnifiedDiffViewer';
 import { HappierTextDiffViewer } from '../happier/HappierTextDiffViewer';
 import { HAPPIER_UI_FONT_SCALE_CSS_VAR } from '@/components/ui/text/webUnistylesFontOverrides';
@@ -606,6 +609,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         || props.highlightLineId
         || (props.highlightLineIds && props.highlightLineIds.size > 0)
         || props.findRangesByLineId?.size
+        || props.intelligence
     );
 
     const codeLines: readonly CodeLine[] | null = React.useMemo(() => {
@@ -621,6 +625,17 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         });
     }, [needsCodeLines, sanitizedPatch, props.mode, props.mode === 'text' ? props.oldText : null,
         props.mode === 'text' ? props.newText : null, props.mode === 'text' ? props.contextLines : null]);
+
+    // Text comparisons can expand unchanged rows outside the patch. Reuse file-row identities there;
+    // patch rows retain their existing diff identities and all callbacks carry the new source line.
+    const intelligenceLines = React.useMemo(() => {
+        if (!props.intelligence) return new Map<number, CodeLine>();
+        const lines = props.mode === 'text'
+            ? [...buildCodeLinesFromFile({ text: props.newText }), ...(codeLines ?? [])]
+            : codeLines ?? [];
+        return new Map(lines.filter(line => !line.renderIsHeaderLine && line.kind !== 'remove' && line.newLine !== null)
+            .map(line => [line.newLine!, line]));
+    }, [codeLines, props.intelligence !== undefined, props.mode, props.mode === 'text' ? props.newText : null]);
 
     const codeLinesByAdditionLine = React.useMemo(() => {
         if (!codeLines) return null;
@@ -869,9 +884,17 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         ? PIERRE_REVIEW_COMMENT_HOVER_SLOT_UNSAFE_CSS
         : '';
 
+    // P7 squiggles in the Changes body: the editors' one diagnostic underline, painted on Pierre's highlight ranges.
+    const diagnosticUnsafeCSS = React.useMemo(() => props.intelligence
+        ? formatCodeEditorDiagnosticCss({
+            diagnosticErrorColor: theme.colors.state.danger.foreground,
+            diagnosticWarningColor: theme.colors.state.warning.foreground,
+        }, (severity) => `::highlight(${PIERRE_DIAGNOSTIC_HIGHLIGHT_NAMES[severity]})`)
+        : '', [props.intelligence !== undefined, theme.colors.state.danger.foreground, theme.colors.state.warning.foreground]);
+
     const composedUnsafeCSS = React.useMemo(() => {
-        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS, reviewedLineUnsafeCSS].filter(Boolean).join('\n');
-    }, [highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, reviewedLineUnsafeCSS]);
+        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, diagnosticUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS, reviewedLineUnsafeCSS].filter(Boolean).join('\n');
+    }, [diagnosticUnsafeCSS, highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, reviewedLineUnsafeCSS]);
 
     const options = React.useMemo<FileDiffOptions<React.ReactNode, undefined>>(() => {
         return {
@@ -963,6 +986,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     const paintRef = React.useRef<PierrePaint | null>(null);
     const scrollTargetKey = codeLineScrollTargetKey(props.scrollToLineId, props.scrollToLineId ? props.findRangesByLineId?.get(props.scrollToLineId) : undefined);
     const stopFindRef = React.useRef<() => void>(() => {});
+    const stopIntelligenceRef = React.useRef<() => void>(() => {});
     const refreshFind = React.useCallback((paint: PierrePaint) => {
         stopFindRef.current();
         stopFindRef.current = registerPierreFindHighlights(paint.node.shadowRoot ?? paint.node, codeLines ?? [], props.findRangesByLineId);
@@ -1006,17 +1030,23 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         paintRef.current = paint;
         revealScrollTarget(paint);
         refreshFind(paint);
-    }, [refreshFind, revealScrollTarget]);
+        stopIntelligenceRef.current();
+        stopIntelligenceRef.current = props.intelligence
+            ? bindPierreIntelligence(paint.node.shadowRoot ?? paint.node, intelligenceLines, props.intelligence, rangeSelectionEnabled)
+            : () => {};
+    }, [refreshFind, revealScrollTarget, props.intelligence, intelligenceLines, rangeSelectionEnabled]);
 
     React.useEffect(() => {
         if (poolFailed || initialPresentationForceFallback) {
             paintRef.current = null;
             stopFindRef.current();
+            stopIntelligenceRef.current();
             return;
         }
         if (paintRef.current) onPaint(paintRef.current);
         return () => {
             stopFindRef.current();
+            stopIntelligenceRef.current();
         };
     }, [initialPresentationForceFallback, onPaint, poolFailed]);
 

@@ -27,7 +27,7 @@ const { machineWorkspaceFileReplaceApply } = await import('@/sync/ops/machineWor
 let current: ReturnType<typeof useWorkspaceFileDetailsLoading>;
 function Harness(props: Parameters<typeof useWorkspaceFileDetailsLoading>[0]) { current = useWorkspaceFileDetailsLoading(props); return null; }
 beforeEach(async () => {
-    input.scope.serverId = await prepareWorkspaceFileDetailsActionBoundary();
+    input.scope.serverId = await prepareWorkspaceFileDetailsActionBoundary(input.scope.machineId);
     transport.diff.mockReset().mockResolvedValue({ success: true, diff: patch('new') });
     transport.stat.mockReset().mockResolvedValue({ success: true, exists: true, sizeBytes: 4 });
     transport.replace.mockReset();

@@ -1,4 +1,4 @@
-import type { WorkspaceFileEditorState } from './useWorkspaceFileEditorState';
+import type { WorkspaceFileEditStart, WorkspaceFileEditorState } from './useWorkspaceFileEditorState';
 
 /** P3 owns header composition; this model projects P4's one editor owner. */
 export type WorkspaceFileEditorHeaderModel = Readonly<{
@@ -15,7 +15,7 @@ export type WorkspaceFileEditorHeaderModel = Readonly<{
     onSave(): void;
     onDone(): void;
     onCancel(): void;
-    onStart(at?: { line: number }): void;
+    onStart(at?: WorkspaceFileEditStart): void;
     onCompare(): void;
     onResolve(choice: 'useMine' | 'useTheirs'): void;
 }>;

@@ -109,7 +109,8 @@ export function createCodeIntelligenceDocument(input: Readonly<{
                     void watch();
                     const result = await opening;
                     accept(result, text, unsaved, 1);
-                    if (result.status !== 'ok') activeWatch?.abort();
+                    if (result.status === 'ok') void watch();
+                    else activeWatch?.abort();
                     return result;
                 } catch (error) {
                     activeWatch?.abort();

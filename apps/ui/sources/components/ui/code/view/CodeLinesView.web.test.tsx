@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
@@ -89,32 +90,40 @@ describe('CodeLinesView (web)', () => {
         const pointer = vi.fn();
         const activate = vi.fn();
         const screen = await renderScreen(<CodeLinesViewCore lines={lines} intelligence={{ onPointerToken: pointer, onActivateToken: activate }} />);
-        const textNode = { textContent: 'target' };
-        const code = { getAttribute: () => lines[0].id, contains: (node: unknown) => node === textNode };
-        const target = { closest: () => code };
-        const range = { selectNodeContents: vi.fn(), setEnd: vi.fn(), toString: () => '😀 ta' };
-        const oldDocument = globalThis.document;
-        vi.stubGlobal('document', {
-            ...oldDocument,
-            caretPositionFromPoint: () => ({ offsetNode: textNode, offset: 2 }),
-            createRange: () => range,
-        });
+        const row = document.createElement('div');
+        row.id = screen.tree.root.findAll(node => typeof node.props.nativeID === 'string' && node.props.nativeID.endsWith(`-${lines[0].id}`))[0].props.nativeID;
+        const code = document.createElement('span');
+        code.setAttribute('data-code-text', lines[0].id);
+        code.innerHTML = '<span>😀 </span><span>target</span>';
+        row.append(code);
+        document.body.append(row);
+        const target = code.lastElementChild!;
+        // Only caret hit testing and geometry substitute browser layout; DOM spans/ranges stay real.
+        const previousCaret = Object.getOwnPropertyDescriptor(document, 'caretPositionFromPoint');
+        Object.defineProperty(document, 'caretPositionFromPoint', { configurable: true, value: () => ({ offsetNode: target.firstChild, offset: 2 }) });
+        const geometry = vi.spyOn(code, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 10, 200, 20));
         try {
             const list = screen.tree.root.findByType('FlatList');
             expect(list.props.onPointerMove).toEqual(expect.any(Function));
             list.props.onPointerMove({ target, clientX: 10, clientY: 20 });
-            expect(pointer).toHaveBeenLastCalledWith(lines[0].id, 5, null);
-            list.props.onClick({ target, clientX: 10, clientY: 20, metaKey: true });
-            expect(activate).toHaveBeenLastCalledWith(lines[0].id, 5, { via: 'modifier', rect: null });
+            expect(pointer).toHaveBeenLastCalledWith(lines[0].id, 5, { x: 10, y: 10, width: 1, height: 20 }, 1);
+            // Rows stop bubbling clicks; the genuine document capture listener still sees them.
+            target.addEventListener('click', event => event.stopPropagation());
+            target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 10, clientY: 20, metaKey: true }));
+            expect(activate).toHaveBeenLastCalledWith(lines[0].id, 5, { via: 'modifier', rect: { x: 10, y: 10, width: 1, height: 20 } }, 1);
             pointer.mockClear(); activate.mockClear();
             await screen.update(<CodeLinesViewCore lines={[{ ...lines[0], kind: 'remove', newLine: null }]} intelligence={{ onPointerToken: pointer, onActivateToken: activate }} />);
             const updated = screen.tree.root.findByType('FlatList');
             updated.props.onPointerMove({ target, clientX: 10, clientY: 20 });
-            updated.props.onClick({ target, clientX: 10, clientY: 20, ctrlKey: true });
+            target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 10, clientY: 20, ctrlKey: true }));
             expect(pointer).not.toHaveBeenCalled();
             expect(activate).not.toHaveBeenCalled();
         } finally {
-            vi.stubGlobal('document', oldDocument);
+            await screen.unmount();
+            row.remove();
+            geometry.mockRestore();
+            if (previousCaret) Object.defineProperty(document, 'caretPositionFromPoint', previousCaret);
+            else Reflect.deleteProperty(document, 'caretPositionFromPoint');
         }
     });
     it('completes a web drag range in an explicit interaction mode', async () => {

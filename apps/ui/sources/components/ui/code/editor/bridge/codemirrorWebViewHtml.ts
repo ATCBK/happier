@@ -411,9 +411,17 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
         function reveal(lineNumber, options = {}) {
           if (!view) return;
           const line = view.state.doc.line(Math.max(1, Math.min(view.state.doc.lines, Math.floor(lineNumber) || 1)));
+          const top = options.top && Number.isFinite(options.top.line) ? options.top : null;
           view.dispatch({ selection: { anchor: line.from, head: options.select ? line.to : line.from },
-            ...(options.behavior === 'smooth' ? {} : { effects: EditorView.scrollIntoView(line.from, { y: 'center' }) }) });
-          if (options.behavior === 'smooth') {
+            ...(options.behavior === 'smooth' || top ? {} : { effects: EditorView.scrollIntoView(line.from, { y: 'center' }) }) });
+          if (top) {
+            const editor = view;
+            const topLine = editor.state.doc.line(Math.max(1, Math.min(editor.state.doc.lines, Math.floor(top.line) || 1)));
+            editor.requestMeasure({
+              read: () => Math.max(0, editor.lineBlockAt(topLine.from).top + editor.documentPadding.top - (Number(top.offset) || 0)),
+              write: scrollTop => { editor.scrollDOM.scrollTop = scrollTop; },
+            });
+          } else if (options.behavior === 'smooth') {
             const editor = view;
             editor.requestMeasure({
               read: () => { const block = editor.lineBlockAt(line.from); return Math.max(0, block.top - (editor.scrollDOM.clientHeight - block.height) / 2); },

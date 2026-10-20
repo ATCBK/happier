@@ -19,6 +19,9 @@ import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import { useWorkspaceFileEditorComparison, type EditorComparisonResolution, type WorkspaceFileEditorComparisonController } from './useWorkspaceFileEditorComparison';
 import type { WorkspaceFileDetailsFileContent } from './refreshWorkspaceFileDetails';
 
+/** Where Edit starts: the caret line and, from View, the row to keep at the top of the editor. */
+export type WorkspaceFileEditStart = Readonly<{ line: number; top?: Readonly<{ line: number; offset: number }> }>;
+
 export type WorkspaceFileEditorLiveValue = Readonly<{ get(): string; subscribe(listener: () => void): () => void }>;
 export type WorkspaceFileEditorRefusal = Readonly<{ kind: 'unreachable' | 'unsupported' | 'awaitingApproval' | 'failed'; message?: string }>;
 type Encoding = NonNullable<WorkspaceFileDetailsFileContent['encoding']>;
@@ -46,7 +49,7 @@ export type WorkspaceFileEditorState = Readonly<{
     editorStatus: 'clean' | 'dirty' | 'saving' | 'conflict'; conflict: WorkspaceFileEditorConflict | null;
     refusal: WorkspaceFileEditorRefusal | null; draftPersistenceFailed: boolean; savedAtMs: number | null;
     lineEndingNormalization: 'lf' | 'crlf' | null;
-    initialLine: number | undefined; onEditorReady(): void; startEditingFile(at?: { line: number }): void;
+    initialLine: number | undefined; onEditorReady(): void; startEditingFile(at?: WorkspaceFileEditStart): void;
     cancelEditingFile(): void; doneEditingFile(): Promise<void>; saveFileEdits(): Promise<boolean>;
     resolveConflict(choice: 'useMine' | 'useTheirs'): Promise<void>; undoSetAside(): Promise<void>;
     isComparing: boolean; startComparison(): void; backToEditing(): void;
@@ -77,6 +80,8 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     const [draftPersistenceFailed, setDraftPersistenceFailed] = React.useState(false);
     const [savedAtMs, setSavedAtMs] = React.useState<number | null>(null);
     const [initialLine, setInitialLine] = React.useState<number>();
+    // The reader's top row when Edit started from View, so the editor opens on the same view (P4-R10).
+    const initialTop = React.useRef<WorkspaceFileEditStart['top']>(undefined);
     const [pendingStart, setPendingStart] = React.useState(false);
     const editorHandleRef = React.useRef<TextEditorHandle | null>(null);
     const saving = React.useRef<AbortController | null>(null);
@@ -132,7 +137,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
         editorHandleRef.current = null; supersededDisk.current = null; setAside.current = null;
         refusalRef.current = draft && input.unreachable ? { kind: 'unreachable' } : null; setRefusal(refusalRef.current);
         setIsSavingEdits(false); setSavedAtMs(null); setDraftPersistenceFailed(false);
-        setPendingStart(false); setInitialLine(undefined); setEditorResetKey(key => key + 1);
+        setPendingStart(false); setInitialLine(undefined); initialTop.current = undefined; setEditorResetKey(key => key + 1);
     }
     React.useEffect(() => { liveValue.publish(text.current); }, [liveValue, ownerKey]);
     React.useEffect(() => () => {
@@ -192,11 +197,12 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     const editorSurfaceEnabled = input.fileEditorFeatureEnabled && input.encoding?.editable !== false
         && (input.fileWriteSupported || input.unreachable === true)
         && (Platform.OS === 'web' ? input.filesEditorWebMonacoEnabled : input.filesEditorNativeCodeMirrorEnabled);
-    const startEditingFile = React.useCallback((at?: { line: number }) => {
+    const startEditingFile = React.useCallback((at?: WorkspaceFileEditStart) => {
         if (!isCurrentOwner() || !editorSurfaceEnabled) return;
         const line = at && Number.isFinite(at.line) ? Math.max(1, Math.trunc(at.line)) : undefined;
-        retireUndo(); if (line !== undefined) setInitialLine(line);
-        if (editing.current) { if (line !== undefined) editorHandleRef.current?.revealLine?.(line, { focus: true }); return; }
+        const top = line !== undefined && at?.top && Number.isFinite(at.top.line) && Number.isFinite(at.top.offset) ? at.top : undefined;
+        retireUndo(); if (line !== undefined) { setInitialLine(line); initialTop.current = top; }
+        if (editing.current) { if (line !== undefined) editorHandleRef.current?.revealLine?.(line, { focus: true, ...(top ? { top } : {}) }); return; }
         if (latest.current.fileText === null || latest.current.displayMode !== 'file') { setPendingStart(true); return; }
         updateBase({ text: latest.current.fileText, hash: latest.current.fileHash, encoding: latest.current.encoding });
         editing.current = true; setIsEditingFile(true); reseed(latest.current.fileText); setEditorDirty(false); setPendingStart(false);
@@ -204,7 +210,8 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     }, [editorSurfaceEnabled, isCurrentOwner, reseed, retireUndo, updateBase, updateRefusal]);
     React.useEffect(() => { if (pendingStart && input.displayMode === 'file' && input.fileText !== null) startEditingFile(); }, [pendingStart, input.displayMode, input.fileText, startEditingFile]);
     const onEditorReady = React.useCallback(() => {
-        if (isCurrentOwner() && initialLine !== undefined) editorHandleRef.current?.revealLine?.(initialLine, { focus: true });
+        const top = initialTop.current;
+        if (isCurrentOwner() && initialLine !== undefined) editorHandleRef.current?.revealLine?.(initialLine, { focus: true, ...(top ? { top } : {}) });
     }, [initialLine, isCurrentOwner]);
     const onEditorChange = React.useCallback((value: string) => {
         if (!isCurrentOwner()) return;

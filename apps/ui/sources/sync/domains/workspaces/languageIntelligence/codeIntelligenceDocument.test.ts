@@ -3,6 +3,36 @@ import type { LanguageIntelligenceSyncResult } from '@happier-dev/protocol/machi
 import { createCodeIntelligenceDocument, type CodeIntelligenceServerPort } from './codeIntelligenceDocument';
 
 describe('language document custody', () => {
+    it('restores watch delivery at open acknowledgement if the startup watch ended early', async () => {
+        let finishOpen!: (answer: LanguageIntelligenceSyncResult) => void;
+        let watches = 0;
+        const received: number[] = [];
+        const unavailable: string[] = [];
+        const holder = createCodeIntelligenceDocument({ rootPath: '/repo', path: 'a.ts', languageId: 'typescript',
+            getText: () => 'answer()', getUnsaved: () => false, isCurrent: () => true, onSync() {},
+            onWatch: answer => { received.push(answer.revision); }, onUnavailable: reason => { unavailable.push(reason); },
+            port: {
+                sync: request => request.op.op === 'open' ? new Promise(resolve => { finishOpen = resolve; })
+                    : Promise.resolve({ status: 'ok', generation: 'g1', servers: [] }),
+                query: async () => ({ status: 'ok', kind: 'hover', sections: [] }),
+                watch: (_request, signal) => {
+                    watches++;
+                    if (watches === 1) return Promise.reject(new Error('Startup transport disconnected'));
+                    if (watches === 2) return Promise.resolve({ status: 'ok', revision: 5, servers: [], diagnostics: {} });
+                    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+                },
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            const pending = holder.query('hover', { line: 0, character: 2 }, new AbortController().signal);
+            await vi.waitFor(() => expect(unavailable).toEqual(['transport_failed']));
+            finishOpen({ status: 'ok', generation: 'g1', version: 1, servers: [] });
+            await pending;
+            await vi.waitFor(() => expect(received).toEqual([5]));
+        } finally { holder.dispose(); }
+    });
+
     it('closes a sent lease without waiting for startup, but never closes a queued unsent lease', async () => {
         let markOpened!: () => void;
         let finishOpen!: (value: LanguageIntelligenceSyncResult) => void;
@@ -55,5 +85,33 @@ describe('language document custody', () => {
         expect(observedSignal?.aborted).toBe(true);
         finishQuery();
         expect(await pending).toBeNull();
+    });
+
+    it('watches while startup is pending, then releases that watch if no server can open without disabling fallback', async () => {
+        let finishOpen!: (answer: LanguageIntelligenceSyncResult) => void;
+        let watchSignal: AbortSignal | undefined;
+        const holder = createCodeIntelligenceDocument({ rootPath: '/repo', path: 'a.txt', languageId: 'text',
+            getText: () => 'answer()', getUnsaved: () => false, isCurrent: () => true, onSync() {}, onWatch() {}, onUnavailable() {},
+            port: {
+                sync: request => request.op.op === 'open' ? new Promise(resolve => { finishOpen = resolve; })
+                    : Promise.resolve({ status: 'ok', generation: 'g1', servers: [] }),
+                query: async () => ({ status: 'loading' }),
+                watch: (_request, signal) => {
+                    watchSignal = signal;
+                    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+                },
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            const pending = holder.query('definition', { line: 0, character: 2 }, new AbortController().signal);
+            await vi.waitFor(() => expect(watchSignal).toBeDefined());
+            expect(watchSignal?.aborted).toBe(false);
+            finishOpen({ status: 'unavailable', reason: 'no_capable_server' });
+            expect(await pending).toEqual({ status: 'unavailable', reason: 'no_capable_server' });
+            expect(watchSignal?.aborted).toBe(true);
+            expect(await holder.query('references', { line: 0, character: 2 }, new AbortController().signal))
+                .toEqual({ status: 'unavailable', reason: 'no_capable_server' });
+        } finally { holder.dispose(); }
     });
 });

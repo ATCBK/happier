@@ -73,7 +73,8 @@ import type { OpenableContentStatResultV1 } from '@happier-dev/protocol';
 import { useWorkspaceFileDetailsLoading } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileDetailsLoading';
 import { recordRecentWorkspaceFile } from '@/sync/domains/workspaces/files/recentWorkspaceFiles';
 import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
-import { useWorkspaceFileEditorState } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState';
+import { useWorkspaceFileEditorState, type WorkspaceFileEditStart } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState';
+import { readCodeViewReadingLine } from '@/components/ui/code/view/readCodeViewReadingLine';
 import { readWorkspaceFileEditorDraft, type WorkspaceFileEditorDraft } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft';
 import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
 import { useWorkspaceFileEditorCommands } from './workspaceFileDetails/useWorkspaceFileEditorCommands';
@@ -604,6 +605,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const { view: fileView, patchView: patchFileView } = useWorkspaceFileView(pane, tabKey);
     const isActive = props.openableContentViewer?.details.active ?? (presentation === 'screen' || (pane.scopeState?.details?.isOpen === true && pane.scopeState.details.activeTabKey === tabKey));
     const persistedDraft = readWorkspaceFileEditorDraft(pane.scopeState?.details?.tabState?.[tabKey], editorAccountScope?.accountId ?? null);
+    // Mirrors the editor state (declared below, after the content it needs) for the loader's diff request.
+    const [diffWhileEditing, setDiffWhileEditing] = React.useState(persistedDraft?.isEditingFile === true);
     const persistDraft = React.useCallback((draft: WorkspaceFileDetailsPersistedDraft | null) => {
         patchDetailsTabState(tabKey, draft ?? {
             accountId: null, isEditingFile: false, editorOriginalText: undefined,
@@ -708,7 +711,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         fileHasIncludedDelta: fileEntry?.hasIncludedDelta,
         previewSlice: fileView.previewSlice,
         maxImagePreviewBytes: typeof filesImagePreviewMaxBytes === 'number' ? filesImagePreviewMaxBytes : null,
-        includeDiff: displayMode === 'diff' && (scmSnapshot == null || fileEntry != null),
+        // Changes reads the diff; so does editing a changed file, for its gutter marks (P4-R9).
+        includeDiff: (displayMode === 'diff' && (scmSnapshot == null || fileEntry != null)) || (diffWhileEditing && fileEntry != null),
         includeFile: displayMode !== 'diff',
         snapshotSignature,
         isActive,
@@ -909,6 +913,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const { editorSurfaceEnabled, isEditingFile, editorResetKey, editorSeedText, editorHandleRef,
         onEditorChange, editorDirty, saveFileEdits, cancelEditingFile, startEditingFile,
         liveValue, initialLine, onEditorReady } = editorState;
+    React.useEffect(() => { setDiffWhileEditing(isEditingFile); }, [isEditingFile]);
     // Ask reads the mounted editor's selection; the handle exists once the engine reports ready.
     const [readyEditorHandle, setReadyEditorHandle] = React.useState<typeof editorHandleRef.current>(null);
     const bindCodeIntelligenceEditor = React.useRef<() => void>(() => undefined);
@@ -945,9 +950,16 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         }));
     }, [requestedDisplayMode, deepLinkAnchor?.source, fileContent, hasRenderableDiff, isEditingFile, markdownPreviewAvailable, persistedDraft?.isEditingFile, fileEntry, fileViewer.kind]);
 
-    const handleStartEditingFile = React.useCallback((at?: { line: number }) => {
-        onDisplayMode('file'); props.onStartEditingFile?.(); startEditingFile(at);
-    }, [onDisplayMode, props.onStartEditingFile, startEditingFile]);
+    const readBodyRef = React.useRef<View | null>(null);
+    // Edit opens where the person is (P4-R10): from View on the same top row with the caret on the selection,
+    // from Changes at the change in focus. Press events and menu entries pass no position.
+    const changesEditLineRef = React.useRef<number | null>(null);
+    const handleStartEditingFile = React.useCallback((at?: WorkspaceFileEditStart) => {
+        const requested = typeof at?.line === 'number' ? at : undefined;
+        const reading = requested ?? (displayMode === 'file' ? readCodeViewReadingLine(readBodyRef.current) ?? undefined
+            : displayMode === 'diff' && changesEditLineRef.current !== null ? { line: changesEditLineRef.current } : undefined);
+        onDisplayMode('file'); props.onStartEditingFile?.(); startEditingFile(reading);
+    }, [displayMode, onDisplayMode, props.onStartEditingFile, startEditingFile]);
     // Edit from a plugin viewer's header lands here with a one-shot request: open the built-in editor once the
     // text is held (the request is cleared first, so a reload never re-enters editing by itself).
     const requestEditFromViewer = React.useCallback(() => patchFileView({ startEditing: true }), [patchFileView]);
@@ -964,16 +976,6 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         focused: isActive && (presentation === 'screen' || focusedGroup?.activeTabKey === tabKey),
     });
 
-    // Gutter marks come from the same diff the Changes body shows, seeded once per saved version and scope;
-    // the engine then carries them through the person's edits (P4-R9).
-    const changeMarkerSeedKey = JSON.stringify([fileContent?.contentHash ?? null, diffMode, editorResetKey]);
-    const changeMarkerDiff = isEditingFile && typeof diffContent === 'string' && diffContent.length > 0 ? diffContent : null;
-    const changeMarkerDiffRef = React.useRef(changeMarkerDiff);
-    changeMarkerDiffRef.current = changeMarkerDiff;
-    // Seeded per saved version: a refreshed diff for the same version does not move marks under the caret.
-    const changeMarkers = React.useMemo(() => changeMarkerDiffRef.current
-        ? { key: changeMarkerSeedKey, items: buildEditorChangeMarkers(filePath, null, changeMarkerDiffRef.current) } : undefined,
-    [changeMarkerSeedKey, changeMarkerDiff !== null, filePath]);
     const surfaceSize = useSurfaceStateSize();
     const editorAccessory = React.useMemo(() => (Platform.OS !== 'web' || surfaceSize === 'phone') ? {
         save: {
@@ -1136,7 +1138,6 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     React.useEffect(() => { if (liveMoment) setLiveMomentAt(Date.now()); }, [liveMoment]);
     const attributionUpdatedAt = Math.max(editorAttribution.updatedAt ?? 0, liveMomentAt ?? 0) || null;
 
-    const readBodyRef = React.useRef<View | null>(null);
     // ── The page's chrome: one header, one `⋯` list, one share owner (P3 §3.2, §3.3) ──
     const phonePage = surfaceSize === 'phone';
     const safeAreaInsets = useSafeAreaInsets();
@@ -1198,8 +1199,23 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         machineName: checkoutReachability.machineName, machineUnreachable: checkoutReachability.unreachable,
         agentName: editorAttribution.agentName, saveFileEdits,
         readSavedText: () => ({ savedText: fileContent?.isBinary ? '' : fileContent?.content ?? '', unsaved: editorState.readSnapshot().dirty }),
+        revealLine: (line) => setJumpToAnchor({ kind: 'line', filePath, line }),
     });
     bindCodeIntelligenceEditor.current = codeIntelligence.bindEditor;
+    // Gutter marks come from the diff of the Changes scope the person selected (this turn, the session or
+    // uncommitted), the same one the Changes body shows, seeded once per saved version and scope; the engine
+    // then carries them through the person's edits (P4-R9).
+    const changeMarkerSeedKey = JSON.stringify([fileContent?.contentHash ?? null, changesReview.scopeKind, diffMode, editorResetKey]);
+    const changeMarkerDiff = isEditingFile && typeof changesReview.unifiedDiff === 'string' && changesReview.unifiedDiff.length > 0
+        ? changesReview.unifiedDiff : null;
+    const changeMarkerDiffRef = React.useRef(changeMarkerDiff);
+    changeMarkerDiffRef.current = changeMarkerDiff;
+    // Seeded per saved version: a refreshed diff for the same version does not move marks under the caret.
+    const changeMarkers = React.useMemo(() => changeMarkerDiffRef.current
+        ? { key: changeMarkerSeedKey, items: buildEditorChangeMarkers(filePath, null, changeMarkerDiffRef.current) } : undefined,
+    [changeMarkerSeedKey, changeMarkerDiff !== null, filePath]);
+    const changesFocusHunk = changesReview.controller.currentHunk;
+    changesEditLineRef.current = changesFocusHunk ? (changesFocusHunk.rangeSide === 'new' ? changesFocusHunk.rangeStart : changesFocusHunk.newStart) : null;
     const menuContext: FileMenuContext = {
         machineReachable,
         unavailableReason,

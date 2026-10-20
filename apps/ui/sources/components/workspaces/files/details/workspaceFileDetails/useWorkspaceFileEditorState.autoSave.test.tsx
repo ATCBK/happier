@@ -751,10 +751,10 @@ describe('useWorkspaceFileEditorState autosave', () => {
             const afterImmediate = { headerRenders, leafCommits, persisted: persistDraft.mock.calls.length };
             const next = 'A note[^1]\n\n[^1]: newly unsupported\n';
             await act(async () => { emit('docChanged', { doc: next }); await vi.advanceTimersByTimeAsync(99); });
-            // The native surface owns the newest buffer before the state
-            // owner's configured 100 ms publication boundary.
+            // The native surface and subscribed Markdown leaf see current text
+            // while persistence remains on the state owner's publication cadence.
             expect(editor.editorHandleRef.current?.getValue()).toBe(next);
-            expect(editor.liveValue.get()).toBe('# Second dirty edit');
+            expect(editor.liveValue.get()).toBe(next);
             expect(headerRenders).toBe(afterImmediate.headerRenders);
             expect(persistDraft.mock.calls).toHaveLength(afterImmediate.persisted);
             await act(async () => { await vi.advanceTimersByTimeAsync(1); });

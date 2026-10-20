@@ -14,7 +14,16 @@ export function installEntityDragCancellation(runtime: EntityDragDropRuntime, ev
     };
     const stopPointer = runtime.subscribePointer(observePointerCarry);
     const stopCarry = runtime.subscribe(observePointerCarry);
-    const pointerDown = () => { suppressPointerActivation = false; };
+    // A refused release returns the carried card to its source; the next press ends that return even if
+    // its animation never reports completion (a stalled frame loop must not pin the card).
+    const returning = () => {
+        const snapshot = runtime.getSnapshot();
+        return snapshot.phase === 'settled' && snapshot.outcome?.status === 'refused' && runtime.getPointer() !== null;
+    };
+    const pointerDown = () => {
+        suppressPointerActivation = false;
+        if (returning()) runtime.cancel('pointerdown');
+    };
     const click = (event: Event) => {
         if (!suppressPointerActivation || !('detail' in event) || event.detail === 0) return;
         suppressPointerActivation = false;
@@ -34,11 +43,13 @@ export function installEntityDragCancellation(runtime: EntityDragDropRuntime, ev
         finishDrag();
         runtime.cancel(event.type);
     };
-    // Escape belongs to the carry only while one is in flight, and ahead of every surface the list sits in: the
-    // first Escape cancels the move, the next one closes the popover or modal around it.
+    // Escape belongs to the carry only while its feedback is on screen (carried, dispatched and awaiting its
+    // owner, or returning after a refusal), and ahead of every surface the list sits in: the first Escape
+    // cancels the move or retires the feedback, the next one closes the popover or modal around it.
     let releaseEscape: (() => void) | null = null;
     const syncEscape = () => {
-        const carrying = runtime.getSnapshot().phase === 'carrying';
+        const phase = runtime.getSnapshot().phase;
+        const carrying = phase === 'carrying' || phase === 'pending' || returning();
         if (carrying === (releaseEscape !== null)) return;
         if (!carrying) { releaseEscape?.(); releaseEscape = null; return; }
         const unregister = registerEscapeLayer({

@@ -97,7 +97,20 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
     const document: ReturnType<typeof createCodeIntelligenceDocument> | null = input.languageServer ? createCodeIntelligenceDocument({
         rootPath: input.scope.rootPath, path: input.path, languageId: input.languageId ?? 'text', port: input.languageServer,
         getText: input.getText, getUnsaved: () => input.getUnsaved?.() ?? false, isCurrent: available,
-        onSync: response => publish({ ...snapshot, mode: 'server', servers: response.servers, capabilities: response.capabilities }),
+        onSync: response => {
+            const acknowledged = document?.getAcknowledged();
+            // A startup watch can precede the first known document version.
+            // Revalidate its retained root diagnostics as soon as sync supplies it.
+            if (diagnostics.revision >= 0) diagnostics = mergeCodeDiagnostics(diagnostics, {
+                status: 'ok', revision: diagnostics.revision, servers: response.servers, diagnostics: {},
+            }, {
+                documentVersions: new Map(acknowledged ? [[input.path, acknowledged.version]] : []),
+                serverGenerations: new Map(response.servers.map(server => [server.serverId, server.generation])),
+            });
+            publish({ ...snapshot, mode: 'server', servers: response.servers, capabilities: response.capabilities,
+                diagnostics: selectCodeDiagnostics(diagnostics),
+                ...(pending && !loadingQuery && snapshot.status === 'loading' ? { status: 'searching' as const } : {}) });
+        },
         onWatch: response => {
             const previousServers = snapshot.servers;
             const acknowledged = document?.getAcknowledged();
@@ -105,7 +118,7 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
                 documentVersions: new Map(acknowledged ? [[input.path, acknowledged.version]] : []),
                 serverGenerations: new Map(response.servers.map(server => [server.serverId, server.generation])),
             });
-            publish({ ...snapshot, servers: response.servers, diagnostics: selectCodeDiagnostics(diagnostics) });
+            publish({ ...snapshot, mode: 'server', servers: response.servers, diagnostics: selectCodeDiagnostics(diagnostics) });
             if (becameReady(previousServers, response.servers) && loadingQuery) {
                 const retry = loadingQuery; loadingQuery = null;
                 void query(retry.kind, retry.position);
@@ -133,7 +146,9 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
                 return;
             }
             const prior = sameSelection(snapshot.querySelection, selection) && snapshot.kind === kind ? snapshot.result : null;
-            publish({ ...snapshot, status: 'searching', selection, querySelection: selection, kind, result: prior });
+            const starting = document && !document.isActivated();
+            publish({ ...snapshot, ...(starting ? { mode: 'server' as const } : {}), status: starting ? 'loading' : 'searching',
+                selection, querySelection: selection, kind, result: prior, reason: undefined });
             if (document) {
                 const serversAtIssue = snapshot.servers;
                 const response = await document.query(kind, position, request.signal);

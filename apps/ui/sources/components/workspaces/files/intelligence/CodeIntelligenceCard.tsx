@@ -26,8 +26,26 @@ import {
   type CodeReferenceRow,
 } from './CodeReferencesList';
 
-const CARD_MAX_WIDTH = 460;
+/** The lab's card (LS1 `rv-hover`) is 440 wide; a longer signature widens it up to the cap before it wraps. */
+const CARD_MIN_WIDTH = 440;
+const CARD_MAX_WIDTH = 600;
 const CARD_MAX_HEIGHT = 420;
+/** Signature type: the mono meta pair (lab `.sig` 12/19). IBM Plex Mono advances 0.6 em per character. */
+const SIGNATURE_FONT_SIZE = 12;
+const SIGNATURE_LINE_HEIGHT = 19;
+const MONO_ADVANCE_EM = 0.6;
+
+/** Wide enough for the signature's longest line on one line, within the card's bounds and the room beside the name. */
+function resolveCardWidth(signature: string | null, room: number, inset: number): number {
+  const longest = signature
+    ? Math.max(...signature.split('\n').map((line) => line.length))
+    : 0;
+  const wanted = Math.ceil(longest * SIGNATURE_FONT_SIZE * MONO_ADVANCE_EM) + inset * 2 + 2;
+  return Math.max(
+    Math.min(CARD_MIN_WIDTH, room),
+    Math.min(CARD_MAX_WIDTH, room, wanted),
+  );
+}
 
 export type CodeIntelligenceCardModel = Readonly<{
   /** The name the answer is about, and the line's other names (phones: a near miss is one tap). */
@@ -75,6 +93,7 @@ export type CodeIntelligenceCardProps = Readonly<{
 export function CodeIntelligenceCard(
   props: CodeIntelligenceCardProps,
 ): React.ReactElement | null {
+  const { theme } = useUnistyles();
   const anchor = props.anchor;
   const popoverAnchor = React.useMemo(
     () =>
@@ -103,6 +122,8 @@ export function CodeIntelligenceCard(
       phonePresentation="sheet"
       sheetHeader="none"
       sheetMaterial="solid"
+      // The tapped line stays readable above the sheet (lab LS2 T): no scrim over the code.
+      sheetBackdrop="none"
       accessibilityLabel={
         props.model.name?.symbol ?? t('files.pane.intelligence.cardLabel')
       }
@@ -111,7 +132,6 @@ export function CodeIntelligenceCard(
         native: true,
         matchAnchorWidth: false,
         anchorAlign: 'start',
-        sizeToContent: true,
       }}
       placement="bottom"
       flip
@@ -120,7 +140,7 @@ export function CodeIntelligenceCard(
       maxWidthCap={CARD_MAX_WIDTH}
       maxHeightCap={CARD_MAX_HEIGHT}
     >
-      {({ presentation, maxHeight }) =>
+      {({ presentation, maxHeight, maxWidth }) =>
         presentation === 'sheet' ? (
           <CodeIntelligenceSheetContent {...props} />
         ) : (
@@ -132,7 +152,13 @@ export function CodeIntelligenceCard(
             <View
               testID="code-hover-card"
               accessibilityRole={Platform.OS === 'web' ? undefined : 'summary'}
-              style={styles.card}
+              style={{
+                width: resolveCardWidth(
+                  props.model.hover?.signature?.code ?? null,
+                  maxWidth,
+                  theme.space.s12,
+                ),
+              }}
               {...(Platform.OS === 'web'
                 ? {
                     onPointerEnter: () => props.onHoverChange?.(true),
@@ -204,6 +230,8 @@ function CodeIntelligenceAnswer(
             language={model.hover.signature.language ?? 'typescript'}
             selectable
             wrap
+            fontSize={SIGNATURE_FONT_SIZE}
+            lineHeight={SIGNATURE_LINE_HEIGHT}
           />
         </View>
       ) : null}
@@ -216,7 +244,7 @@ function CodeIntelligenceAnswer(
               : null,
           ]}
         >
-          <Text variant="body" selectable style={styles.documentation}>
+          <Text variant="meta" selectable style={styles.documentation}>
             {model.hover.documentation}
           </Text>
         </View>
@@ -345,11 +373,11 @@ function FooterAction(
         pressed ? styles.pressed : hovered ? styles.hovered : null,
       ]}
     >
-      <Text variant="label" emphasis="medium" style={styles.link}>
+      <Text variant="meta" style={styles.link}>
         {props.label}
       </Text>
       {props.shortcut && Platform.OS === 'web' ? (
-        <Text variant="meta" style={styles.shortcut}>
+        <Text variant="micro" style={styles.shortcut}>
           {props.shortcut}
         </Text>
       ) : null}
@@ -463,12 +491,9 @@ const styles = StyleSheet.create((theme) => ({
   problemsSheet: {
     minHeight: 280,
   },
-  card: {
-    maxWidth: CARD_MAX_WIDTH,
-  },
   block: {
     paddingHorizontal: theme.space.s12,
-    paddingVertical: theme.space.s8,
+    paddingVertical: theme.space.s10,
     gap: theme.space.s4,
   },
   divided: {
@@ -476,7 +501,7 @@ const styles = StyleSheet.create((theme) => ({
     borderTopColor: theme.colors.border.subtle,
   },
   signature: {
-    paddingVertical: theme.space.s8,
+    paddingVertical: theme.space.s10,
   },
   sheetSignature: {
     backgroundColor: theme.colors.surface.sectionTint,

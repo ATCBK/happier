@@ -23,7 +23,7 @@ const { refreshWorkspaceFileDetails } = await import('./refreshWorkspaceFileDeta
 
 describe('file details independent acquisition', () => {
     beforeEach(async () => {
-        input.scope.serverId = await prepareWorkspaceFileDetailsActionBoundary();
+        input.scope.serverId = await prepareWorkspaceFileDetailsActionBoundary(input.scope.machineId);
         transport.diff.mockReset().mockResolvedValue({ success: true, diff: patch });
         transport.stat.mockReset().mockResolvedValue({ success: true, exists: true, sizeBytes: 4 });
         workspaceFileDetailsActionBoundary.read.mockReset().mockResolvedValue({ success: true, content: 'bmV3Cg==' });
@@ -48,12 +48,13 @@ describe('file details independent acquisition', () => {
     it('keeps a deleted-file patch when reading the removed file fails', async () => {
         workspaceFileDetailsActionBoundary.read.mockResolvedValue({ success: false, error: 'ENOENT' });
         const result = await refreshWorkspaceFileDetails({ ...input, fileEntryKind: 'deleted' });
-        expect(result).toMatchObject({ status: 'ready', diffContent: patch, error: 'ENOENT', fileWriteSupported: false });
+        expect(result).toMatchObject({ status: 'ready', diffContent: patch, error: 'ENOENT', fileContent: null });
     });
     it('retains a small patch when the full file exceeds the preview bound', async () => {
         transport.stat.mockResolvedValue({ success: true, exists: true, sizeBytes: 2000000 });
         const result = await refreshWorkspaceFileDetails(input);
-        expect(result).toMatchObject({ status: 'ready', diffContent: patch, fileContent: null, error: 'files.fileTooLargeToPreview' });
+        expect(result).toMatchObject({ status: 'ready', diffContent: patch, fileContent: null, error: null,
+            fileWriteSupported: false, tooLarge: { sizeBytes: 2000000, maxPreviewBytes: 1000000 } });
         expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
     });
     it('does not request text or Git for a known binary preview', async () => {
