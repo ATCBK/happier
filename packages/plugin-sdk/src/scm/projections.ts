@@ -1368,6 +1368,7 @@ export type ScmPullRequestOpenComposeRequest = Pick<ScmStatusSnapshotRequest, 'c
     providerId?: string;
     base: string;
     head: string;
+    includeTemplate?: boolean;
 };
 
 export type ScmPullRequestOpenComposeResponse =
@@ -1377,6 +1378,7 @@ export type ScmPullRequestOpenComposeResponse =
         outcome?: ScmOperationOutcome;
         nextAction: ScmFollowupAction;
         composeUrl?: string;
+        template?: Readonly<{ kind: 'ready'; body?: string }> | Readonly<{ kind: 'needs_input'; error: string }>;
     })
     | ScmPullRequestErrorResponse;
 
