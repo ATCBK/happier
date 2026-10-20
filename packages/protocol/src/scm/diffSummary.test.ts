@@ -23,6 +23,13 @@ describe('personal reviewed marks', () => {
 });
 
 describe('comparison evidence and analysis contracts', () => {
+  it('qualifies contextual turn selectors while retaining an explicit source Session as authority', () => {
+    const context = { cwd: '/repo', sessionId: 'session', turnId: 'turn', checkpointReceiptId: 'receipt', turnEvidenceMode: 'checkpoint' };
+    const resolved = { kind: 'turnCheckpoint' as const, sessionId: 'session', turnId: 'turn', checkpointReceiptId: 'receipt', evidenceMode: 'checkpoint' as const };
+    const key = diffSummary.buildScmComparisonSourceKey({ cwd: '/repo', source: resolved });
+    expect(diffSummary.buildScmComparisonSourceKey({ ...context, source: { kind: 'turnCheckpoint' } })).toBe(key);
+    expect(diffSummary.buildScmComparisonSourceKey({ ...context, source: { ...resolved, sessionId: 'another-session' } })).not.toBe(key);
+  });
   it('admits an exact retained comparison for first generation without accepting fabricated comparison bytes', () => {
     const input = { cwd: '/repo', source: { kind: 'branch', head: 'topic', base: 'main' },
       comparisonId: 'c'.repeat(64), outputs: ['walkthrough'] };
