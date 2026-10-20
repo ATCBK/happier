@@ -5,6 +5,7 @@ import { AGENT_DEFINITION } from './agent/definition.js';
 import { AUGGIE_PREFLIGHT_SESSION_CONTROLS } from './agent/preflight/models.js';
 import { createAuggieAgentRuntime } from './agent/runtime/factory.js';
 import { AUGGIE_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
+import { auggieExternalSessionsContribution } from './agent/surfaces/sessions/external/contribution.js';
 
 const {
   id: AUGGIE_AGENT_SETTINGS_CONTRIBUTION_ID,
@@ -58,6 +59,7 @@ export const AUGGIE_PLUGIN = definePlugin({
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          surfaces: ['externalSessions'],
           skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
             nativeRoots: { user: [['.augment', 'skills'], ['.claude', 'skills'], ['.agents', 'skills']], project: [['.augment', 'skills'], ['.claude', 'skills'], ['.agents', 'skills']] } },
           sessions: {
@@ -67,6 +69,17 @@ export const AUGGIE_PLUGIN = definePlugin({
             executionRunContext: { versions: [1] },
           },
         }),
+        surfaces: { externalSession: {
+          externalLinkedTakeover: { writerSafety: 'unsupported' },
+          sources: [{ sourceKind: 'auggieHome', contentSearch: true,
+            schema: { fields: [
+              { kind: 'literal', name: 'kind', value: 'auggieHome' },
+              { kind: 'string', name: 'augmentHome', min: 1, nullish: true },
+            ] },
+            key: { segments: [{ kind: 'literal', value: 'auggieHome' }, { kind: 'field', field: 'augmentHome' }] },
+            instances: [{ kind: 'default', constants: {} }],
+          }],
+        } },
       },
       factory: createAuggieAgentRuntime,
       preflightSessionControls: AUGGIE_PREFLIGHT_SESSION_CONTROLS,
@@ -74,7 +87,9 @@ export const AUGGIE_PLUGIN = definePlugin({
         module: './agent/runtime/factory',
         export: 'createAuggieAgentRuntime',
         runtimeApiVersion: 1,
+        externalSessionsExport: 'auggieExternalSessionsContribution',
       },
+      externalSessions: auggieExternalSessionsContribution,
     },
   },
   systemTools: {

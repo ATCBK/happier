@@ -7,6 +7,7 @@ import type {
 import { buildAuggieAcpArgvFromSessionConfiguration } from '../acp/callbacks.js';
 import { AUGGIE_ACP_RUNTIME_DEFINITION } from '../acp/definition.js';
 import { AUGGIE_ACP_COMMAND } from '../preflight/models.js';
+export { auggieExternalSessionsContribution } from '../surfaces/sessions/external/contribution.js';
 
 function createAuggieAcpOptions(configuration: AgentSessionConfigurationSnapshot | undefined): AgentAcpRuntimeOptions {
   if (!configuration) throw new Error('Auggie requires the host-projected Agent session configuration');

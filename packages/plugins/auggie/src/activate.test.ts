@@ -27,7 +27,10 @@ describe('Auggie activation', () => {
     expect(activation.registrations()).toContainEqual({ family: 'agents', localId: 'auggie' });
     const registration = activation.registration('agents', 'auggie');
     expect(registration?.factory).toEqual(expect.any(Function));
-    expect(registration).not.toHaveProperty('externalSessions');
+    expect(registration?.externalSessions).toMatchObject({
+      resolveSource: expect.any(Function), listCandidates: expect.any(Function),
+      pageTranscript: expect.any(Function), readAfterTranscript: expect.any(Function),
+    });
     expect(registration).not.toHaveProperty('externalSessionObservation');
     await activation.dispose();
   });
