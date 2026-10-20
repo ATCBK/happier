@@ -662,7 +662,13 @@ Account, Session, Machine and installation. Cross-Account reporting uses the
 Session requester's recovered credentials. `preparation_pending` and unavailable
 plugin catalogs keep their existing recovery path; an optional MCP omission or
 the broad `mcp_request_auth_unavailable` diagnostic alone is not a definite
-startup refusal.
+startup refusal. A host continuation refusal (runner exit 78) reaches this same
+failure reader before requester custody is released, even though it suppresses
+automatic respawn. Only the same occurrence's failed primary Session issue and
+exact activation stamp can settle the input. An unavailable Home observation or
+stale target leaves it waiting. A generic Agent error without that terminal
+runner evidence does not establish a continuation refusal. Runner failure logs
+record the exit phase and shared code-only error projection.
 
 Cold requester preparation records a failed phase's allowlisted error class,
 code, HTTP status and source frames through the shared code-only diagnostic;
