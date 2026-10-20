@@ -2,6 +2,7 @@ import type { EventEmitter } from 'node:events';
 
 import { writeSessionExitReportSync } from '@/session/diagnostics/sessionExitReport';
 import { logger } from '@/ui/logger';
+import { formatErrorForUi } from '@/ui/formatErrorForUi';
 
 import {
   computeRunnerTerminationOutcome,
@@ -105,7 +106,17 @@ export function registerRunnerTerminationHandlers(params: Readonly<{
     writeRunnerTerminationSessionExitReport({ options: params.sessionExitReport, event, outcome });
     const terminationWork = Promise.resolve()
       .then(() => params.onTerminate(event, outcome))
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        try {
+          logger.infoFile('[RunnerTermination] Cleanup failed', {
+            phase: 'termination-cleanup',
+            terminationKind: event.kind,
+            cause: formatErrorForUi(error),
+          });
+        } catch {
+          // Diagnostics must never replace the original termination outcome.
+        }
+      });
     const completion = new Promise<void>((resolve) => {
       const timer = setTimeout(() => resolve(), terminationTimeoutMs);
       terminationWork.finally(() => {
