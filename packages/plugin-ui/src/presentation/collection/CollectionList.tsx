@@ -204,9 +204,10 @@ export const HappierCollectionTableRowContext = createContext<HappierCollectionT
  * How a Collection's resting list (no detail beside it) parts its rows. `air` (default): the page's own edges,
  * rows apart by space, for a phone or a page. `ruled`: the table's own insets and the row hairline, as the list
  * beside an open detail, for a host whose list fills a dialog and keeps one rhythm at rest and beside the detail.
+ * `ruled-page`: the same ruled rows with their ends on the page gutter, for that dialog as a phone's full-screen page.
  * Host-provided; an author's Collection takes whatever its host presents.
  */
-export type HappierCollectionRestingRows = 'air' | 'ruled';
+export type HappierCollectionRestingRows = 'air' | 'ruled' | 'ruled-page';
 export const HappierCollectionRestingRowsContext = createContext<HappierCollectionRestingRows>('air');
 
 export function useHappierCollectionTableRow(): HappierCollectionTableRowFacts | null {

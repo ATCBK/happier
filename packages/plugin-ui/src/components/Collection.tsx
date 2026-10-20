@@ -34,7 +34,7 @@ import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../presentation/sema
 import type { HappierTypeRole, HappierUiTheme, HappierUiTypography } from '../environment/types.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { HappierCollectionDetailWidthContext, HappierCollectionLayoutContext, resolveHappierCollectionLayoutState } from '../presentation/collection/collectionLayout.js';
-import { HAPPIER_COLLECTION_LIST_TEXT, HappierCollectionRestingRowsContext, HappierCollectionTableRowContext, HappierCollectionTreeRowContext, type HappierCollectionTableRowFacts, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
+import { HAPPIER_COLLECTION_LIST_TEXT, HappierCollectionRestingRowsContext, HappierCollectionTableRowContext, type HappierCollectionRestingRows, HappierCollectionTreeRowContext, type HappierCollectionTableRowFacts, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
 import {
   HAPPIER_COLLECTION_INSTANT_MOTION,
   HAPPIER_INSTANT_DISCLOSURE_MOTION,
@@ -532,8 +532,8 @@ type CollectionStage<Item> = Readonly<{
    * take two lines and rows size to them. Beside a detail rows keep the exact height the travel plans with.
    */
   wrapTitles: boolean;
-  /** The resting list is ruled and keeps the table's insets (`restingRows="ruled"`). */
-  ruledResting: boolean;
+  /** The resting list is ruled (`restingRows` `ruled`/`ruled-page`): the row inset at both ends, else null. */
+  ruledInsetPx: number | null;
   pageSections: boolean;
   useRowActions: ((item: Item) => CollectionRowActions) | undefined;
   expandable: boolean;
@@ -558,6 +558,14 @@ const LIST_LINE_GAP = 4;
 const LIST_TITLE_MIN_SHARE = 0.5;
 /** The list row's action stands at the row's end inset, mirroring where its text starts. */
 const LIST_ACTION_INSET = TABLE.insetStart - TABLE.insetEnd;
+/**
+ * A ruled resting list's row inset, at both ends: where a row action ends (its own margin and the accessory cell's
+ * inset), so text, status, action and loading rows share one edge pair, the dialog's tools band above them. `ruled`:
+ * the card's 24; `ruled-page`: the page gutter (the action's margin shrinks to keep the action on it).
+ */
+function ruledRowInset(theme: HappierUiTheme, restingRows: HappierCollectionRestingRows): number {
+  return restingRows === 'ruled-page' ? theme.spacing.large : LIST_ACTION_INSET + theme.spacing.medium;
+}
 const listActionStyle: HappierPortableStyle = { marginRight: LIST_ACTION_INSET };
 /** The title meta: end-aligned, whole (it never shrinks; the title gives way). */
 const metaCellStyle: HappierPortableStyle = { flexShrink: 0, alignItems: 'flex-end', marginLeft: HAPPIER_ROW_TITLE_META_GAP_PX };
@@ -685,6 +693,8 @@ function CollectionSkeletonRows(props: Readonly<{
   rowHeight: number;
   twoLines: boolean;
   viewportHeight: number | null;
+  /** The row insets the placeholders stand at; the table's own unless a ruled resting list sets its inset. */
+  ruledInsetPx?: number;
   testID?: string;
   accessibilityLabel?: string;
   reducedMotion?: boolean;
@@ -699,7 +709,9 @@ function CollectionSkeletonRows(props: Readonly<{
       rowHeight={props.rowHeight}
       lines={props.twoLines ? 2 : 1}
       dividerColor={palette.rowDivider}
-      geometry={COLLECTION_SKELETON_GEOMETRY}
+      geometry={props.ruledInsetPx === undefined
+        ? COLLECTION_SKELETON_GEOMETRY
+        : { ...COLLECTION_SKELETON_GEOMETRY, insetStart: props.ruledInsetPx, insetEnd: props.ruledInsetPx }}
       {...(props.accessibilityLabel === undefined ? {} : { accessibilityLabel: props.accessibilityLabel })}
       {...(props.reducedMotion === undefined ? {} : { reducedMotion: props.reducedMotion })}
       {...(props.testID === undefined ? {} : { rowTestID: `${props.testID}:skeleton-row` })}
@@ -1020,8 +1032,8 @@ function ListCells<Item>(props: Readonly<{
   AnimatedView: ReturnType<typeof useMotionDriver>['AnimatedView'];
   /** The resting phone list: a title may take a second line and the row grows to it (no travel to plan). */
   wrapTitle: boolean;
-  /** The resting list is ruled: the row keeps the table's insets instead of the page's edges. */
-  ruled: boolean;
+  /** The resting list is ruled: the row inset at both ends (the table's insets instead of the page's edges), else null. */
+  ruledInsetPx: number | null;
   pageSection: boolean;
   /** No accessory cell follows the row's content, so the content runs to the row's trailing edge. */
   ownsTrailingInset: boolean;
@@ -1029,9 +1041,12 @@ function ListCells<Item>(props: Readonly<{
   const { item, anatomy, AnimatedView } = props;
   const typography = useOptionalHappierUiTypography();
   const uiTheme = useHappierUiTheme();
-  // A ruled row with no trailing control ends where its action would: the action's own margin and the accessory
-  // cell's inset, less the row's 1 pt edge. A status at the title's end and an Add button share one end edge.
-  const ruledTrailingStyle: HappierPortableStyle = { paddingRight: LIST_ACTION_INSET + uiTheme.spacing.medium - 1 };
+  // The row's 1 pt press edge is part of its inset. A ruled row with no trailing control ends where its action
+  // would, so a status at the title's end and an Add button share one end edge.
+  const ruledPaddingPx = (props.ruledInsetPx ?? 0) - 1;
+  const ruledStyle: HappierPortableStyle = props.ownsTrailingInset
+    ? { paddingLeft: ruledPaddingPx, paddingRight: ruledPaddingPx }
+    : { paddingLeft: ruledPaddingPx };
   const age = anatomy.age?.(item) ?? null;
   const where = anatomy.byline === undefined ? anatomy.where?.(item) : anatomy.byline(item);
   const reason = anatomy.reason?.(item);
@@ -1081,8 +1096,8 @@ function ListCells<Item>(props: Readonly<{
   return (
     <View pointerEvents={layer?.content} style={[listRowContentStyle,
       page ? pageRowContentStyle : props.wrapTitle ? { minHeight: props.height } : { height: props.height },
-      props.wrapTitle && !page ? (props.ruled
-        ? (props.ownsTrailingInset ? ruledTrailingStyle : null)
+      props.wrapTitle && !page ? (props.ruledInsetPx !== null
+        ? ruledStyle
         : (props.ownsTrailingInset ? restingListTrailingStyle : restingListContentStyle)) : null]}>
       {glyph === null && badge === null ? null : (
         <View pointerEvents={layer?.leaf} style={[glyphStyle, { justifyContent: 'flex-start' }, page ? pageRowGlyphStyle : null]}>
@@ -1207,7 +1222,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
   const accessory = (rowAccessory === undefined && anatomy.peek === undefined && anatomy.action === undefined)
     || (stage.wrapTitles && rowAccessory === undefined && chevron === null && listAction === null) ? null : (
     <View style={lineStyle}>
-      {anatomy.action === undefined || geometry !== 'list' || stage.composition === 'split' ? null : <View style={listActionStyle}>{listAction}</View>}
+      {anatomy.action === undefined || geometry !== 'list' || stage.composition === 'split' ? null : <View style={stage.ruledInsetPx === null ? listActionStyle : { marginRight: stage.ruledInsetPx - theme.spacing.medium }}>{listAction}</View>}
       {rowAccessory}{chevron}
     </View>
   );
@@ -1257,7 +1272,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
         secondLine={{ value: progress, tracks: travel === null ? NO_TRACKS : HAPPIER_COLLECTION_TRANSITION_TRACKS.secondLine }}
         AnimatedView={AnimatedView}
         wrapTitle={stage.wrapTitles}
-        ruled={stage.ruledResting}
+        ruledInsetPx={stage.ruledInsetPx}
         pageSection={stage.pageSections}
         ownsTrailingInset={stage.wrapTitles && !stage.pageSections && accessory === null}
       />
@@ -1314,7 +1329,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
     </List.Item>
   );
   const destinationRow = (
-    <HappierCollectionTableRowContext.Provider value={stage.wrapTitles && !stage.ruledResting ? RESTING_LIST_ROW : RULED_ROW}>
+    <HappierCollectionTableRowContext.Provider value={stage.wrapTitles && stage.ruledInsetPx === null ? RESTING_LIST_ROW : RULED_ROW}>
       <HappierCollectionTreeRowContext.Provider value={treeFacts}>
         {renderCollectionItemDestination(host, anatomy, item, rowItem)}
       </HappierCollectionTreeRowContext.Provider>
@@ -1626,7 +1641,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
 
   const wrapTitles = composition === 'list' && transition === null && !besideDetail;
   const restingRows = useContext(HappierCollectionRestingRowsContext);
-  const ruledResting = wrapTitles && restingRows === 'ruled';
+  const ruledInsetPx = wrapTitles && restingRows !== 'air' ? ruledRowInset(theme, restingRows) : null;
   // Peeks exist in the resting table; while the table fades out (reduced motion) they stay and fade with it.
   const expandable = rowGeometry === 'table'
     && (transition === null || transition.kind === 'fade')
@@ -1756,14 +1771,14 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     toggleExpanded: model.actions.toggleExpanded,
     tree: treeStage,
     wrapTitles,
-    ruledResting,
+    ruledInsetPx,
     pageSections,
     useRowActions: props.useRowActions,
     expandable,
     dividedKeys,
     onPeekHeight,
     onPeekSettled,
-  }), [anatomy, columns, composition, dividedKeys, expandable, expanded, metrics, model.actions.toggleExpanded, treeStage, wrapTitles, ruledResting, pageSections, onPeekHeight, onPeekSettled, progress, props.useRowActions, rowGeometry, transition]);
+  }), [anatomy, columns, composition, dividedKeys, expandable, expanded, metrics, model.actions.toggleExpanded, treeStage, wrapTitles, ruledInsetPx, pageSections, onPeekHeight, onPeekSettled, progress, props.useRowActions, rowGeometry, transition]);
 
   // ---- the List engine's Collection facts ----
   const authorMultiple: NonNullable<CollectionProps<Item>['selection']>['multiple'] = props.selection?.multiple
@@ -1858,7 +1873,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
         paddingBottom: LIST_LINE_GAP,
         // On the page's edges, with its rows' marks and trailing facts (`restingListContentStyle`); a ruled list
         // keeps its rows' own inset.
-        paddingHorizontal: ruledResting ? TABLE.insetStart : 0,
+        paddingHorizontal: ruledInsetPx ?? 0,
       },
     } : {
       sectionHeaderTitleRole: 'micro' as const,
@@ -1895,7 +1910,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
         {header}
       </driver.AnimatedView>
     ),
-  }), [canPeek, driver, expandable, metrics, model, multipleStore, navigationKeys, nestedTable, setBranchOpen, treeNodes, pageScroll, wrapTitles, ruledResting, pageVirtualized, pageGeometry, pageSections, pageSheetHeader, enclosingPageSheet, palette, presentation, progress, props.groupAction, props.testID, scrollOffsetRef, singleChoice === undefined, tabStopKey, theme.colors.divider, theme.colors.elevatedSurface, theme.colors.surface, transition, view.scrollRequest, viewportScrollRequest]);
+  }), [canPeek, driver, expandable, metrics, model, multipleStore, navigationKeys, nestedTable, setBranchOpen, treeNodes, pageScroll, wrapTitles, ruledInsetPx, pageVirtualized, pageGeometry, pageSections, pageSheetHeader, enclosingPageSheet, palette, presentation, progress, props.groupAction, props.testID, scrollOffsetRef, singleChoice === undefined, tabStopKey, theme.colors.divider, theme.colors.elevatedSurface, theme.colors.surface, transition, view.scrollRequest, viewportScrollRequest]);
 
   // ---- Escape returns to the table from anywhere inside the Collection (web keyboard) ----
   const rootRef = useRef<View | null>(null);
@@ -2290,6 +2305,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
                         rowHeight={rowGeometry === 'table' ? metrics.tableRow : metrics.listRow}
                         twoLines={rowGeometry === 'list'}
                         viewportHeight={viewportHeight}
+                        {...(ruledInsetPx === null ? {} : { ruledInsetPx })}
                         {...(props.testID === undefined ? {} : { testID: props.testID })}
                       />
                     ) : props.empty}
