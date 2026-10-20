@@ -1,4 +1,4 @@
-import type { CustomModalChromeConfig } from '../types';
+import type { CustomModalChromeCardConfig, CustomModalChromeConfig } from '../types';
 
 function areViewportMarginsEqual(a: unknown, b: unknown): boolean {
     if (a === b) return true;
@@ -106,7 +106,15 @@ export function mergeChromeConfig(
 }
 
 /** Modal-owned chrome decisions, independent of the content's render lifecycle. */
-export function resolveCustomModalPresentation(chrome: CustomModalChromeConfig | null | undefined, deviceType: 'phone' | 'tablet') {
+export function resolveCustomModalPresentation(chrome: CustomModalChromeConfig | null | undefined, deviceType: 'phone' | 'tablet'): Readonly<{
+    card: CustomModalChromeCardConfig | null;
+    phoneSheet: boolean;
+    phoneFullscreen: boolean;
+    placement: 'fullscreen' | 'bottom' | 'center';
+    scrollHost: 'body' | 'overlay';
+    showBackdrop: boolean;
+    motion: 'none' | undefined;
+}> {
     const stage = chrome?.kind === 'stage';
     const card = chrome?.kind === 'card' ? chrome : null;
     const phoneSheet = card?.phonePresentation === 'sheet' && deviceType === 'phone';
