@@ -2036,6 +2036,15 @@ export async function runHostSessionRuntime(
       activeModelId,
       contextUsage: latestSessionContextUsage,
     });
+    if (followDeliveries?.length) logger.debug('[Session Follow] Context allowance resolved', {
+      basis: allowance.basis, maxUtf8Bytes: allowance.maxUtf8Bytes, activeModelId,
+      contextUsageModelId: latestSessionContextUsage?.modelId ?? null,
+      contextUsageSource: latestSessionContextUsage?.source ?? null,
+      windowTokens: latestSessionContextUsage?.windowTokens ?? null,
+      usedTokens: latestSessionContextUsage?.usedTokens ?? null,
+      requiredPromptUtf8Bytes: measureSessionFollowUtf8Bytes(requiredPrompt),
+      inputLocalIds: followDeliveries.map(delivery => delivery.localInputId),
+    });
     const fittedWake = contextOnlyWorkerUpdate
       ? fitWorkerUpdateWithinHostContextAllowance(contextOnlyWorkerUpdate, allowance.maxUtf8Bytes)
       : undefined;

@@ -362,6 +362,13 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
             ...(input.spawnSession ? { spawnSession: input.spawnSession } : {}),
             ...(features ? { serverFeaturesSnapshot: features } : {}), signal: input.signal,
           }));
+          logger.debug('[Session Follow] Original admission completed', {
+            sourceSessionId: original.sourceSessionId, destinationSessionId,
+            ...('sourceMessage' in original ? { sourceMessage: original.sourceMessage }
+              : { agentStateVersion: original.sourceRequests.agentStateVersion }),
+            ok: result.ok,
+            ...(result.ok ? { localInputId: result.localId, suppressed: result.suppressed === true } : { code: result.code }),
+          });
           if (!result.ok) {
             logger.debug('[Session Follow] Original admission held', { code: result.code });
             if (receiverSessionId) return;
