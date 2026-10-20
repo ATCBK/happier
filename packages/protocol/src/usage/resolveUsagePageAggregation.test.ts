@@ -562,6 +562,48 @@ describe('resolveUsagePageAggregation', () => {
     expect(UsageQueryBatchResultSchema.safeParse(result).success).toBe(true);
     expect(UsageQueryBatchResultSchema.safeParse({ ...result, results: [{ ...result.results[0], pools: [pools[1]] }] }).success).toBe(false);
   });
+  it('retains exact admitted pool decisions through repeated failed reads and replaces them on recovery', () => {
+    const query = normalizeUsageQuery({ includeAccounting: false, machines: ['machine'] });
+    const group = { service: { pluginId: 'test.provider', localId: 'account' }, groupId: 'pool' };
+    const selected = { profileId: 'work', priority: 1, createdAtMs: 1, enabled: true, leastLimitedScore: 80 };
+    const value = { group, observedAtMs: 100, selection: { selected, reason: 'selected' as const, excluded: [],
+      decisionTrace: { activeProfileId: 'work', reason: 'selected' as const, strategy: 'priority' as const,
+        selectionBasis: 'active_stickiness' as const, sticky: true, orderedEligibleCandidates: [selected], candidates: [] } } };
+    const pool = { group, memberAccountIds: ['work'], activeAccountId: 'work',
+      selection: { status: 'available' as const, machineId: 'machine', value, asOfMs: 100 } };
+    const quota = { status: 'unsupported' as const };
+    const first = resolveUsagePageAggregation({ queries: [query], quota, pools: [{ query, value: [pool] }] });
+    let previous = first;
+    for (const errorCode of ['MACHINE_RPC_TIMEOUT', 'connected_service_request_failed']) {
+      previous = resolveUsagePageAggregation({ queries: [query], previous, quota, pools: [{ query, value: [{ ...pool,
+        selection: { status: 'error', machineId: 'machine', errorCode } }] }] });
+      expect(previous.results[0]?.pools?.[0]?.selection).toEqual({ status: 'stale', machineId: 'machine', value, asOfMs: 100, errorCode });
+      expect(previous.results[0]?.sources).toContainEqual({ source: 'selection:test.provider/account:pool', status: 'stale', asOfMs: 100, errorCode });
+      expect(previous.results[0]?.pending).toBe(false);
+      expect(UsageQueryBatchResultSchema.safeParse(previous).success).toBe(true);
+    }
+    for (const errorCode of ['denied', 'permission_denied', 'unauthorized', 'forbidden', 'stale_surface', 'cancelled']) {
+      const refused = resolveUsagePageAggregation({ queries: [query], previous, quota, pools: [{ query, value: [{ ...pool,
+        selection: { status: 'error', machineId: 'machine', errorCode } }] }] });
+      expect(refused.results[0]?.pools?.[0]?.selection.value).toBeUndefined();
+      const failedAfterRefusal = resolveUsagePageAggregation({ queries: [query], previous: refused, quota, pools: [{ query, value: [{ ...pool,
+        selection: { status: 'error', machineId: 'machine', errorCode: 'MACHINE_RPC_TIMEOUT' } }] }] });
+      expect(failedAfterRefusal.results[0]?.pools?.[0]?.selection.value).toBeUndefined();
+    }
+    const offline = resolveUsagePageAggregation({ queries: [query], previous, quota, pools: [{ query, value: [{ ...pool,
+      selection: { status: 'unsupported', errorCode: 'no_machine' } }] }] });
+    expect(offline.results[0]?.pools?.[0]?.selection).toMatchObject({ status: 'stale', machineId: 'machine', value, asOfMs: 100, errorCode: 'no_machine' });
+    const changedMachine = resolveUsagePageAggregation({ queries: [query], previous, quota, pools: [{ query, value: [{ ...pool,
+      selection: { status: 'error', machineId: 'other', errorCode: 'MACHINE_RPC_TIMEOUT' } }] }] });
+    expect(changedMachine.results[0]?.pools?.[0]?.selection.value).toBeUndefined();
+    const changedMembership = resolveUsagePageAggregation({ queries: [query], previous, quota, pools: [{ query, value: [{ ...pool,
+      memberAccountIds: ['personal'], selection: { status: 'error', machineId: 'machine', errorCode: 'MACHINE_RPC_TIMEOUT' } }] }] });
+    expect(changedMembership.results[0]?.pools?.[0]?.selection.value).toBeUndefined();
+    const recovered = resolveUsagePageAggregation({ queries: [query], previous, quota, pools: [{ query, value: [{ ...pool,
+      selection: { ...pool.selection, value: { ...value, observedAtMs: 200 }, asOfMs: 200 } }] }] });
+    expect(recovered.results[0]?.pools?.[0]?.selection).toEqual({ ...pool.selection, value: { ...value, observedAtMs: 200 }, asOfMs: 200 });
+    expect(resolveUsagePageAggregation({ queries: [query], previous, quota, pools: [{ query, value: [] }] }).results[0]?.pools).toEqual([]);
+  });
   it('publishes all Coach evidence states on the same admitted query rather than a separate detector read', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
     const result = resolveUsagePageAggregation({ queries: [query],
@@ -761,6 +803,20 @@ describe('resolveUsagePageAggregation', () => {
     const changed = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: changedValue, status: 'available' }],
       work: [{ query, status: 'pending' }], previous: result });
     expect(changed.results[0]?.work?.allocations[0]).toMatchObject({ contribution: { tokens: { input: 14, total: 18 } }, reason: 'allocated' });
+    let failed = result;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      failed = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }], previous: failed,
+        work: [{ query, status: 'error', errorCode: 'work_evidence_failed' }] });
+      expect(failed.results[0]?.work).toEqual(result.results[0]?.work);
+      expect(failed.results[0]?.sources).toContainEqual({ source: 'work', status: 'stale', errorCode: 'work_evidence_failed' });
+      expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+    }
+    const recoveredEmpty = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }], previous: failed,
+      work: [{ query, status: 'partial', evidence: [] }] });
+    expect(recoveredEmpty.results[0]?.work?.outcomes).toEqual([]);
+    const quarantined = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }], previous: failed,
+      work: [{ query, status: 'error', errorCode: 'work_evidence_failed', evidence: [], branchEvidence: [] }] });
+    expect(quarantined.results[0]?.work?.outcomes).toEqual([]);
     const revoked = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }],
       work: [{ query, status: 'error', errorCode: 'unauthorized', evidence: [witness] }], previous: result });
     expect(revoked.results[0]?.work?.allocations).toMatchObject([{ contribution, reason: 'missing_evidence', outcome: null, evidence: [] }]);
