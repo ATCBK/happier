@@ -106,6 +106,31 @@ async function withUiGateway(backend: string, run: (origin: string) => Promise<v
 }
 
 describe('enableServeUi (mountRoot)', () => {
+  it.each([true, false])('serves PDF support assets as bytes with mountRoot=%s', async mountRoot => {
+    await withTempDir('happier-ui-pdf-assets-', async dir => {
+      await writeFile(join(dir, 'index.html'), '<html>app</html>');
+      const assets = [
+        ['map.bcmap', 'application/octet-stream'],
+        ['font.pfb', 'application/x-font-type1'],
+        ['profile.icc', 'application/vnd.iccprofile'],
+        ['worker.js', 'text/javascript; charset=utf-8'],
+      ] as const;
+      const bytes = Buffer.from([0x00, 0xff, 0x41, 0x80]);
+      for (const [name] of assets) await writeFile(join(dir, name), bytes);
+      await withApp(async app => {
+        enableServeUi(app, { dir, prefix: '/ui', mountRoot, required: false });
+        await app.ready();
+        for (const [name, mime] of assets) {
+          const response = await app.inject({ method: 'GET', url: `${mountRoot ? '' : '/ui'}/${name}` });
+          expect(response.statusCode).toBe(200);
+          expect(response.headers['content-type']).toBe(mime);
+          expect(response.rawPayload).toEqual(bytes);
+          expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+        }
+      });
+    });
+  });
+
   it.each([true, false])('serves exported web manifests as JSON with mountRoot=%s', async (mountRoot) => {
     await withTempDir('happier-ui-manifest-', async (dir) => {
       const manifest = { name: 'Happier', start_url: '/', display: 'standalone' };

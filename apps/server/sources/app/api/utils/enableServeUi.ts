@@ -107,6 +107,15 @@ function setUiFileHeaders(reply: any, ext: string): void {
     } else if (ext === '.wasm') {
         reply.header('content-type', 'application/wasm');
         reply.header('cache-control', 'public, max-age=31536000, immutable');
+    } else if (ext === '.pfb') {
+        reply.header('content-type', 'application/x-font-type1');
+        reply.header('cache-control', 'public, max-age=31536000, immutable');
+    } else if (ext === '.icc') {
+        reply.header('content-type', 'application/vnd.iccprofile');
+        reply.header('cache-control', 'public, max-age=31536000, immutable');
+    } else if (ext === '.bcmap') {
+        reply.header('content-type', 'application/octet-stream');
+        reply.header('cache-control', 'public, max-age=31536000, immutable');
     } else if (ext === '.ttf') {
         reply.header('content-type', 'font/ttf');
         reply.header('cache-control', 'public, max-age=31536000, immutable');
@@ -257,6 +266,9 @@ export function enableServeUi(app: AnyFastifyInstance, ui: UiConfig) {
                     '.svg',
                     '.ico',
                     '.wasm',
+                    '.bcmap',
+                    '.pfb',
+                    '.icc',
                     '.ttf',
                     '.woff',
                     '.woff2',
