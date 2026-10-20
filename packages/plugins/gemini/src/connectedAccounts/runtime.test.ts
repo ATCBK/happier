@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 
 import type { ConnectedAccountRuntime as PluginConnectedAccountRuntime } from '@happier-dev/plugin-sdk/connected-accounts';
 
@@ -16,25 +17,19 @@ function credentialStore(values = new Map<string, string>()) {
   };
 }
 
-function activateConnectedAccountRuntime(): PluginConnectedAccountRuntime {
-  const registrations: PluginConnectedAccountRuntime[] = [];
-  activate({
-    agents: { register() { return { dispose() {} }; } },
-    hooks: { register() { return { dispose() {} }; } },
-    connectedAccounts: {
-      register(_id: string, runtime: PluginConnectedAccountRuntime) {
-        registrations.push(runtime);
-        return { dispose() {} };
-      },
-    },
-  } as Parameters<typeof activate>[0]);
-  const runtime = registrations[0];
+const kits: Awaited<ReturnType<typeof createPluginTestkit>>[] = [];
+afterEach(async () => { await Promise.all(kits.splice(0).map(kit => kit.dispose())); });
+
+async function activateConnectedAccountRuntime(): Promise<PluginConnectedAccountRuntime> {
+  const kit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
+  kits.push(kit);
+  const runtime = kit.registration('connectedAccountDescriptors', 'gemini-account');
   if (!runtime) throw new Error('Gemini Connected Account runtime was not registered');
   return runtime;
 }
 
 describe('Gemini Connected Account modes', () => {
-  it('declares and registers API-key plus service-account modes', () => {
+  it('declares and registers API-key plus service-account modes', async () => {
     expect(PLUGIN_MANIFEST.contributes.connectedAccountDescriptors).toContainEqual({
       id: 'gemini-account',
       title: 'Gemini',
@@ -46,7 +41,7 @@ describe('Gemini Connected Account modes', () => {
         ],
       },
     });
-    const modes = activateConnectedAccountRuntime().authentication.modes;
+    const modes = (await activateConnectedAccountRuntime()).authentication.modes;
     expect(modes).toMatchObject({
       'api-key': { kind: 'manual' },
       'service-account': { kind: 'manual' },
@@ -55,7 +50,7 @@ describe('Gemini Connected Account modes', () => {
   });
 
   it('materializes API keys to requested Gemini environment keys', async () => {
-    const runtime = activateConnectedAccountRuntime();
+    const runtime = await activateConnectedAccountRuntime();
     const mode = runtime.authentication.modes['api-key'];
     if (!mode || mode.kind !== 'manual') throw new Error('Gemini API-key mode is unavailable');
     const attempted = credentialStore();
@@ -121,7 +116,7 @@ describe('Gemini Connected Account modes', () => {
   });
 
   it('validates service-account JSON before staging it and materializes an exact credential file', async () => {
-    const runtime = activateConnectedAccountRuntime();
+    const runtime = await activateConnectedAccountRuntime();
     const mode = runtime.authentication.modes['service-account'];
     if (!mode || mode.kind !== 'manual') throw new Error('Gemini service-account mode is unavailable');
     const attempted = credentialStore();
@@ -222,7 +217,7 @@ describe('Gemini Connected Account modes', () => {
   });
 
   it('uses the immutable service-account client ID and exposes reconnect identity mismatches', async () => {
-    const runtime = activateConnectedAccountRuntime();
+    const runtime = await activateConnectedAccountRuntime();
     const mode = runtime.authentication.modes['service-account'];
     if (!mode || mode.kind !== 'manual') throw new Error('Gemini service-account mode is unavailable');
     const complete = async (
