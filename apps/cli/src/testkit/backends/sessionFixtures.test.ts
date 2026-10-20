@@ -1,24 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
 import { createTestMetadata } from './sessionMetadata';
+import * as mod from './sessionFixtures';
 
 describe('session fixtures', () => {
     it('defaults runtime session metadata to the canonical metadata helper', async () => {
-        const mod = await import('./sessionFixtures');
         const { getMetadata } = mod.createSessionClientWithMetadata();
 
         expect(getMetadata()).toEqual(createTestMetadata());
     });
 
     it('creates a mock session with canonical metadata defaults', async () => {
-        const mod = await import('./sessionFixtures');
         const mockSession = mod.createMockSession();
 
         expect(mockSession.metadata).toEqual(createTestMetadata());
     });
 
     it('merges partial mock-session metadata overrides onto canonical defaults', async () => {
-        const mod = await import('./sessionFixtures');
         const mockSession = mod.createMockSession({
             metadata: {
                 path: '/tmp/override',
@@ -33,7 +31,6 @@ describe('session fixtures', () => {
     });
 
     it('creates plaintext session fixtures with canonical metadata defaults', async () => {
-        const mod = await import('./sessionFixtures');
         const session = mod.createPlainSessionFixture();
 
         expect(session).toMatchObject({
@@ -49,7 +46,6 @@ describe('session fixtures', () => {
     });
 
     it('creates plaintext session fixtures with metadata overrides', async () => {
-        const mod = await import('./sessionFixtures');
         const session = mod.createPlainSessionFixture({
             id: 'plain-1',
             metadata: createTestMetadata({ machineId: 'machine-1' }),
@@ -63,7 +59,6 @@ describe('session fixtures', () => {
     });
 
     it('creates session record fixtures with stable defaults', async () => {
-        const mod = await import('./sessionFixtures');
         const row = mod.createSessionRecordFixture({ id: 'sess-1' });
 
         expect(row).toMatchObject({
@@ -82,7 +77,6 @@ describe('session fixtures', () => {
     });
 
     it('creates session list response fixtures with stable pagination defaults', async () => {
-        const mod = await import('./sessionFixtures');
         const row = mod.createSessionRecordFixture({ id: 'sess-1' });
         const response = mod.createSessionListResponseFixture([row]);
 
@@ -94,7 +88,6 @@ describe('session fixtures', () => {
     });
 
     it('creates lightweight api session clients with metadata snapshots', async () => {
-        const mod = await import('./sessionFixtures');
         const session = mod.createApiSessionClientFixture({
             metadataPermissionMode: 'read-only',
         });
@@ -105,7 +98,6 @@ describe('session fixtures', () => {
     });
 
     it('creates mutable api session clients with canonical metadata lifecycle helpers', async () => {
-        const mod = await import('./sessionFixtures');
         const session = mod.createMutableApiSessionClientFixture({
             sessionId: 'session-port-1',
             metadataPermissionMode: 'read-only',
@@ -151,7 +143,6 @@ describe('session fixtures', () => {
     });
 
     it('waits for mutable Session metadata and releases waits on abort or close', async () => {
-        const mod = await import('./sessionFixtures');
         const session = mod.createMutableApiSessionClientFixture({ metadata: createTestMetadata() });
         const changed = session.waitForMetadataUpdate();
         session.updateMetadata((current) => current);
@@ -169,8 +160,22 @@ describe('session fixtures', () => {
         await expect(session.waitForMetadataUpdate()).resolves.toBe(false);
     });
 
+    it('keeps current-publisher updates on the supplied metadata transport boundary', async () => {
+        let metadata = createTestMetadata({ permissionMode: 'read-only' });
+        const session = mod.createMutableApiSessionClientFixture({
+            metadata,
+            overrides: {
+                updateMetadata(update) {
+                    const next = update(metadata);
+                    if (next) metadata = next;
+                },
+            },
+        });
+        await session.updateMetadataAsCurrentPublisher(current => ({ ...current, permissionMode: 'default' }));
+        expect(metadata.permissionMode).toBe('default');
+    });
+
     it('retains the immutable server binding captured when the Session is constructed', async () => {
-        const mod = await import('./sessionFixtures');
         const binding = { serverId: 'fixture-home', serverUrl: 'https://fixture-home.example' };
         const session = mod.createMutableApiSessionClientFixture({ serverBinding: binding });
         binding.serverUrl = 'https://another-home.example';
@@ -180,7 +185,6 @@ describe('session fixtures', () => {
     });
 
     it('creates basic session clients with selective overrides', async () => {
-        const mod = await import('./sessionFixtures');
         const seen: string[] = [];
         const session = mod.createBasicSessionClientWithOverrides({
             enqueueAgentMessageCommitted: async (_provider, body) => {

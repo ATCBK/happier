@@ -933,7 +933,8 @@ describe('ApiSessionClient pending queue materialization', () => {
             initialPermissionMode: 'default', inFlightSteer: { isTurnInFlight: () => false, supportsInFlightSteer: () => false,
                 steerText: async () => {}, registerProviderAcceptedEffect: () => {}, rejectPromptBeforeProvider: input => {
                 for (const id of input.localIds ?? []) void client.observeProviderInputSettlement({ kind: 'rejected_before_effect',
-                    localId: id, userMessageSeq: null, reason: 'unsupported_action', retryable: false });
+                    localId: id, userMessageSeq: null, reason: 'unsupported_action',
+                    diagnostic: { code: 'unsupported_action', severity: 'warning' }, retryable: false });
             } } });
         await waitForPendingInputContract(client);
         const material = createSessionFollowSourceMaterialResolver();
@@ -1752,7 +1753,7 @@ describe('ApiSessionClient pending queue materialization', () => {
             session: { waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal),
                 materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
                 getMetadataSnapshot: () => client.getMetadataSnapshot(),
-                hasPendingProviderInput: () => client.hasPendingProviderInput(),
+                hasPendingProviderInput: localId => client.hasPendingProviderInput(localId),
                 reconcilePendingProviderInputCustodyBeforeMaterialization: () => client.reconcilePendingProviderInputCustodyBeforeMaterialization() },
             beforeCollectQueuedBatch: () => sync.flushPendingAfterStart(), refreshBeforeQueuedBatch: false, reconcileWhenEmpty: 'skip' });
         const controller = new AbortController();
@@ -1769,7 +1770,7 @@ describe('ApiSessionClient pending queue materialization', () => {
             if (!nativeRuntime.sessions) throw new Error('Expected fixture Agent Session runtime');
             const nativeSession = await nativeRuntime.sessions.open({ kind: 'create', sessionId: TEST_SESSION_ID, cwd: homeDir,
                 launchEnvironment: { values: { RUN_PROVIDER_TOKEN: endpoint.credential }, unset: [] },
-                providerBinding: { upstream: { protocol: 'openai-responses', normalizedUrl: endpoint.endpointUrl, credential: 'apiKey' },
+                providerBinding: { connectionId: 'fixture-provider', upstream: { protocol: 'openai-responses', normalizedUrl: endpoint.endpointUrl, credential: 'apiKey' },
                     model: { id: 'example', name: 'Example' }, materialization: { v: 1, kind: 'spawnEnv' } } },
                 // This installed boundary fixture reads only the cancellation signal;
                 // no host domain service is replaced by the reduced context.
@@ -1841,7 +1842,7 @@ describe('ApiSessionClient pending queue materialization', () => {
                 waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal),
                 materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
                 getMetadataSnapshot: () => client.getMetadataSnapshot(),
-                hasPendingProviderInput: () => client.hasPendingProviderInput(),
+                hasPendingProviderInput: localId => client.hasPendingProviderInput(localId),
                 reconcilePendingProviderInputCustodyBeforeMaterialization: () => client.reconcilePendingProviderInputCustodyBeforeMaterialization(),
             },
             reconcileWhenEmpty: 'skip',

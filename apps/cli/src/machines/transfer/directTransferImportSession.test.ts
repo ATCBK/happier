@@ -17,8 +17,6 @@ import { DirectTransferImportOpenRequestSchema } from './directTransferImportOpe
 
 let failNextUploadPromotionWithExdev = false;
 let failNextUploadSourceCleanup = false;
-let failDestinationBackupRestore = false;
-let destinationBackupPath: string | null = null;
 let beforeImportDestinationCommit: ((path: string) => Promise<void>) | undefined;
 
 vi.mock('node:fs/promises', async () => {
@@ -38,13 +36,7 @@ vi.mock('node:fs/promises', async () => {
         error.code = 'EXDEV';
         throw error;
       }
-      if (failDestinationBackupRestore && destinationBackupPath === from) {
-        throw new Error('simulated destination backup restoration failure');
-      }
       await actual.rename(from, to);
-      if (to.includes('.happier-upload-backup-')) {
-        destinationBackupPath = to;
-      }
     }),
     rm: vi.fn(async (path: string, options?: Parameters<typeof actual.rm>[1]) => {
       if (failNextUploadSourceCleanup && path.endsWith('.upload')) {
@@ -61,8 +53,6 @@ vi.mock('node:fs/promises', async () => {
 afterEach(() => {
   failNextUploadPromotionWithExdev = false;
   failNextUploadSourceCleanup = false;
-  failDestinationBackupRestore = false;
-  destinationBackupPath = null;
   beforeImportDestinationCommit = undefined;
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -327,7 +317,7 @@ describe('direct transfer import session manager', () => {
     }
   });
 
-  it('preserves finalize recovery codes and retained session state through the import manager', async () => {
+  it('retains staged upload custody when cleanup fails before destination publication', async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const workingDirectory = await mkdtemp(join(tmpdir(), 'happier-direct-transfer-import-finalize-recovery-'));
@@ -366,17 +356,16 @@ describe('direct transfer import session manager', () => {
 
       failNextUploadPromotionWithExdev = true;
       failNextUploadSourceCleanup = true;
-      failDestinationBackupRestore = true;
 
       await expect(manager.finalizeImportTransferSession({
         uploadId: opened.response.uploadId,
-      })).resolves.toEqual({
+      })).resolves.toMatchObject({
         success: false,
-        error: 'Failed to finalize uploaded file because destination recovery was incomplete. Recovery files were preserved; inspect the destination before retrying.',
-        errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED',
+        errorCode: 'file_replace_failed',
         keepSession: true,
         expiresAt: 12_000,
       });
+      expect(await readFile(destinationPath, 'utf8')).toBe('original');
       expect(manager.countActiveImportSessions()).toBe(1);
     } finally {
       nowSpy.mockRestore();

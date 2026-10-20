@@ -45,6 +45,7 @@ import { createLifecycleParams } from '@/agent/runtime/session/loop/lifecycle.te
 import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
 import { registerRunnerTerminationHandlers } from '@/agent/runtime/lifecycle/runnerTerminationHandlers';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
@@ -232,7 +233,9 @@ describe('ApiSessionClient socket write readiness', () => {
 
   it.each(['offline', 'connected', 'disconnect-during-drain'] as const)(
     'retires an offline native transcript ACK before runner cleanup drains the Session (%s)', async closeState => {
-    const session = createPlainSessionFixture({ id: 's-native-offline-close' });
+    // Each mode owns a different retained journal. The offline case deliberately
+    // leaves custody behind, so reusing its Session would replay that earlier turn.
+    const session = createPlainSessionFixture({ id: `s-native-offline-close-${closeState}` });
     serveSession(createSessionRecordFixture({ id: session.id, encryptionMode: 'plain', metadataLayoutVersion: 0,
       metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion, share: null }));
     const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1' });
@@ -448,6 +451,7 @@ describe('ApiSessionClient socket write readiness', () => {
     expect(new Set(attempts).size).toBe(2);
     for (const original of originals) {
       const request = SessionTranscriptObservationInputSchema.parse(original);
+      if (typeof request.content === 'string') throw new Error('Expected a keyless plain Goal notice');
       expect(request.content.t).toBe('plain');
       if (request.content.t !== 'plain') throw new Error('Expected a keyless plain Goal notice');
       expect(TranscriptRawRecordV1Schema.parse(request.content.v)).toMatchObject({ role: 'agent',
@@ -517,12 +521,20 @@ describe('ApiSessionClient socket write readiness', () => {
       const initial = await openConfiguredSession();
       await initial.dispose();
       const initialControls = createCodexNativeSessionControls();
-      const base = { signal: new AbortController().signal, services: { exec }, session: {
+      const base = { signal: new AbortController().signal,
+        plugin: { id: 'happier.agent.codex', version: '1.0.0' },
+        contribution: { id: 'codex', qualifiedId: 'happier.agent.codex/codex' },
+        surface: 'background' as const, invokedAtMs: 1, agent: { id: 'codex' },
+        protocols: { acp: {
+          open: async () => { throw new Error('Native Goal control must not open ACP'); },
+          openExecutionRunV1: async () => { throw new Error('Native Goal control must not open ACP'); },
+        } },
+        services: { ...createUnavailablePluginServices(), exec }, session: {
         id: session.id, cwd: directory, activity: 'inactive' as const, providerSessionId: 'fresh-thread', connectedAccounts: [],
       } };
       await expect(initialControls.goals.set({ objective: 'Retained B', status: 'paused' }, {
         ...base, goalSource: workState('inactive-before-reopen').publisher('goals'),
-      } as AgentSessionGoalControlContext)).resolves.toMatchObject({ status: 'applied' });
+      } satisfies AgentSessionGoalControlContext)).resolves.toMatchObject({ status: 'applied' });
       await client.flush();
       expect(originals()).toHaveLength(1);
       const retained = readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot());
@@ -536,7 +548,7 @@ describe('ApiSessionClient socket write readiness', () => {
       } }, agent: { id: 'codex' }, session: { id: session.id, services: {} }, ui: { title: { set: async () => undefined } },
       } as unknown as AgentSessionRuntimeContext;
       const opened = await runtime.sessions.open({ kind: 'resume', providerSessionId: 'fresh-thread', sessionId: session.id,
-        cwd: directory, launchEnvironment: { values: { CODEX_HOME: directory } },
+        cwd: directory, launchEnvironment: { values: { CODEX_HOME: directory }, unset: [] },
         configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
           permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {} },
       }, nativeContext);
@@ -561,7 +573,7 @@ describe('ApiSessionClient socket write readiness', () => {
         expect(runtimeEvents).toContainEqual(expect.objectContaining({ kind: 'provider-session-id', providerSessionId: 'fresh-thread' }));
         unsubscribe();
         const goalContext = { ...base, session: { ...base.session, activity: 'active' as const },
-          goalSource: reopenedState.publisher('goals') } as AgentSessionGoalControlContext;
+          goalSource: reopenedState.publisher('goals') } satisfies AgentSessionGoalControlContext;
         if (!runtime.sessions.goals) throw new Error('Expected native Goal controls');
         await expect(runtime.sessions.goals.get(goalContext)).resolves.toMatchObject({ status: 'applied' });
         await client.flush();
@@ -693,9 +705,10 @@ describe('ApiSessionClient socket write readiness', () => {
 
   it.each(['plain', 'e2ee'] as const)('notifies the original semantic agent message after an append retry (%s)', async mode => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'message-owner' })).toString('base64url')}.signature`;
-    const session = mode === 'plain' ? createPlainSessionFixture({ id: 's-message-retry' })
+    const initialSession = mode === 'plain' ? createPlainSessionFixture({ id: 's-message-retry' })
       : createEncryptedOwnerSession('s-message-retry');
-    session.metadata = { ...session.metadata, projectId: 'private-original-project', workspaceId: 'private-workspace' };
+    const session = { ...initialSession, metadata: { ...initialSession.metadata,
+      projectId: 'private-original-project', workspaceId: 'private-workspace' } };
     if (mode === 'plain') serveSession(createSessionRecordFixture({ id: session.id, encryptionMode: 'plain',
       metadataLayoutVersion: 0, metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion, share: null }));
     const activity = createSessionRuntimeActivityHomeStub({ machineId: 'machine-1' });

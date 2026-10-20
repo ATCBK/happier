@@ -1026,6 +1026,7 @@ export type RuntimeSessionClientDurableMutationOutbox = Readonly<{
         delivered: boolean;
         localId?: string;
         committedSequence?: number;
+        whenCommitted?: Promise<CommittedTranscriptOriginal | null>;
     }>>;
     enqueueVoiceAgentTranscriptTurn(mutation: VoiceAgentTranscriptTurnMutationV1): Promise<Readonly<{
         persisted: boolean;

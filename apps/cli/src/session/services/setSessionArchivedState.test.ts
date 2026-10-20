@@ -115,7 +115,7 @@ describe('setSessionArchivedState', () => {
     const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 409, data: { error: 'session_active' } });
     const { executor } = createCliActionExecutorHarness({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
       getCurrentSessionMetadata: () => ({ machineId: 'machine-1', path: '/repo' }),
-      getCurrentSessionBackendTarget: () => ({ kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }),
+      getCurrentSessionBackendTarget: () => ({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }),
       actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({ actionsSettingsV1: {
         v: 1, actions: { 'session.archive': { enabled: true, disabledSurfaces: [] } },
         approvalWaivedSurfaces: { 'session.archive': ['agent'] },

@@ -182,6 +182,10 @@ describe('language intelligence composed host', () => {
             try {
                 const opening = f.open('a.ts', 'shared');
                 await vi.waitFor(async () => expect((await f.messages()).some(message => message.method === 'initialize')).toBe(true));
+                // The controller can subscribe before open acknowledges: the real
+                // Machine watch already reports native startup during initialize.
+                expect(DaemonLspWatchResponseSchema.parse(await f.call(RPC_METHODS.DAEMON_LSP_WATCH, { rootPath })))
+                    .toMatchObject({ status: 'ok', servers: [{ state: 'starting', loading: false }] });
                 expect(await f.call(RPC_METHODS.DAEMON_LSP_SYNC, { rootPath, op: { op: 'close', path: 'a.ts' } })).toMatchObject({ status: 'ok' });
                 await opening;
                 expect(f.protocolHandles).toHaveLength(1);

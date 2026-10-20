@@ -4,7 +4,7 @@ import { FEATURES_RESPONSE_MAX_UTF8_BYTES_V1 } from '@happier-dev/protocol';
 
 const axiosGet = vi.hoisted(() => vi.fn());
 
-// Keep the real AxiosHeaders so mocked responses carry the headers a real response always has.
+// Keep the real AxiosHeaders alongside the plain record accepted by Axios response types.
 vi.mock('axios', async (importOriginal) => ({
   ...(await importOriginal<typeof import('axios')>()),
   default: { get: axiosGet },
@@ -47,13 +47,16 @@ describe('createLoopbackReadinessProbe', () => {
     expect(axiosGet).not.toHaveBeenCalled();
   });
 
-  it('carries the server-announced maintenance window from the authenticated read', async () => {
+  it.each([
+    new AxiosHeaders({ 'Retry-After': '3', 'X-Happier-Retry-Reason': 'server_restarting' }),
+    { 'retry-after': '3', 'x-happier-retry-reason': 'server_restarting' },
+  ])('carries the server-announced maintenance window from authenticated response headers %#', async (headers) => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       features: {}, capabilities: { serverIdentity: { serverIdentityId: 'srv_expected' } },
     }), { status: 200, headers: { 'content-type': 'application/json' } })));
     axiosGet.mockResolvedValueOnce({
       status: 503,
-      headers: new AxiosHeaders({ 'Retry-After': '3', 'X-Happier-Retry-Reason': 'server_restarting' }),
+      headers,
     });
 
     await expect(createLoopbackReadinessProbe({

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ReadinessProbeResult } from '@happier-dev/connection-supervisor';
 import { buildConnectedServiceCredentialRecord, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { QualifiedConnectedAccountCredentialSnapshotV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
 import { CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE } from '@happier-dev/plugins-claude/agent';
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { buildProfilePhysicalKey, ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -16,6 +18,8 @@ import { buildPromptLibraryPhysicalKeyV1, PromptLibraryCatalogKeyV1Schema } from
 import { emptyPromptLibraryRecordV1, readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import * as persistence from '@/persistence';
 import { ApiClient } from '@/api/api';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createHttpStatusError } from '@/api/client/httpStatusError';
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 
@@ -33,8 +37,10 @@ import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createDeferred } from '@/testkit/async/deferred';
 import { logger } from '@/ui/logger';
-import { resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
+import { getConnectedServiceStateSharingDescriptor, resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
 import { readCurrentCatalogHook } from '@/agent/catalog/runtimeEntry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { ConnectedServiceGenerationReconciliationNotAcknowledgeableError } from '@/daemon/connectedServices/accountGroups/generation/reconcileConnectedServiceAuthGroupGenerations';
 import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
 import { bootstrapMachineSyncRuntime } from '@/daemon/machine/bootstrapMachineSyncRuntime';
@@ -448,7 +454,9 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             createConnectedApiMachine: () => client, attachTransferRuntimeStatePublisher: async () => {},
             startAutomationWorkerForMachine: () => ({ liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} }, stop: () => {}, refreshAssignments: async () => {}, pause: () => {}, resume: () => {}, handleServerUpdate: () => {} }),
             startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
-            spawnSession: async () => ({ type: 'success', sessionId: 'unused' }), stopSession: async () => ({ status: 'stopped' }),
+            spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
+            spawnSessionForInternalResume: async () => { throw new Error('Unexpected internal resume'); },
+            stopSession: async () => ({ status: 'stopped' }),
             isSessionAlreadyRunning: async () => false, loadLocalSessionMetadataForHandoff: async () => null,
             beforeShutdown: async () => {}, requestShutdown: () => {}, directPeerServerLifecycle: null,
             directTransferRegistryHost: createCliRegistryHostV1(),
@@ -509,7 +517,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const settingsHint = vi.fn();
         client.onAccountSettingsVersionHint(settingsHint);
         client.onAccountProjectRowsChanged(async ({ signal }) => {
-            await readProjectAccountRows({ credentials, signal });
+            await readProjectAccountRows({ credentials, signal, publication: 'installed' });
         });
 
         await (client as unknown as { syncChangesOnConnect(options: { reason: 'live' }): Promise<void> })
@@ -1174,6 +1182,10 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
     });
 
     it('advances the durable account cursor while semantic generation deferral remains event-eligible', async () => {
+        const admittedRuntime = await createAdmittedPluginRuntimeFixture({
+            controller: pluginReloadController,
+            runtimeOptions: { pluginIds: ['happier.agent.claude'] },
+        });
         const tempRoot = await mkdtemp(join(tmpdir(), 'happier-projection-cursor-composition-'));
         const originalActiveServerDir = configuration.activeServerDir;
         const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -1271,15 +1283,33 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         });
         runtimeRegistry.registerTarget(targetInput(7101, 'sess-shared-a'));
         let authoritativeProofAvailable = false;
-        const getConnectedServiceAuthGroup = vi.fn(async () => (
-            authoritativeProofAvailable ? {
-                serviceId: 'claude-subscription',
-                groupId: 'shared',
-                activeProfileId: 'team',
-                generation: 9,
-                memberProfileIds: ['team'],
-            } : null
-        ));
+        const materializedRoot = await readCurrentCatalogHook('claude', entry => resolveConnectedServiceMaterializedHomeRoot('claude', {
+            activeServerDir: configuration.activeServerDir,
+            serviceId: 'claude-subscription', profileId: 'team',
+            selection: { kind: 'group', serviceId: 'claude-subscription', groupId: 'shared',
+                activeProfileId: 'team', fallbackProfileId: 'team', generation: 9, policy: null },
+        }, entry));
+        const descriptor = await getConnectedServiceStateSharingDescriptor('claude');
+        if (!materializedRoot || !descriptor?.nativeHome) throw new Error('Expected the admitted Claude native home');
+        const provenancePath = join(materializedRoot, '.happier-claude-connected-service-home.json');
+        const getConnectedServiceAuthGroup = vi.fn(async () => {
+            // Home admits the exact target before native mutation. Lose its
+            // later proof only after that target has actually been written.
+            if (!authoritativeProofAvailable) {
+                try {
+                    const provenance: unknown = JSON.parse(await readFile(provenancePath, 'utf8'));
+                    if (provenance && typeof provenance === 'object'
+                        && 'generation' in provenance && provenance.generation === 9
+                        && 'credentialRevision' in provenance && provenance.credentialRevision === credentialRevision) return null;
+                } catch (error) {
+                    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+                }
+            }
+            return { serviceId: 'claude-subscription', groupId: 'shared', activeProfileId: 'team',
+                generation: 9, memberProfileIds: ['team'] };
+        });
+        const trackedLaunch = { directory: tempRoot,
+            environmentVariables: { [descriptor.nativeHome.environmentKey]: materializedRoot } };
         const restartRequestedPids = new Set<number>();
         const runtime = await startDaemonSessionControlRuntime({
             machineId: machine.id,
@@ -1306,7 +1336,12 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             getConnectedServiceRefreshCoordinator: () => null,
             getConnectedServiceQuotasCoordinator: () => null,
             connectedServiceRuntimeRegistry: runtimeRegistry,
-            pidToTrackedSession: new Map(),
+            pidToTrackedSession: new Map([
+                [7101, { pid: 7101, startedBy: 'daemon', happySessionId: 'sess-shared-a',
+                    happySessionMetadataFromLocalWebhook: createTestMetadata({ flavor: 'claude' }), spawnOptions: trackedLaunch }],
+                [7102, { pid: 7102, startedBy: 'daemon', happySessionId: 'sess-shared-b',
+                    happySessionMetadataFromLocalWebhook: createTestMetadata({ flavor: 'claude' }), spawnOptions: trackedLaunch }],
+            ]),
             pidToAwaiter: new Map(),
             pidToSpawnResultResolver: new Map(),
             pidToSpawnWebhookTimeout: new Map(),
@@ -1329,6 +1364,18 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const client = new ApiMachineClient('token', machine);
         mockAccountGet(async (url: string) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: projection };
+            if (url.includes('/v4/connect/qualified/credential?')) {
+                const compatibility = BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID['claude-subscription'];
+                return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+                    ref: { service: compatibility.service, accountId: 'team' },
+                    authenticationModeId: compatibility.authenticationModeByCredentialKind.oauth,
+                    revisionSemantics: 'revisioned', credentialRevision, configurationRevision: null,
+                    content: { t: 'plain', v: connectedCredential }, metadata: {},
+                }) };
+            }
+            if (url.endsWith('/v1/account/encryption/currentness')) return {
+                status: 200, data: createAccountEncryptionCurrentnessFixture(),
+            };
             if (url.includes('/v2/sessions/')) return { status: 404, data: {} };
             if (url.includes('/v2/changes')) {
                 return {
@@ -1365,6 +1412,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             })),
             startMemoryWorkerForMachine: vi.fn(async () => null),
             spawnSession: vi.fn(async () => ({ type: 'success', sessionId: 'unused' })) as never,
+            spawnSessionForInternalResume: async () => { throw new Error('Unexpected internal resume'); },
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
             loadLocalSessionMetadataForHandoff: vi.fn(async () => null),
@@ -1387,26 +1435,11 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             expect(writeAccountChangesCursor).toHaveBeenCalledOnce();
             expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 3);
 
-            const materializedRoot = await readCurrentCatalogHook('claude', entry => resolveConnectedServiceMaterializedHomeRoot('claude', {
-                activeServerDir: configuration.activeServerDir,
-                serviceId: 'claude-subscription',
-                profileId: 'team',
-                selection: {
-                    kind: 'group',
-                    serviceId: 'claude-subscription',
-                    groupId: 'shared',
-                    activeProfileId: 'team',
-                    fallbackProfileId: 'team',
-                    generation: 9,
-                    policy: null,
-                },
-            }, entry));
             expect(materializedRoot).toEqual(expect.any(String));
-            const provenancePath = join(materializedRoot!, '.happier-claude-connected-service-home.json');
+            expect(claudeProvenanceReplaceCount.current).toBe(2);
             const effectAfterLostResponse = await stat(provenancePath, { bigint: true });
             // One real Claude hot-apply replaces base provenance and then stamps the exact group epoch.
             // Replays and additional recipients must verify those bytes without another replacement.
-            expect(claudeProvenanceReplaceCount.current).toBe(2);
 
             authoritativeProofAvailable = true;
             runtimeRegistry.registerTarget(targetInput(7102, 'sess-shared-b'));
@@ -1437,6 +1470,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             bootstrap.machineConnectionStateCleanup?.();
             await client.shutdown();
             await runtime.stopControlServer();
+            await admittedRuntime.dispose();
             Object.assign(configuration, { activeServerDir: originalActiveServerDir });
             if (originalPlatformDescriptor) {
                 Object.defineProperty(process, 'platform', originalPlatformDescriptor);

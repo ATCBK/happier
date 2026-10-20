@@ -44,7 +44,7 @@ function createHarness(overrides: Record<string, unknown> = {}) {
     };
     let currentContractResult: typeof contractResult | null = contractResult;
     let runtimeAuthorityCurrent = true;
-    const deliverMaterializedUserMessageToAgentQueue = vi.fn(() => true);
+    const deliverMaterializedUserMessageToAgentQueue = vi.fn((_message: Parameters<Parameters<typeof runPendingQueueV2ReleasedServerAdapter>[0]['deliverMaterializedUserMessageToAgentQueue']>[0]) => true);
     const params = {
         token: 'token-1',
         serverUrl: 'https://server.example',

@@ -18,6 +18,7 @@ import { encodeBase64, encryptWithDataKey, libsodiumPublicKeyFromSecretKey } fro
 import type { StoredCredentials } from '@/persistence';
 import { createAccountArtifactStore } from './accountArtifactStore';
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { StrictJsonValueSchema } from '@happier-dev/protocol';
 
 const { get, put, post } = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn() }));
 // Only the authenticated Home transport is mocked; codecs, binding verification and recipient preparation are real.
@@ -58,7 +59,7 @@ async function fixture(mode: 'plain' | 'e2ee', recipientAccessAccountId: string 
           serverIdentityId: 'stable-home', accountId: 'alice', custodianAccountId: 'alice',
           machineId: 'machine-1', installationId: 'installation', actionId, requestId: 'action-request', target,
           authentication: { kind: 'account', tokenEpoch: 0 },
-          requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: 'action-request', target, input }),
+          requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: 'action-request', target, input: StrictJsonValueSchema.parse(input) }),
           sessionActionOrigin: { v: 1, caller, sourceTurnId: 'turn-1', callerPermissionMode: 'yolo', requestId: 'action-request' },
           sessionActionSource: { machineId: 'machine-1', installationId: 'installation' },
         } },

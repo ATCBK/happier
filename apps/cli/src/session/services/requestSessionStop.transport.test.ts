@@ -24,6 +24,7 @@ import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/action
 import { markSessionListQueryResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { resolveSessionResumeControlIntent } from './sessionExplicitStopIntent';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 const boundary = vi.hoisted(() => ({ socket: null as unknown, mode: 'timeout', connections: 0 }));
 vi.mock('socket.io-client', () => ({ io: () => { boundary.connections++; return boundary.socket; } }));
@@ -303,7 +304,7 @@ describe('requestSessionStop machine transport', () => {
       };
       // Home list, metadata HTTP and Socket.IO are the boundaries. The real
       // Action scope guard, Stop service, provenance write and physical port run.
-      const executor = createActionExecutor({ isActionApprovalRequired: () => false,
+      const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), isActionApprovalRequired: () => false,
         sessionList: async ({ query }) => markSessionListQueryResultV1({
           sessions: query?.underSessionId === 'lead-session' ? [{ id: sessionId, active: false, presence: 'offline', updatedAt: 10 }] : [],
           nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,

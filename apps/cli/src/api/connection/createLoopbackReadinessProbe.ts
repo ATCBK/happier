@@ -1,5 +1,5 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
-import axios from 'axios';
+import axios, { AxiosHeaders } from 'axios';
 import { readRetryLaterHints, type ReadinessProbeResult } from '@happier-dev/connection-supervisor';
 
 import { isAuthenticationStatus } from '@/api/client/httpStatusError';
@@ -97,7 +97,7 @@ export function createLoopbackReadinessProbe(params: Readonly<{
       if (authResponse.status >= 500) {
         return {
           status: 'retry_later',
-          ...readRetryLaterHints(authResponse.headers),
+          ...readRetryLaterHints(AxiosHeaders.from(authResponse.headers)),
           errorMessage: `Authenticated probe returned ${authResponse.status}`,
         };
       }

@@ -293,6 +293,10 @@ export function createDirectTransferImportSessionManager(params?: Readonly<{
           commitAdmitted = true;
         };
         return {
+          prepareCommit: async () => {
+            await operations?.prepareCommit?.();
+            await assertCurrentFilesystemOwner(filesystemScope);
+          },
           copyFile: async (source, destination, mode) => {
             await admitCommit();
             await (operations?.copyFile ?? copyFile)(source, destination, mode);

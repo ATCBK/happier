@@ -164,7 +164,9 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
     metadata?: TMetadata | null;
     metadataPermissionMode?: PermissionMode;
     agentState?: AgentState;
-    overrides?: Partial<ApiSessionClient>;
+    overrides?: Omit<Partial<ApiSessionClient>, 'updateMetadata'> & {
+        updateMetadata?: (updater: (current: TMetadata | null) => TMetadata | null) => void;
+    };
 }): MutableApiSessionClientFixture<TMetadata> {
     const sessionId = options?.sessionId ?? 'test-session-id';
     // Mirror the ApiSessionClient transport boundary's immutable construction
@@ -214,10 +216,10 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             events.emit('metadata-updated');
         },
         hasOwnerMetadataAuthority: () => true,
-        async updateMetadataAsCurrentPublisher(updater: (current: Metadata) => Metadata) {
+        async updateMetadataAsCurrentPublisher(updater: (current: TMetadata | null) => TMetadata | null) {
             // This generic transport fixture uses the caller's metadata view;
             // production enforces publisher currentness at the Home boundary.
-            fixture.updateMetadata(current => updater(current as Metadata) as TMetadata);
+            fixture.updateMetadata(updater);
         },
         updateAgentState(updater: (current: AgentState) => AgentState) {
             agentState = updater(agentState);

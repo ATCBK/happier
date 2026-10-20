@@ -30,9 +30,9 @@ it('releases a subscription that fails before iteration while its sibling retain
     // Transparent instrumentation of the actual emitter boundary. Its real
     // close handlers must run even when the native parent remains shared.
     const emit = vi.spyOn(EventEmitter.prototype, 'emit').mockImplementation(function (
-        this: EventEmitter, event: string | symbol, ...args: unknown[]
+        this: EventEmitter, event: unknown, ...args: unknown[]
     ) {
-        const result = originalEmit.call(this, event, ...args);
+        const result = Reflect.apply(originalEmit, this, [event, ...args]);
         if (event === 'close' && this.constructor === EventEmitter) stoppedEmitters.push(this);
         return result;
     });

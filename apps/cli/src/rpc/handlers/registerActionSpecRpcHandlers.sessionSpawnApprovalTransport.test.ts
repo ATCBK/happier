@@ -6,6 +6,7 @@ import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/cre
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions/actionRpcTransport';
 import { projectDiscussionModelParticipantLaunchV1 } from '@happier-dev/protocol/discussions/modelParticipantLaunch';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 import { registerActionSpecRpcHandlers, unwrapActionResultForRpc } from './registerActionSpecRpcHandlers';
 
@@ -67,7 +68,7 @@ describe('session.spawn_new Action RPC deferred approval transport', () => {
         expect(rpcParsed, JSON.stringify(rpcParsed)).toMatchObject({ success: true });
         // No launch dependencies are supplied: the real executor must refuse
         // unavailable execution, not the transport parsing of an admitted child.
-        const executor = createActionExecutor({});
+        const executor = createActionExecutor(createUnavailableActionTransportDeps());
         const expected = unwrapActionResultForRpc('session.spawn_new', await executor.execute('session.spawn_new', child, {
             surface: 'rpc', authority: 'account_automation', serverId: child.executionTarget.serverId,
         }));

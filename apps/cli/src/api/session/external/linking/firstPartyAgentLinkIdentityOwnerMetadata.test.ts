@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import axios from 'axios';
@@ -8,6 +8,7 @@ import {
   buildLinkedExternalSessionQualifiedIdentityV1,
   createSessionOwnerMetadataV1,
   ExternalSessionsSourceSchema,
+  type PluginAgentExternalSessionLinkDataObject,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -43,6 +44,8 @@ const ENV_KEYS = [
   'CODEX_HOME',
   'PI_CODING_AGENT_DIR',
   'PI_CODING_AGENT_SESSION_DIR',
+  'GROK_HOME',
+  'KIMI_CODE_HOME',
 ] as const;
 
 const sourceInventoryReads = vi.hoisted(() => [] as string[]);
@@ -59,7 +62,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 type LinkIdentityProbe = Readonly<{
   source: Record<string, unknown>;
   remoteSessionId: string;
-  linkData?: Record<string, unknown>;
+  linkData?: PluginAgentExternalSessionLinkDataObject;
 }>;
 
 type FirstPartyAgentLinkFixture = Readonly<{
@@ -75,7 +78,7 @@ type FirstPartyAgentLinkFixture = Readonly<{
     env: ReturnType<typeof createEnvKeyScope>;
     listCandidates: (source: Record<string, unknown>) => Promise<readonly Readonly<{
       remoteSessionId: string;
-      linkData?: Record<string, unknown>;
+      linkData?: PluginAgentExternalSessionLinkDataObject;
     }>[]>;
   }>): Promise<LinkIdentityProbe>;
 }>;
@@ -127,7 +130,7 @@ async function firstCandidateProbe(params: Readonly<{
   source: Record<string, unknown>;
   listCandidates: (source: Record<string, unknown>) => Promise<readonly Readonly<{
     remoteSessionId: string;
-    linkData?: Record<string, unknown>;
+    linkData?: PluginAgentExternalSessionLinkDataObject;
   }>[]>;
 }>): Promise<LinkIdentityProbe> {
   const candidates = await params.listCandidates(params.source);
@@ -314,6 +317,142 @@ const FIRST_PARTY_AGENT_LINK_FIXTURES: readonly FirstPartyAgentLinkFixture[] = [
       });
     },
   },
+  // Reuse the readers' provenance-backed fixtures. Each contribution has its
+  // own source admission/identity producer even when its linkData is empty;
+  // the host-envelope check must exercise that registered producer as well.
+  {
+    agentId: 'auggie', pluginId: 'happier.agent.auggie',
+    async prepare({ root, listCandidates }) {
+      const { buildAuggieNativeSession } = await import('../../../../../../../packages/plugins/auggie/src/agent/surfaces/sessions/external/__fixtures__/nativeSession.test-support');
+      const directory = join(root, 'sessions');
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'native-session.json'), JSON.stringify(buildAuggieNativeSession(['guard prompt'])));
+      return firstCandidateProbe({ source: { kind: 'auggieHome', augmentHome: root }, listCandidates });
+    },
+  },
+  {
+    agentId: 'codebuddy', pluginId: 'happier.agent.codebuddy',
+    async prepare({ root, listCandidates }) {
+      const directory = join(root, 'projects', 'fixture-workspace');
+      await mkdir(directory, { recursive: true });
+      await copyFile(new URL('../../../../../../../packages/plugins/codebuddy/src/agent/externalSessions/__fixtures__/codebuddy-2.170.0-producer.jsonl', import.meta.url), join(directory, 'fixture-session.jsonl'));
+      return firstCandidateProbe({ source: { kind: 'codebuddyHome', homeDir: root }, listCandidates });
+    },
+  },
+  {
+    agentId: 'copilot', pluginId: 'happier.agent.copilot',
+    async prepare({ root, listCandidates }) {
+      const directory = join(root, 'session-state', 'native');
+      await mkdir(directory, { recursive: true });
+      await copyFile(new URL('../../../../../../../packages/plugins/copilot/src/agent/externalSessions/__fixtures__/copilot-v1-events.jsonl', import.meta.url), join(directory, 'events.jsonl'));
+      return firstCandidateProbe({ source: { kind: 'copilotHome', homeDir: root }, listCandidates });
+    },
+  },
+  {
+    agentId: 'cursor', pluginId: 'happier.agent.cursor',
+    async prepare({ root, listCandidates }) {
+      const { writeCursorNativeFixture } = await import('../../../../../../../packages/plugins/cursor/src/agent/externalSessions/__fixtures__/native.test-support');
+      await writeCursorNativeFixture(root);
+      return firstCandidateProbe({ source: { kind: 'cursorHome', homeDir: root }, listCandidates });
+    },
+  },
+  {
+    agentId: 'devin', pluginId: 'happier.agent.devin',
+    async prepare({ root, listCandidates }) {
+      const { createDevinNativeFixture } = await import('../../../../../../../packages/plugins/devin/src/agent/externalSessions/__fixtures__/nativeSession.test-support');
+      const native = createDevinNativeFixture(root, ['guard prompt']);
+      try {
+        return await firstCandidateProbe({ source: { kind: 'devinHome', devinHome: root }, listCandidates });
+      } finally { native.close(); }
+    },
+  },
+  {
+    agentId: 'droid', pluginId: 'happier.agent.droid',
+    async prepare({ root, env, listCandidates }) {
+      const factoryDir = join(root, '.factory');
+      const directory = join(factoryDir, 'sessions', '-workspace');
+      await mkdir(directory, { recursive: true });
+      await copyFile(new URL('../../../../../../../packages/plugins/droid/src/agent/externalSessions/__fixtures__/droid-0.170.0-transcript-v2.jsonl', import.meta.url), join(directory, 'session-fixture.jsonl'));
+      env.patch({ HOME: root, USERPROFILE: root });
+      return firstCandidateProbe({ source: { kind: 'droidFactoryDir', factoryDir }, listCandidates });
+    },
+  },
+  {
+    agentId: 'fx', pluginId: 'happier.agent.fx',
+    async prepare({ root, env, listCandidates }) {
+      const directory = join(root, '.fx', 'sessions', 'native-session');
+      await mkdir(directory, { recursive: true });
+      await copyFile(new URL('../../../../../../../packages/plugins/fx/src/agent/externalSessions/__fixtures__/fx-v0.0.14-events.jsonl', import.meta.url), join(directory, 'events.jsonl'));
+      // The same schema-v4 metadata envelope as the FX reader's owner fixture.
+      await writeFile(join(directory, 'session.json'), JSON.stringify({ schema_version: 4,
+        id: 'native-session', origin_workspace_root: '/repo', workspace_root: '/repo',
+        created_at_ms: 1792490400000, updated_at_ms: 1792490400010,
+        conversation_language: 'en', provider: 'openai', model: 'fixture-model', effort: 'medium',
+        fast_mode: false, title: 'ordinary title', subagent_child: false }));
+      env.patch({ HOME: root, USERPROFILE: root });
+      return firstCandidateProbe({ source: { kind: 'fxHome' }, listCandidates });
+    },
+  },
+  {
+    agentId: 'gemini', pluginId: 'happier.agent.gemini',
+    async prepare({ root, listCandidates }) {
+      const fixture = await import('../../../../../../../packages/plugins/gemini/src/agent/surfaces/sessions/external/__fixtures__/gemini064');
+      const directory = join(root, 'tmp', 'project', 'chats');
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(root, 'projects.json'), JSON.stringify({ projects: { '/repo': 'project' } }));
+      await writeFile(join(directory, 'session-2026-10-20T10-00-8b6e1959.jsonl'), fixture.jsonl());
+      return firstCandidateProbe({ source: { kind: 'geminiConfigDir', configDir: root }, listCandidates });
+    },
+  },
+  {
+    agentId: 'grok', pluginId: 'happier.agent.grok',
+    async prepare({ root, env, listCandidates }) {
+      const { createGrokNativeHistoryFixture } = await import('../../../../../../../packages/plugins/grok/src/agent/externalSessions/__fixtures__/grokNative.test-support');
+      await createGrokNativeHistoryFixture(root);
+      env.patch({ GROK_HOME: join(root, '.grok') });
+      return firstCandidateProbe({ source: { kind: 'grokHome' }, listCandidates });
+    },
+  },
+  {
+    agentId: 'kilo', pluginId: 'happier.agent.kilo',
+    async prepare({ root, listCandidates }) {
+      // Identity reads the existing session document; message/part decoding is
+      // covered by Kilo's own transcript contract and is not duplicated here.
+      const captured: unknown = JSON.parse(await readFile(new URL('../../../../../../../packages/plugins/kilo/src/agent/externalSessions/__fixtures__/kilo-json-1.0.25.json', import.meta.url), 'utf8'));
+      if (!captured || typeof captured !== 'object' || !('session' in captured)) throw new Error('Missing Kilo session fixture');
+      const directory = join(root, 'session', 'project');
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'ses_fixture.json'), JSON.stringify(captured.session));
+      return firstCandidateProbe({ source: { kind: 'kiloStorage', storageRoot: root }, listCandidates });
+    },
+  },
+  {
+    agentId: 'kimi', pluginId: 'happier.agent.kimi',
+    async prepare({ root, env, listCandidates }) {
+      const { writeKimiFixture } = await import('../../../../../../../packages/plugins/kimi/src/agent/externalSessions/__fixtures__/kimiCode.test-support');
+      await writeKimiFixture(root);
+      env.patch({ KIMI_CODE_HOME: root });
+      return firstCandidateProbe({ source: { kind: 'kimiCodeHome' }, listCandidates });
+    },
+  },
+  {
+    agentId: 'kiro', pluginId: 'happier.agent.kiro',
+    async prepare({ root, listCandidates }) {
+      const { createKiroChatV1Fixture } = await import('../../../../../../../packages/plugins/kiro/src/agent/externalSessions/__fixtures__/kiroChatV1.test-support');
+      await createKiroChatV1Fixture({ home: root });
+      return firstCandidateProbe({ source: { kind: 'kiroChatStore', kiroHome: root }, listCandidates });
+    },
+  },
+  {
+    agentId: 'qwen', pluginId: 'happier.agent.qwen',
+    async prepare({ root, listCandidates }) {
+      const fixture = await import('../../../../../../../packages/plugins/qwen/src/agent/externalSessions/__fixtures__/qwen0253');
+      const directory = join(root, 'projects', '-repo', 'chats');
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, `${fixture.sessionId}.jsonl`), fixture.jsonl());
+      return firstCandidateProbe({ source: { kind: 'qwenRuntimeDir', runtimeDir: root }, listCandidates });
+    },
+  },
 ];
 
 describe('first-party Agent link identities and host owner metadata', () => {
@@ -455,15 +594,15 @@ describe('first-party Agent link identities and host owner metadata', () => {
             env: envScope,
             listCandidates: async (source) => {
               const listed = await externalSession.listCandidates!({
-                source: source as never,
+                source: ExternalSessionsSourceSchema.parse(source),
                 limit: 5,
               });
-              return listed.candidates as never;
+              return listed.candidates;
             },
           });
 
           const linked = await externalSession.resolveLinkIdentity({
-            source: probe.source as never,
+            source: ExternalSessionsSourceSchema.parse(probe.source),
             remoteSessionId: probe.remoteSessionId,
             ...(probe.linkData ? { metadata: { linkData: probe.linkData } } : {}),
           });

@@ -51,6 +51,12 @@ vi.mock('../../../../ui/node_modules/expo-file-system/src/index.ts', async () =>
   const { createExpoFileSystemFileMock } = await import(new URL('../../../../ui/sources/dev/testkit/mocks/expoFileSystem.ts', import.meta.url).href);
   return createExpoFileSystemFileMock().module;
 });
+const uiCapabilityTransport = vi.hoisted(() => ({
+  invoke: vi.fn<typeof import('../../../../ui/sources/sync/ops/capabilities')['machineCapabilitiesInvoke']>(),
+}));
+vi.mock('../../../../ui/sources/sync/ops/capabilities', () => ({
+  machineCapabilitiesInvoke: uiCapabilityTransport.invoke,
+}));
 
 type ActivatePurposeBindingsInput = Parameters<
   ConnectedAccountPurposeBindingOwner['activatePurposeBindings']
@@ -62,6 +68,10 @@ const malformedSelectionModules = [
   await import('./capabilities'), await import('./encryptedRpc.testkit'),
   await import('@/configuration'), await import('@/persistence'),
 ] as const;
+// The real UI inventory graph is shared across native cases. Loading it inside
+// a timed operation can leave its import pending across the next module reset.
+const { probeAgentModelsForActions } = await import('../../../../ui/sources/sync/ops/actions/agentInventoryActionDeps');
+const { parseCapabilitiesInvokeResponse } = await import('../../../../ui/sources/sync/api/capabilities/capabilitiesProtocol');
 let tempDir: string | null = null;
 let releaseRuntime: (() => Promise<void>) | null = null;
 
@@ -72,7 +82,7 @@ afterEach(async () => {
   vi.doUnmock('@/persistence');
   vi.doUnmock('@/settings/accountSettings/bootstrapAccountSettingsContext');
   vi.doUnmock('@/daemon/connectedServices/resolveConnectedServiceAuthForSpawn');
-  vi.doUnmock('../../../../ui/sources/sync/ops/capabilities');
+  uiCapabilityTransport.invoke.mockReset();
   vi.resetModules();
   process.env = { ...originalEnv };
   if (tempDir) {
@@ -496,7 +506,7 @@ describe('capabilities.invoke connected-service preflight', () => {
       ]) } });
       if (!options.ok) throw new Error('Native options unavailable');
       const optionsSpec = getActionSpec('action.options.resolve');
-      if (!optionsSpec) throw new Error('Native options Action unavailable');
+      if (!optionsSpec?.outputSchema) throw new Error('Native options Action unavailable');
       const nativeResult = optionsSpec.outputSchema.parse(options.result);
       if (!nativeResult || typeof nativeResult !== 'object' || !('options' in nativeResult)) throw new Error('Native options unavailable');
       const nativeOptions = nativeResult.options;
@@ -526,13 +536,11 @@ describe('capabilities.invoke connected-service preflight', () => {
       expect(unselected).toMatchObject({ source: 'dynamic', items: expect.not.arrayContaining([
         expect.objectContaining({ id: 'native/selected-account' }),
       ]) });
-      phase = 'UI inventory import';
-      vi.doMock('../../../../ui/sources/sync/ops/capabilities', () => ({
-        machineCapabilitiesInvoke: async (_machineId: string, request: unknown) => ({
-          supported: true, response: await call(RPC_METHODS.CAPABILITIES_INVOKE, request),
-        }),
-      }));
-      const { probeAgentModelsForActions } = await import('../../../../ui/sources/sync/ops/actions/agentInventoryActionDeps');
+      uiCapabilityTransport.invoke.mockImplementation(async (_machineId, request) => {
+        const response = parseCapabilitiesInvokeResponse(await call(RPC_METHODS.CAPABILITIES_INVOKE, request));
+        if (!response) throw new Error('Invalid capability RPC response');
+        return { supported: true, response };
+      });
       phase = 'UI inventory';
       expect(await probeAgentModelsForActions(input, { agentId, backendTargetParam: null })).toMatchObject({
         source: 'dynamic', items: expect.arrayContaining([{ modelId: 'native/selected-account', label: 'selected-account', description: 'native' }]),

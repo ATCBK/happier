@@ -1011,7 +1011,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
           happierInputRequestV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' }, discussionAddressing,
             replyIntent: { mode: 'return' }, permission: state === 'permission-broadened' ? {}
               : { requestedPermissionCeiling: state === 'permission-narrowed' ? 'default' : 'read-only' } },
-        } } }, inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing,
+        } } }, inputAdmissionReceipt: { v: 1 as const, issuer: 'authenticatedMachine' as const, discussionAddressing,
           admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 's1', machineId: 'machine', installationId: 'installation' } } };
       const request = readSessionInputRequest(requestedOriginal.content.v.meta, 'stored');
       if (!request || request.v !== 1) throw new Error('Expected the original protected request fixture');
