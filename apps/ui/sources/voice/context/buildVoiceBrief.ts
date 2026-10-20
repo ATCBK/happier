@@ -103,6 +103,7 @@ export function buildVoiceBrief(input: Readonly<{ inbox: VoiceBriefSource; setti
     for (const item of inbox.automationAttentionItems) {
         if (!item.title?.trim()) continue;
         items.push({ key: item.key, category: 'needs_you', title: item.title, destination: { kind: 'automation', route: item.route }, route: item.route });
+        if (privacy.shareSessionSummary) speechByKey.set(item.key, { title: safeTitle(item.title) });
     }
     const rank = { needs_you: 0, failed: 1, ready: 2 } as const;
     items.sort((a, b) => rank[a.category] - rank[b.category]);

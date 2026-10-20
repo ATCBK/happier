@@ -5,6 +5,13 @@ import type { VoiceSessionSnapshot } from '@/voice/session/types';
 import { readVoiceContinuationProvenance, type VoiceContinuationProvenance } from './voiceTranscriptNoteMeta';
 import { areSessionAddressesEqual } from '@/sync/domains/session/sessionAddress';
 import { createVoiceContinuationObservation } from './voiceContinuationObservation';
+import { randomUUID } from '@/platform/randomUUID';
+
+export type VoiceContinuationPublication = Readonly<{
+    continuation: VoiceContinuationProvenance;
+    localId: string;
+    createdAt: number;
+}>;
 
 /**
  * Whether a connecting attempt continues a conversation last voiced on another device: the newest
@@ -27,14 +34,16 @@ export function readVoiceContinuationArrival(messages: readonly Message[], conve
 export function createVoiceContinuationProjection() {
     let attempt: Readonly<{ adapterId: string; controlSessionId: string; conversation: SessionAddress; deviceId: string;
         observation: ReturnType<typeof createVoiceContinuationObservation> }> | null = null;
-    let published = false;
+    let publication: VoiceContinuationPublication | null = null;
+    let settlement: 'pending' | 'failed' | 'acknowledged' = 'failed';
     return {
-        update(input: Readonly<{ snapshot: VoiceSessionSnapshot; binding: VoiceSessionBinding | null; deviceId: string | null; deviceDisplayName?: string | null; sessionSeq: number | null }>): VoiceContinuationProvenance | null {
+        update(input: Readonly<{ snapshot: VoiceSessionSnapshot; binding: VoiceSessionBinding | null; deviceId: string | null; deviceDisplayName?: string | null; sessionSeq: number | null }>): VoiceContinuationPublication | null {
             const { snapshot, binding, deviceId } = input;
             if (!snapshot.canStop || !snapshot.sessionId || !binding || !deviceId?.trim()
                 || binding.adapterId !== snapshot.adapterId || binding.controlSessionId !== snapshot.sessionId) {
                 attempt = null;
-                published = false;
+                publication = null;
+                settlement = 'failed';
                 return null;
             }
             if (!attempt || attempt.adapterId !== snapshot.adapterId || attempt.controlSessionId !== snapshot.sessionId
@@ -42,12 +51,20 @@ export function createVoiceContinuationProjection() {
                 const conversation = binding.conversationSessionAddress;
                 attempt = { adapterId: binding.adapterId, controlSessionId: binding.controlSessionId, conversation, deviceId,
                     observation: createVoiceContinuationObservation({ conversation, deviceId, afterSeq: input.sessionSeq }) };
-                published = false;
+                publication = null;
+                settlement = 'failed';
             }
-            if (snapshot.status !== 'connected' || published) return null;
-            published = true;
-            return { v: 1, deviceId, conversation: attempt.conversation,
-                ...(input.deviceDisplayName !== undefined ? { deviceDisplayName: input.deviceDisplayName } : {}) };
+            if (snapshot.status !== 'connected' || settlement !== 'failed') return null;
+            publication ??= { localId: `voice-note:${randomUUID()}`, createdAt: Date.now(),
+                continuation: { v: 1, deviceId, conversation: attempt.conversation,
+                    ...(input.deviceDisplayName !== undefined ? { deviceDisplayName: input.deviceDisplayName } : {}) } };
+            settlement = 'pending';
+            return publication;
+        },
+        settle(note: VoiceContinuationPublication, acknowledged: boolean): void {
+            // A retired attempt's late completion cannot settle its replacement.
+            if (note !== publication || settlement !== 'pending') return;
+            settlement = acknowledged ? 'acknowledged' : 'failed';
         },
         observe(address: SessionAddress, messages: readonly Message[]): Readonly<{ controlSessionId: string; continuation: VoiceContinuationProvenance }> | null {
             const current = attempt;
