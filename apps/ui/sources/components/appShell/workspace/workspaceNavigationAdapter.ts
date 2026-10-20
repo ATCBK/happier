@@ -7,7 +7,7 @@ import { createWorkspaceDestinationSplit } from './workspaceSplit';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { matchWorkspaceDestinationRoute } from './workspaceRoutes';
-import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { parseSessionPaneUrlState, serializeSessionPaneUrlState, SESSION_PANE_URL_PARAM_KEYS } from '@/components/sessions/panes/url/sessionPaneUrlState';
 
 export type WorkspaceOpenOptions = Readonly<{
     mode?: 'preview' | 'newTab' | 'splitLeft' | 'splitRight' | 'splitUp' | 'splitDown';
@@ -84,6 +84,15 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
         const params: Record<string, string> = { ...retained.params, ...target.params,
             ...(retained.params.serverId ? { serverId: retained.params.serverId } : {}),
         };
+        const incomingPane = parseSessionPaneUrlState(target.params);
+        if (incomingPane?.details) {
+            // An addressed resource replaces its previous anchor/view/comparison,
+            // while unaddressed side and bottom panes stay in the retained view.
+            for (const key of SESSION_PANE_URL_PARAM_KEYS) delete params[key];
+            Object.assign(params, serializeSessionPaneUrlState({
+                ...parseSessionPaneUrlState(retained.params), ...incomingPane,
+            }));
+        }
         // A responsive return to the Session root must not keep projecting the
         // phone child route from the previous view's params.
         if (!target.params.workspacePathname) delete params.workspacePathname;
@@ -202,7 +211,7 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                 // address must qualify a legacy tab before it is projected again.
                 if (workspaceDestinationNavigationIdentity(target, input.getCatalog()) !== null) {
                     if (!sameDestinationRef(retained, target)) input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target });
-                } else if (presentationPreview) {
+                } else if (presentationPreview || (target.kind === 'session' && parseSessionPaneUrlState(target.params)?.details)) {
                     const adopted = adoptSessionTarget(retained, target);
                     if (!sameDestinationRef(retained, adopted)) input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target: adopted });
                 } else if (target.kind === 'session') {

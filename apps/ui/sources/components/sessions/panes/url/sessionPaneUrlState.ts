@@ -54,7 +54,7 @@ export type SessionPaneUrlDetailsTarget =
  * route all read this one list, so a target's extra params (a review comparison) survive reload/back.
  */
 export const SESSION_PANE_URL_PARAM_KEYS = [
-    'right', 'bottom', 'details', 'path', 'sha', 'terminalInstanceId', 'discussionId', 'machineId',
+    'right', 'bottom', 'details', 'path', 'sha', 'terminalInstanceId', 'discussionId', 'machineId', 'boardItemId',
     'comparison', 'comparisonId', 'turnId', 'checkpointReceiptId', 'evidence', 'head', 'base', 'commit', 'parent', 'view', 'explain', 'pullRequest', 'evidenceSessionId',
     'fileView', 'blame', 'fileOpenAs',
     ...FILE_TARGET_ANCHOR_PARAM_KEYS,

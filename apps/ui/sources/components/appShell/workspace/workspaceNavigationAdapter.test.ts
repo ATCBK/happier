@@ -8,7 +8,7 @@ import { projectWorkspaceSharedTabs } from './workspaceSyncedTabs';
 import { applyCloseDetailsTab, applyOpenDetailsTab, createEmptyPaneDetailsState } from '../panes/details/workspace/detailsWorkspaceReducer';
 import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { readScopedWorkspaceLayout, workspaceLayoutScopeKey, writeScopedWorkspaceLayout } from './workspacePersistence';
-import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { parseSessionPaneUrlState, serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -346,6 +346,32 @@ describe('workspace navigation adapter', () => {
         expect(h.active()).toMatchObject({ id: 'A', target: { params: { bottom: 'terminal' } } });
         expect(h.adapter.acceptUrl('/session/A1?serverId=home-a&right=files')).toBe(true);
         expect(h.active().target.params.right).toBe('files');
+    });
+    it('replaces explicitly addressed Session file state without replaying the previous file hints', () => {
+        const h = harness();
+        h.adapter.setParams('A', { bottom: 'terminal', right: 'files', details: 'board', boardItemId: 'item-a' });
+        const fileA = { kind: 'file' as const, path: 'src/a.ts',
+            anchor: { kind: 'range' as const, filePath: 'src/a.ts', startLine: 3, endLine: 8 },
+            anchorSource: 'diff' as const, view: 'changes' as const, blame: true,
+            openAs: 'pinned' as const, changes: { kind: 'branch' as const, head: 'feature', base: 'main' } };
+        const openFile = (details: Parameters<typeof serializeSessionPaneUrlState>[0]['details']) => h.adapter.openHref(
+            `/session/A1?${new URLSearchParams({ serverId: 'home-a', ...serializeSessionPaneUrlState({ details }) })}`,
+            { reuseExisting: true },
+        );
+        expect(openFile(fileA)).toBe(true);
+        expect(h.active().id).toBe('A');
+        expect(h.active().target.params.boardItemId).toBeUndefined();
+        expect(parseSessionPaneUrlState(h.active().target.params)).toEqual({
+            rightTabId: 'files', bottomTabId: 'terminal', details: fileA,
+        });
+        expect(openFile({ kind: 'file', path: 'src/b.ts' })).toBe(true);
+        expect(h.active().id).toBe('A');
+        expect(h.active().target.params).toEqual({ id: 'A1', serverId: 'home-a', right: 'files', bottom: 'terminal', details: 'file', path: 'src/b.ts' });
+        expect(h.adapter.openHref('/session/A1?serverId=home-a', { reuseExisting: true })).toBe(true);
+        expect(parseSessionPaneUrlState(h.active().target.params)).toEqual({
+            rightTabId: 'files', bottomTabId: 'terminal', details: { kind: 'file', path: 'src/b.ts' },
+        });
+        expect(Object.keys(h.state().tabs)).toEqual(['A']);
     });
     it('returns from a pane-scoped Inbox router and Session list to the retained Session', () => {
         const h = harness([], { serverId: 'home-a', accountId: 'account-a' });
