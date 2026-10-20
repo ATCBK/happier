@@ -8,15 +8,20 @@ import { StyleSheet } from 'react-native';
 import { lightTheme } from '@/theme';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { LinearGradient } from 'expo-linear-gradient';
+import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
 import type {
     MarkdownEditorCommand,
     MarkdownEditorController,
     MarkdownSelectionState,
 } from '@/components/ui/markdown/editor/markdownEditorTypes';
 
+const toolbarPlatform = vi.hoisted(() => ({ os: 'web' as 'web' | 'ios' }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    return createReactNativeWebMock({ Platform: {
+        get OS() { return toolbarPlatform.os; },
+        select: <T,>(options: { web?: T; ios?: T; default?: T }) => options[toolbarPlatform.os] ?? options.default,
+    } });
 });
 
 vi.mock('react-native-unistyles', async () => {
@@ -84,6 +89,21 @@ function createFakeController(initial: MarkdownSelectionState = BASE_SELECTION) 
 }
 
 describe('MarkdownEditorToolbar', () => {
+    it.each(['panel', 'inline'] as const)('preserves native %s keyboard placement and formatting actions', async (variant) => {
+        toolbarPlatform.os = 'ios';
+        try {
+            const fake = createFakeController();
+            const screen = await renderScreen(<MarkdownEditorToolbar controller={fake.controller} testID={TEST_ID} variant={variant} />);
+            expect(screen.tree.root.findAllByType(KeyboardStickyFooter)).toHaveLength(variant === 'panel' ? 1 : 0);
+            expect(fake.commands).toEqual([]);
+            screen.pressByTestId(`${TEST_ID}:bold`);
+            expect(fake.commands).toEqual([{ kind: 'toggleBold' }]);
+            await screen.unmount();
+        } finally {
+            toolbarPlatform.os = 'web';
+        }
+    });
+
     it('does not put an opaque scroll fade over its glass plane', async () => {
         const screen = await renderScreen(<HappierMaterialRoleProvider role="content" resolveMaterialColor={({ translucentColor }) => translucentColor ?? 'transparent'}>
             <ScrollEdgeFades color={lightTheme.colors.surface.inset} edges={{ right: true }} />

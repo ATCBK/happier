@@ -1,20 +1,16 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
-import { HorizontalScrollableRow } from '@/components/ui/scroll/HorizontalScrollableRow';
-import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
-import { Text } from '@/components/ui/text/Text';
+import { EditorAccessoryBar, EditorAccessoryChip } from '@/components/ui/code/editor/chrome/EditorAccessoryBar';
 import { hapticsLight } from '@/components/ui/theme/haptics';
 import { t } from '@/text';
-import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import type { IconName } from '@/components/ui/icons/Icon';
 import type {
     MarkdownEditorCommand,
     MarkdownEditorController,
     MarkdownSelectionState,
 } from '@/components/ui/markdown/editor/markdownEditorTypes';
-import { motionTokens } from '@/components/ui/motion/motionTokens';
 
 /**
  * Phase-1 formatting toolbar for the rich markdown editor (Lane C / C2).
@@ -57,8 +53,6 @@ const DEFAULT_SELECTION_STATE: MarkdownSelectionState = {
     canUndo: false,
     canRedo: false,
 };
-
-const ICON_SIZE = 16;
 
 /**
  * Static descriptor for each always-present formatting chip. `isActive` reads
@@ -176,10 +170,7 @@ function buildChipSpecs(): ToolbarChipSpec[] {
 
 function MarkdownEditorToolbarInner(props: MarkdownEditorToolbarProps): React.ReactElement {
     const { controller, testID, variant = 'panel' } = props;
-    const { theme } = useUnistyles();
-    const paintColor = useHappierMaterialColorResolver();
     const styles = stylesheet;
-    const isInline = variant === 'inline';
 
     const [selectionState, setSelectionState] = React.useState<MarkdownSelectionState>(DEFAULT_SELECTION_STATE);
 
@@ -211,189 +202,47 @@ function MarkdownEditorToolbarInner(props: MarkdownEditorToolbarProps): React.Re
         runCommand({ kind: 'unlink' });
     }, [runCommand]);
 
-    const activeForeground = theme.colors.state.active.foreground;
-    const inactiveForeground = theme.colors.text.secondary;
-
     const renderChip = (spec: ToolbarChipSpec) => {
         const active = spec.isActive(selectionState);
         return (
-            <Pressable
+            <EditorAccessoryChip
                 key={spec.id}
                 testID={testID ? `${testID}:${spec.id}` : undefined}
-                accessibilityRole="button"
-                accessibilityLabel={spec.label}
-                accessibilityState={{ selected: active }}
-                aria-pressed={active}
-                hitSlop={6}
+                icon={spec.icon}
+                label={spec.label}
+                selected={active}
+                badge={spec.badge}
                 onPress={() => runCommand(spec.command)}
-                style={({ pressed }) => [
-                    styles.chip,
-                    {
-                        backgroundColor: paintColor(active
-                            ? theme.colors.state.active.background
-                            : theme.colors.surface.base),
-                        borderColor: active
-                            ? theme.colors.state.active.border
-                            : theme.colors.border.default,
-                        opacity: pressed ? motionTokens.press.opacity : 1,
-                    },
-                ]}
-            >
-                <Icon
-                    name={spec.icon}
-                    size={ICON_SIZE}
-                    color={active ? activeForeground : inactiveForeground}
-                />
-                {spec.badge ? (
-                    <Text
-                        style={[
-                            styles.badge,
-                            { color: active ? activeForeground : inactiveForeground },
-                        ]}
-                        allowFontScaling={false}
-                    >
-                        {spec.badge}
-                    </Text>
-                ) : null}
-            </Pressable>
+            />
         );
     };
 
-    // Inline variant sits on the host's own background (the field header), so we
-    // fade against `surface.base` instead of the panel's `surface.inset`.
-    const fadeColor = isInline ? theme.colors.surface.base : theme.colors.surface.inset;
-    const scrollContentStyle = isInline ? styles.scrollContentInline : styles.scrollContent;
-
-    const content = (
-        <HorizontalScrollableRow
-            testID={testID ? `${testID}:scroll` : undefined}
-            contentTestID={testID ? `${testID}:scroll-content` : undefined}
-            fadeColor={fadeColor}
-            indicatorColor={theme.colors.text.secondary}
-            contentStyle={scrollContentStyle}
-        >
+    return (
+        <EditorAccessoryBar testID={testID} variant={variant}>
             {chipSpecs.map(renderChip)}
 
             {selectionState.isLinkActive ? (
                 <View style={styles.linkGroup} testID={testID ? `${testID}:link-actions` : undefined}>
                     <View style={styles.divider} />
-                    <Pressable
+                    <EditorAccessoryChip
                         testID={testID ? `${testID}:openLink` : undefined}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('markdownEditorToolbar.openLink')}
-                        hitSlop={6}
+                        icon="arrow-square-out"
+                        label={t('markdownEditorToolbar.openLink')}
                         onPress={handleOpenLink}
-                        style={({ pressed }) => [
-                            styles.chip,
-                            {
-                                backgroundColor: paintColor(theme.colors.surface.base),
-                                borderColor: theme.colors.border.default,
-                                opacity: pressed ? motionTokens.press.opacity : 1,
-                            },
-                        ]}
-                    >
-                        <Icon name="arrow-square-out" size={ICON_SIZE} color={inactiveForeground} />
-                    </Pressable>
-                    <Pressable
+                    />
+                    <EditorAccessoryChip
                         testID={testID ? `${testID}:unlink` : undefined}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('markdownEditorToolbar.unlink')}
-                        hitSlop={6}
+                        icon="link-break"
+                        label={t('markdownEditorToolbar.unlink')}
                         onPress={handleUnlink}
-                        style={({ pressed }) => [
-                            styles.chip,
-                            {
-                                backgroundColor: paintColor(theme.colors.surface.base),
-                                borderColor: theme.colors.border.default,
-                                opacity: pressed ? motionTokens.press.opacity : 1,
-                            },
-                        ]}
-                    >
-                        <Icon name="link-break" size={ICON_SIZE} color={inactiveForeground} />
-                    </Pressable>
+                    />
                 </View>
             ) : null}
-        </HorizontalScrollableRow>
+        </EditorAccessoryBar>
     );
-
-    // Inline variant: render JUST the scrolling chip row, no bar chrome, no
-    // keyboard-sticky wrap. The host provides the surrounding header layout.
-    if (isInline) {
-        return (
-            <View testID={testID} accessibilityRole="toolbar" style={styles.inlineRoot}>
-                {content}
-            </View>
-        );
-    }
-
-    const bar = (
-        <View
-            testID={testID}
-            accessibilityRole="toolbar"
-            style={[styles.bar, { backgroundColor: paintColor(theme.colors.surface.inset, 'transparent') }]}
-        >
-            {content}
-        </View>
-    );
-
-    // On native the toolbar sits above the software keyboard via
-    // `KeyboardStickyFooter`. On web that wrapper is a plain passthrough View, so
-    // the bar simply renders inline.
-    if (Platform.OS === 'web') {
-        return bar;
-    }
-    return <KeyboardStickyFooter>{bar}</KeyboardStickyFooter>;
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-    bar: {
-        backgroundColor: theme.colors.surface.inset,
-        borderTopWidth: Platform.select({ ios: 0.33, default: 1 }),
-        borderTopColor: theme.colors.border.default,
-    },
-    scrollContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-    },
-    // Inline variant content row: same chip layout, no outer padding (the host
-    // header provides spacing) and slightly tighter vertical alignment so the
-    // chips read level with the adjacent dropdown trigger.
-    scrollContentInline: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 0,
-        paddingVertical: 0,
-    },
-    // Wrapper around the inline scroll row so the parent's flex layout can size
-    // it (the host owns spacing/background; we only need `position: relative`
-    // for the fade overlays inside `HorizontalScrollableRow`).
-    inlineRoot: {
-        flex: 1,
-        minWidth: 0,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    chip: {
-        width: 34,
-        height: 34,
-        borderRadius: 9,
-        borderWidth: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        position: 'relative',
-    },
-    badge: {
-        position: 'absolute',
-        right: 4,
-        bottom: 3,
-        fontSize: 9,
-        fontWeight: '700',
-        lineHeight: 10,
-    },
     linkGroup: {
         flexDirection: 'row',
         alignItems: 'center',
