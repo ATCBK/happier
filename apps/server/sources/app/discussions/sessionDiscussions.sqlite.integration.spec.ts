@@ -451,6 +451,7 @@ describe('First-class Discussions service (SQLite)', () => {
         expect(original).toMatchObject({ seq: 3, content: finalContent, acceptedTurnId });
         const final = await db.sessionMessage.create({ data: { sessionId: session.id, seq: 5, messageRole: 'agent',
             content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Two plus two is four.' } } } } });
+        await db.session.update({ where: { id: session.id }, data: { seq: 6 } });
         const turn = await db.sessionTurn.create({ data: { sessionId: session.id, turnId: acceptedTurnId, status: 'completed', startedAt: 1n, updatedAt: 2n,
             transcriptAnchorsJson: JSON.stringify({ startUserMessageSeq: 3, userMessageSeqs: [3], startSeqInclusive: 3,
                 endSeqInclusive: 6, finalAssistantMessageSeq: 5 }) } });

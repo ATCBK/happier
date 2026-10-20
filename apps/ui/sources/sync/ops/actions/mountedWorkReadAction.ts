@@ -27,6 +27,8 @@ function publishMountedReadAddresses(): void {
         && address.sessionId === owner.sessionId && areServerAccountScopesEqual(address.scope, owner.scope))) {
         next.push({ scope: owner.scope, actionId: 'session.work.get', sessionId: owner.sessionId });
     }
+    for (const owner of inboxOwners) if (!next.some(address => address.actionId === 'inbox.get'
+        && areServerAccountScopesEqual(address.scope, owner.scope))) next.push({ scope: owner.scope, actionId: 'inbox.get' });
     if (next.length === mountedReadAddresses.length && next.every((address, index) => {
         const previous = mountedReadAddresses[index];
         return previous?.actionId === address.actionId && previous.sessionId === address.sessionId

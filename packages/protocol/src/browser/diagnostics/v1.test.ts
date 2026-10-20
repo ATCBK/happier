@@ -568,13 +568,14 @@ describe('browser diagnostics protocol contracts', () => {
     expect(parsed.result?.objectId).toBe('obj_1');
   });
 
-  it('rejects primitive string eval results above the inline cap', async () => {
+  it('preserves complete primitive string eval results without a subordinate inline cap', async () => {
     const mod = await import('./v1.js').catch(() => null);
 
     expect(mod).not.toBeNull();
     if (!mod) return;
 
-    const result = mod.BrowserDiagnosticsEvalResultV1Schema.safeParse({
+    const value = 'x'.repeat(70_000);
+    const result = mod.BrowserDiagnosticsEvalResultV1Schema.parse({
       v: 1,
       evalRequestId: 'eval_string_1',
       viewId: 'view_1',
@@ -584,11 +585,11 @@ describe('browser diagnostics protocol contracts', () => {
       audited: true,
       result: {
         type: 'string',
-        value: 'x'.repeat(1025),
+        value,
       },
     });
 
-    expect(result.success).toBe(false);
+    expect(result.result?.value).toBe(value);
   });
 
   it('parses redacted injected eval audit events without raw result values', async () => {

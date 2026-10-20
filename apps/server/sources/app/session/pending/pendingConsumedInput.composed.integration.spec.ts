@@ -59,6 +59,9 @@ import { createResourceDataKey } from '../../../../../cli/src/api/encryption/res
 import { writeSessionDataKeyEnvelopeInTx } from '@/app/session/encryption/sessionDataKeyEnvelopePersistence';
 import { inTx } from '@/storage/inTx';
 import { hasCanonicalFollowProviderInputAcceptanceInTx } from '@/app/session/follow/providerInputAcceptance';
+import { sendFileReviewNoteToSession } from '../../../../../cli/src/session/services/sendFileReviewNote';
+import { runWithServerHttpBaseUrl } from '../../../../../cli/src/api/client/serverHttpBaseUrl';
+import { prepareSessionInputForProviderDispatch } from '../../../../../cli/src/agent/runtime/turns/prepareSessionInputForProviderDispatch';
 
 describe('consumed ACP input → host turn → Pending', () => {
     let harness: LightSqliteHarness;
@@ -88,8 +91,8 @@ describe('consumed ACP input → host turn → Pending', () => {
         vi.unstubAllEnvs();
     });
 
-    it.each(['retained', 'reconnect', 'successor', 'ordinary-head', 'person-hold', 'omitted'] as const)(
-        'carries a retained quiet Follow original with the next natural Pending input (%s)', async scenario => {
+    it.each(['retained', 'reconnect', 'successor', 'ordinary-head', 'person-hold', 'omitted', 'file-review'] as const)(
+        'carries a retained quiet original with the next natural Pending input (%s)', async scenario => {
         harness.resetEnv({ HAPPIER_FEATURE_SESSIONS__ENABLED: 'true', HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED: 'true' });
         await getOrCreateServerIdentityId();
         const authentication = createPresentUserSessionAccessAuthentication();
@@ -157,7 +160,16 @@ describe('consumed ACP input → host turn → Pending', () => {
             original: { sourceSessionId: source.id, sourceMessage } });
         const host = buildTrustedHostSessionInputAdmissionV1('agent');
         const request = SessionInputRequestV1Schema.parse({ ...host.request, followDeliveryV1: delivery });
-        const quietId = deriveSessionFollowInputLocalIdV1({ destinationSessionId: session.id, original: delivery.original });
+        let quietId: string;
+        if (scenario === 'file-review') {
+            await runWithServerHttpBaseUrl(origin, () => sendFileReviewNoteToSession({ credentials, sessionId: session.id,
+                note: { action: 'discard', paths: ['src/app.ts'], changeCount: 2 } }));
+            const rows = await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } });
+            expect(rows).toHaveLength(1);
+            quietId = rows[0]!.localId;
+            expect(rows[0]!.inputAdmissionReceipt).toMatchObject({ nextTurnNote: 'file_review_note.v1' });
+        } else {
+        quietId = deriveSessionFollowInputLocalIdV1({ destinationSessionId: session.id, original: delivery.original });
         expect(await enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: machine.id,
             targetMachineId: machine.id, sessionId: session.id, localId: quietId,
             requestedAction: { v: 1, kind: 'enqueue' }, followDeliveryV1: delivery,
@@ -166,6 +178,7 @@ describe('consumed ACP input → host turn → Pending', () => {
                 role: 'user', content: { type: 'text', text: '' },
                 meta: withSessionInputRequestV1({ [SESSION_MESSAGE_PROVENANCE_META_KEY]: host.provenance }, request),
             })) } })).toMatchObject({ status: 'accepted', localId: quietId });
+        }
         const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
             batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,
             withContext: appendNextTurnContextToQueuedPrompt,
@@ -239,10 +252,12 @@ describe('consumed ACP input → host turn → Pending', () => {
             .toMatchObject({ type: 'materialized', localId: humanId });
         const batch = await queue.waitForMessagesAndGetAsString();
         expect(batch?.message).toMatchObject({ localId: humanId, text: 'Continue the work',
-            followDeliveries: [{ localInputId: quietId, delivery }] });
+            ...(scenario === 'file-review' ? { fileReviewNoteContext: [{ localId: quietId }] }
+                : { followDeliveries: [{ localInputId: quietId, delivery }] }) });
         const hydrateObservation = createSessionFollowSourceHydrator({ session: client, credentials });
         const reconciler = createSessionFollowContextReconciler({ session: client, hydrateObservation,
             maxFollowContextUtf8Bytes: scenario === 'omitted' ? 1 : 8192 });
+        if (scenario !== 'file-review') {
         const observed = await client.observePendingSessionFollow({ inputLocalIds: [quietId] });
         expect(observed, JSON.stringify(observed)).toMatchObject({ ok: true });
         expect(observed.ok && observed.observations.some(row => 'kind' in row
@@ -254,13 +269,18 @@ describe('consumed ACP input → host turn → Pending', () => {
         }
         expect(await hydrateObservation({ observation: admittedObservation, signal: new AbortController().signal }))
             .toMatchObject({ reason: 'source_changed', recentMessages: [{ text: 'Worker original result', seq: 1 }] });
-        const prepared = await reconciler({ signal: new AbortController().signal,
+        }
+        const prepared = scenario === 'file-review' ? null : await reconciler({ signal: new AbortController().signal,
             followDeliveries: batch!.message.followDeliveries });
-        const representedIds = prepared?.representedFollowLocalInputIds ?? [];
+        const representedIds = scenario === 'file-review' ? [quietId] : prepared?.representedFollowLocalInputIds ?? [];
         expect(representedIds).toEqual(scenario === 'omitted' ? [] : [quietId]);
-        const prompt = renderSessionInputContextPromptV1({ sessionFollowUpdates: prepared?.updates,
-            transformedUserText: batch!.message.text });
-        if (scenario !== 'omitted') expect(prompt).toContain('Worker original result');
+        const prompt = scenario === 'file-review'
+            ? (await prepareSessionInputForProviderDispatch({ prompt: batch!.message, transformedUserText: batch!.message.text,
+                providerNativeCommand: false, localId: humanId, signal: new AbortController().signal })).renderPrompt()
+            : renderSessionInputContextPromptV1({ sessionFollowUpdates: prepared?.updates,
+                transformedUserText: batch!.message.text });
+        if (scenario === 'file-review') expect(prompt).toBe('Continue the work\n\nYou discarded 2 changes in "src/app.ts".');
+        else if (scenario !== 'omitted') expect(prompt).toContain('Worker original result');
         let emitNative: ((event: AgentSessionRuntimeEvent) => void) | undefined;
         let sequence = 0;
         const native: AgentSessionRuntime = {
@@ -281,7 +301,9 @@ describe('consumed ACP input → host turn → Pending', () => {
                 cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false } });
         const acceptance = createSessionProviderInputOutcomeBinding({ getTarget: () => client });
         let primarySettlement: Promise<void> | undefined;
-        const representedInputs = batch!.message.followDeliveries!.filter(input => representedIds.includes(input.localInputId));
+        const representedInputs = scenario === 'file-review'
+            ? batch!.message.fileReviewNoteContext!.map(note => ({ localInputId: note.localId!, userMessageSeq: note.userMessageSeq }))
+            : batch!.message.followDeliveries!.filter(input => representedIds.includes(input.localInputId));
         acceptance.registerProviderAcceptedEffect(humanId, settlement => { primarySettlement = settlement; },
             representedInputs.map(input => ({ localId: input.localInputId, userMessageSeq: input.userMessageSeq })));
         for (const { localInputId, userMessageSeq } of representedInputs) {
@@ -289,7 +311,7 @@ describe('consumed ACP input → host turn → Pending', () => {
                 prepared?.acknowledgeAccepted({ kind: 'admitted_input', localInputId, userMessageSeq }, settlement);
             });
             queue.discardMatching(message => message.localId === localInputId
-                && Boolean(message.followDeliveries?.some(item => item.localInputId === localInputId)));
+                && (message.fileReviewNote !== undefined || Boolean(message.followDeliveries?.some(item => item.localInputId === localInputId))));
         }
         const unbind = bindSessionProviderInputOutcome({ runtime, observe: acceptance.observeProviderInputOutcome,
             wakePendingMaterialization: () => client.wakePendingMaterialization() });
@@ -309,7 +331,7 @@ describe('consumed ACP input → host turn → Pending', () => {
             } else {
                 expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId: quietId } })).toBe(0);
                 expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId: quietId } })).toBe(1);
-                await waitForCondition(async () => (await db.sessionFollowEdge.findUniqueOrThrow({
+                if (scenario !== 'file-review') await waitForCondition(async () => (await db.sessionFollowEdge.findUniqueOrThrow({
                     where: { managerSourceSessionId: source.id } })).deliveredTranscriptSeq === 1,
                 { timeoutMs: 5_000, intervalMs: 10, label: 'exact quiet original native-accepted Follow ACK' });
             }

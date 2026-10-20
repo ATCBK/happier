@@ -25,6 +25,7 @@ export type WorkspaceFileOpenOptions = Readonly<Pick<WorkspaceFileOpenInput, 'an
     signal?: AbortSignal;
     origin?: WorkspaceFileOpenOrigin;
 }>;
+export type WorkspaceFileOpen = (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions) => Promise<boolean>;
 
 /** Every file entry point enters the same Action policy and mounted navigation owner. */
 export function useWorkspaceFileOpener() {

@@ -249,7 +249,7 @@ async function installPullRequestProjection(h: Awaited<ReturnType<typeof createH
     return { setLinks: (next: typeof links) => { links = next; }, fail: () => { failure = true; } };
 }
 
-async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly<{ workflowResult?: boolean; malformed?: boolean; locked?: boolean; identity?: boolean; historicalSecret?: Uint8Array; credentialKind?: 'account' | 'account_directory' | 'ephemeral_session_runner'; automations?: readonly AutomationDefinitionListItem[]; cleanupFailure?: boolean; beforeAutomationDeleteResponse?: () => Promise<void>; beforeAutomationListResponse?: () => Promise<void> }> = {}) {
+async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly<{ workflowResult?: boolean; malformed?: boolean; locked?: boolean; identity?: boolean; historicalSecret?: Uint8Array; credentialKind?: 'account' | 'account_directory' | 'ephemeral_session_runner'; automations?: readonly AutomationDefinitionListItem[]; cleanupFailure?: boolean; beforeAutomationDeleteResponse?: () => Promise<void>; beforeAutomationListResponse?: () => Promise<void>; featureReadFailure?: boolean; featureReadStatus?: number }> = {}) {
     const home = await upsertAndActivateServer({ serverUrl: `https://workflow-${mode}-${crypto.randomUUID()}.test`, scope: 'tab' });
     if (options.identity) await setServerProfileIdentityForUrl(home.serverUrl, `srv_workflow-${crypto.randomUUID()}`);
     const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: accountId,
@@ -309,6 +309,8 @@ async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly
         const target = new URL(String(url));
         if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
         if (target.pathname === '/v1/features' || target.pathname === '/v1/features/authenticated') {
+            if (options.featureReadStatus) return json({ error: 'feature_read_refused' }, options.featureReadStatus);
+            if (options.featureReadFailure) return json({ error: 'database_connection_unavailable' }, 503);
             const features = createRootLayoutFeaturesResponse();
             return json({ ...features, capabilities: { ...features.capabilities, accountStoredContentCompatibility: { v: 1, minimumProtocolVersion: 2,
                 currentProtocolVersion: ACCOUNT_STORED_CONTENT_PLUGIN_DATA_PROTOCOL_VERSION,
@@ -460,6 +462,22 @@ function savedAutomationReceipt(automationId: string) {
 }
 
 describe('UI Workflow Action front door', () => {
+    it('preserves a failed Home feature read as temporary storage unavailability', async () => {
+        const h = await createHarness('plain', { featureReadFailure: true });
+        try {
+            await expect(h.execute('workflow.run.get', { runId }, h.context))
+                .resolves.toMatchObject({ ok: false, errorCode: 'storage_unavailable' });
+            expect(h.operations).toEqual([]);
+        } finally { h.account.dispose(); }
+    });
+    it('keeps a permanent Home feature refusal out of storage retry', async () => {
+        const h = await createHarness('plain', { featureReadStatus: 403 });
+        try {
+            await expect(h.execute('workflow.run.get', { runId }, h.context))
+                .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+            expect(h.operations).toEqual([]);
+        } finally { h.account.dispose(); }
+    });
     it.each(['absent', 'unprojected', 'not_found', 'other_session', 'retired', 'native_owner'] as const)(
         'FIX81 resolves Keep going placement through the exact Home: %s', async cached => {
         const previousState = storage.getState();
@@ -650,7 +668,7 @@ describe('UI Workflow Action front door', () => {
             storage.setState({ workflowRunsById: {}, automationRunIdsByAutomationId: {} });
             misboundReceipt = true;
             expect(await h.execute('workflow.trigger.run_now', { automationId }, h.context))
-                .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+                .toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });
             expect(storage.getState().workflowRunsById[ownRunKey]).toBeUndefined();
             expect(storage.getState().automationRunIdsByAutomationId['another-automation']).toBeUndefined();
 

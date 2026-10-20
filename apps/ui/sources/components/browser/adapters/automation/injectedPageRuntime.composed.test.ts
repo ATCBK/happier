@@ -72,7 +72,7 @@ describe('mounted browser Action to installed collector', () => {
             objectId: object.evalResult.result.objectId, objectGroupId: 'group', diagnosticsInteractionEnabled: true,
         } }))();
         const expanded = parseInjectedBrowserDiagnosticsMessage(host.messages.at(-1)!, identity);
-        if (!expanded.ok || !('propertiesResult' in expanded)) throw new Error('Expected expanded properties');
+        if (!expanded.ok || !('propertiesResult' in expanded) || !expanded.propertiesResult) throw new Error('Expected expanded properties');
         expect(expanded.propertiesResult.properties).toHaveLength(101);
         expect(expanded.propertiesResult.properties[100]?.value.value).toHaveLength(longValue.length);
     });

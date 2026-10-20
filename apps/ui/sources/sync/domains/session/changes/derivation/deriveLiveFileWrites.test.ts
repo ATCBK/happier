@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolCallMessage, ToolCall } from '@happier-dev/session-core/messages';
 import { createToolCallMessageFixture } from '@/dev/testkit';
+import { readFileSync } from 'node:fs';
+import type { ToolTraceFixturesV1 } from '../../../../../../../cli/src/agent/tools/trace/extractToolTraceFixtures';
 
 import { deriveLiveFileWrites, deriveSettledFileWrites } from './deriveLiveFileWrites';
 
@@ -13,6 +15,29 @@ function call(id: string, name: string, input: unknown, state: ToolCall['state']
 const options = { workspaceRoot: '/repo', sessionId: 'session-1' };
 
 describe('deriveLiveFileWrites', () => {
+    it('projects the committed Claude, Codex and ACP incoming tool-trace payloads without recreating their input shapes', () => {
+        // This is the CLI trace owner's curated, sanitized corpus, not a current-type reconstruction.
+        const fixtures = JSON.parse(readFileSync(new URL('../../../../../../../cli/src/agent/tools/normalization/__fixtures__/tool-trace-fixtures.v1.json', import.meta.url), 'utf8')) as ToolTraceFixturesV1;
+        const cases = [
+            ['claude/claude/tool-call/Edit', '/Users/USER/Development/happy-local', '.tmp/happy-tool-ux.txt'],
+            ['claude/claude/tool-call/Write', '/Users/USER/Development/happy-local', '.tmp/happy-tool-ux.txt'],
+            ['codex/codex/tool-call/CodexPatch', '/Users/USER/Development/happy-local', '.tmp/happy-tool-ux.txt'],
+            ['codex/codex/tool-call/CodexDiff', '/Users/USER/Development/happy-local', null],
+            ['acp/pi/tool-call/Edit', '/repo', 'output.txt'],
+            ['acp/pi/tool-call/Write', '/repo', 'output.txt'],
+        ] as const;
+        for (const [key, workspaceRoot, expectedPath] of cases) {
+            const trace = fixtures.examples[key]?.[0];
+            if (!trace) throw new Error(`Missing curated tool-call trace: ${key}`);
+            const payload = trace.payload;
+            if (!payload || typeof payload !== 'object' || !('name' in payload) || typeof payload.name !== 'string' || !('input' in payload)) {
+                throw new Error(`Invalid tool-call trace: ${key}`);
+            }
+            const writes = deriveLiveFileWrites([call(key, payload.name, payload.input)], { workspaceRoot, sessionId: trace.sessionId });
+            expect([...writes.keys()], key).toEqual(expectedPath ? [expectedPath] : []);
+        }
+    });
+
     it('projects canonical Edit, Write, MultiEdit, Patch and rename calls while excluding inspection and shell', () => {
         const writes = deriveLiveFileWrites([
             call('edit', 'Edit', { file_path: '/repo/src/edit.ts', old_string: 'old', new_string: 'new' }),
