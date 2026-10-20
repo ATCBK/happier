@@ -222,6 +222,15 @@ owner. Capability validation, activation and retirement use that root, while the
 retained `materializedRoot` continues to identify the native home. A durable
 native home is never used as a substitute capability root or removed on release.
 
+Run rematerialization reads its native conversation identity from the existing
+sealed Run record, including after Stop and Session resume. If isolated home
+preparation detaches a borrowed state link, the catalog verifier selects only
+that conversation before detachment and the existing importer retains it in the
+prepared home. Other conversations stay with their original owner. Agents that
+declare a local resume verifier are checked against the prepared home before
+native launch; Agents without that declaration retain their native continuation
+contract. Credential-failure recovery uses the same preparation path.
+
 A `linked` entry whose native source is missing remains local. The descriptor
 must explicitly declare `createIfMissing: 'directory'` to create a native
 directory. Shared mode imports declared private history before establishing
