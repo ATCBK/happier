@@ -5211,8 +5211,8 @@ export const fr: TranslationStructure = {
             hideBannerAction: 'Masquer la bannière',
         },
         runnerRestartBackgroundWork: {
-            title: 'Des agents en arrière-plan sont en cours',
-            body: ({ count }: { count: number }) => count === 1 ? `1 agent en arrière-plan est en cours. Le redémarrage l’arrêtera.` : `${count} agents en arrière-plan sont en cours. Le redémarrage les arrêtera.`,
+            title: 'Du travail est en cours en arrière-plan',
+            body: ({ count }: { count: number }) => `Du travail est en cours en arrière-plan (${count}). Le redémarrage l’arrêtera.`,
             confirmAction: 'Arrêter et redémarrer',
         },
         staleRunner: {

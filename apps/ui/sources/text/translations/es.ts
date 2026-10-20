@@ -5558,8 +5558,8 @@ export const es: TranslationStructure = {
             hideBannerAction: 'Ocultar aviso',
 	    },
 	    runnerRestartBackgroundWork: {
-	        title: 'Hay agentes en segundo plano en ejecución',
-	        body: ({ count }: { count: number }) => count === 1 ? `Hay 1 agente en segundo plano en ejecución. Reiniciar lo detendrá.` : `Hay ${count} agentes en segundo plano en ejecución. Reiniciar los detendrá.`,
+	        title: 'Hay trabajo en segundo plano en ejecución',
+	        body: ({ count }: { count: number }) => `Hay trabajo en segundo plano en ejecución (${count}). Reiniciar lo detendrá.`,
 	        confirmAction: 'Detener y reiniciar',
 	    },
 	    staleRunner: {

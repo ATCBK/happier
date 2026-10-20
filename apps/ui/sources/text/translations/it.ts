@@ -5905,8 +5905,8 @@ export const it: TranslationStructure = {
             hideBannerAction: 'Nascondi banner',
 	    },
 	    runnerRestartBackgroundWork: {
-	        title: 'Agenti in background in esecuzione',
-	        body: ({ count }: { count: number }) => count === 1 ? `1 agente in background in esecuzione. Il riavvio lo interromperà.` : `${count} agenti in background in esecuzione. Il riavvio li interromperà.`,
+	        title: 'Lavoro in background in corso',
+	        body: ({ count }: { count: number }) => `È in corso del lavoro in background (${count}). Il riavvio lo interromperà.`,
 	        confirmAction: 'Interrompi e riavvia',
 	    },
 	    staleRunner: {

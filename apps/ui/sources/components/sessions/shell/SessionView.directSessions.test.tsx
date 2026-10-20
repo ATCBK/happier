@@ -1724,6 +1724,27 @@ describe('SessionView (direct sessions)', () => {
     });
   });
 
+  it.each(['stale-runner', 'MCP configuration'])('still asks before a %s restart when foreground and background work coexist', async (entryPoint) => {
+    if (entryPoint === 'stale-runner') installStaleSessionRunnerStatus();
+    else installMcpSelectionRestartRequired();
+    installBackgroundActivity(2);
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      latestTurnStatus: 'in_progress',
+      latestTurnStatusObservedAt: Date.now(),
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId(entryPoint === 'stale-runner'
+      ? 'session-staleRunner-version-restart'
+      : 'session.mcpSelectionRestartRequired.restart'));
+    await settleDirectSessionView();
+
+    expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
+    expect(restartStaleSessionRunnerSpy).not.toHaveBeenCalled();
+    expect(restartSessionRunnerForConfigurationSpy).not.toHaveBeenCalled();
+  });
+
   it('opens one background-agent confirmation for repeated restart presses', async () => {
     installStaleSessionRunnerStatus();
     installBackgroundActivity(1);

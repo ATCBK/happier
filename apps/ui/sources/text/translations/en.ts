@@ -5245,8 +5245,8 @@ export const en = {
             hideBannerAction: 'Hide banner',
         },
         runnerRestartBackgroundWork: {
-            title: 'Background agents are running',
-            body: ({ count }: { count: number }) => `${count} background ${count === 1 ? 'agent is' : 'agents are'} running. Restarting will stop ${count === 1 ? 'it' : 'them'}.`,
+            title: 'Background work is running',
+            body: ({ count }: { count: number }) => `${count} background ${count === 1 ? 'activity is' : 'activities are'} running. Restarting will stop ${count === 1 ? 'it' : 'them'}.`,
             confirmAction: 'Stop and restart',
         },
         staleRunner: {

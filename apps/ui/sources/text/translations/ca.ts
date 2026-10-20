@@ -5227,8 +5227,8 @@ deps: {
             hideBannerAction: 'Amaga el bàner',
 	        },
 	        runnerRestartBackgroundWork: {
-	            title: 'Hi ha agents en segon pla en execució',
-	            body: ({ count }: { count: number }) => count === 1 ? `Hi ha 1 agent en segon pla en execució. Reiniciar l'aturarà.` : `Hi ha ${count} agents en segon pla en execució. Reiniciar els aturarà.`,
+	            title: 'Hi ha feina en segon pla en execució',
+	            body: ({ count }: { count: number }) => `Hi ha feina en segon pla en execució (${count}). Reiniciar l’aturarà.`,
 	            confirmAction: 'Atura i reinicia',
 	        },
 	        staleRunner: {

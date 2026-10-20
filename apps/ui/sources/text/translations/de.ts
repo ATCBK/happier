@@ -5224,8 +5224,8 @@ export const de: TranslationStructure = {
             hideBannerAction: 'Banner ausblenden',
         },
         runnerRestartBackgroundWork: {
-            title: 'Hintergrund-Agents laufen',
-            body: ({ count }: { count: number }) => count === 1 ? `1 Hintergrund-Agent läuft. Ein Neustart beendet ihn.` : `${count} Hintergrund-Agents laufen. Ein Neustart beendet sie.`,
+            title: 'Im Hintergrund läuft Arbeit',
+            body: ({ count }: { count: number }) => `Im Hintergrund läuft Arbeit (${count}). Ein Neustart beendet sie.`,
             confirmAction: 'Beenden und neu starten',
         },
         staleRunner: {

@@ -5579,8 +5579,8 @@ export const pl: TranslationStructure = {
             hideBannerAction: 'Ukryj baner',
 	    },
 	    runnerRestartBackgroundWork: {
-	        title: 'Agenci w tle są uruchomieni',
-	        body: ({ count }: { count: number }) => `Uruchomieni agenci w tle: ${count}. Ponowne uruchomienie ich zatrzyma.`,
+	        title: 'Praca w tle jest w toku',
+	        body: ({ count }: { count: number }) => `Praca w tle jest w toku (${count}). Ponowne uruchomienie ją zatrzyma.`,
 	        confirmAction: 'Zatrzymaj i uruchom ponownie',
 	    },
 	    staleRunner: {

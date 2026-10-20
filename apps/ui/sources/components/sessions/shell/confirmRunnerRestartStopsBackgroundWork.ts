@@ -17,13 +17,14 @@ export async function confirmRunnerRestartStopsBackgroundWork(sessionId: string)
     // SessionView renders only stored sessions, so a missing record has no runtime to protect.
     if (!session) return true;
     const runtime = deriveSessionRuntimePresentationStateForSession(session, Date.now());
-    if (!runtime.backgroundActive) return true;
+    // Background presentation excludes foreground work; interruption protection must not.
+    if (!runtime.freshProviderRuntimeActivity) return true;
     if (confirmationOpen) return false;
     confirmationOpen = true;
     try {
         return await Modal.confirm(
             t('session.runnerRestartBackgroundWork.title'),
-            t('session.runnerRestartBackgroundWork.body', { count: runtime.backgroundActiveCount }),
+            t('session.runnerRestartBackgroundWork.body', { count: session.runtimeActivityActiveCount ?? 0 }),
             {
                 cancelText: t('common.cancel'),
                 confirmText: t('session.runnerRestartBackgroundWork.confirmAction'),

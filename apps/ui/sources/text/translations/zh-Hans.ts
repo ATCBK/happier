@@ -5377,8 +5377,8 @@ export const zhHans: TranslationStructure = {
             hideBannerAction: '隐藏横幅',
 	    },
 	    runnerRestartBackgroundWork: {
-	        title: '后台代理正在运行',
-	        body: ({ count }: { count: number }) => `${count} 个后台代理正在运行。重启将停止它们。`,
+	        title: '后台任务正在运行',
+	        body: ({ count }: { count: number }) => `${count} 个后台任务正在运行。重启将停止它们。`,
 	        confirmAction: '停止并重启',
 	    },
 	    staleRunner: {

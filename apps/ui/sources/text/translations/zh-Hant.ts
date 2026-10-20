@@ -4871,8 +4871,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 hideBannerAction: '隱藏橫幅',
             },
             runnerRestartBackgroundWork: {
-                title: '背景代理正在執行',
-                body: ({ count }: { count: number }) => `${count} 個背景代理正在執行。重新啟動將停止它們。`,
+                title: '背景工作正在執行',
+                body: ({ count }: { count: number }) => `${count} 個背景工作正在執行。重新啟動將停止這些工作。`,
                 confirmAction: '停止並重新啟動',
             },
             staleRunner: {
