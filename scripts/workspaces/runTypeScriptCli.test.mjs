@@ -175,6 +175,9 @@ esac
         HAPPIER_HSTACK_EXECUTION: '1', HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
         HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
         HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
+        // These fixtures exercise Microsoft's process boundary; tsrs selection
+        // and its real incremental recovery are covered by the selector suite.
+        HAPPIER_TYPESCRIPT_COMPILER: 'microsoft',
         ...options.env, PATH: `${join(root, 'bin')}:${options.env?.PATH ?? process.env.PATH}`,
         NODE_OPTIONS: `--require=${JSON.stringify(preload)}`, COMPILER_PID_FILE: pidFile };
       if (route || windows) {

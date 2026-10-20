@@ -455,11 +455,7 @@ export function readWorkspacePackageInputFingerprint({
     excludeGeneratedPluginArtifacts,
   })
     .map((path) => join(packageDir, path));
-  const buildScript = String(packageJson.scripts?.build ?? '');
-  const referencedBuildInputs = [...buildScript.matchAll(/(?:^|\s)(\.{1,2}\/[^\s;&|]+\.(?:[cm]?[jt]sx?|json))(?=$|\s|[;&|])/g)]
-    .map((match) => resolve(packageDir, match[1]))
-    .filter(existsSync);
-  const invocation = resolveTypeScriptCliInvocationImpl({ args: [], env });
+  const invocation = resolveTypeScriptCliInvocationImpl({ args: [], env, invocationKind: 'build' });
   const compilerPath = invocation.compilerPath ?? invocation.argsPrefix[0];
   const compilerPackageJson = resolve(dirname(compilerPath), '..', 'package.json');
   // The canonical selector's @typescript installation owns the actual native
@@ -482,7 +478,6 @@ export function readWorkspacePackageInputFingerprint({
   };
   const paths = [...new Set([
     ...inputPaths,
-    ...referencedBuildInputs,
     compilerPath,
     compilerPackageJson,
     ...buildOwnerPaths,

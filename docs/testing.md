@@ -701,10 +701,10 @@ preparation and the remaining bodies is still required.
 
 The repository deliberately separates the compiler from the programmatic TypeScript API:
 
-- `@typescript/native` provides the TypeScript 7 compiler used by first-party typecheck and package-build lanes.
+- `@typescript/native` provides Microsoft TypeScript 7.0.2, the final diagnostic authority and compiler for declaration preparation, builds, CI/release, editors, and non-Linux hosts. In 0.3 development, pinned `tsrs` handles only check-only (`noEmit`) invocations on Linux x64/arm64; build graphs and watch/tooling stay on Microsoft. Set `HAPPIER_TYPESCRIPT_COMPILER=microsoft` to compare or switch back (`auto` restores selection). Missing binaries and compiler failures propagate without fallback. Tsrs incremental cache paths append `.tsrs`, preserving Microsoft's reference/declaration caches.
 - `typescript` remains the TypeScript 5.9 API consumed by AST tooling and ecosystem integrations. Do not replace it with TypeScript 7 until the native release provides a stable compatible API and every consumer supports it.
 - `scripts/workspaces/resolveTypeScriptCliInvocation.mjs` is the only compiler-selection owner. First-party scripts must use `runTypeScriptCli.mjs`, `buildTypeScriptPackageDist.mjs`, or that resolver directly; do not invoke a bare `tsc` shim or resolve `typescript/bin/tsc`.
-- `yarn tsc ...` is defined at the repository root and in every TypeScript-owning workspace; it delegates to the shared native runner and therefore uses TypeScript 7.
+- `yarn tsc ...` is defined at the repository root and in every TypeScript-owning workspace; it delegates to the same selector and runner.
 
 CLI typechecks run `tsconfig.foundation.json`, `tsconfig.services.json`,
 `tsconfig.core.json`, `tsconfig.source.json` and `tsconfig.test.json` sequentially

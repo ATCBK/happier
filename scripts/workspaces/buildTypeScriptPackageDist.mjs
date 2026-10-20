@@ -708,7 +708,7 @@ export async function buildTypeScriptPackageDist({
   const lockPath = resolveWorkspacePackageBuildLockPath(resolvedPackageDir, packageJson);
   const admissionClass = resolveRemoteCommandPolicy(
     [process.execPath, fileURLToPath(import.meta.url), ...effectiveCompilerArgs],
-    { cwd: relative(repoRoot, resolvedPackageDir).replaceAll('\\', '/') || '.' },
+    { cwd: relative(repoRoot, resolvedPackageDir).replaceAll('\\', '/') || '.', env: commandEnv },
   ).heavyClass;
   const privateWorker = process.argv[2] === DIST_BUILD_WORKER_FLAG
     && pathToFileURL(resolve(process.argv[1] ?? '')).href === import.meta.url;
@@ -762,6 +762,7 @@ export async function buildTypeScriptPackageDist({
       );
       const invocation = resolveTypeScriptCliInvocationImpl({
         repoRoot,
+        invocationKind: 'build',
         workspaceDir: resolvedPackageDir,
         processExecPath: process.execPath,
         env: stagedBuildEnv,

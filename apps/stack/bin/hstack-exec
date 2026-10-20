@@ -2651,6 +2651,11 @@ mark_public_typecheck_dispatch
 if [ "${HAPPIER_TYPECHECK_DISPATCHED-}" = 1 ]; then
   remote_command_environment=' export HAPPIER_TYPECHECK_DISPATCHED=1;'
 fi
+# Transport the override; compiler selection remains owned by the shared
+# resolver on the executing host.
+if [ "${HAPPIER_TYPESCRIPT_COMPILER+x}" = x ]; then
+  remote_command_environment="$remote_command_environment export HAPPIER_TYPESCRIPT_COMPILER=$(quote_remote "$HAPPIER_TYPESCRIPT_COMPILER");"
+fi
 if [ "$resource_governor_priority" = background ]; then
   case "$nested_worker_tool" in
     vitest)

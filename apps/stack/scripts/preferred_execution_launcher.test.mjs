@@ -4828,7 +4828,7 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
   });
   const explicitTypeScriptEnvironment = spawnSync('/bin/sh', [launcher, '--', 'node', 'scripts/workspaces/runTypeScriptCli.mjs', '--noEmit'], {
     cwd: repoRoot,
-    env: { ...env, GOMAXPROCS: '7' },
+    env: { ...env, GOMAXPROCS: '7', HAPPIER_TYPESCRIPT_COMPILER: 'microsoft' },
     encoding: 'utf8',
   });
   if (platform === 'darwin') {
@@ -4897,6 +4897,7 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
   assert.doesNotMatch(explicitRemoteVitestEnvironment.stdout, /--maxWorkers=1|VITEST_MAX_FORKS=1/);
   assert.match(explicitTypeScriptEnvironment.stdout, /GOMAXPROCS=.*7/s);
   assert.doesNotMatch(explicitTypeScriptEnvironment.stdout, /GOMAXPROCS=1/);
+  assert.match(explicitTypeScriptEnvironment.stdout, /export HAPPIER_TYPESCRIPT_COMPILER=.*microsoft/s);
   if (platform === 'darwin') {
     for (const result of [vitest, scriptedVitest, typecheck, search]) {
       assert.doesNotMatch(result.stdout, /--heavyweight-admission|systemd-run|\/proc\//);

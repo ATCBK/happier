@@ -16,6 +16,7 @@ import { runCaptureResult } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
 import { spawnTestProcess } from '../../apps/stack/scripts/testkit/core/spawn_test_process.mjs';
+import { withPatchedProcessEnv } from '../../apps/stack/scripts/testkit/core/env_scope.mjs';
 
 async function createNativeDistBuildFixture(t) {
   const packageDir = await createPackageFixture(t, 'native-dist-admission');
@@ -421,19 +422,18 @@ test('buildTypeScriptPackageDist preserves original Node type roots in isolated 
 
 test('buildTypeScriptPackageDist defaults to one checker but respects an explicitly sized compiler', async (t) => {
   const packageDir = await createPackageFixture(t, 'build-ts-package-checker-budget');
+  withPatchedProcessEnv(t, { HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev' });
   for (const explicit of [false, true]) {
     await buildTypeScriptPackageDist({
       packageDir,
       args: ['-p', 'tsconfig.json', '--noCheck', ...(explicit ? ['--singleThreaded', 'false'] : [])],
-      env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
+      env: { ...buildNativeAdmissionFixtureEnv(), CI: '', HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
       stdio: 'ignore',
-      resolveTypeScriptCliInvocationImpl: ({ admissionClass }) => {
-        assert.equal(admissionClass, 'compilation', 'strict compiler overrides must govern resource admission');
-        return { command: 'tsc', argsPrefix: [] };
-      },
       // The process boundary observes the resource policy passed to the real
       // compiler; output admission, caching and promotion remain real.
       runCommandImpl: (_command, args) => {
+        if (process.platform === 'linux') assert.ok(args.includes('--class=compilation'),
+          'explicit strict compiler mode must govern admission even in a source-dev process');
         const checkerOption = args.indexOf('--singleThreaded');
         assert.notEqual(checkerOption, -1, 'package compiles must not implicitly use every checker');
         if (explicit) assert.equal(args[checkerOption + 1], 'false');

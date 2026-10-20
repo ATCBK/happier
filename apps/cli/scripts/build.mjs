@@ -343,6 +343,7 @@ async function buildCliDistUnlocked(options = {}) {
       } else {
         const typeScriptInvocation = (options.resolveTypeScriptCliInvocationImpl ?? resolveTypeScriptCliInvocation)({
           processExecPath: process.execPath,
+          invocationKind: 'build',
           env,
           args: options.effectiveCompilerArgs,
           workspaceDir: packageRoot,

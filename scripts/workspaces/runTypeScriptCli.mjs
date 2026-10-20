@@ -68,7 +68,7 @@ function compilerProjects(args) {
 async function runCompiler(invocation, project, isCancelled) {
   const options = { ownedProcessGroup: true, cwd: process.cwd(), stdio: 'inherit', env: process.env };
   const diagnosticReportDir = process.env.HAPPIER_TYPECHECK_REPORT_DIR;
-  const compilerArgs = [...invocation.argsPrefix, ...project.args, ...(diagnosticReportDir ? ['--pretty', 'false'] : [])];
+  const compilerArgs = [...invocation.argsPrefix, ...project.args, ...(invocation.argsSuffix ?? []), ...(diagnosticReportDir ? ['--pretty', 'false'] : [])];
   const execute = async (command, args) => {
     if (!diagnosticReportDir) return await runCommand(command, args, options);
     const child = spawnForegroundCommand(command, args, { ...options, stdio: ['inherit', 'pipe', 'pipe'] });
@@ -85,6 +85,7 @@ async function runCompiler(invocation, project, isCancelled) {
   const publish = async result => {
     if (diagnosticReportDir) await writeJsonAtomic(resolve(diagnosticReportDir, `${randomUUID()}.json`), {
       cwd: process.cwd(), project: project.authoredProject ?? project.project,
+      compiler: invocation.compilerPath,
       status: result.status, signal: result.signal,
       ...(result.error ? { error: { message: result.error.message, code: result.error.code } } : {}),
       stdout: result.stdout ?? '', stderr: result.stderr ?? '',

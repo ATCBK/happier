@@ -3,7 +3,7 @@ import test from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,81 @@ import { createTempFixture } from '../../apps/stack/scripts/testkit/core/temp_fi
 import { writeFakeBin } from '../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
 import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 
+test('selects tsrs only for Linux check-only work, preserving Microsoft emit, CI and platform authority', () => {
+  const select = (args, options = {}) => resolveTypeScriptCliInvocation({
+    args, platform: 'linux', arch: 'x64', env: {},
+    requireResolve: specifier => `/repo/node_modules/${specifier}`,
+    readFileSyncImpl: path => JSON.stringify({ bin: path.includes('/tsrs/') ? { tsrs: './bin/tsrs' } : { tsc: './bin/tsc' } }),
+    ...options,
+  });
+  for (const arch of ['x64', 'arm64']) {
+    assert.match(select(['--noEmit'], { arch }).compilerPath, /\/tsrs\/bin\/tsrs$/);
+  }
+  for (const [args, options] of [
+    [[], {}], [['--noEmit', 'false'], {}], [['--declaration'], {}],
+    [['--emitDeclarationOnly'], {}], [['--build'], {}], [['--build', '--noEmit'], {}],
+    [['--noEmit'], { platform: 'darwin' }], [['--noEmit'], { platform: 'win32' }],
+    [['--noEmit'], { arch: 'ia32' }], [['--noEmit'], { env: { CI: 'true' } }],
+    [['--noEmit'], { invocationKind: 'build' }],
+    [['--noEmit'], { env: { HAPPIER_TYPESCRIPT_COMPILER: 'microsoft' } }],
+  ]) assert.match(select(args, options).compilerPath, /\/@typescript\/native\/bin\/tsc$/);
+  assert.throws(() => select(['--noEmit'], { env: { HAPPIER_TYPESCRIPT_COMPILER: 'typo' } }), /HAPPIER_TYPESCRIPT_COMPILER/);
+  assert.throws(() => select(['--noEmit'], { requireResolve: () => { throw new Error('missing tsrs'); } }), /missing tsrs/,
+    'a missing selected compiler must not silently fall back');
+});
+
+test('inherits project noEmit and isolates tsrs incremental state without changing Microsoft reference caches', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-compiler-selection-' });
+  await writeFile(fixture.path('base.json'), JSON.stringify({ compilerOptions: {
+    noEmit: true, incremental: true, tsBuildInfoFile: './cache/check.tsbuildinfo',
+  } }));
+  await writeFile(fixture.path('tsconfig.json'), JSON.stringify({ extends: './base.json', files: [] }));
+  const select = (args, env = {}) => resolveTypeScriptCliInvocation({
+    args, env, platform: 'linux', arch: 'x64', workspaceDir: fixture.root,
+    requireResolve: specifier => `/repo/node_modules/${specifier}`,
+    readFileSyncImpl: path => JSON.stringify({ bin: path.includes('/tsrs/') ? { tsrs: './bin/tsrs' } : { tsc: './bin/tsc' } }),
+  });
+  const args = ['-p', 'tsconfig.json'];
+  assert.match(select(undefined).compilerPath, /\/@typescript\/native\//,
+    'an unspecified future argument list cannot establish a check-only invocation');
+  assert.match(select(args).compilerPath, /\/tsrs\//);
+  assert.deepEqual(select(args).argsSuffix, ['--tsBuildInfoFile', fixture.path('cache/check.tsbuildinfo.tsrs')]);
+  assert.equal(select(args, { HAPPIER_TYPESCRIPT_COMPILER: 'microsoft' }).argsSuffix, undefined);
+  assert.match(select([...args, '--noEmit', 'false', '--emitDeclarationOnly']).compilerPath, /\/@typescript\/native\//);
+  assert.deepEqual(select([...args, '--tsBuildInfoFile', 'custom.tsbuildinfo']).argsSuffix,
+    ['--tsBuildInfoFile', fixture.path('custom.tsbuildinfo.tsrs')]);
+  await writeFile(fixture.path('tsconfig.json'), JSON.stringify({ compilerOptions: { noEmit: true, incremental: true }, files: [] }));
+  assert.deepEqual(select(args).argsSuffix, ['--tsBuildInfoFile', fixture.path('tsconfig.tsbuildinfo.tsrs')]);
+});
+
+test('runner checks, recovers incrementally and switches to Microsoft without sharing compiler snapshots', {
+  skip: process.platform !== 'linux' || !['x64', 'arm64'].includes(process.arch),
+}, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-compiler-cache-' });
+  await writeFile(fixture.path('source.ts'), 'export const value: number = "wrong";\n');
+  await writeFile(fixture.path('tsconfig.json'), JSON.stringify({
+    compilerOptions: { noEmit: true, incremental: true, strict: true, types: [], tsBuildInfoFile: './check.tsbuildinfo' },
+    files: ['source.ts'],
+  }));
+  const runner = fileURLToPath(new URL('./runTypeScriptCli.mjs', import.meta.url));
+  const check = compiler => spawnSync(process.execPath, [runner, '-p', 'tsconfig.json', '--pretty', 'false'], {
+    cwd: fixture.root, encoding: 'utf8',
+    env: { ...process.env, CI: '', HAPPIER_TYPESCRIPT_COMPILER: compiler },
+  });
+  const red = check('auto');
+  assert.ifError(red.error);
+  assert.equal(red.status, 2, `${red.stdout}\n${red.stderr}`);
+  assert.match(red.stdout, /source\.ts\(1,14\): error TS2322/);
+  assert.ok(existsSync(fixture.path('check.tsbuildinfo.tsrs')));
+  assert.equal(existsSync(fixture.path('check.tsbuildinfo')), false);
+  await writeFile(fixture.path('source.ts'), 'export const value: number = 1;\n');
+  const green = check('auto');
+  assert.equal(green.status, 0, `${green.stdout}\n${green.stderr}`);
+  const microsoft = check('microsoft');
+  assert.equal(microsoft.status, 0, `${microsoft.stdout}\n${microsoft.stderr}`);
+  assert.ok(existsSync(fixture.path('check.tsbuildinfo')));
+});
+
 test('compiler leaf uses the package admission policy instead of escalating CLI to the UI envelope', () => {
   const workspaceDir = fileURLToPath(new URL('../../', import.meta.url));
   for (const component of ['cli', 'ui', 'server']) {
@@ -24,7 +99,7 @@ test('compiler leaf uses the package admission policy instead of escalating CLI 
         workspaceDir, args: ['--noEmit', '-p', `apps/${component}/${config}`],
         platform: 'linux', env: {},
         requireResolve: () => '/repo/node_modules/@typescript/native/package.json',
-        readFileSyncImpl: () => JSON.stringify({ bin: { tsc: './bin/tsc' } }),
+        readFileSyncImpl: () => JSON.stringify({ bin: { tsc: './bin/tsc', tsrs: './bin/tsrs' } }),
       });
       assert.ok(invocation.argsPrefix.includes(`--class=compilation-${component}`), invocation.argsPrefix.join(' '));
     }
@@ -293,7 +368,8 @@ test('checks every requested project sequentially even when source checking fail
       '--noEmit', '--pretty', 'false',
     ], { encoding: 'utf8' });
     assert.ifError(result.error);
-    assert.equal(result.status, 1);
+    assert.ok(Number.isInteger(result.status) && result.status > 0, result.stderr);
+    assert.equal(result.signal, null);
     assert.match(result.stdout, /source\.ts\(1,14\): error TS2322/u);
     assert.match(result.stdout, /case\.test\.ts\(1,14\): error TS2322/u);
     assert.ok(result.stdout.indexOf('source.ts(1,14)') < result.stdout.indexOf('case.test.ts(1,14)'));
@@ -303,7 +379,7 @@ test('checks every requested project sequentially even when source checking fail
       '--project', join(root, 'tests.json'), '--noEmit', '--pretty', 'false',
     ], { encoding: 'utf8' });
     assert.ifError(sourceFailure.error);
-    assert.equal(sourceFailure.status, 1, 'a later passing project must not hide an earlier failure');
+    assert.equal(sourceFailure.status, result.status, 'a later passing project must not hide an earlier failure');
     assert.match(sourceFailure.stdout, /source\.ts\(1,14\): error TS2322/u);
     assert.doesNotMatch(sourceFailure.stdout, /case\.test\.ts\(1,14\): error TS2322/u);
     writeFileSync(join(root, 'source.ts'), 'export const sourceValue: number = 1;\n');
