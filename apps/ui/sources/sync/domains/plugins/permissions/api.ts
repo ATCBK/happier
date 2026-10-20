@@ -8,7 +8,7 @@ import type {
     PluginPermissionGrantRevokeActionInputV1,
 } from '@happier-dev/protocol';
 
-import { serverFetch } from '@/sync/http/client';
+import { serverFetch, type ServerFetch } from '@/sync/http/client';
 
 export type PluginPermissionGrantUiActionExecutor = (
     actionId: PluginPermissionGrantActionIdV1,
@@ -17,7 +17,7 @@ export type PluginPermissionGrantUiActionExecutor = (
 ) => Promise<unknown>;
 
 export type CreatePluginPermissionGrantHttpActionExecutorParams = Readonly<{
-    request?: typeof serverFetch;
+    request?: ServerFetch;
 }>;
 
 function withJsonBody(body: unknown): RequestInit {
@@ -42,7 +42,7 @@ async function readPluginPermissionGrantJsonResponse(response: Response): Promis
 }
 
 async function requestPluginPermissionGrantJson(
-    request: typeof serverFetch,
+    request: ServerFetch,
     path: string,
     body: unknown,
 ): Promise<unknown> {
@@ -73,7 +73,7 @@ export function createPluginPermissionGrantHttpActionExecutor(
 ): PluginPermissionGrantUiActionExecutor {
     const request = params.request ?? serverFetch;
     return async (actionId, input, options) => {
-        const actionRequest: typeof serverFetch = options?.signal
+        const actionRequest: ServerFetch = options?.signal
             ? (path, init, requestOptions) => request(
                 path,
                 { ...init, signal: options.signal },

@@ -283,7 +283,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
         // facade and cancellation lifetime. Later operations re-read the server;
         // the direct client still admits Account currentness for each operation.
         const pending = new Map<AbortSignal | undefined, Promise<ResolvedCollection<PluginAccountCollectionValue<TDefinition>>>>();
-        return Object.freeze({
+        return Object.freeze<PluginAccountCollectionForDefinition<TDefinition>>({
             watch(request, listener) {
                 admit(requested);
                 if (!('kind' in request) && !definition.indexes.some(index => index.id === request.index)) {

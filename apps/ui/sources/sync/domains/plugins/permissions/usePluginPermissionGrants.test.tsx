@@ -39,7 +39,7 @@ async function mount(request: typeof import('@/sync/http/client').serverFetch, e
 describe('permission grants through real schemas/actions/store beneath Account HTTP', () => {
     it('admits the active Account for omitted scope and retires callbacks when that Account leaves', async () => {
         const requests: string[] = [];
-        const owner = await mount(async path => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'omitted');
+        const owner = await mount(async (path: string) => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'omitted');
         expect(owner.current().hasGrant({ capability, targetScope })).toBe(true);
         const old = owner.current();
         const { storage } = await import('@/sync/domains/state/storage');
@@ -52,7 +52,7 @@ describe('permission grants through real schemas/actions/store beneath Account H
 
     it('does not use the active Account when an explicit null scope denies authority', async () => {
         const requests: string[] = [];
-        const owner = await mount(async path => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'null');
+        const owner = await mount(async (path: string) => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'null');
         await act(async () => { await owner.current().refresh(); await owner.current().grant({ requestId: pending.id }); });
         expect(owner.current().state.grantIds).toEqual([]);
         expect(requests).toEqual([]);
@@ -60,7 +60,7 @@ describe('permission grants through real schemas/actions/store beneath Account H
 
     it('withdraws omitted-scope authority synchronously when the applied runtime stops serving its retained Profile', async () => {
         const requests: string[] = [];
-        const owner = await mount(async path => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'omitted');
+        const owner = await mount(async (path: string) => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'omitted');
         expect(owner.current().hasGrant({ capability, targetScope })).toBe(true);
         const old = owner.current();
         const { publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
@@ -75,7 +75,7 @@ describe('permission grants through real schemas/actions/store beneath Account H
         expect(requests).toEqual(['/v1/plugins/permissions/grants/list']);
     });
     it('publishes admitted approval, revocation and dismissal through the same owner', async () => {
-        const owner = await mount(async path => {
+        const owner = await mount(async (path: string) => {
             if (String(path).endsWith('/grant')) return Response.json({ grant,
                 pendingRequest: { ...pending, status: 'granted', grantId: grant.id, decidedAt: 2 } });
             if (String(path).endsWith('/revoke')) return Response.json({ grant: { ...grant, status: 'revoked', revokedAt: 3 } });
@@ -109,7 +109,7 @@ describe('permission grants through real schemas/actions/store beneath Account H
 
     it('clears grants before another Home/Account can render and rejects retained callbacks before dispatch', async () => {
         const requests: string[] = [];
-        const owner = await mount(async path => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); });
+        const owner = await mount(async (path: string) => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); });
         expect(owner.current().hasGrant({ capability, targetScope })).toBe(true);
         const old = owner.current();
         for (const scope of [{ ...owner.scope, accountId: 'bob' }, { ...owner.scope, serverId: 'another-home' }]) {
@@ -124,7 +124,7 @@ describe('permission grants through real schemas/actions/store beneath Account H
     it('ignores a held mutation after retirement and keeps disabled owners inert', async () => {
         const response = createDeferred<Response>();
         const requests: string[] = [];
-        const owner = await mount(async path => {
+        const owner = await mount(async (path: string) => {
             requests.push(String(path));
             return String(path).endsWith('/grant') ? response.promise : Response.json({ grants: [], pendingRequests: [pending] });
         });

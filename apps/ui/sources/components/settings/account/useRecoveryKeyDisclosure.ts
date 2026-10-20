@@ -97,7 +97,7 @@ export function useRecoveryKeyDisclosure(
         const lifetime = captureActiveServerAccountScopeCurrentness();
         const controller = new AbortController();
         const retirement = lifetime.onRetire(() => controller.abort());
-        const request = async (...args: Parameters<typeof serverFetch>) => {
+        const request = async (...args: Parameters<ServerFetch>) => {
             if (!lifetime.isCurrent() || controller.signal.aborted) throw new Error('action_account_scope_changed');
             const [path, init, options] = args;
             const response = await serverFetch(path, { ...init, signal: controller.signal }, options);

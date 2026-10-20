@@ -10,7 +10,7 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
-import { serverFetch } from '@/sync/http/client';
+import { serverFetch, type ServerFetch } from '@/sync/http/client';
 import { parseToken } from '@/utils/auth/parseToken';
 
 export type ReviewCommentUiActionExecutor = (
@@ -20,7 +20,7 @@ export type ReviewCommentUiActionExecutor = (
 ) => Promise<unknown>;
 
 export type CreateReviewCommentsHttpActionExecutorParams = Readonly<{
-    request?: typeof serverFetch;
+    request?: ServerFetch;
     resolveEventStorageContext?: () => Promise<ReviewCommentEventStorageContext>;
     randomBytes?: (length: number) => Uint8Array;
 }>;
@@ -88,7 +88,7 @@ async function readReviewCommentJsonResponse(response: Response): Promise<unknow
 }
 
 async function requestReviewCommentJson(
-    request: typeof serverFetch,
+    request: ServerFetch,
     path: string,
     init?: RequestInit,
 ): Promise<unknown> {
@@ -140,7 +140,7 @@ export function createReviewCommentsHttpActionExecutor(
     const resolveEventStorageContext = params.resolveEventStorageContext ?? resolveDefaultEventStorageContext;
     const randomBytes = params.randomBytes ?? getRandomBytes;
     return async (actionId, input, options) => {
-        const actionRequest: typeof serverFetch = options?.signal
+        const actionRequest: ServerFetch = options?.signal
             ? (path, init, requestOptions) => request(
                 path,
                 { ...init, signal: options.signal },
