@@ -50,41 +50,33 @@ describe('Kimi plugin manifest', () => {
     ]);
   });
 
-  it('declares a resume-only external-session source the host produces itself', () => {
-    // Current Kimi Code answers `session/list`, so the host's declarative ACP
-    // runtime registry synthesizes the one generic session-listing producer for
-    // this declaration. The source must stay ALL resume-only and the Agent must
-    // stay ACP/Session-primary with `resume` open, or the protocol contract
-    // rejects the declaration and the host would advertise candidates nothing
-    // can load. The plugin deliberately contributes no External Sessions
-    // runtime: a second one would be a competing owner of the same surface.
+  it('declares one native history source while retaining the declarative ACP runtime', () => {
     const agent = PLUGIN_MANIFEST.contributes.agents[0];
     expect(agent.capabilities.surfaces).toContain('externalSessions');
     expect(agent.surfaces?.externalSession).toEqual({
+      externalLinkedTakeover: { writerSafety: 'unsupported' },
       sources: [{
-        sourceKind: 'kimiAcpSessionList',
-        resumeOnly: true,
-        schema: { fields: [{ kind: 'literal', name: 'kind', value: 'kimiAcpSessionList' }] },
-        key: { segments: [{ kind: 'literal', value: 'kimiAcpSessionList' }] },
+        sourceKind: 'kimiCodeHome',
+        contentSearch: true,
+        schema: { fields: [
+          { kind: 'literal', name: 'kind', value: 'kimiCodeHome' },
+          { kind: 'string', name: 'homeDir', nullish: true },
+        ] },
+        key: { segments: [{ kind: 'literal', value: 'kimiCodeHome' }] },
         instances: [{ kind: 'default', constants: {} }],
       }],
     });
-    expect(agent.surfaces?.externalSession).not.toHaveProperty('externalLinkedTakeover');
     expect(agent).toMatchObject({ primary: 'sessions', runtime: { kind: 'acp' } });
     expect(agent.capabilities.sessions?.open).toContain('resume');
   });
 
-  it('owes no plugin-authored External Sessions runtime registration', () => {
-    // The activation rights the host enforces are derived from this manifest.
-    // A host-synthesized resume-only declaration must not demand a plugin
-    // contribution; demanding one is what previously forced the source to be
-    // deleted instead of activated.
+  it('requires its plugin-authored native reader registration', () => {
     expect(derivePluginDaemonContributionRegistrationRights(
       PLUGIN_MANIFEST.contributes as unknown as Readonly<Record<string, unknown>>,
     )).toContainEqual(expect.objectContaining({
       family: 'agents',
       localId: 'kimi',
-      requiredFields: ['terminal'],
+      requiredFields: expect.arrayContaining(['terminal', 'externalSessions']),
     }));
   });
 
