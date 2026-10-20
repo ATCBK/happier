@@ -113,6 +113,7 @@ describe('session.spawn_new daemon dispatch', () => {
     it.each([
         ['socket acknowledgement', createSocketIoAckTimeoutError],
         ['machine RPC setup', createMachineRpcTimeoutError],
+        ['machine row setup', () => createRpcCallError({ error: 'Machine row request timed out', errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE })],
     ] as const)('reports a %s timeout before issuance as a retryable failure without claiming a Session may exist', async (_kind, timeout) => {
         machineRpcWithServerScopeMock.mockRejectedValue(timeout());
 
@@ -121,7 +122,13 @@ describe('session.spawn_new daemon dispatch', () => {
             type: 'error',
             code: 'spawn_failed',
             retryable: true,
+            launchError: {
+                kind: 'launch_error',
+                code: MACHINE_RPC_TIMEOUT_ERROR_CODE,
+                message: expect.any(String),
+            },
         });
+        expect(SessionSpawnNewResultV1Schema.parse(result)).toEqual(result);
         // A setup deadline cannot override independently observed connected presence.
         expect(isMachineRequestReachabilityFailure(result)).toBe(false);
         expect(machineRpcWithServerScopeMock.mock.calls[0]?.[0]).toMatchObject({

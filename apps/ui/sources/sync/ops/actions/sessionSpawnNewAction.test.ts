@@ -1,8 +1,102 @@
-import { describe, expect, it } from 'vitest';
-import { RPC_ERROR_CODES, type SessionSpawnNewResultV1 } from '@happier-dev/protocol';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { RPC_ERROR_CODES, RPC_METHODS, type SessionSpawnNewResultV1 } from '@happier-dev/protocol';
 import { t } from '@/text';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 
-import * as sessionSpawnNewAction from './sessionSpawnNewAction';
+const boundary = await installSessionOpsNetworkBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const sessionSpawnNewAction = await import('./sessionSpawnNewAction');
+const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+
+afterAll(() => boundary.dispose());
+
+describe('Session directory preflight through the Action and Machine transport owners', () => {
+    afterEach(async () => {
+        vi.useRealTimers();
+        await serverScopedRpcSocketPool.stopAll();
+        await resetServerReachabilitySupervisors();
+        resetScopedMachineTransportCacheForTests();
+    });
+
+    it('preserves the generic Machine setup deadline through the strict spawn Action consumer before any spawn is issued', async () => {
+        boundary.resetRequests();
+        const home = await boundary.addHome('https://spawn-preflight.test', 'spawn-account');
+        const account = await captureLazyActionAccountContext(home.id);
+        const reading = createDeferred<void>();
+        boundary.setHttpResponder(async (input, init) => {
+            if (new URL(String(input)).pathname !== '/v1/machines/machine-1') return null;
+            reading.resolve();
+            return await new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener('abort', () => reject(new DOMException('private request detail', 'AbortError')), { once: true });
+            });
+        });
+        const input = { creationKey: SessionCreationKeyV1Schema.parse('preflight-deadline'), executionTarget: { serverId: home.id, machineId: 'machine-1' },
+            directory: { kind: 'path' as const, path: '/workspace/project' },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            sessionSpawnNewDirectoryApprovalPreflight: sessionSpawnNewAction.createUiSessionSpawnNewDirectoryApprovalPreflight(account),
+        }));
+        vi.useFakeTimers();
+        try {
+            const action = sessionSpawnNewAction.executeSessionSpawnNewAction(input,
+                { surface: 'ui', authority: 'present_user' }, executor);
+            await Promise.race([reading.promise, action.then(() => { throw new Error('Directory preflight was bypassed'); })]);
+            await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS);
+            const result = await action;
+            expect(result).toMatchObject({ ok: true, result: {
+                type: 'error', code: 'spawn_failed', retryable: true,
+                launchError: { kind: 'launch_error', code: 'MACHINE_RPC_TIMEOUT' },
+            } });
+            if (!result.ok) throw new Error('Expected a typed Session creation result');
+            expect(SessionSpawnNewResultV1Schema.parse(result.result)).toEqual(result.result);
+            expect(JSON.stringify(result)).not.toContain('private request detail');
+            expect(boundary.requests).toEqual([]);
+        } finally {
+            account.dispose();
+        }
+    });
+
+    it.each([
+        { errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, code: 'incompatible_target' },
+        { errorCode: RPC_ERROR_CODES.FORBIDDEN, code: 'permission_denied' },
+    ] as const)('retains the permanent directory refusal $errorCode through the real RPC binding', async ({ errorCode, code }) => {
+        boundary.resetRequests();
+        const home = await boundary.addHome('https://spawn-preflight-refusal.test', 'spawn-account');
+        const account = await captureLazyActionAccountContext(home.id);
+        boundary.setRpcAckResponder(async request => {
+            expect(request.method).toBe(RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT);
+            // A typed permanent refusal takes precedence over the bare Socket.IO timeout message.
+            return { ok: false, errorCode, error: 'operation has timed out' };
+        });
+        const input = { creationKey: SessionCreationKeyV1Schema.parse('preflight-refusal'), executionTarget: { serverId: home.id, machineId: 'machine-1' },
+            directory: { kind: 'path' as const, path: '/workspace/project' },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            sessionSpawnNewDirectoryApprovalPreflight: sessionSpawnNewAction.createUiSessionSpawnNewDirectoryApprovalPreflight(account),
+        }));
+        try {
+            const result = await sessionSpawnNewAction.executeSessionSpawnNewAction(input,
+                { surface: 'ui', authority: 'present_user' }, executor);
+            expect(result).toMatchObject({ ok: true, result: { type: 'error', code, retryable: false } });
+            expect(new Set(boundary.requests.map(request => request.method))).toEqual(new Set([RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT]));
+            expect(JSON.stringify(result)).not.toContain('operation has timed out');
+            if (!result.ok) throw new Error('Expected a typed Session creation refusal');
+            expect(SessionSpawnNewResultV1Schema.parse(result.result)).toEqual(result.result);
+        } finally {
+            account.dispose();
+        }
+    });
+});
 
 type FailurePresentationResolver = (result: Readonly<{
     ok: false;

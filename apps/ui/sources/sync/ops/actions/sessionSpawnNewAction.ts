@@ -28,7 +28,7 @@ import {
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spawn/spawnSessionRpcTimeout';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import { isMachineRpcTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 import { isSocketIoAckTimeoutError, readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { parseToken } from '@/utils/auth/parseToken';
 
@@ -48,6 +48,23 @@ export type SessionSpawnNewActionResult =
     | Readonly<{ ok: true; result: SessionSpawnNewResultV1 }>
     | Extract<ActionExecuteResult, Readonly<{ ok: false }>>;
 
+/** Preserve recognized transport causes without copying private exception messages into the result. */
+function projectSessionSpawnSetupTransportFailure(error: unknown): Extract<SessionSpawnNewResultV1, { type: 'error' }> | null {
+    const code = readRpcErrorCode(error)
+        ?? (error && typeof error === 'object' && 'code' in error ? error.code : undefined);
+    const timedOut = code === MACHINE_RPC_TIMEOUT_ERROR_CODE || (code === undefined && isSocketIoAckTimeoutError(error));
+    if (!timedOut && code !== RPC_ERROR_CODES.OUTCOME_UNKNOWN) return null;
+    return {
+        type: 'error', code: 'spawn_failed', retryable: true,
+        launchError: { kind: 'launch_error',
+            code: code === RPC_ERROR_CODES.OUTCOME_UNKNOWN ? code : MACHINE_RPC_TIMEOUT_ERROR_CODE,
+            message: code === RPC_ERROR_CODES.OUTCOME_UNKNOWN
+                ? 'Session creation transport lost its acknowledgement before a spawn request was issued.'
+                : 'Session creation transport timed out before a spawn request was issued.',
+        },
+    };
+}
+
 /** Read-only target preparation precedes the UI Artifact, as it does for CLI approvals. */
 export function createUiSessionSpawnNewDirectoryApprovalPreflight(
     account: LazyActionAccountContext | null,
@@ -56,11 +73,19 @@ export function createUiSessionSpawnNewDirectoryApprovalPreflight(
         if (!needsSessionCreationDirectoryApprovalPreflightV1(input)) return { type: 'not_required' };
         if (!account) return { type: 'error', result: { type: 'error', code: 'permission_denied', retryable: false } };
         account.assertCurrent();
-        const raw = await withActionAccountRequestSignal(account, signal, ownedSignal => machineRpcWithServerScope<unknown, { directory: SessionSpawnNewInputV2['directory'] }>({
-            serverId: input.executionTarget.serverId, accountId: account.accountId,
-            machineId: input.executionTarget.machineId, method: RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT,
-            payload: { directory: input.directory }, signal: ownedSignal,
-        }));
+        let raw: unknown;
+        try {
+            raw = await withActionAccountRequestSignal(account, signal, ownedSignal => machineRpcWithServerScope<unknown, { directory: SessionSpawnNewInputV2['directory'] }>({
+                serverId: input.executionTarget.serverId, accountId: account.accountId,
+                machineId: input.executionTarget.machineId, method: RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT,
+                payload: { directory: input.directory }, signal: ownedSignal,
+            }));
+        } catch (error) {
+            if (signal?.aborted) throw error;
+            const failure = projectSessionSpawnSetupTransportFailure(error);
+            if (failure) return { type: 'error', result: failure };
+            throw error;
+        }
         account.assertCurrent();
         const prepared = SessionCreationTargetPreparationResultV1Schema.safeParse(raw);
         if (!prepared.success) return { type: 'error', result: { type: 'error', code: 'incompatible_target', retryable: false,
@@ -334,10 +359,11 @@ export async function dispatchSessionSpawnNewToMachine(params: Readonly<{
         });
         // A scoped-rpc socket recycled after the emit clears the acknowledgement with
         // RPC_OUTCOME_UNKNOWN: like a timeout, the daemon may already be creating the Session.
-        if (isSocketIoAckTimeoutError(error) || isMachineRpcTimeoutError(error) || code === RPC_ERROR_CODES.OUTCOME_UNKNOWN) {
+        const failure = projectSessionSpawnSetupTransportFailure(error);
+        if (failure) {
             return issued
                 ? { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' }
-                : { type: 'error', code: 'spawn_failed', retryable: true };
+                : failure;
         }
         throw error;
     }
