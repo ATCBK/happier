@@ -88,6 +88,16 @@ vi.mock('react-native-unistyles', async () => {
 });
 
 describe('BaseModal (native)', () => {
+    it('keeps native Back and dialog custody without a motion frame for a stage', async () => {
+        const { BaseModal } = await import('./BaseModal');
+        const { OverlayMotionFrame } = await import('@/components/ui/overlays/motion/overlayMotion');
+        const onClose = vi.fn();
+        const screen = await renderScreen(<BaseModal visible motion="none" placement="fullscreen" showBackdrop={false} onClose={onClose}><View /></BaseModal>);
+        expect(screen.findAllByType(OverlayMotionFrame)).toHaveLength(0);
+        expect(screen.findAll(node => node.props.role === 'dialog').length).toBeGreaterThan(0);
+        expect(nativeBackState.pressHardwareBack()).toBe(true);
+        expect(onClose).toHaveBeenCalledOnce();
+    });
     beforeEach(() => { nativePlatform.os = 'android'; });
     it.each(['android', 'ios'] as const)('retains input custody while its own chrome changes scroll owner on %s', async (platform) => {
         nativePlatform.os = platform;

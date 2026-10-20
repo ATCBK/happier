@@ -105,6 +105,24 @@ async function renderCustomModal(config: Omit<CustomModalConfig<any>, 'id'>, onC
 }
 
 describe('CustomModal', () => {
+    it('gives a stage fullscreen custody without card chrome or competing modal motion', async () => {
+        const onClose = vi.fn();
+        const focusReturnRef = { current: { focus: vi.fn() } };
+        const screen = await renderCustomModal({
+            type: 'custom', component: RawModal, props: { label: 'stage' },
+            focusReturnRef, chrome: { kind: 'stage', title: 'Photo' },
+        }, onClose);
+        const base = screen.findByType(BaseModal);
+        expect(base.props.placement).toBe('fullscreen');
+        expect(base.props.motion).toBe('none');
+        expect(base.props.showBackdrop).toBe(false);
+        expect(base.props.scrollHost).toBe('body');
+        expect(base.props.accessibilityLabel).toBe('Photo');
+        expect(base.props.focusReturnRef).toBe(focusReturnRef);
+        expect(screen.findByType(ModalCardFrame).props.framed).toBe(false);
+        act(() => base.props.onClose());
+        expect(onClose).toHaveBeenCalledOnce();
+    });
     it('preserves the raw rendering path when no chrome is requested', async () => {
         const screen = await renderCustomModal({
             type: 'custom',

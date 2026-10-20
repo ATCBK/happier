@@ -116,7 +116,13 @@ export type CustomModalChromeCardConfig = Readonly<{
     phonePresentation?: 'card' | 'sheet' | 'fullscreen';
 }>;
 
-export type CustomModalChromeConfig = CustomModalChromeCardConfig;
+export type CustomModalChromeStageConfig = Readonly<{
+    kind: 'stage';
+    testID?: string;
+    title?: string;
+}>;
+
+export type CustomModalChromeConfig = CustomModalChromeCardConfig | CustomModalChromeStageConfig;
 
 export interface CustomModalConfig<P extends CustomModalInjectedProps = any> extends BaseModalConfig {
     type: 'custom';
