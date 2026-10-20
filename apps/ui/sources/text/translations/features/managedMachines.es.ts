@@ -314,6 +314,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             readRefused: "Inicia sesión en esta Home con permiso para leer esta máquina.",
             missing: "No se encontró esta máquina gestionada en esta Home.",
             loadFailed: "No se pudo leer esta máquina. Reinténtalo para comprobar su estado.",
+            controllerRequestFailed: "El ordenador que la administra no pudo confirmar esta solicitud. Comprueba el estado actual de la máquina antes de volver a intentarlo.",
             cancelDescription: "Si el recurso ya existe, puede que todavía necesite limpieza.",
             recipeTitle: "Tamaño, imagen y ubicación",
             recipeDescription: "Se definió al crearla. Edita el ajuste predefinido para máquinas nuevas; esta máquina conserva aquello con lo que se creó.",

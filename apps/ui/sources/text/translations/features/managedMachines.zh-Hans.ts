@@ -314,6 +314,7 @@ export const managedMachines: ManagedMachinesTranslations = {
             readRefused: "请使用有权读取此机器的账户登录此 Home。",
             missing: "在此 Home 中未找到此托管机器。",
             loadFailed: "无法读取此机器。请重试以查看最新状态。",
+            controllerRequestFailed: "管理此机器的计算机无法确认此请求。请先检查机器的当前状态，再重试。",
             cancelDescription: "如果资源已存在，可能仍需要清理。",
             recipeTitle: "规格、镜像和位置",
             recipeDescription: "在创建时设定。编辑预设以用于新机器；这台机器保留创建时的配置。",
