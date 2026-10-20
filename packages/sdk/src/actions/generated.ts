@@ -189,6 +189,8 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "follow.preferences.set",
   "follow.remove",
   "follow.set",
+  "friends.add",
+  "friends.remove",
   "home.accounts.delete",
   "home.accounts.disable",
   "home.accounts.enable",
@@ -557,6 +559,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "session.config_option.set",
   "session.connected_services_auth.set",
   "session.context.update",
+  "session.control.switch",
   "session.coordinator.enable",
   "session.delete",
   "session.delivery.mute.remove",
@@ -571,6 +574,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "session.folders.delete",
   "session.folders.rename",
   "session.fork",
+  "session.handoff",
   "session.instructions.set",
   "session.list.view.reset",
   "session.list.view.set",
@@ -1309,6 +1313,10 @@ export type GeneratedActions = Readonly<{
     readonly preview: (input: PublicActionInputById["follow.preview"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"follow.preview">>;
     readonly remove: (input: PublicActionInputById["follow.remove"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"follow.remove">>;
     readonly set: (input: PublicActionInputById["follow.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"follow.set">>;
+  }> ;
+  readonly friends: Readonly<{
+    readonly add: (input: PublicActionInputById["friends.add"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"friends.add">>;
+    readonly remove: (input: PublicActionInputById["friends.remove"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"friends.remove">>;
   }> ;
   readonly home: Readonly<{
     readonly accounts: Readonly<{
@@ -2352,6 +2360,9 @@ export type GeneratedActions = Readonly<{
       readonly inspect: (input: PublicActionInputById["session.continuation.inspect"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.continuation.inspect">>;
     }> ;
     readonly continueWithReplay: (input: PublicActionInputById["session.continue_with_replay"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.continue_with_replay">>;
+    readonly control: Readonly<{
+      readonly switch: (input: PublicActionInputById["session.control.switch"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.control.switch">>;
+    }> ;
     readonly coordinator: Readonly<{
       readonly enable: (input: PublicActionInputById["session.coordinator.enable"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.coordinator.enable">>;
     }> ;
@@ -2532,6 +2543,9 @@ export type GeneratedActions = Readonly<{
       readonly tracked: Readonly<{
         readonly set: (input: PublicActionInputById["session.target.tracked.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.target.tracked.set">>;
       }> ;
+    }> ;
+    readonly targets: Readonly<{
+      readonly resolve: (input: PublicActionInputById["session.targets.resolve"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.targets.resolve">>;
     }> ;
     readonly terminalComposer: Readonly<{
       readonly clear: (input: PublicActionInputById["session.terminalComposer.clear"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.terminalComposer.clear">>;
@@ -3650,6 +3664,10 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       remove: (input: PublicActionInputById["follow.remove"], options?: ActionExecutionOptions) => execute("follow.remove", input, options),
       set: (input: PublicActionInputById["follow.set"], options?: ActionExecutionOptions) => execute("follow.set", input, options),
     },
+    friends: {
+      add: (input: PublicActionInputById["friends.add"], options?: ActionExecutionOptions) => execute("friends.add", input, options),
+      remove: (input: PublicActionInputById["friends.remove"], options?: ActionExecutionOptions) => execute("friends.remove", input, options),
+    },
     home: {
       accounts: {
         delete: (input: PublicActionInputById["home.accounts.delete"], options?: ActionExecutionOptions) => execute("home.accounts.delete", input, options),
@@ -4692,6 +4710,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         inspect: (input: PublicActionInputById["session.continuation.inspect"], options?: ActionExecutionOptions) => execute("session.continuation.inspect", input, options),
       },
       continueWithReplay: (input: PublicActionInputById["session.continue_with_replay"], options?: ActionExecutionOptions) => execute("session.continue_with_replay", input, options),
+      control: {
+        switch: (input: PublicActionInputById["session.control.switch"], options?: ActionExecutionOptions) => execute("session.control.switch", input, options),
+      },
       coordinator: {
         enable: (input: PublicActionInputById["session.coordinator.enable"], options?: ActionExecutionOptions) => execute("session.coordinator.enable", input, options),
       },
@@ -4872,6 +4893,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         tracked: {
           set: (input: PublicActionInputById["session.target.tracked.set"], options?: ActionExecutionOptions) => execute("session.target.tracked.set", input, options),
         },
+      },
+      targets: {
+        resolve: (input: PublicActionInputById["session.targets.resolve"], options?: ActionExecutionOptions) => execute("session.targets.resolve", input, options),
       },
       terminalComposer: {
         clear: (input: PublicActionInputById["session.terminalComposer.clear"], options?: ActionExecutionOptions) => execute("session.terminalComposer.clear", input, options),
