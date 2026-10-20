@@ -62,7 +62,7 @@ function signedIdle(machine: ReturnType<typeof ManagedMachineV1Schema.parse>, si
     }) };
 }
 function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unknown'; reasons: ['finite'] } = { kind: 'idle', since: 0 },
-    nativeResult: { kind: 'confirmed' | 'unknown' } | { kind: 'refused'; code: string } = { kind: 'confirmed' }, intent: 'start' | 'stop' | 'delete' | 'rebuild' = 'delete',
+    nativeResult: { kind: 'confirmed' | 'unknown' } | { kind: 'refused'; code: string } = { kind: 'confirmed' }, intent: 'start' | 'stop' | 'suspend' | 'delete' | 'rebuild' = 'delete',
     inspectObservation?: ProviderObservationV1, onNativeEffect?: () => void,
     rebuildResult?: ReturnType<typeof MachineProvisionerRebuildResultV1Schema.parse>, recoverRebuild = false,
     cleanupObservation?: { kind: 'confirmed' | 'retryable' } | { kind: 'unknown'; code?: string }) {
@@ -363,6 +363,26 @@ describe('unused Stop through guest drain and controller operation custody', () 
             runtime.notifyChanged();
             await vi.waitFor(async () => expect(await operations.handlers.getV2({ operationId: 'policy-stop' }))
                 .toMatchObject({ kind: 'found' }));
+        } finally { await runtime.stop(); }
+    });
+    it('does not recreate unused Stop operations while a suspend-only provider is already parked', async () => {
+        const test = setup(undefined, undefined, 'suspend', {
+            observedAt: 10, availability: 'present', power: 'suspended', storage: 'retained',
+        });
+        test.setMachine({ retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' },
+            observation: { observedAt: 10, availability: 'present', power: 'suspended', storage: 'retained' } });
+        let reads = 0;
+        const executed: unknown[] = [];
+        const runtime = createDaemonManagedMachinePolicyRuntime({
+            readCensus: async () => { reads++; return { machines: [test.readMachine()], targets: [] }; },
+            executePolicy: async request => { executed.push(request.purpose); return { ok: true, result: {} } as never; },
+        });
+        try {
+            for (let expected = 1; expected <= 3; expected++) {
+                runtime.notifyChanged();
+                await vi.waitFor(() => expect(reads).toBe(expected));
+            }
+            expect(executed).toEqual([]);
         } finally { await runtime.stop(); }
     });
     it('does not recreate accepted Start operations while compute runs and the exact Session input remains pending', async () => {
@@ -1275,6 +1295,18 @@ describe('managed native intent through the accepted Action', () => {
         await work;
         expect(test.effects).toEqual(['destroy']);
         expect(test.reopen).toHaveBeenCalledOnce();
+    });
+    it('carries an after-idle retention Stop out as native Suspend for a provider that only suspends', async () => {
+        vi.useFakeTimers({ now: 3_599_999 });
+        const test = setup(undefined, undefined, 'suspend');
+        test.setMachine({ desiredWhen: 'after-idle', desiredAfterMs: 3_600_000, retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' } });
+        const work = test.run();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(test.effects).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        await work;
+        expect(test.effects).toEqual(['power']);
+        expect(test.nativeInputs).toMatchObject([{ intent: 'suspend' }]);
     });
     it('returns to waiting while the guest drain is reopened for the selected unused interval', async () => {
         vi.useFakeTimers({ now: 3_599_999 });

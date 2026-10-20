@@ -97,13 +97,13 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 if (prior) abortPolicy(machine.id, prior.cancel, 'policy_replaced');
                 continue;
             }
-            // Native Stop satisfies a Stop policy until compute runs again.
+            // Native Stop, or Suspend where that is how the provider parks, satisfies a Stop policy until compute runs again.
             // Keep an already-running driver's settlement above; a pending native
             // effect still needs its incumbent reconciliation, and an accepted
             // wake target takes precedence over retention in the purpose above.
             if (purpose.kind === 'retention' && machine.retention.kind !== 'until-delete'
                 && machine.retention.effect === 'stop' && !machine.submittedNativeEffect
-                && machine.observation?.availability === 'present' && machine.observation.power === 'stopped') {
+                && machine.observation?.availability === 'present' && (machine.observation.power === 'stopped' || machine.observation.power === 'suspended')) {
                 if (prior) abortPolicy(machine.id, prior.cancel, 'retention_satisfied');
                 continue;
             }

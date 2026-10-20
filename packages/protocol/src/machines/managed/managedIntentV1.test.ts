@@ -10,7 +10,7 @@ describe('managed intent transport admission', () => {
     expect(schema?.safeParse({ ...intent, reviewedEffectDigest: '' }).success).toBe(false);
     expect(protocol.ManagedIntentInputSchema.safeParse({ homeId: 'home', managedId: 'managed', when: 'now', expectedRevision: 4, intent: 'rebuild' }).success).toBe(false);
   });
-  it('requires revision for immediate effects, and admits only revision-free stop/delete after idle', () => {
+  it('requires revision for immediate effects, and admits only revision-free stop, suspend or delete after idle', () => {
     const schema = Reflect.get(protocol, 'ManagedIntentInputSchema');
     expect(schema).toBeDefined();
     const target = { homeId: 'home', managedId: 'managed' };
@@ -19,6 +19,8 @@ describe('managed intent transport admission', () => {
     expect(schema.safeParse({ ...target, when: 'now', expectedRevision: 4, intent: 'stop', afterMs: 1 }).success).toBe(false);
     expect(schema.safeParse({ ...target, when: 'after-idle', intent: 'delete', afterMs: 3_600_000 }).success).toBe(true);
     expect(schema.safeParse({ ...target, when: 'after-idle', intent: 'stop' }).success).toBe(true);
+    expect(schema.safeParse({ ...target, when: 'after-idle', intent: 'suspend' }).success).toBe(true);
+    expect(schema.safeParse({ ...target, when: 'after-idle', intent: 'resume' }).success).toBe(false);
     for (const extra of [{ expectedRevision: 4 }, { afterMs: -1 }, { actorAccountId: 'forged' }]) {
       expect(schema.safeParse({ ...target, when: 'after-idle', intent: 'stop', ...extra }).success).toBe(false);
     }

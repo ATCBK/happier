@@ -6,7 +6,7 @@ import { ManagedPolicyAdmissionInputV1Schema, type ManagedPolicyAdmissionInputV1
 import { type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { MANAGED_ADMISSION_DRAIN_CONFIRM_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
-import { isMachineRetentionPolicySupportedV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
+import { isMachineRetentionPolicySupportedV1, resolveMachineRetentionNativeIntentV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
 import { validateManagedRecipeInTx } from "./machinePresetService";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
@@ -46,7 +46,7 @@ async function hasPendingManagedCleanupTargetInTx(tx: Tx, row: StoredManagedMach
 }
 
 /** Policy execution consumes committed row intent, guest drain or an accepted origin, never caller ids alone. */
-export async function requireManagedPolicyPurposeInTx(tx: Tx, row: StoredManagedMachine, purpose: ManagedPolicyPurposeV1, options: Readonly<{ admission?: boolean; actionOrigin?: ExternalActionExecutionAuthorizationV1 }> = {}): Promise<'start' | 'resume' | 'stop' | 'delete'> {
+export async function requireManagedPolicyPurposeInTx(tx: Tx, row: StoredManagedMachine, purpose: ManagedPolicyPurposeV1, options: Readonly<{ admission?: boolean; actionOrigin?: ExternalActionExecutionAuthorizationV1 }> = {}): Promise<'start' | 'resume' | 'stop' | 'suspend' | 'delete'> {
     const machine = await projectManagedMachineInTx(tx, row);
     const pendingCleanup = purpose.kind === 'creation-cleanup' && await hasPendingManagedCleanupTargetInTx(tx, row);
     if (machine.archivedAt !== undefined || (!(machine.allocation === 'bound' && machine.resource) && !pendingCleanup)
@@ -75,9 +75,17 @@ export async function requireManagedPolicyPurposeInTx(tx: Tx, row: StoredManaged
         return 'start';
     }
     if (machine.retention.kind === 'until-delete') throw new ManagedMachineError('permission_denied');
+    /** A retention Stop is carried out by the provider's native Stop, or its Suspend when that is how it parks. */
+    const retentionIntent = async (effect: 'stop' | 'delete') => {
+        const declaration = await resolveManagedDeclarationInTx(tx, { homeId: row.homeId, custodianAccountId: row.custodianAccountId,
+            controller: machine.controller, provider: machine.launch.provider });
+        const intent = declaration && resolveMachineRetentionNativeIntentV1(effect, declaration.retention.supportedIntents);
+        if (!intent) throw new ManagedMachineError('provider_unavailable');
+        return intent;
+    };
     if (machine.retention.kind === 'deadline') {
         if (!machine.retention.interrupts || Date.now() < machine.retention.at) throw new ManagedMachineError('intent_changed');
-        return machine.retention.effect;
+        return await retentionIntent(machine.retention.effect);
     }
     const evidence = purpose.evidence;
     if (!evidence) throw new ManagedMachineError('permission_denied');
@@ -96,7 +104,7 @@ export async function requireManagedPolicyPurposeInTx(tx: Tx, row: StoredManaged
             publicKey: guest.installationPublicKey })) throw new ManagedMachineError('permission_denied');
     const account = await tx.account.findUnique({ where: { id: row.custodianAccountId }, select: { encryptionMode: true } });
     if (account?.encryptionMode !== context.encryptionMode || decision.confirmedAt - decision.since < machine.retention.afterMs) throw new ManagedMachineError('intent_changed');
-    return machine.retention.effect;
+    return await retentionIntent(machine.retention.effect);
 }
 
 /** The existing row is the one policy/current-request authority; no extra wake queue or effect journal. */

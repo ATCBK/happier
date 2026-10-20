@@ -31,11 +31,39 @@ export function resolveManagedMachineWakeStateV1(machine: ManagedMachineV1, enro
     ? 'asleep' : null;
 }
 
+type RetentionEffectV1 = Extract<RetentionV1, { effect: unknown }>['effect'];
+type NativeIntentsV1 = RetentionCapabilitiesV1['supportedIntents'];
+
+/**
+ * The native intent that carries out a retention effect. Stop means "parked, not billed": the
+ * provider's native Stop, or its native Suspend when that is the only way it parks. Delete never
+ * stands in for Stop. Null when the provider declares nothing that can carry the effect.
+ */
+export function resolveMachineRetentionNativeIntentV1(effect: RetentionEffectV1, supportedIntents: NativeIntentsV1): 'stop' | 'suspend' | 'delete' | null {
+  if (effect === 'delete') return supportedIntents.includes('delete') ? 'delete' : null;
+  return supportedIntents.includes('stop') ? 'stop' : supportedIntents.includes('suspend') ? 'suspend' : null;
+}
+
+/** Retention effects a provider can carry out; the only filter any consumer applies to its declared intents. */
+export function supportedMachineRetentionEffectsV1(supportedIntents: NativeIntentsV1): RetentionEffectV1[] {
+  return (['stop', 'delete'] as const).filter(effect => resolveMachineRetentionNativeIntentV1(effect, supportedIntents) !== null);
+}
+
+/**
+ * A provider that declares both wake verbs offers one: Resume for a suspended machine and Start
+ * otherwise, the same rule accepted-message wake dispatches by. A pair on one machine is noise.
+ */
+export function isRedundantManagedWakeIntentV1(intent: 'start' | 'resume', observedPower: 'running' | 'stopped' | 'suspended' | 'unknown' | undefined,
+  supportedIntents: NativeIntentsV1): boolean {
+  const suspended = observedPower === 'suspended';
+  return intent === 'start' ? suspended && supportedIntents.includes('resume') : !suspended && supportedIntents.includes('start');
+}
+
 /** Explicit live edits are refused rather than mapped to a different native effect. */
 export function isMachineRetentionPolicySupportedV1(policy: MachineRetentionPolicyV1,
   nativeCapabilities: Pick<RetentionCapabilitiesV1, 'supportedIntents' | 'finiteOnly'>): boolean {
   return !(nativeCapabilities.finiteOnly && policy.retention.kind === 'until-delete')
-    && (policy.retention.kind === 'until-delete' || nativeCapabilities.supportedIntents.includes(policy.retention.effect))
+    && (policy.retention.kind === 'until-delete' || resolveMachineRetentionNativeIntentV1(policy.retention.effect, nativeCapabilities.supportedIntents) !== null)
     && (!policy.wakeOnAcceptedMessage || isMachineRetainedWakeEligibleV1(policy.retention, nativeCapabilities));
 }
 
@@ -98,8 +126,10 @@ export function resolveMachineRetentionPolicyV1(input: Readonly<{
   if (input.nativeCapabilities?.finiteOnly && retention.kind === 'until-delete') {
     retention = { kind: 'unused', afterMs: DEFAULT_MACHINE_UNUSED_RETENTION_MS_V1, effect: 'delete' };
   }
-  // This qualifies Keep at acquisition only. An explicit native Stop Action never maps to Delete.
-  if (supported && !supported.includes('stop') && supported.includes('delete')
+  // This qualifies Keep at acquisition only. An explicit native Stop Action never maps to Delete,
+  // and a provider that can park with Suspend keeps the user's data: only a provider with no way
+  // to park falls back to Delete.
+  if (supported && resolveMachineRetentionNativeIntentV1('stop', supported) === null && supported.includes('delete')
     && retention.kind === 'unused' && retention.effect === 'stop') {
     retention = { ...retention, effect: 'delete' };
   }

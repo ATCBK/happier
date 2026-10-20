@@ -19,7 +19,7 @@ export const ManagedIntentInputSchema = lazyDefinition(() => z.discriminatedUnio
   z.strictObject({ homeId: id(), managedId: id(), when: z.literal('now'),
     expectedRevision: revision(), intent: z.enum(['start', 'stop', 'suspend', 'resume', 'delete']) }),
   z.strictObject({ homeId: id(), managedId: id(), when: z.literal('after-idle'),
-    intent: z.enum(['stop', 'delete']), afterMs: z.optional(RetentionV1Schema.def.options[1].def.shape.afterMs) }),
+    intent: z.enum(['stop', 'suspend', 'delete']), afterMs: z.optional(RetentionV1Schema.def.options[1].def.shape.afterMs) }),
 ]));
 
 export const ManagedIntentResultSchema = lazyDefinition(() => z.discriminatedUnion('kind', [

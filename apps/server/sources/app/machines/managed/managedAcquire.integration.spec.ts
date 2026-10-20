@@ -971,6 +971,34 @@ describe("managed acquisition durable authority", () => {
         expect(await db.managedMachine.findUniqueOrThrow({ where: { id: policyRow.id } })).toMatchObject({
             admittedActionRequestId: 'policy-created', admittedInput: { currentAdmission: { kind: 'policy', request: policyInput } },
         });
+        // A provisioner that parks only with Suspend keeps its data: the unused-Stop policy is carried out as Suspend, never Delete.
+        const suspendOnlyManifest = PluginManifestV2Schema.parse({ ...manifest, contributes: { ...manifest.contributes,
+            machineProvisioners: manifest.contributes.machineProvisioners!.map(provider => ({ ...provider,
+                retention: { ...provider.retention, supportedIntents: ['start', 'suspend', 'resume', 'delete'] } })) } });
+        const suspendOnlyDeclaration = createReleaseLessDeclarationV1(suspendOnlyManifest);
+        await db.accountPluginIntent.update({ where: { accountId_pluginId: { accountId: account.id, pluginId: manifest.id } }, data: { releaseLessDeclaration: suspendOnlyDeclaration } });
+        await db.pluginMachineMaterialization.updateMany({ where: { accountId: account.id, pluginId: manifest.id }, data: { archiveDigestSha256: suspendOnlyDeclaration.manifestDigestSha256 } });
+        const suspendGuestKeys = tweetnacl.sign.keyPair();
+        const suspendGuest = { machineId: 'policy-suspend-guest', installationId: 'policy-suspend-guest-installation' };
+        await db.machine.create({ data: { id: suspendGuest.machineId, accountId: account.id, metadata: 'ciphertext', installationId: suspendGuest.installationId, installationPublicKey: Buffer.from(suspendGuestKeys.publicKey) } });
+        const suspendRow = await db.managedMachine.create({ data: { homeId, custodianAccountId: account.id,
+            controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId,
+            admittedActionRequestId: 'policy-suspend-created', admittedInput: {}, launch: input.selection.launch,
+            allocation: 'bound', resource, enrolledMachineId: suspendGuest.machineId,
+            retention: { kind: 'unused', afterMs: 17.5, effect: 'stop' }, wakeOnAcceptedMessage: true } });
+        const suspendContext = { ...context, ...suspendGuest };
+        const suspendTarget = { ...managedTarget, managedId: suspendRow.id };
+        const suspendMethod = `${suspendGuest.machineId}:managed.admission.drain.confirm`;
+        const suspendEvidence: ManagedCommittedIdleEvidenceV1 = { context: suspendContext, method: suspendMethod, managedTarget: suspendTarget, decision,
+            proof: signMachineInstallationProof({ payload: { version: 1, machineId: suspendGuest.machineId,
+                installationId: suspendGuest.installationId, accountId: account.id,
+                rpcAdmission: { context: suspendContext, method: suspendMethod, managedTarget: suspendTarget, managedIdleDecision: decision } }, privateKey: suspendGuestKeys.secretKey }) };
+        expect(await admitManagedPolicy({ custodianAccountId: account.id, input: { homeId, managedId: suspendRow.id, expectedIntentRevision: 0,
+            requestId: 'policy-suspend-fire', controller, purpose: { kind: 'retention', evidence: suspendEvidence } } })).toMatchObject({
+            machine: { id: suspendRow.id, desired: 'suspend', desiredWhen: 'now', retention: { kind: 'unused', effect: 'stop' }, wakeOnAcceptedMessage: true }, replayed: false,
+        });
+        await db.accountPluginIntent.update({ where: { accountId_pluginId: { accountId: account.id, pluginId: manifest.id } }, data: { releaseLessDeclaration: declaration } });
+        await db.pluginMachineMaterialization.updateMany({ where: { accountId: account.id, pluginId: manifest.id }, data: { archiveDigestSha256: declaration.manifestDigestSha256 } });
         await db.machine.update({ where: { id: guest.machineId }, data: { operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1] } }, operationProtocolCapabilitiesRevision: 1 } });
         const session = await db.session.create({ data: { accountId: account.id, tag: 'managed-resume-accepted-input', metadata: 'ciphertext' } });
         await db.accessKey.create({ data: { accountId: account.id, machineId: guest.machineId, sessionId: session.id, data: 'encrypted' } });

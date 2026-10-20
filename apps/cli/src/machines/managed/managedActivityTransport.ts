@@ -25,7 +25,7 @@ export function createManagedGuestActivityTransport(input: Pick<ManagedMachineAc
         || authorization.binding.installationId !== machine.controller.installationId
         || authorization.binding.requestId !== options.requestId
         || machine.desiredWhen !== 'after-idle'
-        || !(authorization.binding.actionId === 'machines.managed.power.set' && machine.desired === 'stop'
+        || !(authorization.binding.actionId === 'machines.managed.power.set' && (machine.desired === 'stop' || machine.desired === 'suspend')
             || authorization.binding.actionId === 'machines.managed.delete' && machine.desired === 'delete')
     )) {
         throw new ManagedMachineControllerError('admission_unavailable');

@@ -62,7 +62,7 @@ export const ManagedMutationInputV1Schema = lazyZodSchema(() => z.strictObject({
 export const ManagedRebuildInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: id(), ...DevcontainerRebuildIntentV1Schema.def.shape }));
 export const ManagedPowerInputV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ ...ManagedIntentInputSchema.def.options[0].def.shape, intent: z.enum(['start', 'stop', 'suspend', 'resume']) }),
-  z.strictObject({ ...ManagedIntentInputSchema.def.options[1].def.shape, intent: z.literal('stop') }),
+  z.strictObject({ ...ManagedIntentInputSchema.def.options[1].def.shape, intent: z.enum(['stop', 'suspend']) }),
 ]));
 export const ManagedDeleteInputV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ ...ManagedIntentInputSchema.def.options[0].def.shape, intent: z.literal('delete'), reviewedDependencies: z.literal(true) }),

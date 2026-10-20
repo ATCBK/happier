@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as owner from './accountSettings.js';
 import { applyAccountSettingMutationV1 } from './accountSettingMutationV1.js';
-import { isMachineRetentionPolicySupportedV1, resolveMachineRetentionNativeIntentV1, resolveMachineRetentionPolicyV1 as resolve, supportedMachineRetentionEffectsV1 } from '../../machines/managed/resolveMachineRetentionPolicyV1.js';
+import { isMachineRetentionPolicySupportedV1, isRedundantManagedWakeIntentV1, resolveMachineRetentionNativeIntentV1, resolveMachineRetentionPolicyV1 as resolve, supportedMachineRetentionEffectsV1 } from '../../machines/managed/resolveMachineRetentionPolicyV1.js';
 import { MACHINE_RETENTION_CATEGORIES_V1, MachineRetentionPolicyV1Schema, updateMachineRetentionCategoryPreferenceV1 } from './machineRetentionDefaultsV1.js';
 
 const unused = { kind: 'unused', afterMs: 3_600_000, effect: 'stop' } as const;
@@ -125,9 +125,20 @@ describe('managed machine category preference through Account settings', () => {
     expect(resolveMachineRetentionNativeIntentV1('stop', ['stop', 'suspend', 'delete'])).toBe('stop');
     expect(resolveMachineRetentionNativeIntentV1('delete', suspendOnly.supportedIntents)).toBe('delete');
     expect(resolveMachineRetentionNativeIntentV1('stop', ['delete'])).toBeNull();
-    // finiteOnly still converts to Delete: the resource cannot be retained.
-    expect(resolve({ billing: local, nativeCapabilities: { ...suspendOnly, finiteOnly: true } }).retention)
+    // finiteOnly still turns Keep into Delete: the resource cannot be retained.
+    expect(resolve({ billing: local, machineOverride: { retention: keep }, nativeCapabilities: { ...suspendOnly, finiteOnly: true } }).retention)
       .toMatchObject({ kind: 'unused', effect: 'delete' });
+  });
+
+  it('offers one wake verb per observed power instead of a Start and Resume pair', () => {
+    const both = ['start', 'suspend', 'resume', 'delete'] as const;
+    expect(isRedundantManagedWakeIntentV1('start', 'suspended', both)).toBe(true);
+    expect(isRedundantManagedWakeIntentV1('resume', 'suspended', both)).toBe(false);
+    expect(isRedundantManagedWakeIntentV1('resume', 'stopped', both)).toBe(true);
+    expect(isRedundantManagedWakeIntentV1('start', 'stopped', both)).toBe(false);
+    // A provider with a single wake verb always offers it.
+    expect(isRedundantManagedWakeIntentV1('start', 'suspended', ['start', 'stop'])).toBe(false);
+    expect(isRedundantManagedWakeIntentV1('resume', 'stopped', ['resume', 'suspend'])).toBe(false);
   });
 
   it('does not silently change an explicitly selected deadline Stop into Delete', () => {

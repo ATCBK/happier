@@ -231,7 +231,7 @@ export async function reconcileManagedIntent(params: ManagedMachineReconciliatio
             ? machine.retention.afterMs : machine.desiredAfterMs ?? 0;
         for (;;) {
             if (needsIdle && !machine.submittedNativeEffect) {
-                if (!machine.enrolledMachineId || !['stop', 'delete'].includes(machine.desired)) {
+                if (!machine.enrolledMachineId || !['stop', 'suspend', 'delete'].includes(machine.desired)) {
                     throw new ManagedMachineControllerError('admission_unavailable');
                 }
                 options.context?.operationOwnerUpdate?.update({ progress: {
