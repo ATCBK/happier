@@ -213,6 +213,12 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             metadata = updater(metadata);
             events.emit('metadata-updated');
         },
+        hasOwnerMetadataAuthority: () => true,
+        async updateMetadataAsCurrentPublisher(updater: (current: Metadata) => Metadata) {
+            // This generic transport fixture uses the caller's metadata view;
+            // production enforces publisher currentness at the Home boundary.
+            fixture.updateMetadata(current => updater(current as Metadata) as TMetadata);
+        },
         updateAgentState(updater: (current: AgentState) => AgentState) {
             agentState = updater(agentState);
         },
