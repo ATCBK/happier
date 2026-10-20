@@ -1,6 +1,7 @@
 import { pt as actionTitlesPt } from './actionTitles/pt';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
