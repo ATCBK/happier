@@ -1,6 +1,8 @@
 import type { ReactElement } from 'react';
 import { View } from 'react-native';
 
+import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
+import { resolveHappierDiffViewerRequest } from '../presentation/content/DiffViewer.js';
 import { useOptionalHappierUiPalette, useOptionalHappierUiTypography } from '../environment/context.js';
 import { HAPPIER_RADIUS_V1 } from '../environment/radius.js';
 import { HAPPIER_SPACE_STEPS } from '../environment/spacing.js';
@@ -97,10 +99,19 @@ function ProposalSpinner(): ReactElement {
   return <Spinner size="small" />;
 }
 
-/** The before/after as the author passed it: the replaced passage struck, the new one beneath. */
+/**
+ * The before/after through the host's one diff renderer, so a plugin's suggestion reads exactly like
+ * core's. Without a bound host, the author's passage is shown plainly: the replaced text struck, the new one beneath.
+ */
 function ProposalDiff(props: HappierDocEditProposalDiffProps): ReactElement {
+  const host = useOptionalPluginUiPresentationHost();
   const theme = usePluginTheme();
   const typography = useOptionalHappierUiTypography();
+  const hosted = host?.renderDiffViewer?.(resolveHappierDiffViewerRequest({
+    before: props.before, after: props.after, beforeLabel: props.beforeLabel, afterLabel: props.afterLabel,
+    ...(props.testID === undefined ? {} : { testID: props.testID }),
+  }));
+  if (hosted !== undefined && hosted !== null) return <>{hosted}</>;
   const label = [resolveHappierTypeRoleStyle('micro', theme, typography), { color: theme.colors.mutedText }];
   const body = resolveHappierTypeRoleStyle('body', theme, typography);
   return <View testID={props.testID} style={{ gap: HAPPIER_SPACE_STEPS.s4 }}>

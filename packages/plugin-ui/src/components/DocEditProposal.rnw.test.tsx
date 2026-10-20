@@ -10,6 +10,7 @@ import { DocEditProposalExample } from '../../fixtures/external-authoring/src/do
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
+import { PluginUiPresentationHostProviderInternal, type PluginUiPresentationHost } from '../presentationHost/context.js';
 
 const byId = (container: HTMLElement, id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
@@ -71,6 +72,23 @@ describe('external author Doc edit proposal', () => {
       // A settled suggestion folds to its receipt: no diff and no decision buttons remain.
       expect(byId(mounted.container, 'author-proposal.diff')).toBeNull();
       expect(byId(mounted.container, 'author-proposal.accept')).toBeNull();
+    } finally { mounted.unmount(); }
+  });
+
+  it('draws the suggestion through the host diff renderer so plugins and core read one diff', () => {
+    const renderDiffViewer = vi.fn(() => <span data-testid="host-prose-diff">host prose diff</span>);
+    const host = { renderMarkdown: () => null, renderCodeBlock: () => null, renderDiffViewer, renderPopover: () => null,
+      renderIcon: () => null } as unknown as PluginUiPresentationHost;
+    const context = createSurfaceContext();
+    const mounted = mountThroughReactNativeWeb(<PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+      <PluginUiPresentationHostProviderInternal host={host}><DocEditProposalExample /></PluginUiPresentationHostProviderInternal>
+    </PluginUiProvider>);
+    try {
+      expect(renderDiffViewer).toHaveBeenCalledWith({ before: 'Two rows.', after: 'One row with a replayed badge.',
+        beforeLabel: 'Before', afterLabel: 'After', testID: 'author-proposal.diff' });
+      expect(byId(mounted.container, 'host-prose-diff')).not.toBeNull();
+      // The host owns the whole diff: the author's literal before/after blocks are not drawn beside it.
+      expect(mounted.container.textContent).not.toContain('Two rows.');
     } finally { mounted.unmount(); }
   });
 

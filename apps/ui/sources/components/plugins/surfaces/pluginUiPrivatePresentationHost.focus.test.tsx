@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ProseDiffViewer } from '@/components/ui/code/diff/prose/ProseDiffViewer';
+
 import { createPluginUiPrivatePresentationHost } from './pluginUiPrivatePresentationHost';
 
 type FocusPresentationHost = Readonly<{
@@ -48,6 +50,25 @@ describe('createPluginUiPrivatePresentationHost focus transfer', () => {
             unifiedDiff,
             filePath: 'src/provider.ts',
             testID: 'provider-diff',
+        });
+    });
+
+    it('draws a prose before/after with the same prose diff viewer core uses for its own proposals', () => {
+        const host = createPluginUiPrivatePresentationHost(undefined);
+        const rendered = host.renderDiffViewer({
+            before: 'Two rows.',
+            after: 'One row.',
+            beforeLabel: 'Before',
+            afterLabel: 'After',
+            testID: 'proposal.diff',
+        });
+
+        expect(rendered.type).toBe(ProseDiffViewer);
+        expect(rendered.props).toMatchObject({
+            testID: 'proposal.diff',
+            oldText: 'Two rows.',
+            newText: 'One row.',
+            prose: { oldLabel: 'Before', newLabel: 'After' },
         });
     });
 });

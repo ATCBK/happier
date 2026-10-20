@@ -34,6 +34,7 @@ import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
 import { QRCode } from '@/components/qr/QRCode';
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
+import { ProseDiffViewer } from '@/components/ui/code/diff/prose/ProseDiffViewer';
 import { resolveInlineDiffVirtualization } from '@/components/ui/code/diff/resolveInlineDiffVirtualization';
 import { resolveInlineDiffVirtualizedMaxHeight } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedMaxHeight';
 import { resolveInlineDiffVirtualizedViewportStyle } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedViewportStyle';
@@ -298,7 +299,7 @@ function PluginUiPrivateTargetBrandMark(props: PluginUiPrivateTargetBrandMarkInp
  * owns no parser, cache, or review state: current user settings and the existing
  * inline virtualization policy remain the only decisions.
  */
-function PluginUiPrivateDiffViewer(props: HappierDiffViewerRequest): React.ReactElement {
+function PluginUiPrivateDiffViewer(props: Extract<HappierDiffViewerRequest, { unifiedDiff: string }>): React.ReactElement {
     const configuredWrapLines = useSetting('wrapLinesInDiffs');
     const configuredLineNumbers = useSetting('showLineNumbers');
     const thresholds = useInlineDiffVirtualizationThresholds();
@@ -398,7 +399,12 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
         );
     },
     renderDiffViewer(input: HappierDiffViewerRequest) {
-        return <PluginUiPrivateDiffViewer {...resolveHappierDiffViewerRequest(input)} />;
+        const request = resolveHappierDiffViewerRequest(input);
+        // A prose passage is the same viewer's prose face, as core's own proposal card draws it.
+        return 'before' in request
+            ? <ProseDiffViewer mode="text" testID={request.testID} oldText={request.before} newText={request.after} contextLines={0}
+                prose={{ oldLabel: request.beforeLabel, newLabel: request.afterLabel }} />
+            : <PluginUiPrivateDiffViewer {...request} />;
     },
     renderPopover(input: Readonly<{
         open: boolean;
