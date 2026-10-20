@@ -134,6 +134,22 @@ export function getVoiceContributedSettingsDeclarations(
                 ) }),
             };
         };
+        const addCatalogOperations = (path: string, title: unknown) => {
+            for (const operation of ['preview', 'stop', 'list', 'retry'] as const) {
+                const operationId = { preview: 'preview', stop: 'stopPreview', list: 'listCatalog', retry: 'retryCatalog' }[operation];
+                const operationTitle = { preview: 'common.preview', stop: 'common.stop', list: 'common.search', retry: 'common.retry' } as const;
+                fields[`provider.${entry.providerId}.${path}.${operationId}`] = {
+                    titleKey: 'settingsVoice.providerSectionTitle',
+                    title: `${label(title)} · ${String(tLoose(operationTitle[operation]))}`,
+                    operation: { kind: 'invoke', requiresHumanInteraction: operation === 'preview', requiresApproval: operation === 'preview',
+                        invoke: async context => {
+                            const { invokeVoiceCatalogSettingsOperation } = await import('./voiceCatalogSettingsOperation');
+                            return invokeVoiceCatalogSettingsOperation(entry, registry, operation, context);
+                        },
+                    },
+                };
+            }
+        };
         for (const field of descriptor.fields) {
             if (!field.presentation?.control || field.presentation.hidden) continue;
             add(field.id, field.title, field.description, Boolean(field.secret));
@@ -143,20 +159,13 @@ export function getVoiceContributedSettingsDeclarations(
             if (field.kind === 'welcome') continue;
             add(field.path, field.titleKey ?? fields[`provider.${entry.providerId}.${field.path}`]?.title ?? field.path, field.subtitleKey);
             if (entry.kind === 'voice.conversation-provider.v1' && (field.kind === 'voice_catalog' || field.kind === 'remote_voice')) {
-                for (const operation of ['preview', 'stop'] as const) {
-                    fields[`provider.${entry.providerId}.${field.path}.${operation === 'stop' ? 'stopPreview' : 'preview'}`] = {
-                        titleKey: 'settingsVoice.providerSectionTitle',
-                        title: `${label(field.titleKey ?? field.path)} · ${String(tLoose(operation === 'stop' ? 'common.stop' : 'common.preview'))}`,
-                        operation: { kind: 'invoke', requiresHumanInteraction: operation === 'preview', requiresApproval: operation === 'preview',
-                            invoke: async context => {
-                                const { invokeVoiceCatalogSettingsOperation } = await import('./voiceCatalogSettingsOperation');
-                                return invokeVoiceCatalogSettingsOperation(entry, registry, operation, context);
-                            },
-                        },
-                    };
-                }
+                addCatalogOperations(field.path, field.titleKey ?? field.path);
             }
             for (const subfield of 'subfields' in field ? field.subfields ?? [] : []) add(subfield.path, subfield.titleKey ?? subfield.path, subfield.subtitleKey);
+        }
+        if (entry.kind === 'voice.speech-engine.v1') for (const catalog of entry.declaration?.catalogs ?? []) {
+            if (catalog.kind === 'voices') addCatalogOperations(catalog.settingFieldId,
+                descriptor.fields.find(field => field.id === catalog.settingFieldId)?.title ?? catalog.settingFieldId);
         }
         for (const action of declaration?.settings?.actions ?? []) {
             fields[`provider.${entry.providerId}.action.${action.id}`] = {

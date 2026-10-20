@@ -138,7 +138,7 @@ export function RealtimeProviderFields(props: Readonly<{
   const [customField, setCustomField] = React.useState<string | null>(null);
   const actionBusyRef = React.useRef(false);
   const [actionBusy, setActionBusy] = React.useState(false);
-  const { previewingId, playPreview, stopPreview } = useRealtimeCatalogPreview(props.providerId);
+  const { previewingId, playPreview, retirePreview } = useRealtimeCatalogPreview(props.providerId);
   const [expandedAdvancedPaths, setExpandedAdvancedPaths] = React.useState<ReadonlySet<string>>(() => new Set());
   const previousProviderIdRef = React.useRef(props.providerId);
   const latestSettingsRef = React.useRef({
@@ -164,12 +164,12 @@ export function RealtimeProviderFields(props: Readonly<{
     // Initial disclosure reveal runs after mount; only a real provider change resets it.
     if (previousProviderIdRef.current === props.providerId) return;
     previousProviderIdRef.current = props.providerId;
-    stopPreview();
+    retirePreview();
     setOpenField(null);
     setExpandedAdvancedPaths(new Set());
     actionBusyRef.current = false;
     setActionBusy(false);
-  }, [props.providerId, stopPreview]);
+  }, [props.providerId, retirePreview]);
 
   const { statusRows: catalogStatusRows, catalogRows } = useRealtimeCatalogMenuItems({ catalog: props.catalog, credentialUsable,
     credentialUnavailableDetail, previewingId, onPreview: playPreview, onRetry: props.onRequestCatalog });
@@ -461,7 +461,7 @@ export function RealtimeProviderFields(props: Readonly<{
         onOpenChange={(next) => {
           setOpenField(next ? key : null);
           if (next && isCatalog && credentialUsable) props.onRequestCatalog();
-          if (!next && isCatalog) stopPreview();
+          if (!next && isCatalog) retirePreview();
         }}
         variant="selectable"
         search={isCatalog}
@@ -519,7 +519,8 @@ export function RealtimeProviderFields(props: Readonly<{
       </React.Fragment>;
       })();
       const setting = field.kind === 'welcome' ? VOICE_CONVERSATIONS_SETTINGS.settings.greeting : settingRef(field.path);
-      const catalogOperationSettings = [setting, settingRef(`${field.path}.preview`), settingRef(`${field.path}.stopPreview`)].flatMap(ref => ref ? [ref] : []);
+      const catalogOperationSettings = [setting, ...['preview', 'stopPreview', 'listCatalog', 'retryCatalog']
+        .map(operation => settingRef(`${field.path}.${operation}`))].flatMap(ref => ref ? [ref] : []);
       const anchored = <SettingAnchor settings={catalogOperationSettings}><>{rendered}</></SettingAnchor>;
       return <React.Fragment key={`layout:${key}`}>
         {rendered && setting ? <SettingAnchor setting={setting}>{anchored}</SettingAnchor> : anchored}

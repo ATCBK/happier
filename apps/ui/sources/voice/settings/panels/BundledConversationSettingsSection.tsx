@@ -147,7 +147,8 @@ export function BundledConversationSettingsSection(props: Readonly<{
   const declaredRows = React.useMemo(() => sessionChoice?.declaration
     ? readDeclaredVoiceSettingsCatalog(sessionChoice.declaration) : null, [sessionChoice?.declaration]);
   const { catalog, requestCatalog, resetCatalog } = useRealtimeVoiceCatalog({
-    client: bundledUi?.client ?? null, credentialUsable, targetKey: sessionChoice?.targetKey ?? credentialTargetKey,
+    providerId,
+    catalogAvailable: Boolean(bundledUi?.client), credentialUsable, targetKey: sessionChoice?.targetKey ?? credentialTargetKey,
     declaredRows,
   });
 

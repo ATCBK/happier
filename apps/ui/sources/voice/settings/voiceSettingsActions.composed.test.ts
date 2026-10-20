@@ -20,6 +20,45 @@ const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 
 describe('Voice declarations through the default Settings Action and Account persistence', () => {
+    it('lists and retries the selected local-neural voice catalog for Agents without starting playback', async () => {
+        const { filesystem } = speech.reset();
+        const { parseModelPackManifest } = await import('@happier-dev/protocol/voice/modelPacks/manifest');
+        const packId = 'settings-catalog-kokoro';
+        const manifest = parseModelPackManifest({ packId, kind: 'tts_sherpa', model: 'kokoro', version: '1', frontend: { lang: 'en' },
+            voices: [{ id: 'am_adam', title: 'Adam', sid: 0 }], defaultVoiceId: 'am_adam',
+            files: [{ path: 'model.onnx', url: 'https://example.test/model.onnx', sha256: 'a'.repeat(64), sizeBytes: 1 }] });
+        filesystem.files.set(`${filesystem.root}/${packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+        const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: 'local_conversation',
+            providers: { local_conversation: { schemaVersion: 1, config: { tts: { provider: 'local_neural',
+                localNeural: { execution: 'device', assetId: packId } } } } } } }));
+        onTestFinished(account.dispose);
+        const executor = createDefaultActionExecutor();
+        for (const anchor of ['voiceConversations.ttsCatalog', 'voiceConversations.ttsCatalogRetry']) {
+            const result = await executor.execute('settings.invoke', { anchor }, {
+                surface: 'agent', authority: 'account_automation', serverId: account.scope.serverId, expectedAccountId: account.scope.accountId,
+            });
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'completed', value: { rows: [{ id: 'am_adam', name: 'Adam' }] } } });
+        }
+        expect(speech.nativeSynthesize).not.toHaveBeenCalled();
+        expect(speech.encodedAudio.start).not.toHaveBeenCalled();
+        expect(account.writes).toHaveLength(0);
+    });
+    it('admits web catalog Stop through the existing local-neural Settings Action', async () => {
+        const previousPlatform = speech.platform.value;
+        speech.platform.value = 'web';
+        onTestFinished(() => { speech.platform.value = previousPlatform; });
+        const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: 'local_conversation' } }));
+        onTestFinished(account.dispose);
+        const { localNeuralTtsPreviewController } = await import('./panels/localTts/providers/localNeural/previewLocalNeuralTts');
+        const preview = localNeuralTtsPreviewController.begin('af_maple');
+        onTestFinished(() => preview.finish());
+        const result = await createDefaultActionExecutor().execute('settings.invoke', { anchor: 'voiceConversations.ttsPreviewStop' }, {
+            surface: 'ui', authority: 'present_user', serverId: account.scope.serverId, expectedAccountId: account.scope.accountId,
+        });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'completed', value: { stopped: true } } });
+        expect(localNeuralTtsPreviewController.read()).toBeNull();
+        expect(account.writes).toHaveLength(0);
+    });
     it('cancels Device Test through settings.invoke and releases its playback lease', async () => {
         const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: 'local_conversation',
             providers: { local_conversation: { schemaVersion: 1, config: { tts: { provider: 'device' } } } } } }));
