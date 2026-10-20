@@ -4673,11 +4673,15 @@ body shape is `{v: 1, index, topics: [{title, summary, facts}]}`. Its stored ada
 preserves already-written `facts`/`archive` documents as index/archive-topic content
 and reads index-only documents as having no topics; current writes use index/topics.
 
-Valid empty Markdown succeeds. Optional entries skip definitive
-absence; required missing entries and wrong-kind, malformed or locked content
-return `attachment_unavailable`. Transient read failures return
-`preparation_pending`, leaving retention and retry to the existing accepted-input
-owner. New Session attachment intents admit `system_append`; this operation
+Valid empty Markdown succeeds. After current Account admission, optional entries
+skip unavailable, missing, wrong-kind, malformed or locked content and coding
+Sessions publish the existing typed Prompt library notice. Required missing,
+wrong-kind, malformed or locked entries return `attachment_unavailable`;
+transient required reads return `preparation_pending`, leaving retention and
+retry to the existing accepted-input owner. Account admission and cancellation
+still refuse preparation rather than treating unknown selections as optional.
+This is the current development-source behavior. New Session attachment intents
+admit `system_append`; this operation
 restriction does not narrow the stored placement schema or discard retained
 skill, composer-insert or provider-asset entries.
 
