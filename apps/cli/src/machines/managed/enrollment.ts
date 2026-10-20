@@ -5,10 +5,10 @@ import type { ResolvedHomeTarget } from '@happier-dev/cli-common/homeTarget';
 import { resolveManagedCliReleaseChannelSync } from '@happier-dev/cli-common/firstPartyRuntime';
 import { safeBashSingleQuote } from '@happier-dev/cli-common/ssh';
 import {
-  createRemoteNativeBootstrapMachineTaskKind, installRemoteFirstPartyComponentPayload,
+  createRemoteNativeBootstrapMachineTaskKind,
   normalizeRemoteReleaseArch, normalizeRemoteReleaseOs, resolveRemoteInstalledFirstPartyBinaryPath, SystemTaskExecutionError,
 } from '@happier-dev/cli-common/systemTasks/nativeRemoteSshBootstrap';
-import { buildRemoteHappierInvocationCommand, createHappierJsonExecutorFromTextRunner, resolveLocalHappierCommandTimeoutMs, type InteractiveSystemTaskEventInput, type InteractiveSystemTaskKind } from '@happier-dev/cli-common/systemTasks';
+import { buildRemoteHappierInvocationCommand, createHappierJsonExecutorFromTextRunner, installRemoteFirstPartyComponentPayload, resolveLocalHappierCommandTimeoutMs, type InteractiveSystemTaskEventInput, type InteractiveSystemTaskKind } from '@happier-dev/cli-common/systemTasks';
 import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { ManagedBootstrapCarrierV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';

@@ -75,6 +75,9 @@ vi.mock('node:fs/promises', async importOriginal => {
 });
 
 const controller = { machineId: 'controller', installationId: 'installation' };
+function isJsonObject(value: JsonValue | undefined): value is Readonly<Record<string, JsonValue>> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 const input = { selection: { kind: 'one-off' as const, homeId: 'home', controller, launch: {
     provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1,
     name: 'guest', choices: {},
@@ -184,13 +187,13 @@ describe('creation environment stage', () => {
                 guestHome: { homeDir: guestHome, happyHomeDir: join(guestHome, '.happier'), daemonStartup: 'native-process' } } };
             const native = nativeFixture({ privateNative: true, credentialPurposes: [], nativeRoleResults: results,
                 onNativeRole: async (role, body) => {
-                    if (role === 'putFile' && body && typeof body === 'object' && !Array.isArray(body)
+                    if (role === 'putFile' && isJsonObject(body)
                         && typeof body.guestPath === 'string' && typeof body.bytesBase64 === 'string') {
                         await filesystem.mkdir(dirname(body.guestPath), { recursive: true });
                         await writeFile(body.guestPath, Buffer.from(body.bytesBase64, 'base64'));
                     }
                     if (role !== 'exec') return;
-                    const parsed = body && typeof body === 'object' && !Array.isArray(body) ? body : null;
+                    const parsed = isJsonObject(body) ? body : null;
                     if (parsed?.processConfig) { results.exec = { kind: 'process-configured' }; return; }
                     const argv = parsed?.argv;
                     if (!Array.isArray(argv) || typeof argv[2] !== 'string') throw new Error('Native command missing');
