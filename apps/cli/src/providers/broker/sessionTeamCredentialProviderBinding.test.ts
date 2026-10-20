@@ -7,7 +7,7 @@ import { evaluateTeamCredentialRequestPolicyV1 } from './requestPolicyV1';
 import { PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivateProtocol';
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import { TeamCredentialDirectMaterialPayloadV1Schema } from '@happier-dev/protocol/teams';
-import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderConnectionIdSchema, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { setProviderExperimentalConfirmationV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
 import { getProviderExperimentalConfirmationCatalogSourceKeyV1 } from '@happier-dev/protocol/providers/settings/v1';
 import { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
@@ -93,7 +93,7 @@ const row = {
       reason: 'Fixture contract', evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-20' } }],
   }),
   confirmationSource: ProviderModelConfirmationSourceV1Schema.parse({ connectionId: 'connected-source:fixture',
-    catalogSourceKey: getProviderExperimentalConfirmationCatalogSourceKeyV1({ connectionId: 'connected-source:fixture' }) }),
+    catalogSourceKey: getProviderExperimentalConfirmationCatalogSourceKeyV1({ connectionId: ProviderConnectionIdSchema.parse('connected-source:fixture') }) }),
 } as const;
 
 const authority = {
@@ -152,6 +152,7 @@ describe('Session Team credential Provider binding', () => {
       lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
       catalog: { status: 'ready', revision: 2, catalog: splitProviderSettingsV1(settings).catalog } })).toBe(true);
     const opened = await open();
+    if (!opened) throw new Error('Expected admitted Team Provider binding');
     await opened.cleanup();
     await expect(open(lease({ ...adapter, adapterVersion: 2 }))).rejects.toMatchObject({ code: 'provider_compatibility_unverified' });
     await expect(open(lease(adapter, 'anthropic'))).rejects.toMatchObject({ code: 'provider_incompatible_with_agent' });

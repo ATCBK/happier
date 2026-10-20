@@ -217,7 +217,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
                         fail(createProviderErrorV1('provider_compatibility_unverified')); return false;
                     }
                 }
-                commitSelection();
+                await commitSelection();
                 return true;
             } catch (caught) {
                 if (isCurrentScope()) fail(providerErrorFromRpcFailure(caught, { machineId }));

@@ -99,6 +99,7 @@ import type {
   ResolveManagedProviderPurposeBindingIntent,
 } from '@/providers/managed/resolvePurposeBindingSnapshot';
 import {
+  providerManagedPurposeBindingError,
   resolveManagedProviderPurposeBindingSnapshot,
 } from '@/providers/managed/resolvePurposeBindingSnapshot';
 
@@ -833,12 +834,7 @@ export function createRuntimeProviderServices(input: Readonly<{
       } catch (error) {
         return {
           ok: false,
-          error: createProviderErrorV1(
-            // A saved account/pool that cannot resolve needs connection repair;
-            // approving or restarting the same probe cannot restore that slot.
-            error instanceof ProviderOperationAbandonedError ? 'provider_catalog_unavailable' : 'provider_connection_invalid',
-            identity,
-          ),
+          error: providerManagedPurposeBindingError(error, identity),
         };
       }
       if (!isProviderFeatureEnabled()) {

@@ -125,30 +125,30 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
             sessionModelSelectionKey(candidate.selection) === sessionModelSelectionKey(outcome.selection)
         ));
         if (!model) return;
-        let admitted = false;
-        await confirmation.confirm({ kind: 'team-model', model }, () => { admitted = true; });
-        if (!admitted || !isStillOffered()) return;
-        onSelectionChange?.();
-        setActionInput((previous) => {
-            const next: Record<string, unknown> = {
-                ...previous,
-                teamCredentialModel: outcome.selection,
-                modelId: outcome.selection.modelId,
-                ...(teamVisible && sessionId
-                    ? {
-                        teamCredentialSessionBindingConsent: {
-                            v: 1,
-                            sessionId,
-                            teamId: outcome.selection.teamId,
-                            resourceId: outcome.selection.resourceId,
-                            expectedResourceRevision: outcome.selection.expectedResourceRevision,
-                        },
-                    }
-                    : {}),
-            };
-            if (!teamVisible || !sessionId) delete next.teamCredentialSessionBindingConsent;
-            delete next.modelSelection;
-            return next;
+        await confirmation.confirm({ kind: 'team-model', model }, () => {
+            if (!isStillOffered()) return;
+            onSelectionChange?.();
+            setActionInput((previous) => {
+                const next: Record<string, unknown> = {
+                    ...previous,
+                    teamCredentialModel: outcome.selection,
+                    modelId: outcome.selection.modelId,
+                    ...(teamVisible && sessionId
+                        ? {
+                            teamCredentialSessionBindingConsent: {
+                                v: 1,
+                                sessionId,
+                                teamId: outcome.selection.teamId,
+                                resourceId: outcome.selection.resourceId,
+                                expectedResourceRevision: outcome.selection.expectedResourceRevision,
+                            },
+                        }
+                        : {}),
+                };
+                if (!teamVisible || !sessionId) delete next.teamCredentialSessionBindingConsent;
+                delete next.modelSelection;
+                return next;
+            });
         });
     }, [catalog.current, catalog.currentResourceKeys, catalog.resources, confirmation, coordinate, onSelectionChange, sessionId, setActionInput]);
 

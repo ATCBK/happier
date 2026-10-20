@@ -477,7 +477,7 @@ describe('provider connection service', () => {
       const heldRead = new Promise<void>(resolve => { resumeRead = resolve; });
       h.loadSnapshot.mockImplementationOnce(async projection => { await heldRead; return readSnapshot(projection); });
       vi.useFakeTimers();
-      const request = { machineId: 'machine-a', connectionId: 'pc_slow' };
+      const request = { machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_slow') };
       const pending = action === 'describe' ? h.service.describe(request)
         : action === 'setEnabled' ? h.service.setEnabled({ ...request, action, enabled: true, scope: 'machine' })
         : action === 'setEndpointOverride' ? h.service.setEndpointOverride({ ...request, action, expectedRevision: 1,

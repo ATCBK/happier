@@ -49,6 +49,7 @@ import { revalidateProviderBindingAuthorizationTicket } from './ticket';
 import { createAccountBoundProviderSnapshotReader } from '../lifecycle/currentAccountSettingsSnapshot';
 import { activateAgentRuntimeContributionOnDemand } from '@/agent/runtime/registry/activationDemand';
 import {
+  providerManagedPurposeBindingError,
   resolveManagedProviderPurposeBindingSnapshot,
   type ResolveManagedProviderPurposeBindingIntent,
 } from '../managed/resolvePurposeBindingSnapshot';
@@ -760,12 +761,9 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
               signal,
             }), lifetime));
         } catch (error) {
-          if (error instanceof ProviderOperationAbandonedError) return {
-            ok: false, error: createProviderErrorV1('provider_endpoint_unavailable', { connectionId, machineId: input.machineId }),
-          };
           return {
             ok: false,
-            error: createProviderErrorV1('provider_connection_invalid', {
+            error: providerManagedPurposeBindingError(error, {
               connectionId,
               machineId: input.machineId,
             }),

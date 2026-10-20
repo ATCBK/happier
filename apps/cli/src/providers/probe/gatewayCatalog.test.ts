@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS, ProviderConnectionIdSchema, ProviderSettingsV1Schema, SessionModelSelectionV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
@@ -42,6 +43,38 @@ vi.mock('socket.io-client', () => ({ io: socketBoundary.io }));
 // daemons' catalog, authorization, managed process and endpoint owners are real.
 vi.mock('@/session/transport/rpc/machineRpc', () => ({ callExactMachineRpc: transport.call }));
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); transport.call.mockReset(); });
+
+it.each(['admission', 'pre-launch'] as const)('keeps a requester Home outage retryable at %s instead of reporting changed authorization', phase =>
+  withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-home-outage-' }, async ({ homeDir }) => {
+    let unavailable = phase === 'admission';
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller: createPluginReloadController(), physicalGateway: true, probeCatalog: true,
+      resolveAccountTarget: async target => {
+        // The external Account inventory can fail at admission or at the
+        // pre-effect revalidation after the initial inventory succeeded.
+        if (unavailable) throw new PluginError({
+          code: 'project_requester_home_unavailable', retryable: true, message: 'Requester Home unavailable',
+        });
+        return target.kind === 'account' ? { account: target.account, displayName: 'Upstream' } : null;
+      },
+    });
+    try {
+      const services = createRuntimeProviderServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
+        registry: fixture.contributes, featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => fixture.snapshot,
+        resolveManagedPurposeBindingIntent: fixture.gateway!.purposeBindingOwner.resolveBindingIntent,
+        managedCatalogRuntime: createProviderManagedCatalogRuntimePort({ happyHomeDir: homeDir, acquireRegistryLease: async () => {
+          const lease = fixture.gateway!.controller.tryAcquireRuntimeRegistry();
+          if (!lease) throw new Error('Expected Gateway registry');
+          unavailable = true;
+          return lease;
+        } }),
+      });
+      const request = { connectionId: 'run-gateway', machineId: fixture.machineId };
+      expect(await services.probe(request)).toMatchObject({ status: 'error', error: {
+        code: 'provider_catalog_unavailable', retryable: true, action: 'retry',
+      } });
+    } finally { await fixture.cleanup(); }
+  }));
 
 it('reports unavailable catalog preparation rather than an endpoint outage when Home admission spends the operation budget', () =>
   withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-deadline-' }, async ({ homeDir }) => {
@@ -205,7 +238,7 @@ it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pendi
         modelSettingsMutation: async (): Promise<never> => { throw new Error('No model-settings mutation'); },
       });
       const projectPeerModels = () => peerModels.projectModels({ machineId: peerId,
-        agentTargetKey: fixture.agentTargetKey, sourceConnectionId: 'run-gateway', mode: 'management' });
+        agentTargetKey: fixture.agentTargetKey, sourceConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), mode: 'management' });
       const request = { connectionId: ProviderConnectionIdSchema.parse('run-gateway'), machineId: peerId };
       expect(await peer.probe(request)).toMatchObject({ status: 'error', error: { code: 'provider_not_enabled_on_machine' } });
       expect(transport.call).not.toHaveBeenCalled();
@@ -413,7 +446,7 @@ it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pendi
           const consumer = createSessionProviderInputConsumer({ messageQueue: queue, refreshBeforeQueuedBatch: false, reconcileWhenEmpty: 'skip',
             session: { waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal), getMetadataSnapshot: () => client.getMetadataSnapshot(),
               materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
-              hasPendingProviderInput: () => client.hasPendingProviderInput(),
+              hasPendingProviderInput: () => client.hasPendingProviderInput('fresh-original'),
               reconcilePendingProviderInputCustodyBeforeMaterialization: () => client.reconcilePendingProviderInputCustodyBeforeMaterialization() } });
           const stop = new AbortController();
           try {
@@ -432,7 +465,7 @@ it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pendi
       const ownedSnapshot = getActiveAccountSettingsSnapshot();
       resetActiveAccountSettingsSnapshotForTests();
       expect(await peerModels.projectModelsForAccount({ machineId: peerId, agentTargetKey: fixture.agentTargetKey,
-        sourceConnectionId: 'run-gateway', mode: 'management' }, {
+        sourceConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), mode: 'management' }, {
         getAccountSettingsSnapshot: () => ownedSnapshot,
         resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
         signal: new AbortController().signal, isCurrent: () => true,

@@ -1,6 +1,6 @@
 import type { ProviderSettingsV1 } from '@happier-dev/protocol';
 import type { TeamCredentialProviderModelCatalogEntryV1 } from '@happier-dev/protocol/teams';
-import { resolveProviderBindingCompatibilityFromSourceFactsV1, ProviderModelBindingSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
+import { resolveProviderBindingCompatibilityFromSourceFactsV1, ProviderModelBindingSourceV1Schema, type ProviderModelBindingSourceV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { readLeasedAgentProviderBindingAdapter } from '@/plugins/runtime/providerBindings/adapter';
@@ -27,7 +27,7 @@ export function resolveTeamCredentialModelCompatibility(input: Readonly<{
     throw Object.assign(new Error('provider_incompatible_with_agent'), createProviderErrorV1('provider_incompatible_with_agent'));
   }
   const brokerCredential = { kind: 'apiKey' as const, required: true, slotId: 'apiKey',
-    transports: [teamCredentialBrokerLocalCredentialTransport(input.model.application.protocol)] };
+    transports: [teamCredentialBrokerLocalCredentialTransport(input.model.application.protocol)] } satisfies NonNullable<ProviderModelBindingSourceV1['credential']>;
   const compatibility = resolveProviderBindingCompatibilityFromSourceFactsV1({
     agentTargetKey: input.model.application.agentTargetKey, agent: adapter.support,
     adapterVersion: adapter.adapter.adapterVersion, endpoints: [facts.data.endpoint],

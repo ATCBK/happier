@@ -20,6 +20,7 @@ import {
   type ResolveProviderSpawnAuthorizationInput,
 } from './resolve';
 import {
+  providerManagedPurposeBindingError,
   resolveManagedProviderPurposeBindingSnapshot,
   type ResolveManagedProviderPurposeBindingIntent,
 } from '../managed/resolvePurposeBindingSnapshot';
@@ -203,7 +204,9 @@ export async function resolveProviderRuntimeCatalogSelectionObservation(
             purposeBindingIntents: managedDeployment.purposeBindingIntents,
             resolveBindingIntent: input.resolveManagedPurposeBindingIntent,
           });
-      } catch {
+      } catch (error) {
+        const failure = providerManagedPurposeBindingError(error, { connectionId, machineId: input.machineId });
+        if (failure.retryable) throw failure;
         return null;
       }
     }

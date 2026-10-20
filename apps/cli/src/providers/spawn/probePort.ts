@@ -23,6 +23,7 @@ import {
 } from '../operationLifetime';
 import { resolveProviderConnectionForMachineFromSettingsRead } from '../registry/resolve';
 import {
+  providerManagedPurposeBindingError,
   resolveManagedProviderPurposeBindingSnapshot,
   type ResolveManagedProviderPurposeBindingIntent,
 } from '../managed/resolvePurposeBindingSnapshot';
@@ -355,10 +356,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
       } catch (error) {
         return {
           ok: false,
-          error: createProviderErrorV1(
-            error instanceof ProviderOperationAbandonedError
-              ? 'provider_endpoint_unavailable'
-              : 'provider_connection_invalid', {
+          error: providerManagedPurposeBindingError(error, {
             connectionId: request.connectionId,
             machineId: request.machineId,
           }),

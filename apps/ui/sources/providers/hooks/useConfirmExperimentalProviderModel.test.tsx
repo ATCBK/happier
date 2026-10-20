@@ -159,6 +159,30 @@ describe('useConfirmExperimentalProviderModel', () => {
         expect(commitSelectionSpy).toHaveBeenCalledOnce();
     });
 
+    it('keeps a Team selection pending until its retained commit completes', async () => {
+        const confirmed = teamProjection();
+        confirmed.groups[0]!.rows[0]!.compatibility.confirmed = true;
+        rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, confirmed);
+        const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
+        const hook = await renderHook(() => useConfirmExperimentalProviderModel({ enabled: true, machineId: 'machine-a',
+            serverId, agentTargetKey: confirmation.agentTargetKey, refresh: async () => {} }));
+        const commit = createDeferred<void>();
+        let settled = false;
+        let result!: Promise<boolean>;
+        await act(async () => {
+            result = hook.getCurrent().confirm({ kind: 'team-model', model: teamModel }, async () => {
+                commitSelectionSpy();
+                await commit.promise;
+            });
+            void result.then(() => { settled = true; });
+        });
+        await waitForHomeGovernance(() => expect(commitSelectionSpy).toHaveBeenCalledOnce());
+        expect(settled).toBe(false);
+        expect(hook.getCurrent().pending).toBe(true);
+        await act(async () => { commit.resolve(); await result; });
+        expect(settled).toBe(true);
+    });
+
     it('refuses a Team model rejected by the worker even when the source reports it confirmed', async () => {
         rpc.setResponse(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, teamProjection('incompatible'));
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');

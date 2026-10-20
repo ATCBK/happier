@@ -80,6 +80,7 @@ import {
 } from '@/plugins/projection/registry/agentRoutingIdentity';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import {
+  providerManagedPurposeBindingError,
   resolveManagedProviderPurposeBindingSnapshot,
   type ResolveManagedProviderPurposeBindingIntent,
 } from '@/providers/managed/resolvePurposeBindingSnapshot';
@@ -1515,12 +1516,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           if (!managedProviderRuntime?.isCurrent()) {
             throw new Error('Managed Provider runtime is unavailable');
           }
-        } catch {
-          const error = createProviderErrorV1(
-            'provider_connection_invalid',
-            errorContext,
-          );
-          return { status: 'incompatible', error };
+        } catch (error) {
+          return { status: 'incompatible', error: providerManagedPurposeBindingError(error, errorContext) };
         }
       }
       let runtimeCatalogSelection: Awaited<ReturnType<typeof resolveProviderRuntimeCatalogSelectionObservation>>;

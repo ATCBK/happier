@@ -140,7 +140,7 @@ it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal',
   const demand = read({ expectedScopeKey: scopeKey, signal: controller.signal })
     .then(catalog => { admitted = catalog; return catalog; });
   await rowEntered;
-  const publications: number[] = [];
+  const publications: (number | 'absent')[] = [];
   const unsubscribe = subscribeActiveAccountSettingsSnapshot((_previous, next) => {
     if (next?.providerConnectionsCatalog?.status === 'ready') publications.push(next.providerConnectionsCatalog.revision);
   });

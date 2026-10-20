@@ -28,7 +28,7 @@ import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/a
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { createRuntimeTranscriptProjector, type RuntimeTranscriptProjectionSession } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { waitForProcessExit } from '@/testkit/process/spawn';
-import { createCodexAppServerRuntime } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime';
+import { createCodexAppServerRuntime, waitForCodexAppServerRuntimeTurnCompletion } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime';
 import { createCodexNativeAppServerSessionRuntime } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/native';
 import type { DisposableCodexAppServerClient } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/client';
 
@@ -211,8 +211,14 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
   return { native, events, stored, sends, failures,
     async send(text: string) {
       const terminals = events.filter(event => ['turn-complete', 'turn-cancelled', 'turn-failed'].includes(event.kind)).length;
-      await native.send({ inputIds: [`${sessionId}-${sends.length}`], input: { text }, delivery: { kind: 'newTurn', turnId: `host-${sends.length}` } });
-      return async () => { await vi.waitFor(() => expect(events.filter(event => ['turn-complete', 'turn-cancelled', 'turn-failed'].includes(event.kind))).toHaveLength(terminals + 1)); await projection; };
+      const admitted = await native.send({ inputIds: [`${sessionId}-${sends.length}`], input: { text }, delivery: { kind: 'newTurn', turnId: `host-${sends.length}` } });
+      expect(admitted, `${sessionId}: ${text}`).toMatchObject({ status: 'admitted' });
+      const completion = waitForCodexAppServerRuntimeTurnCompletion(runtime);
+      return async () => {
+        await completion;
+        expect(events.filter(event => ['turn-complete', 'turn-cancelled', 'turn-failed'].includes(event.kind)), `${sessionId}: ${text}`).toHaveLength(terminals + 1);
+        await projection;
+      };
     },
     async close() { for (const controller of requests.values()) controller.abort(); await Promise.all(jobs); await projection; await native.dispose(); bridge.clear(); },
   };
@@ -350,6 +356,7 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
 
     const cancelled = await first.native.send('hold:cancel');
     await vi.waitFor(() => expect(upstream.held.has('hold:cancel')).toBe(true));
+    if (!first.native.native.cancel) throw new Error('Expected native cancellation support');
     await first.native.native.cancel({ turnId: 'host-1', reason: 'user' }); await cancelled();
     expect(first.native.events.filter(event => event.kind === 'turn-cancelled')).toHaveLength(1);
     await (await survivor.native.send('after-cancel'))();

@@ -98,7 +98,7 @@ it('G1 releases only the deleted connection explicit Start claim through retaine
       expect(await custody.revalidateRetainedClaims()).toBe(0);
       expect(process.kill(deletedPid, 0)).toBe(true);
       catalogAvailable = true;
-      expect(await service.delete({ action: 'delete', connectionId })).toEqual({ status: 'success', connectionId });
+      expect(await service.delete({ action: 'delete', machineId: fixture.machineId, connectionId })).toEqual({ status: 'success', connectionId });
       expect(providerSettings.connections.map(connection => connection.id)).toEqual([otherConnectionId]);
       expect(await custody.revalidateRetainedClaims()).toBe(1);
       expect(await waitForProcessExit(deletedPid)).toBe(true);

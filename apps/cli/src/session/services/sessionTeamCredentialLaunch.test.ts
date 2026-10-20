@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { SessionTeamCredentialBindingIntentsV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
-import { normalizeSessionTeamCredentialLaunch, readSessionTeamCredentialResourceCatalog } from './sessionTeamCredentialLaunch';
+import { normalizeSessionTeamCredentialLaunch, readSessionTeamCredentialResourceCatalog, SessionTeamCredentialLaunchUnavailableError } from './sessionTeamCredentialLaunch';
 
 const target = buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' });
 const selection = { source: 'team_resource', resourceId: 'resource-a', deliveryMode: 'brokered' } as const;
@@ -30,6 +31,13 @@ const options: SpawnSessionOptions = {
 const applications = resource.providerModels.map(entry => entry.application);
 
 describe('Session Team launch composition', () => {
+  it('refuses malformed supplied Connected Account bindings through the typed launch refusal', async () => {
+    await expect(normalizeSessionTeamCredentialLaunch({ options: { ...options, connectedServices: { v: 99 } },
+      agentId: 'codex', agentTargetKey: target, contributions: readCurrentContributionRegistry(), applications,
+      readCatalog: async () => { throw new Error('Unexpected Team catalog read'); },
+    })).rejects.toBeInstanceOf(SessionTeamCredentialLaunchUnavailableError);
+  });
+
   it('sends the exact application through the shared strict catalog transport and refuses failed reads', async () => {
     const application = resource.providerModels[0]!.application;
     const resources = await readSessionTeamCredentialResourceCatalog({ applications: [application], teamIds: ['team-a'],
@@ -138,7 +146,7 @@ describe('Session Team launch composition', () => {
   it.each(['native', 'personal'] as const)('preserves an explicit %s model source over a service-derived route', async source => {
     const explicit: SpawnSessionOptions = { ...options,
       ...(source === 'native' ? { teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' }, resourceId: null }] }
-        : { modelSelection: { ...options.modelSelection!, ref: { ...options.modelSelection!.ref, providerConnectionId: 'pc_personal' } } }),
+        : { modelSelection: { ...options.modelSelection!, ref: { ...options.modelSelection!.ref, providerConnectionId: ProviderConnectionIdSchema.parse('pc_personal') } } }),
     };
     const result = await normalizeSessionTeamCredentialLaunch({ options: explicit, agentId: 'codex', agentTargetKey: target,
       contributions: readCurrentContributionRegistry(), applications, readCatalog: async () => [resource] });

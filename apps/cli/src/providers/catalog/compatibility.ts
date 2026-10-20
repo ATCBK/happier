@@ -7,7 +7,7 @@ import { resolveProviderSourceFacts } from '../registry/sourceFacts';
 
 export function hasProviderExperimentalConfirmation(input: Readonly<{
   providerSettings: ProviderSettingsV1;
-  connectionId: string;
+  connectionId: ProviderSettingsV1['experimentalBindingConfirmations'][number]['connectionId'];
   connectedAccountTarget?: ProviderSettingsV1['experimentalBindingConfirmations'][number]['connectedAccountTarget'];
   catalogSourceKey?: string;
   agentTargetKey: string;

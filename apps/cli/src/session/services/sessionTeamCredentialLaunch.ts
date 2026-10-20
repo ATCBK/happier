@@ -1,6 +1,7 @@
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { ActionExecutorDeps, ProviderBrokerApplicationBindingV1, TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol';
+import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { TeamsPageV1Schema } from '@happier-dev/protocol/teams/projections';
 import { mergeSessionTeamCredentialBindingIntents, readSpawnConnectedServicesTeamResources,
   resolvePurposeTeamCredentialBindingIntents, type PurposeTeamResourceSelectionForSession } from './spawnConnectedServicesDefaults';
@@ -101,13 +102,16 @@ export async function normalizeSessionTeamCredentialLaunch(input: Readonly<{
   readCatalog(): Promise<readonly TeamCredentialResourceCatalogEntryV1[]>;
 }>): Promise<NormalizedSessionTeamCredentialLaunch> {
   const { options } = input;
+  const connectedServices = options.connectedServices == null ? null
+    : ConnectedServiceBindingsV2IngressSchema.safeParse(options.connectedServices);
+  if (connectedServices && !connectedServices.success) throw new SessionTeamCredentialLaunchUnavailableError();
   const explicitModelBinding = options.teamCredentialBindings?.find(binding => binding.slot.kind === 'provider_model');
   const declarations = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({
     agentId: input.agentId, contributions: input.contributions,
   });
   const selectedPurposes = (declarations?.authorizedPurposes ?? []).flatMap(scope => (
     scope.serviceRefs.flatMap(service => {
-      const selection = options.connectedServices?.bindingsByServiceId[buildQualifiedPluginContributionKey(service)];
+      const selection = connectedServices?.data.bindingsByServiceId[buildQualifiedPluginContributionKey(service)];
       return selection?.source === 'team_resource' ? [{ scope, selection }] : [];
     })
   ));

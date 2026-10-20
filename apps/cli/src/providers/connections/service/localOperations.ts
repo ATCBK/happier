@@ -12,7 +12,7 @@ import {
   normalizeProviderContributionRegistryKey,
   resolveProviderContributionRegistryEntry,
 } from '@/providers/registry/lookup';
-import { resolveManagedProviderPurposeBindingSnapshot } from '@/providers/managed/resolvePurposeBindingSnapshot';
+import { providerManagedPurposeBindingError, resolveManagedProviderPurposeBindingSnapshot } from '@/providers/managed/resolvePurposeBindingSnapshot';
 import { createProviderOperationLifetime } from '@/providers/operationLifetime';
 import { prepareProviderConnectionCreationV1 } from '@happier-dev/protocol/providers/connections/creationV1';
 import { errorForProviderResolution, type ProviderConnectionServiceContext } from './context';
@@ -363,7 +363,9 @@ export function createProviderLocalOperations(context: ProviderConnectionService
               purposeBindings,
             })]),
           };
-        } catch {
+        } catch (error) {
+          const failure = providerManagedPurposeBindingError(error, { connectionId: record.connectionId, machineId: input.machineId });
+          if (failure.retryable) throw failure;
           return { status: 'invalid' as const };
         }
       };
