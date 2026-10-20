@@ -23,11 +23,11 @@ export async function sendFileReviewNote(input: Readonly<{
     if (!parsed.success) return { ok: false, errorCode: 'invalid_parameters', error: 'Invalid file review note' };
     try {
         return await sendSessionMessageWithServerScope({
-        ...target,
-        message: formatFileReviewNoteV1(parsed.data),
-        metaOverrides: { happier: { kind: FILE_REVIEW_NOTE_KIND, payload: parsed.data } },
-        requestedAction: { v: 1, kind: 'enqueue' },
-        hostAdmissionOrigin: 'file_review_note',
+            ...target,
+            message: formatFileReviewNoteV1(parsed.data),
+            metaOverrides: { happier: { kind: FILE_REVIEW_NOTE_KIND, payload: parsed.data } },
+            requestedAction: { v: 1, kind: 'enqueue' },
+            hostAdmissionOrigin: 'file_review_note',
         });
     } catch {
         return { ok: false, errorCode: 'delivery_failed', error: 'File review note could not be sent' };
