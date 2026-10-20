@@ -19,7 +19,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
-import { formatMemoryDate } from './MemoryDocumentBody';
+import { formatMemoryDate, useMemoryFactAttribution } from './useMemoryFactAttribution';
 import { useMemoryDocument } from './useMemoryDocument';
 import { useMemoryFactSource } from './useMemoryFactSource';
 
@@ -85,17 +85,7 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
     : renderMemoryDocV1({ body: { v: 1, index: [fact], topics: [] }, nowMs: now }).markdown.trim();
   const agentEntry = React.useMemo(() => readAgentLine(agentLine), [agentLine]);
   const [exactLine, setExactLine] = React.useState(false);
-  const approval = !decision
-    ? null
-    : decision.approvedBy === null
-      ? t('memoryContext.memory.decisionNotApproved')
-      : decision.approvedBy.accountId === props.viewerAccountId
-        ? t('memoryContext.memory.detailApprovedByYou', {
-            date: formatMemoryDate(decision.approvedBy.atMs),
-          })
-        : t('memoryContext.memory.detailApprovedOn', {
-            date: formatMemoryDate(decision.approvedBy.atMs),
-          });
+  const attribution = useMemoryFactAttribution(fact, props.documentRef?.serverId ?? props.serverId);
   const expiry =
     fact.expiresAtMs === undefined
       ? t('memoryContext.memory.sheetExpiresNever')
@@ -170,7 +160,7 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
             testID={`${props.testID}.approval`}
             mode="info"
             title={t('memoryContext.memory.detailApprovedBy')}
-            detail={approval ?? undefined}
+            detail={attribution.detailApproval ?? undefined}
             showChevron={false}
           />
         ) : null}
@@ -178,11 +168,7 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
           testID={`${props.testID}.saved`}
           mode="info"
           title={t('memoryContext.memory.detailSaved')}
-          detail={
-            source || decision
-              ? formatMemoryDate(fact.createdAtMs)
-              : `${formatMemoryDate(fact.createdAtMs)} · ${t('memoryContext.memory.addedByYou')}`
-          }
+          detail={attribution.savedLabel}
           showChevron={false}
         />
         <Item

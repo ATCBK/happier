@@ -47,8 +47,7 @@ import {
   type MemoryDocumentTarget,
   type MemorySessionTarget,
 } from '@/sync/ops/promptLibrary/memoryDocuments';
-import { getPreferredLanguage, t } from '@/text';
-import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -57,7 +56,10 @@ import type { MemoryDocumentSource } from './useMemoryDocument';
 import type { MemoryDocumentSummary } from '@/sync/domains/memory/fetchDaemonMemoryStatus';
 import { useMemoryDocumentSummary } from './useMemoryDocumentSummary';
 import { readMemoryFactSource } from './useMemoryFactSource';
+import { formatMemoryDate, useMemoryFactAttribution } from './useMemoryFactAttribution';
 import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
+
+export { formatMemoryDate } from './useMemoryFactAttribution';
 
 /** A fact this fresh reads "Just now" rather than today's date. */
 const JUST_NOW_MS = 60_000;
@@ -125,13 +127,6 @@ function useArrivedFactIds(viewKey: string | null, facts: readonly MemoryFactV1[
     seenRef.current = { key: viewKey, ids: new Set([...(previous ?? []), ...facts.map((fact) => fact.id)]) };
   }, [facts, viewKey]);
   return arrived;
-}
-
-export function formatMemoryDate(ms: number): string {
-  return formatWithCachedDateTimeFormatter(ms, getPreferredLanguage(), {
-    month: 'short',
-    day: 'numeric',
-  });
 }
 
 /** The topic's name as people read it; the reserved archive topic has a translated name. */
@@ -633,7 +628,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
             <MemoryFactRow
               testID={`${testID}.fact.${fact.id}`}
               fact={fact}
-              serverId={serverId}
+              serverId={view?.ref.serverId ?? serverId}
               archived={archive}
               writable={writable && target !== null && !leaving}
               disabled={busy}
@@ -1118,17 +1113,13 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
   );
   const now = Date.now();
   const expired = fact.expiresAtMs !== undefined && fact.expiresAtMs <= now;
-  // Approval is a stored fact, said in words: the person who approved, or its true absence.
-  const approval = !decision ? null
-    : decision.approvedBy === null ? t('memoryContext.memory.decisionNotApproved')
-      : decision.approvedBy.accountId === props.viewerAccountId ? t('memoryContext.memory.decisionApprovedByYou')
-        : t('memoryContext.memory.decisionApproved', { date: formatMemoryDate(decision.approvedBy.atMs) });
+  const attribution = useMemoryFactAttribution(fact, props.serverId);
   const facts = [
     decision ? t('memoryContext.memory.decision') : null,
-    approval,
+    attribution.rowApproval,
     now - fact.createdAtMs < JUST_NOW_MS
       ? t('memoryContext.memory.justNow')
-      : formatMemoryDate(fact.createdAtMs),
+      : attribution.savedLabel,
     fact.expiresAtMs === undefined
       ? null
       : expired
@@ -1138,7 +1129,6 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
         : t('memoryContext.memory.until', {
             date: formatMemoryDate(fact.expiresAtMs),
           }),
-    source || decision ? null : t('memoryContext.memory.addedByYou'),
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');

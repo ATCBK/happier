@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
-import { MemoryDocBodyV1Schema, type MemoryDocBodyV1, type MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
+import { MEMORY_ARCHIVE_TOPIC_TITLE_V1, MemoryDocBodyV1Schema, type MemoryDocBodyV1, type MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { MemoryDocReadResultV1Schema, type MemoryDuplicateChoiceRequiredV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import {
@@ -16,6 +16,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { awaitPendingArtifactInventory } from '@/sync/engine/artifacts/syncArtifacts';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
@@ -147,6 +148,11 @@ async function seedDocument(body: MemoryDocBodyV1): Promise<PromptDocArtifactRef
     homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
     return { kind: 'doc', serverId, artifactId };
 }
+async function settleInitialArtifactInventory() {
+    await settled(() => expect(storage.getState().artifactsLoaded).toBe(true));
+    if (!connection) throw new Error('Expected the admitted Memory Account fixture');
+    await awaitPendingArtifactInventory({ scope: { serverId, accountId: 'account-a' }, credentials: connection.credentials });
+}
 function storedBody(ref: PromptDocArtifactRefV1): MemoryDocBodyV1 {
     return MemoryDocBodyV1Schema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(ref.artifactId) ?? 'null'));
 }
@@ -234,6 +240,8 @@ async function readMemory(ref: PromptDocArtifactRefV1, topic?: string) {
 }
 
 it.each(['private', 'grant', 'public', 'unknown'] as const)('publishes the admitted Memory audience (%s) without inferring privacy from ownership', async audience => {
+    // Measure the display read, not the separate cold inventory hydration that changes its refresh basis.
+    await settleInitialArtifactInventory();
     const ref = await seedDocument({ v: 1, index: [fact('one', 'Verify payment signatures.')], topics: [] });
     if (audience === 'grant') homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'teammate', 'view');
     if (audience === 'public') homes.artifacts(serverId).replaceStoredRow({
@@ -242,14 +250,32 @@ it.each(['private', 'grant', 'public', 'unknown'] as const)('publishes the admit
     if (audience === 'unknown') homes.answer(serverId, `/v1/artifacts/${ref.artifactId}/access/grants`, {
         status: 503, body: { error: 'database_connection_unavailable' },
     });
+    const requestStart = homes.requests.length;
     const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
     await settled(() => expect(hook.getCurrent().status).toBe('ready'));
     expect(hook.getCurrent().view).toMatchObject({ access: 'owner', shared: audience === 'unknown' ? null : audience !== 'private' });
+    expect(homes.requests.slice(requestStart).filter(request => request.path === `/v1/artifacts/${ref.artifactId}`)).toHaveLength(1);
     expect(hook.getCurrent().view).toMatchObject({ audience: audience === 'unknown' ? null : {
         shared: audience !== 'private', team: null, publicLink: audience === 'public',
         grants: audience === 'grant' ? [expect.objectContaining({ principal: { kind: 'account', accountId: 'teammate' } })] : [],
     } });
     expect(hook.getCurrent().target === null).toBe(audience === 'unknown');
+    await hook.unmount();
+});
+
+it.each(['Build', MEMORY_ARCHIVE_TOPIC_TITLE_V1])('reads %s facts and their audience from one admitted body', async topic => {
+    await settleInitialArtifactInventory();
+    const ref = await seedDocument({ v: 1, index: [], topics: [
+        { title: topic, summary: 'Saved topic', facts: [fact('topic-fact', 'Use the reviewed topic fact.')] },
+    ] });
+    const requestStart = homes.requests.length;
+    const hook = await renderHook(() => useMemoryDocument({ ref, serverId, topic }));
+    await settled(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect(hook.getCurrent().view).toMatchObject({
+        facts: [expect.objectContaining({ id: 'topic-fact' })], topic: { title: topic },
+        access: 'owner', audience: { shared: false },
+    });
+    expect(homes.requests.slice(requestStart).filter(request => request.path === `/v1/artifacts/${ref.artifactId}`)).toHaveLength(1);
     await hook.unmount();
 });
 
