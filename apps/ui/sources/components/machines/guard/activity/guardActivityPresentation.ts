@@ -85,7 +85,7 @@ function reason(entry: MachineGuardActivityRowV1): string | null {
     if (entry.note) parts.push(entry.note);
     else if (entry.kind === 'kept_running') parts.push(t('machineGuard.activity.because.kept_running'));
     else if (entry.rule === 'memory_guard' && entry.trigger) {
-        parts.push(t('machineGuard.activity.trigger', { level: guardLevelWord(entry.trigger.level), duration: formatGuardDuration(entry.trigger.sinceMs) }));
+        parts.push(t('machineGuard.activity.trigger', { level: guardLevelWord(entry.trigger.level), duration: formatGuardDuration(entry.at - entry.trigger.sinceMs) }));
         if (entry.step) parts.push(t('machineGuard.activity.stepN', { step: entry.step }));
     } else if (entry.rule === 'idle_sessions' || entry.rule === 'left_behind' || entry.rule === 'ceiling'
         || entry.rule === 'approved_proposal' || entry.rule === 'idle_terminals') {

@@ -3,6 +3,7 @@ import { MachineGuardActivityRowV1Schema } from '@happier-dev/protocol/machines/
 
 import { describeGuardActivityRow, groupGuardActivityByDay, summarizeGuardActivity } from './guardActivityPresentation';
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
+import { guardLevelWord } from '../guardPresentation';
 import { t } from '@/text';
 
 describe('Guard Activity presentation data', () => {
@@ -25,6 +26,16 @@ describe('Guard Activity presentation data', () => {
         );
         expect(describeGuardActivityRow(memory).figure).toBe(t('machineGuard.activity.freed', { amount: formatMachineBytes(1024 ** 3, 'memory') }));
         expect(describeGuardActivityRow(entries[3]!).figure).toBeNull();
+    });
+    it('explains a pressure episode by the time it had lasted when the receipt was written, not by its absolute start', () => {
+        const at = Date.UTC(2026, 9, 20, 14, 30);
+        const entry = MachineGuardActivityRowV1Schema.parse({
+            v: 1, id: 'pressure', at, kind: 'stopped_session', rule: 'memory_guard',
+            subject: { kind: 'session', sessionId: 'session', title: 'Build' }, outcome: 'done', attribution: { kind: 'unknown' },
+            trigger: { level: 'elevated', sinceMs: at - 2 * 60_000 },
+        });
+        expect(describeGuardActivityRow(entry).reason).toBe(t('machineGuard.activity.trigger', {
+            level: guardLevelWord('elevated'), duration: t('machineVitals.alerts.durations.minutes', { minutes: 2 }) }));
     });
     it.each(['too_many_open_files', 'no_ptys', 'process_limit', 'out_of_memory', 'other'] as const)(
         'preserves the typed %s start failure and next step without diagnostic prose', failureReason => {
