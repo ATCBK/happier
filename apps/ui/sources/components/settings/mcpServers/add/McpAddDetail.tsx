@@ -21,9 +21,9 @@ import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
 import { ValueRefRowsEditor } from '@/components/ui/forms/valueRefs/ValueRefRowsEditor';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
+import { BareSectionContent } from '@/components/ui/lists/BareSectionContent';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
-import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useRegistryItem } from '@/registries/useRegistryItem';
@@ -173,6 +173,7 @@ export function McpAddDetail(
   return (
     <View style={styles.detail}>
       <ItemGroup surface="none">
+        <BareSectionContent>
         <View style={styles.head}>
           <View style={styles.title}>
             <McpServerMark
@@ -258,6 +259,7 @@ export function McpAddDetail(
             </Text>
           ) : null}
         </View>
+        </BareSectionContent>
       </ItemGroup>
 
       {props.existing === null && supported ? (
@@ -460,8 +462,7 @@ function TextField(
 
 const styles = StyleSheet.create((theme) => ({
   detail: { gap: theme.space.s24 },
-  // The head stands on the sections' edge: their titles and sheets start one content margin in.
-  head: { gap: theme.space.s8, paddingHorizontal: resolveItemGroupContentHorizontalInsetPx() },
+  head: { gap: theme.space.s8 },
   title: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12 },
   titleText: { flexShrink: 1 },
   verified: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
