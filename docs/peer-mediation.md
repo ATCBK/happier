@@ -184,6 +184,14 @@ finite operations use the selection contract above. A served UI built before the
 bounded-read change can therefore still show the transfer refusal until its UI export is rebuilt
 and loaded.
 
+The same read Action accepts a byte `length` with an optional `offset` (default zero),
+including slices of files above the daemon's whole-file read ceiling. The existing
+daemon inline-read ceiling bounds each requested length. Ranged replies report
+the total `sizeBytes` and `eof`; a read beyond EOF returns the available bytes,
+including an empty result. An offset without a length is invalid. The predecessor
+`readFile` RPC alias delegates to this same owner. Current 0.3 UI and daemon ship
+together; ranged requests add no older-daemon negotiation path.
+
 Endpoint identity continuity follows the authority that depends on it. A Home endpoint is durable
 first-contact descriptor authority, so lost or changed Home key material fails closed through the
 canonical descriptor continuity record and requires an explicit descriptor recovery/update. A
