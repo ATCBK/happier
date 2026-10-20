@@ -111,7 +111,8 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
       if (typeof name === 'string' && ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'ZodError', '$ZodError',
         'AxiosError', 'HttpStatusError', 'AbortError', 'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError',
         'PrismaClientValidationError', 'PrismaClientInitializationError', 'TransactionConflictExhaustedError',
-        'TransactionAcquisitionUnavailableError', 'TransactionDeadlineExceededError', 'ManagedMachineError'].includes(name)) errorClass = name;
+        'TransactionAcquisitionUnavailableError', 'TransactionDeadlineExceededError', 'ManagedMachineError',
+        'JsonRpcApplicationError'].includes(name)) errorClass = name;
       const code = 'code' in error ? error.code : undefined;
       // Only known platform/database/Session codes; arbitrary fields may be private content.
       if (typeof code === 'string' && (/^P\d{4}$/u.test(code) || [
@@ -121,6 +122,11 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
         'SQLITE_CANTOPEN', 'SQLITE_CORRUPT',
         'session_detail_invalid_response', 'session_detail_projection_unavailable', 'not_authenticated', 'client-upgrade-required',
       ].includes(code))) errorCode = code;
+      // JSON-RPC reserves these protocol/server codes. Preserve only that
+      // bounded vocabulary, never native application data or message text.
+      if (name === 'JsonRpcApplicationError' && typeof code === 'number' && Number.isInteger(code)
+        && ([-32700, -32600, -32601, -32602, -32603].includes(code)
+          || (code >= -32099 && code <= -32000))) errorCode = String(code);
       const response = 'response' in error ? error.response : undefined;
       const status = response && typeof response === 'object' && 'status' in response ? response.status
         : 'status' in error ? error.status : undefined;
