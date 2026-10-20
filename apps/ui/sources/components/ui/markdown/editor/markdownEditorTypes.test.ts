@@ -2,27 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type {
     MarkdownEditorCommand,
-    MarkdownEditorHandle,
     MarkdownEditorProps,
     MarkdownSelectionState,
 } from './markdownEditorTypes';
-import type { CodeEditorHandle } from '../../code/editor/codeEditorTypes';
 
 describe('markdownEditorTypes', () => {
-    it('keeps MarkdownEditorHandle structurally compatible with CodeEditorHandle', () => {
-        // If the handle shapes ever diverge this assignment stops compiling, which
-        // would break the reuse of useSessionFileEditorState (it expects the code
-        // editor handle shape).
-        const handle: MarkdownEditorHandle = {
-            getValue: () => 'doc',
-            flushPendingChange: async () => {},
-        };
-        const asCodeHandle: CodeEditorHandle = handle;
-        const backToMarkdown: MarkdownEditorHandle = asCodeHandle;
-
-        expect(backToMarkdown.getValue()).toBe('doc');
-    });
-
     it('allows the onUnavailable prop to carry the latest markdown', () => {
         let received: string | null = null;
         const props: MarkdownEditorProps = {

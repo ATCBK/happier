@@ -20,7 +20,16 @@ vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mock
 // CodeMirror is the platform editor boundary; the real Markdown field/card own all save wiring.
 vi.mock('@/components/ui/code/editor/CodeEditor', () => ({
     CodeEditor: React.forwardRef<CodeEditorHandle, CodeEditorProps>(function EmbeddedEditor(props, ref) {
-        React.useImperativeHandle(ref, () => ({ getValue: () => 'The saved note', flushPendingChange: async () => {}, focus: () => {} }), []);
+        React.useImperativeHandle(ref, () => ({
+            getValue: () => 'The saved note',
+            flushPendingChange: async () => {},
+            focus: () => {},
+            revealLine: () => {},
+            runCommand: () => {},
+            subscribeHistory: () => () => {},
+            setDecorations: () => {},
+            onDecorationPress: () => () => {},
+        }), []);
         return React.createElement('EmbeddedEditor', props);
     }),
 }));

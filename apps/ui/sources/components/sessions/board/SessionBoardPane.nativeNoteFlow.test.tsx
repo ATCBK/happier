@@ -39,6 +39,11 @@ vi.mock('@/components/ui/code/editor/CodeEditor', () => ({
             flushPendingChange: editorHarness.flushPendingChange,
             getValue: () => editorHarness.value,
             focus: () => undefined,
+            revealLine: () => undefined,
+            runCommand: () => undefined,
+            subscribeHistory: () => () => undefined,
+            setDecorations: () => undefined,
+            onDecorationPress: () => () => undefined,
         }), []);
         return React.createElement('MockCodeEditor', props);
     }),

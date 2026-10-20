@@ -43,6 +43,11 @@ vi.mock('@/components/ui/code/editor/CodeEditor', () => ({
         React.useImperativeHandle(ref, () => ({
             getValue: () => editorHarness.values.get(testID) ?? props.value,
             flushPendingChange: editorHarness.flushPendingChange,
+            revealLine: () => undefined,
+            runCommand: () => undefined,
+            subscribeHistory: () => () => undefined,
+            setDecorations: () => undefined,
+            onDecorationPress: () => () => undefined,
         }), [props.value, testID]);
         return React.createElement('MockCodeEditor', props);
     }),
