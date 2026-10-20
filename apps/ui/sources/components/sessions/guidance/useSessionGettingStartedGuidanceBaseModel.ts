@@ -3,7 +3,7 @@ import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/us
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
 import { useVisibleSessionListSummaryState } from '@/hooks/session/useVisibleSessionListSummaryState';
-import { useAllMachines, useMachineListByServerId, useMachineListStatusByServerId } from '@/sync/domains/state/storage';
+import { useLaunchSelectionMachines, useMachineListByServerId, useMachineListStatusByServerId } from '@/sync/domains/state/storage';
 import { useHomeViewSelectionSettings } from '@/hooks/server/useHomeViewSelectionSettings';
 
 import type { SessionGettingStartedViewModel } from './gettingStartedModel';
@@ -13,8 +13,8 @@ import { useSessionGettingStartedActiveServerProfile } from './useSessionGetting
 export function useSessionGettingStartedGuidanceBaseModel(): SessionGettingStartedViewModel {
     const { selection: summarySelection, summary: sessionSummary } = useVisibleSessionListSummaryState();
     const { serverSelectionGroups } = useHomeViewSelectionSettings();
-    const activeMachines = useAllMachines();
-    const machineListByServerId = useMachineListByServerId();
+    const activeMachines = useLaunchSelectionMachines();
+    const machineListByServerId = useMachineListByServerId(true, 'launch');
     const machineListStatusByServerId = useMachineListStatusByServerId();
     const selectionSnapshot = React.useMemo(() => ({
         activeTarget: summarySelection.activeTarget,

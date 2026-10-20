@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -7,6 +8,7 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useHasMachineForGettingStartedGuidance } from './useHasMachineForGettingStartedGuidance';
+import { useSessionGettingStartedGuidanceBaseModel } from './useSessionGettingStartedGuidanceBaseModel';
 
 afterEach(() => {
     standardCleanup();
@@ -17,6 +19,41 @@ function activeServerId(): string {
 }
 
 describe('useHasMachineForGettingStartedGuidance', () => {
+    it('keeps setup consumers quiet across resource-only revisions while observing removal', async () => {
+        const previousState = storage.getState();
+        let unmount: (() => Promise<void>) | undefined;
+        try {
+            const serverId = activeServerId();
+            storage.setState({ isDataReady: true, machines: {}, machineListByServerId: {},
+                machineListStatusByServerId: {}, machinePresenceById: {}, machinePresenceByServerId: {} });
+            let machine = createMachineFixture({ id: 'guidance-resource-ticks', activeAt: Date.now(),
+                daemonState: { contributionRegistryProjectionRevision: 1 },
+                keyBasis: { dataEncryptionKey: null, metadataVersion: 1, daemonStateVersion: 1 } });
+            storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+            storage.getState().markMachineListSettled(serverId);
+            let renders = 0;
+            const hook = await renderHook(() => {
+                renders++;
+                return { hasMachine: useHasMachineForGettingStartedGuidance(), model: useSessionGettingStartedGuidanceBaseModel() };
+            });
+            unmount = hook.unmount;
+            expect(hook.getCurrent().hasMachine).toBe(true);
+            const initialRenders = renders;
+            for (let index = 0; index < 5; index++) {
+                machine = { ...machine, seq: machine.seq + 1, daemonStateVersion: machine.daemonStateVersion + 1,
+                    keyBasis: { ...machine.keyBasis!, daemonStateVersion: machine.daemonStateVersion + 1 },
+                    activeAt: Date.now(), updatedAt: Date.now() };
+                await act(async () => storage.getState().applyMachines([machine], false, { sourceServerId: serverId }));
+            }
+            expect(renders - initialRenders).toBe(0);
+            expect(storage.getState().machines[machine.id]?.daemonStateVersion).toBe(6);
+            await act(async () => storage.getState().applyMachines([{ ...machine, revokedAt: Date.now() }], false, { sourceServerId: serverId }));
+            expect(hook.getCurrent().hasMachine).toBe(false);
+        } finally {
+            await unmount?.();
+            await act(async () => storage.setState(previousState));
+        }
+    });
     it('is undecided (null) until the active Home machine list has loaded', async () => {
         const previousState = storage.getState();
         try {

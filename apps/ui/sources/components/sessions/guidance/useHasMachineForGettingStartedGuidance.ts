@@ -13,7 +13,7 @@ export function useHasMachineForGettingStartedGuidance(): boolean | null {
     const selection = useResolvedActiveServerSelection();
     const bindings = useServerCredentialAccountScopeBindings([...selection.allowedServerIds, selection.activeServerId]);
     const activeMachines = useLaunchSelectionMachines();
-    const machineListByServerId = useMachineListByServerId();
+    const machineListByServerId = useMachineListByServerId(true, 'launch');
     const activeServerProfile = useSessionGettingStartedActiveServerProfile(selection.activeServerId);
 
     return React.useMemo(() => resolveMachineSetupSatisfied(resolveSessionGettingStartedMachinesSummary({
