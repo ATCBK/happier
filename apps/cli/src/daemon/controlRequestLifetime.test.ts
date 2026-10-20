@@ -1,25 +1,35 @@
 import { createServer, get } from 'node:http';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createDaemonControlRequestLifetime } from './controlRequestLifetime';
 
 describe('daemon control request response lifetime', () => {
   it.each(['interrupted', 'delivered'] as const)('settles an %s response by actual write completion', async (delivery) => {
-    let observeClosed!: (state: { ended: boolean; finished: boolean; aborted: boolean }) => void;
-    const closed = new Promise<{ ended: boolean; finished: boolean; aborted: boolean }>(resolve => { observeClosed = resolve; });
+    type ResponseState = { ended: boolean; finished: boolean; aborted: boolean; writePending: boolean };
+    let observeClosed!: (state: ResponseState) => void;
+    const closed = new Promise<ResponseState>(resolve => { observeClosed = resolve; });
     const server = createServer(async (request, response) => {
       // Fastify consumes the request body before entering a control handler.
       await new Promise<void>(resolve => { request.once('end', resolve); request.resume(); });
       // Only the native HTTP boundary is supplied here; cancellation logic is real.
       const lifetime = createDaemonControlRequestLifetime({ raw: request } as FastifyRequest, { raw: response } as FastifyReply);
+      const socket = response.socket;
+      if (!socket) throw new Error('Expected connected HTTP socket');
+      let writePending = false;
+      // Hold the OS write completion rather than relying on a payload exceeding
+      // the host's socket buffers. HTTP/stream completion and cancellation stay real.
+      const writes = delivery === 'interrupted' ? [
+        vi.spyOn(socket, '_write').mockImplementation(() => { writePending = true; }),
+        vi.spyOn(socket, '_writev').mockImplementation(() => { writePending = true; }),
+      ] : [];
       response.once('close', () => {
-        observeClosed({ ended: response.writableEnded, finished: response.writableFinished, aborted: lifetime.signal.aborted });
+        observeClosed({ ended: response.writableEnded, finished: response.writableFinished, aborted: lifetime.signal.aborted, writePending });
+        writes.forEach(write => write.mockRestore());
         lifetime.dispose();
       });
-      // A pending socket write makes end() observably distinct from finish.
-      response.end(delivery === 'interrupted' ? Buffer.alloc(16 * 1024 * 1024) : 'delivered');
-      if (delivery === 'interrupted') response.socket?.destroy();
+      response.end(delivery);
+      if (delivery === 'interrupted') socket.destroy();
     });
     try {
       await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve); });
@@ -32,6 +42,7 @@ describe('daemon control request response lifetime', () => {
       client.on('error', () => undefined);
       const state = await closed;
       expect(state.ended).toBe(true);
+      expect(state.writePending).toBe(delivery === 'interrupted');
       expect(state.finished).toBe(delivery === 'delivered');
       expect(state.aborted).toBe(delivery === 'interrupted');
     } finally {
