@@ -550,6 +550,7 @@ export type SessionPermissionRemoteActionArgs =
       actionId: 'session.permission.remote.grants.list';
       input: SessionPermissionRemoteGrantsListInputV1;
       caller: ActionCaller;
+      context?: ActionExecutorContext;
       serverId?: string | null;
       signal?: AbortSignal;
     }>
@@ -557,6 +558,7 @@ export type SessionPermissionRemoteActionArgs =
       actionId: 'session.permission.remote.grants.revoke';
       input: SessionPermissionRemoteGrantRevokeInputV1;
       caller: ActionCaller;
+      context?: ActionExecutorContext;
       serverId?: string | null;
       signal?: AbortSignal;
     }>;

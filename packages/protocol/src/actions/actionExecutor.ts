@@ -5145,11 +5145,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                   actionId,
                   input: SessionPermissionRemoteGrantsListInputV1Schema.parse(parsed.data),
                   ...common,
+                  context: ctx,
                 })
               : await deps.sessionPermissionRemoteAction({
                   actionId,
                   input: SessionPermissionRemoteGrantRevokeInputV1Schema.parse(parsed.data),
                   ...common,
+                  context: ctx,
                 });
         return completeActionResult(result);
       }
