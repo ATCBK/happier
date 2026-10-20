@@ -671,6 +671,16 @@ recipient's Account therefore does not by itself establish a selectable
 cross-Account Team model. Do not infer a working launch from confirmation or
 an unqualified entitlement read alone.
 
+The development daemon launch composition normalizes a fresh Session's
+service-purpose Team selection together with its effective model before
+Session binding admission. It uses the declared Agent/Provider application
+and an exact currently offered Team model row, not a personal Provider
+connection or a model-name inference. Explicit model-source choices retain
+precedence; an unavailable or ambiguous model source is refused rather than
+falling back to native authentication. This prepares the Session model slot;
+it does **not** establish the missing admitted broker transport or exempt the
+launch from native sign-in. That end-to-end launch handoff remains incomplete.
+
 Resource access has two intentionally different privacy contracts:
 
 - **Brokered** access keeps usable credential material on one exact broker Machine. A custodian

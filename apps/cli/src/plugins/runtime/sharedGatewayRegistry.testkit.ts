@@ -35,6 +35,7 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
     catalog?: ProviderContributionV1['catalog'];
     catalogModels?: readonly ProviderCatalogProbeModelV1[];
     holdResponseForInput?: string;
+    upstreamUrl?: string;
 }>) {
     const { directory } = input;
     const happyHomeDir = input.happyHomeDir ?? join(directory, 'home');
@@ -53,12 +54,19 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
     const purposeBindingOwner = createConnectedAccountPurposeBindingOwner({
         store: { read: async () => ({ v: 1, bindings: [] }), update: unexpected,
             subscribe: () => ({ dispose() {} }) },
-        selectTarget: unexpected, resolveTarget: input.resolveAccountTarget ?? unexpected, materializeAccount: unexpected,
+        selectTarget: unexpected, resolveTarget: input.resolveAccountTarget ?? unexpected,
+        ...(input.upstreamUrl ? { resolveCredentialRevision: async () => 'fixture-revision' } : {}),
+        materializeAccount: input.upstreamUrl ? async request => {
+            request.signal.throwIfAborted();
+            request.credentialRevisionBasis?.captureCredentialRevision('fixture-revision');
+            return { kind: 'httpHeaders' as const, headers: { authorization: 'Bearer fixture-upstream' } };
+        } : unexpected,
         projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
     });
+    const requestAuthRegistry = createConnectedAccountRequestAuthSubjectRegistry();
     const operationAuthority = createManagedProviderOperationAuthority({
         materializationBaseDir: join(directory, 'request-auth'), purposeBindingOwner,
-        requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(), resolveRequestAuthHttpPort: () => 43123,
+        requestAuthRegistry, resolveRequestAuthHttpPort: () => 43123,
         createRedactionLease: () => ({ add() {}, close() {} }),
     });
     const install = async (id: string, version: string, gateway: boolean) => {
@@ -91,7 +99,19 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
             await chmod(executablePath, 0o755);
         }
         const catalogModels = input.catalogModels ?? [{ id: 'example' }];
-        const script = `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(join(directory, 'gateway-started'))},String(process.pid));fs.appendFileSync(${JSON.stringify(join(directory, 'gateway-starts'))},String(process.pid)+"\\n");require("node:http").createServer((req,res)=>{if(req.method==="POST"&&req.url==="/v1/responses"){let body="";req.on("data",chunk=>{body+=chunk});req.on("end",()=>{let input;try{input=JSON.parse(body).input}catch{}fs.appendFileSync(${JSON.stringify(join(directory, 'gateway-inputs'))},input+"\\n");if(${input.holdResponseForInput === undefined ? 'true' : `input!==${JSON.stringify(input.holdResponseForInput)}`})res.end("ok")});return;}if(req.url==="/v1/models"){res.setHeader("content-type","application/json");res.end(JSON.stringify({object:"list",data:${JSON.stringify(catalogModels.map(model => ({ ...model, object: 'model',
+        // The optional upstream is an OS/HTTP boundary, shared by composed
+        // journey tests. It receives only this fixture's generated capability;
+        // real host subject admission remains in the parent process.
+        const inference = input.upstreamUrl ? `
+          let consumer;
+          try { consumer=JSON.parse(fs.readFileSync(process.env.CONSUMER_ACCESS_PATH,"utf8")).consumers.find(c=>"Bearer "+c.token===req.headers.authorization); } catch {}
+          if(!consumer){res.writeHead(403).end();return;}
+          const capability=JSON.parse(fs.readFileSync(consumer.capabilityPath,"utf8"));
+          const upstream=require("node:http").request(${JSON.stringify(input.upstreamUrl)}, {method:"POST",headers:{"content-type":"application/json","x-fixture-capability":capability.capability}}, reply=>{res.writeHead(reply.statusCode,reply.headers);reply.pipe(res)});
+          upstream.on("error",()=>{if(!res.headersSent)res.writeHead(502);res.end()});
+          res.on("close",()=>upstream.destroy());upstream.end(body);
+        ` : `if(${input.holdResponseForInput === undefined ? 'true' : `input!==${JSON.stringify(input.holdResponseForInput)}`})res.end("ok")`;
+        const script = `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(join(directory, 'gateway-started'))},String(process.pid));fs.appendFileSync(${JSON.stringify(join(directory, 'gateway-starts'))},String(process.pid)+"\\n");require("node:http").createServer((req,res)=>{if(req.method==="POST"&&req.url==="/v1/responses"){let body="";req.on("data",chunk=>{body+=chunk});req.on("end",()=>{let input;try{input=JSON.parse(body).input}catch{}fs.appendFileSync(${JSON.stringify(join(directory, 'gateway-inputs'))},input+"\\n");${inference}});return;}if(req.url==="/v1/models"){res.setHeader("content-type","application/json");res.end(JSON.stringify({object:"list",data:${JSON.stringify(catalogModels.map(model => ({ ...model, object: 'model',
           ...(model.connectedAccountPurposes ? { happier_connected_account_purposes: model.connectedAccountPurposes,
             connectedAccountPurposes: undefined } : {}),
         })))} }));return;}res.end(req.url==="/pid"?String(process.pid):"ok")}).listen(Number(process.env.PORT),"127.0.0.1")`;
@@ -144,6 +164,6 @@ export function createSharedGatewayRegistryTestkit(input: Readonly<{
             resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home', machineId: 'machine' }),
         });
     };
-    return { directory, happyHomeDir, pluginId, peerId, controller, identity, purposeBindings, purposeBindingOwner, operationAuthority,
+    return { directory, happyHomeDir, pluginId, peerId, controller, identity, purposeBindings, purposeBindingOwner, operationAuthority, requestAuthRegistry,
         install, createRegistry, disposeCredentialBoundary: () => readCredentials.mockRestore() };
 }
