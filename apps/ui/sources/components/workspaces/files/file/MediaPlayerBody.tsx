@@ -11,6 +11,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { PrimaryCircleIconButton } from '@/components/ui/buttons/PrimaryCircleIconButton';
 import { Slider } from '@/components/ui/forms/Slider';
 import { Icon } from '@/components/ui/icons/Icon';
+import { MediaDownloadLine, MediaLoadStoppedState } from '@/components/ui/media/MediaDownloadProgress';
 import {
   useFilePreviewSource,
   type UseFilePreviewSourceInput,
@@ -20,6 +21,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 import { useFileAudioPlayer } from './useFileAudioPlayer';
 import { useMediaPlaybackLifecycle } from './useMediaPlaybackLifecycle';
@@ -290,6 +292,9 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
   const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
   const [playbackError, setPlaybackError] = React.useState<string | null>(null);
   const [fullscreen, setFullscreen] = React.useState(false);
+  // Cancel stops the transfer (its last consumer releases the shared fill) until the person loads again.
+  const [stopped, setStopped] = React.useState(false);
+  const phone = useDeviceType() === 'phone';
   const slot = React.useRef<Readonly<{ pause: () => void }> | null>(null);
   const pause = React.useCallback(() => slot.current?.pause(), []);
   const lifecycle = useMediaPlaybackLifecycle({
@@ -302,7 +307,7 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
   }, [props.isActive]);
   const preview = useFilePreviewSource({
     ...props.source,
-    enabled: props.source.enabled && lifecycle.enabled,
+    enabled: props.source.enabled && lifecycle.enabled && !stopped,
     // A retry asks for fresh bytes; the first attempt keeps the page's identity so cached bytes are reused.
     cacheKey:
       props.source.cacheKey != null && attempt > 0
@@ -312,6 +317,29 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
   React.useEffect(() => setPlaybackError(null), [attempt, preview.uri]);
   if (!lifecycle.enabled)
     return <View testID={props.testID} style={styles.page} />;
+  if (stopped) {
+    return (
+      <View testID={props.testID} style={styles.page}>
+        <MediaLoadStoppedState
+          testID={`file-${props.kind}-stopped`}
+          title={props.title}
+          onLoadAgain={() => setStopped(false)}
+          {...(props.onDownload
+            ? { handoff: { label: t('files.viewer.download'), onPress: props.onDownload } }
+            : {})}
+        />
+      </View>
+    );
+  }
+  const downloading =
+    preview.status === 'loading' && preview.progress ? (
+      <MediaDownloadLine
+        testID={`file-${props.kind}-downloading`}
+        progress={preview.progress}
+        compact={phone}
+        onCancel={() => setStopped(true)}
+      />
+    ) : null;
 
   const body = playbackError ? (
     <CantPlayState
@@ -353,6 +381,11 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
         onError={setPlaybackError}
       />
     )
+  ) : downloading ? (
+    // Video: the well waits empty and the line names the bytes beneath it (lab FV6d); audio: the row is the line.
+    props.kind === 'audio' ? (
+      <View style={styles.audioDownload}>{downloading}</View>
+    ) : null
   ) : (
     <SurfaceStateCard
       testID={`file-${props.kind}-loading`}
@@ -364,7 +397,10 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
   return (
     <View testID={props.testID} style={styles.page}>
       {props.kind === 'video' ? (
-        <View style={styles.videoWell}>{body}</View>
+        <View style={styles.videoColumn}>
+          <View style={styles.videoWell}>{body}</View>
+          {downloading}
+        </View>
       ) : (
         <View
           style={[
@@ -391,9 +427,13 @@ const styles = StyleSheet.create((theme) => ({
     padding: theme.space.s32,
     backgroundColor: theme.colors.surface.inset,
   },
-  videoWell: {
+  videoColumn: {
     width: '100%',
     maxWidth: 720,
+    gap: theme.space.s12,
+  },
+  videoWell: {
+    width: '100%',
     aspectRatio: 16 / 9,
     borderRadius: theme.space.s12,
     overflow: 'hidden',
@@ -410,6 +450,10 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.space.s16,
     borderWidth: StyleSheet.hairlineWidth,
     justifyContent: 'center',
+  },
+  audioDownload: {
+    paddingVertical: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
   },
   audioRow: {
     flexDirection: 'row',

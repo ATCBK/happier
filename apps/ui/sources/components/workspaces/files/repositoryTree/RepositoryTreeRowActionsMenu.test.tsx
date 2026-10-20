@@ -12,12 +12,13 @@ vi.mock('@/text', async () => (await import('@/dev/testkit')).createTextModuleMo
 vi.mock('@/components/ui/popover', async importOriginal => (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 describe('canonical repository row menu', () => {
-    async function render(input: { kind: 'file' | 'directory'; downloadActionsEnabled: boolean; disableWriteActions?: boolean; fileMenuContext?: FileMenuContext }) {
+    async function render(input: { kind: 'file' | 'directory'; downloadActionsEnabled: boolean; disableWriteActions?: boolean; fileMenuContext?: FileMenuContext;
+        share?: import('./RepositoryTreeRowActionsMenu').RepositoryTreeRowShareTarget }) {
         const { RepositoryTreeRowActionsMenu } = await import('./RepositoryTreeRowActionsMenu');
         const selected: RepositoryTreeRowActionMenuItemId[] = [];
         const screen = await renderScreen(<RepositoryTreeRowActionsMenu path="folder.ts" kind={input.kind}
             downloadActionsEnabled={input.downloadActionsEnabled} disableWriteActions={input.disableWriteActions ?? false}
-            fileMenuContext={input.fileMenuContext}
+            fileMenuContext={input.fileMenuContext} share={input.share}
             control={{ open: true, onOpenChange: () => {}, triggerHidden: true }} onSelect={item => selected.push(item)} />);
         return { screen, selected };
     }
@@ -55,5 +56,21 @@ describe('canonical repository row menu', () => {
         expect(screen.findByTestId('repository-tree-menuitem-delete')?.props.disabled).toBe(true);
         await screen.pressByTestIdAsync('repository-tree-menuitem-copy-path');
         await vi.waitFor(() => expect(selected).toEqual(['repository-tree-menuitem-copy-path']));
+    });
+
+    it('runs a file row\'s Share items through the share owner for its own path: Happier link and Attach only where they have a target', async () => {
+        const workspaceScope = { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' };
+        const share = { workspaceScope, actionScope: { serverId: 'home-a', accountId: 'account-a' },
+            linkTarget: { kind: 'session' as const, sessionId: 'session-a', serverId: 'home-a' },
+            composer: { scope: { serverId: 'home-a', accountId: 'account-a' }, ref: { kind: 'session' as const, sessionId: 'session-a' }, workspace: workspaceScope } };
+        const file = await render({ kind: 'file', downloadActionsEnabled: false, share });
+        expect(file.screen.findByTestId('repository-tree-menuitem-copyLink')).toBeTruthy();
+        expect(file.screen.findByTestId('repository-tree-menuitem-attachToMessage')).toBeTruthy();
+        const noTargets = await render({ kind: 'file', downloadActionsEnabled: false, share: { workspaceScope, actionScope: share.actionScope } });
+        expect(noTargets.screen.findByTestId('repository-tree-menuitem-copyLink')).toBeNull();
+        expect(noTargets.screen.findByTestId('repository-tree-menuitem-attachToMessage')).toBeNull();
+        const folder = await render({ kind: 'directory', downloadActionsEnabled: false, share });
+        expect(folder.screen.findByTestId('repository-tree-menuitem-copyLink')).toBeNull();
+        expect(folder.screen.findByTestId('repository-tree-menuitem-attachToMessage')).toBeNull();
     });
 });

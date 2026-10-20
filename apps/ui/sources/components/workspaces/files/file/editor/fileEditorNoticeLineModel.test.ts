@@ -109,6 +109,18 @@ describe('file editor notice line', () => {
     ).toBe('approval');
   });
 
+  it('leads a waiting save to its approval review once the request exists', () => {
+    const onOpenApproval = vi.fn();
+    const line = resolveFileEditorNoticeLine({
+      editor: editor({ refusal: { kind: 'awaitingApproval' } }),
+      editing: true, reachability: online, agentName: 'Claude', onRetryReachability: vi.fn(), onOpenApproval,
+    });
+    expect(line?.actions).toHaveLength(1);
+    line?.actions[0]?.onPress();
+    expect(onOpenApproval).toHaveBeenCalledTimes(1);
+    expect(resolve(editor({ refusal: { kind: 'awaitingApproval' } }))?.actions).toEqual([]);
+  });
+
   it('falls back to the quiet notes only when no cause needs the person', () => {
     expect(
       resolve(

@@ -1,0 +1,169 @@
+import * as React from 'react';
+import { ScrollView, View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+
+import { EmptyState } from '@/components/ui/empty/EmptyState';
+import { useCodeIntelligenceSnapshot } from '@/sync/domains/workspaces/languageIntelligence/useCodeIntelligence';
+import { t } from '@/text';
+
+import { CodeProblemsList } from './CodeProblemsList';
+import {
+  CodeReferencesList,
+  type CodeReferenceRow,
+} from './CodeReferencesList';
+import {
+  groupCodeProblems,
+  resolveLanguageStateNote,
+} from './codeIntelligencePresentation';
+import { useCodeIntelligencePaneProducer } from './codeIntelligencePaneStore';
+
+/**
+ * The References and Problems tabs of a Session's or Project's right sidebar (LS1 L1 / L2). They read
+ * the pane's active File page (its one controller); only the open tab subscribes to its answers.
+ */
+export function CodeIntelligencePaneTab(
+  props: Readonly<{
+    scopeId: string;
+    kind: 'references' | 'problems';
+    active: boolean;
+  }>,
+): React.ReactElement {
+  const producer = useCodeIntelligencePaneProducer(props.scopeId);
+  const snapshot = useCodeIntelligenceSnapshot(
+    props.active ? (producer?.controller ?? null) : null,
+  );
+  const [selectedReference, setSelectedReference] =
+    React.useState<CodeReferenceRow | null>(null);
+  const [asked, setAsked] = React.useState(false);
+  const [askBusy, setAskBusy] = React.useState(false);
+  const diagnosticsKey = snapshot.diagnostics?.items;
+  React.useEffect(() => {
+    setAsked(false);
+  }, [diagnosticsKey]);
+  if (!producer) {
+    return (
+      <View style={styles.empty}>
+        <EmptyState
+          layout="line"
+          title={
+            props.kind === 'references'
+              ? t('files.pane.intelligence.referencesEmpty')
+              : t('files.pane.intelligence.problemsEmpty')
+          }
+        />
+      </View>
+    );
+  }
+  const progress = resolveLanguageStateNote({
+    snapshot,
+    machineName: producer.machineName,
+    machineUnreachable: producer.machineUnreachable,
+  });
+  const progressLine = progress?.kind === 'progress' ? progress : null;
+  if (props.kind === 'references') {
+    const result = snapshot.kind === 'references' ? snapshot.result : null;
+    const rows: CodeReferenceRow[] =
+      result && 'locations' in result
+        ? result.locations.map((location) => ({
+            path: location.path,
+            line: location.range.start.line,
+            startCharacter: location.range.start.character,
+            endCharacter:
+              location.range.end.line === location.range.start.line
+                ? location.range.end.character
+                : location.range.start.character,
+            lineText: 'lineText' in location ? location.lineText : '',
+          }))
+        : [];
+    if (snapshot.kind !== 'references') {
+      return (
+        <View style={styles.empty}>
+          <EmptyState
+            layout="line"
+            title={t('files.pane.intelligence.referencesEmpty')}
+          />
+        </View>
+      );
+    }
+    return (
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        testID="code-references-pane"
+      >
+        <CodeReferencesList
+          rows={rows}
+          textMatches={snapshot.mode === 'fallback'}
+          partial={Boolean(
+            result && 'coverage' in result && result.coverage === 'partial',
+          )}
+          searching={
+            snapshot.status === 'searching' || snapshot.status === 'loading'
+          }
+          progress={progressLine}
+          selected={selectedReference}
+          onOpen={(row) => {
+            setSelectedReference(row);
+            producer.openReference(row);
+          }}
+        />
+      </ScrollView>
+    );
+  }
+  const diagnostics = snapshot.diagnostics;
+  const groups = diagnostics
+    ? groupCodeProblems(diagnostics.items, snapshot.servers)
+    : [];
+  return (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={[styles.content, styles.fill]}
+      testID="code-problems-pane"
+    >
+      <CodeProblemsList
+        groups={groups}
+        state={diagnostics?.state ?? 'idle'}
+        count={diagnostics?.count ?? null}
+        progress={progressLine}
+        onOpen={producer.openProblem}
+        onCheck={() => {
+          void producer.controller.checkProblems();
+        }}
+        asked={asked}
+        ask={
+          producer.ask
+            ? {
+                label: producer.ask.label,
+                busy: askBusy,
+                onPress: () => {
+                  setAskBusy(true);
+                  void producer.ask
+                    ?.run()
+                    .then((created) => {
+                      setAsked(created);
+                    })
+                    .finally(() => setAskBusy(false));
+                },
+              }
+            : null
+        }
+      />
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  scroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  content: {
+    paddingTop: theme.space.s8,
+  },
+  fill: {
+    flexGrow: 1,
+  },
+  empty: {
+    paddingTop: theme.space.s8,
+  },
+}));

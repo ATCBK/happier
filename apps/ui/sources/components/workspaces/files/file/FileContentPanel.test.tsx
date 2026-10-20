@@ -420,6 +420,31 @@ describe('FileContentPanel', () => {
         expect(scrollView.props.nestedScrollEnabled).toBe(true);
     });
 
+    it('opens the inline comment composer on the lines a selection toolbar Comment requests', async () => {
+        const { FileContentPanel } = await import('./FileContentPanel');
+        codeLinesViewPropsState.current = null;
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="file"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={null}
+                    fileContent={'const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;'}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    reviewCommentsEnabled
+                    reviewCommentModeActive
+                    reviewCommentDrafts={[]}
+                    commentRangeRequest={{ startLine: 2, endLine: 3, key: 1 }}
+                />);
+
+        const props = codeLinesViewPropsState.current;
+        const active = (props?.lines ?? []).filter((line: any) => props.isCommentActive(line)).map((line: any) => line.newLine);
+        expect(active).toEqual([2, 3]);
+    });
+
     it('disables virtualization when review comment mode is active', async () => {
         const { FileContentPanel } = await import('./FileContentPanel');
 

@@ -18,7 +18,6 @@ export type FileEditorCompareBodyProps = Readonly<{
   comparison: EditorComparison;
   agentName: string | null;
   filePath: string;
-  wrapLines?: boolean;
   showLineNumbers?: boolean;
   onUsePlaceMine(index: number): void;
   onUsePlaceTheirs(index: number): void;
@@ -147,7 +146,9 @@ export const FileEditorCompareBody = React.memo(function FileEditorCompareBody(
           oldText={comparison.mineText}
           newText={comparison.theirsText}
           filePath={props.filePath}
-          wrapLines={props.wrapLines}
+          // Always wrapped: a choice between two versions of a line needs the whole line, and the place rows
+          // (with their Use mine / Use theirs) then span the visible width instead of the scrolled code width.
+          wrapLines
           showLineNumbers={props.showLineNumbers}
           showPrefix={props.showLineNumbers}
           hunks={hunks}

@@ -778,7 +778,8 @@ describe('FilePageHeader', () => {
                 onClearSelection: () => {},
             }),
         );
-        expect(singleAreaScreen.findByTestId('file-details-diff-area-menu.trigger')?.props.disabled).toBe(true);
+        // One layer is no choice: the field is not drawn at all.
+        expect(singleAreaScreen.findByTestId('file-details-diff-area-menu')).toBeFalsy();
 
         const multipleAreaScreen = await renderScreen(
             React.createElement(FilePageHeader as any, {

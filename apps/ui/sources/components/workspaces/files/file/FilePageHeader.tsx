@@ -42,12 +42,16 @@ export type FilePageHeaderProps = Readonly<{
     fileName?: string;
     /** The file's workspace-relative path: its folders become the breadcrumb. */
     filePath?: string;
+    /** The host names the repository (the Code page): its root leads the breadcrumb and opens the root listing. */
+    breadcrumbRoot?: string | null;
     onOpenFolder?: (folderPath: string) => void;
     /** How the file changed, in words ("Modified", "Added"); absent for an unchanged file. */
     statusLabel?: string | null;
     diffStat?: Readonly<{ added: number; removed: number }> | null;
     /** Facts about the file itself ("No changes", "34 lines", "2.5 of 38.4 MB"). */
     summaryFacts?: readonly string[] | null;
+    /** Facts other owners supply for this file (P7's "3 problems"); the header owns where they sit. */
+    providerFacts?: readonly DetailsTabHeaderMetaFact[] | null;
     /** Who last changed the file and when (the facts line's last fact). */
     attribution?: Readonly<{ agentName: string | null; requesterName: string | null; updatedAt: number | null }> | null;
     /** A file deleted on disk: who and when, then Restore, in the attribution's place (lab FV2d). */
@@ -90,6 +94,8 @@ export type FilePageHeaderProps = Readonly<{
     onStartRangeSelection?: () => void;
     onToggleCommentMode?: (active: boolean) => void;
     fileEditorEnabled?: boolean;
+    /** The page's one Edit / Done / Save decision (`resolveFilePageEditControl`); without it the header resolves it. */
+    edit?: FilePageEditControl | null;
     editor?: WorkspaceFileEditorHeaderModel;
     isEditingFile?: boolean;
     onStartEditingFile?: () => void;
@@ -126,7 +132,7 @@ export function FilePageHeader(props: FilePageHeaderProps) {
     const indexStaging = !virtualSelectionEnabled;
     const iconSize = 16;
 
-    const editControl = resolveFilePageEditControl({
+    const editControl = props.edit !== undefined ? props.edit : resolveFilePageEditControl({
         fileEditorEnabled: props.fileEditorEnabled === true,
         isEditingFile: editing,
         editor,
@@ -231,6 +237,7 @@ export function FilePageHeader(props: FilePageHeaderProps) {
             busy: editControl.busy,
             disabled: editControl.disabled,
             tone: editControl.primary ? 'primary' : 'default',
+            ...(editControl.kind === 'edit' ? { iconName: 'pencil-simple' as const } : {}),
             testID: editControl.kind === 'edit' ? 'file-details-edit' : editControl.kind === 'done' ? 'file-details-done' : 'file-details-save',
         });
     }
@@ -243,14 +250,14 @@ export function FilePageHeader(props: FilePageHeaderProps) {
         if (hasIncludedDelta && hasPendingDelta) ids.push('both');
         return ids.map((id) => ({ id, title: resolveScmDiffAreaLabel(id, areaVocabulary) }));
     }, [hasIncludedDelta, hasPendingDelta, indexStaging]);
-    const controls = isDiffDisplay && areaItems.length > 0 && !editing ? (
+    // Which layer of the change to show is a choice only when there are two (a one-option field is noise).
+    const controls = isDiffDisplay && areaItems.length > 1 && !editing ? (
         <View testID="file-details-view-controls" style={styles.controls}>
             <ToolbarSelect
                 testID="file-details-diff-area-menu"
                 label={t('detailsSurface.file.areaLabel')}
                 items={areaItems}
                 selectedId={diffMode}
-                disabled={areaItems.length === 1}
                 onSelect={(itemId) => { if (itemId === 'pending' || itemId === 'included' || itemId === 'both') onDiffMode(itemId); }}
             />
         </View>
@@ -293,8 +300,9 @@ export function FilePageHeader(props: FilePageHeaderProps) {
         meta.push({ key: 'stat', kind: 'diffStat', added: props.diffStat.added, removed: props.diffStat.removed });
     }
     for (const [index, fact] of (props.summaryFacts ?? []).entries()) meta.push({ key: `fact-${index}`, text: fact });
-    const breadcrumb = props.filePath && props.filePath.includes('/') ? (
-        <FilePageBreadcrumb filePath={props.filePath} onOpenFolder={props.onOpenFolder} testID="file-details-dir" />
+    for (const fact of props.providerFacts ?? []) meta.push(fact);
+    const breadcrumb = props.filePath && (props.filePath.includes('/') || props.breadcrumbRoot) ? (
+        <FilePageBreadcrumb filePath={props.filePath} rootLabel={props.breadcrumbRoot} onOpenFolder={props.onOpenFolder} testID="file-details-dir" />
     ) : null;
     const separated = meta.length > 0 || breadcrumb !== null;
     const attribution = props.deletion ? <FilePageDeletionFact {...props.deletion} separated={separated} />

@@ -10248,6 +10248,7 @@ localTailscale: {
                 writtenIn: ({ title, time }: { title: string; time: string }) => `まだコミットされていません。${time} に ${title} で書かれました。`,
                 askedBy: ({ name }: { name: string }) => `依頼: ${name}`,
                 uncommittedBody: "まだコミットされていません。このセッションのどのターンも、今の形ではこれらの行を書いていません。",
+                uncommittedNoSession: "まだコミットされていません。",
                 newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `まだコミットされていません。すべての行が新しく、${agent} が ${turn} で書きました。`,
                 noHistory: "まだ履歴がありません。このファイルはコミットされていません。",
                 failed: "このファイルの履歴を読み込めませんでした。",

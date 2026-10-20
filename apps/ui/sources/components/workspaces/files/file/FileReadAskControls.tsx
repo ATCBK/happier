@@ -5,31 +5,41 @@ import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePan
 import { AskSelectionControls } from '@/components/ui/code/selection/AskSelectionControls';
 import { readCodeLineFromDomNode, resolveSourceLinesForText, useDomTextSelection } from '@/components/ui/code/selection/useDomTextSelection';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
+import { readDiffLineFromDomNode, resolveDiffSelectionLines } from '@/components/ui/code/diff/diffTextSelection';
+import { PIERRE_DIFF_HOST_SELECTOR } from '@/components/ui/code/diff/pierre/pierreDomLine';
 
 /**
  * Ask about a selection in the File page's read bodies (lab AS1): the code view (rows know their file
- * line) and the Markdown preview (lines found in its source). The same controls as the editor's.
+ * line), the Markdown preview (lines found in its source) and the Changes diff (rows know their old/new
+ * lines, either renderer; `text` is then the unified diff). The same controls as the editor's.
  */
 export function FileReadAskControls(props: Readonly<{
     rootRef: React.RefObject<unknown>;
-    mode: 'code' | 'markdown';
+    mode: 'code' | 'markdown' | 'diff';
     scopeId: string;
     scope: WorkspaceScopeBase;
     filePath: string;
     text: string;
     sessionId: string | null;
     active: boolean;
+    /** Comment opens the page's inline comment composer on the selected lines (code view only). */
+    onCommentRange?: (range: Readonly<{ startLine: number; endLine: number }>) => void;
 }>): React.ReactElement | null {
     const pane = useAppPaneScope(props.scopeId);
     const mainColumn = usePaneMainColumn();
     const text = props.text;
     const resolveLines = React.useCallback((range: Parameters<Parameters<typeof useDomTextSelection>[0]['resolveLines']>[0]) => {
         if (props.mode === 'markdown') return resolveSourceLinesForText(text, range.text);
+        if (props.mode === 'diff') return resolveDiffSelectionLines(readDiffLineFromDomNode(range.startNode), readDiffLineFromDomNode(range.endNode));
         const start = readCodeLineFromDomNode(range.startNode);
         const end = readCodeLineFromDomNode(range.endNode);
         return start === null || end === null ? null : { startLine: Math.min(start, end), endLine: Math.max(start, end) };
     }, [props.mode, text]);
-    const source = useDomTextSelection({ rootRef: props.rootRef, active: props.active, resolveLines });
+    const source = useDomTextSelection({ rootRef: props.rootRef, active: props.active, resolveLines,
+        ...(props.mode === 'diff' ? { shadowHostSelector: PIERRE_DIFF_HOST_SELECTOR } : {}) });
+    const diffLines = React.useMemo(() => props.mode === 'diff' ? buildCodeLinesFromUnifiedDiff({ unifiedDiff: text, hideFilePrelude: true }) : undefined,
+        [props.mode, text]);
     const getLinesText = React.useCallback(() => text, [text]);
     const revealSessionColumn = React.useCallback(() => {
         if (mainColumn?.hidden) mainColumn.setHidden(false);
@@ -41,7 +51,8 @@ export function FileReadAskControls(props: Readonly<{
             scopeId={props.scopeId}
             workspaceScope={props.scope}
             filePath={props.filePath}
-            source={props.mode === 'markdown' ? 'markdown' : 'file'}
+            source={props.mode === 'code' ? 'file' : props.mode}
+            lines={diffLines}
             sourceLinesMapped={props.mode === 'markdown'}
             getSelection={source.getSelection}
             subscribeSelection={source.subscribeSelection}
@@ -50,6 +61,7 @@ export function FileReadAskControls(props: Readonly<{
             sessionTarget={sessionTarget}
             openDetailsTab={pane.openDetailsTab}
             active={props.active}
+            onCommentSelection={props.onCommentRange}
             testID="file-read-selection-toolbar"
         />
     );

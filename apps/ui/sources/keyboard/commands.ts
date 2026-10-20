@@ -93,6 +93,7 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         { binding: 'Mod+i', blockedSurfaces: ['web'], allowInEditable: true, nativeConsumable: true, conflictScope: 'editorSelection' },
     ] },
     { id: 'files.track.toggle', settingsTitleKey: 'settingsKeyboard.commands.filesTrackToggle' },
+    { id: 'file.blame.toggle', settingsTitleKey: 'settingsKeyboard.commands.fileBlameToggle' },
     { id: 'inbox.item.next', settingsTitleKey: 'common.next', defaultBindings: [{ binding: 'ArrowDown' }, { binding: 'j' }],
         when: context => !context.isEditableTarget && !context.isInteractiveTarget },
     { id: 'inbox.item.previous', settingsTitleKey: 'common.previous', defaultBindings: [{ binding: 'ArrowUp' }, { binding: 'k' }],

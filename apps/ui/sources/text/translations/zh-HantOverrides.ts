@@ -8055,6 +8055,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
                 writtenIn: ({ title, time }: { title: string; time: string }) => `尚未提交。${time} 寫於 ${title}。`,
                 askedBy: ({ name }: { name: string }) => `由 ${name} 發起。`,
                 uncommittedBody: "尚未提交。本工作階段中沒有哪一輪寫出這些行的目前內容。",
+                uncommittedNoSession: "尚未提交。",
                 newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `尚未提交。每一行都是新的；${agent} 在${turn}寫下。`,
                 noHistory: "還沒有歷史。此檔案尚未提交。",
                 failed: "無法讀取此檔案的歷史。",

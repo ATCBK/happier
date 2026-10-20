@@ -365,6 +365,7 @@ export interface ScmCapabilities {
     capabilityScope?: 'local-backend';
     readStatus: boolean;
     readDiffFile: boolean;
+    readBlame?: boolean;
     readDiffCommit: boolean;
     readLog: boolean;
     writeInclude: boolean;

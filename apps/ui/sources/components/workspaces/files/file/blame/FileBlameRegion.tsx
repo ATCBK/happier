@@ -125,10 +125,13 @@ export function BlameCard({
   onOpenCommit,
   onOpenTurn,
   onClose,
+  inSession,
 }: Readonly<{
   run: FileBlameRun;
   nowMs: number;
   agentId: string | null;
+  /** Session pages can say no turn wrote the lines; project pages only know git's answer. */
+  inSession: boolean;
   onOpenCommit?: (sha: string) => void;
   onOpenTurn?: (turn: FileBlameTurn) => void;
   onClose: () => void;
@@ -323,7 +326,7 @@ export function BlameCard({
           },
         ]}
       >
-        {t('files.blame.uncommittedBody')}
+        {inSession ? t('files.blame.uncommittedBody') : t('files.blame.uncommittedNoSession')}
       </Text>
       {footer(null, lineRangeLabel(run))}
     </View>
@@ -456,6 +459,8 @@ export type FileBlameRegion = Readonly<{
   card: React.ReactNode;
   /** One quiet note above the code (untracked file, an error); null when none applies. */
   note: Readonly<{ tone: 'info' | 'danger'; text: string }> | null;
+  /** The open card's run, for the code view to emphasize. */
+  emphasizedLines: Readonly<{ startLine: number; lineCount: number }> | null;
   refresh: () => void;
 }>;
 
@@ -619,6 +624,7 @@ export function useFileBlameRegion(
         <FloatingOverlay role="panel" maxHeight={maxHeight}>
           <BlameCard
             run={open}
+            inSession={input.sessionAddress !== null}
             nowMs={nowMs}
             agentId={agentId}
             onOpenCommit={input.onOpenCommit}
@@ -697,7 +703,7 @@ export function useFileBlameRegion(
         : blame.error
           ? { tone: 'danger', text: t('files.blame.failed') }
           : null;
-  return { renderLeadingLane, card, note, refresh: blame.refresh };
+  return { renderLeadingLane, card, note, emphasizedLines: open, refresh: blame.refresh };
 }
 
 /** The region's one note above the code (lab BL1 N): quiet, one line, said once. */

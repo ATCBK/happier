@@ -36,6 +36,8 @@ export const CodeBrowserBar = React.memo(function CodeBrowserBar(props: Readonly
      * widget, where Go to file belongs to the Code page.
      */
     onQuickOpen?: (() => void) | null;
+    /** Off while a file is open: the File page header carries its breadcrumb. */
+    crumbs?: boolean;
     /** Phone layout keeps nested up navigation above a full-width Go to file field. */
     compact?: boolean;
     /** The folder's own controls (View, +), at the end of the line after Go to file. */
@@ -48,7 +50,7 @@ export const CodeBrowserBar = React.memo(function CodeBrowserBar(props: Readonly
     const segments = React.useMemo(() => buildCodeBreadcrumbSegments(props.rootLabel, props.path), [props.path, props.rootLabel]);
     return (
         <View testID={testID} style={[styles.bar, props.compact ? styles.barCompact : null]}>
-            {props.compact && props.path === '' ? null : <HappierBreadcrumb accessibilityRole="header" style={styles.crumbs}
+            {(props.compact && props.path === '') || props.crumbs === false ? null : <HappierBreadcrumb accessibilityRole="header" style={styles.crumbs}
                 separator={<Text style={styles.separator}>/</Text>}
                 linkStyle={styles.crumb}
                 colors={{ focus: theme.colors.border.focus, hover: theme.colors.surface.pressed }}
@@ -76,7 +78,8 @@ function CodeQuickOpenField(props: Readonly<{ testID: string; onPress: () => voi
     return (
         <HappierPressable testID={props.testID} accessibilityRole="button" accessibilityLabel={t('projects.code.goToFile')}
             onPress={props.onPress} style={props.compact ? styles.gotoCompact : styles.goto}>
-            <View style={styles.gotoField}>
+            {/* Drawn as the field it opens; the button is the one control assistive tech and pointers reach. */}
+            <View style={[styles.gotoField, { pointerEvents: 'none' }]} aria-hidden importantForAccessibility="no-hide-descendants">
                 <CompactSearchField
                     testID={`${props.testID}-field`}
                     value=""

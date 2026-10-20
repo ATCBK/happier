@@ -2,25 +2,18 @@ import * as React from 'react';
 import type { FileChangesScope } from '@happier-dev/protocol/scm';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
-import {
-  discardChange,
-  type DiscardChangeMessages,
-  type DiscardChangeResult,
-} from '@/components/sessions/files/review/discardChange';
 import { useSessionTurnNumber } from '@/components/sessions/files/review/sessionTurnNumber';
-import { describeDiffHunkRange } from '@/components/ui/code/diff/hunks/DiffHunkRow';
 import {
   useHunkReviewController,
   type HunkReviewActionTarget,
 } from '@/components/workspaces/scm/review/hunkReview/useHunkReviewController';
 import type { ReviewKeyboardController } from '@/components/workspaces/scm/review/hunkReview/useReviewKeyboard';
 import { useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
-import { decodeBase64 } from '@/encryption/base64';
-import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { useSessionSelector } from '@/sync/store/hooks';
 import { t } from '@/text';
 import { useFileChangesActions } from './useFileChangesActions';
+import { rangeOfReviewUnit, useHunkDiscard } from '@/components/workspaces/scm/review/hunkReview/useHunkDiscard';
 import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import { askAboutRanges } from '@/components/ui/code/selection/askAboutRanges';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
@@ -53,12 +46,6 @@ export type FileChangesReviewParams = Readonly<{
   onReplacedUnsavedEdits?: () => void;
   offerWholeTurnRollback?: (turnId: string) => void;
 }>;
-
-function decodeUtf8(base64: string): string {
-  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
-    decodeBase64(base64),
-  );
-}
 
 /**
  * The File page Changes region: scope, the displayed diff for it, the hunk review controller,
@@ -128,114 +115,25 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
           ? 'ready'
           : 'empty';
 
-  const target = React.useMemo(
-    () => ({
-      machineId: scope.machineId,
-      rootPath: scope.rootPath,
-      serverId: scope.serverId,
-    }),
-    [scope.machineId, scope.rootPath, scope.serverId],
-  );
-  const readCurrentText = React.useCallback(async () => {
-    const read = await workspaceReadFile(target, filePath);
-    if (!read.success) throw new Error(read.error);
-    return decodeUtf8(read.content);
-  }, [target, filePath]);
-  const agent =
-    params.agentName?.trim() || t('hunkReview.agentFallback');
-  const messages = React.useMemo<DiscardChangeMessages>(
-    () => ({
-      moved_on: t('hunkReview.noticeMovedOn'),
-      update_required: t('hunkReview.noticeUpdateRequired', {
-        machine: machineName,
-      }),
-      unsupported: t('hunkReview.noticeUnsupported'),
-      unavailable: t('hunkReview.noticeUnavailable'),
-      unknown: t('hunkReview.noticeUnknown'),
-      discarded: t('hunkReview.noticeDiscarded'),
-      restored: t('hunkReview.noticeRestored', {
-        name: filePath.split('/').pop() ?? filePath,
-      }),
-      kept_edited: t('hunkReview.noticeKeptEdited'),
-      undone: t('hunkReview.noticeUndone'),
-      undo_conflict: t('hunkReview.noticeUndoConflict'),
-      undo: t('hunkReview.undo'),
-      note_failed: t('hunkReview.noticeNoteFailed', { agent }),
-      undo_unavailable: t('hunkReview.noticeUndoUnavailable'),
-    }),
-    [machineName, filePath, agent],
-  );
-  const refresh = React.useCallback(async () => {
-    changes.refreshAfterAction();
-  }, [changes.refreshAfterAction]);
-  const sessionTarget = React.useMemo(
-    () => (sessionId ? { sessionId, serverId: scope.serverId } : undefined),
-    [sessionId, scope.serverId],
-  );
-
-  const latestResult = React.useRef<DiscardChangeResult | null>(null);
-  const [undoAvailable, setUndoAvailable] = React.useState(false);
-  const retireUndo = React.useCallback(() => {
-    const previous = latestResult.current;
-    latestResult.current = null;
-    setUndoAvailable(false);
-    if (previous?.ok) previous.retire();
-  }, []);
+  // One discard / Undo owner with the Review list (`useHunkDiscard`); this page adds its file's restore.
+  const hunkDiscard = useHunkDiscard({
+    scope,
+    sessionId,
+    agentName: params.agentName,
+    machineName,
+    unreachable: reachability.unreachable,
+    refresh: changes.refreshAfterAction,
+  });
+  const { target, refresh, sessionTarget, remember, retireUndo, undo, undoAvailable, discardDisabledReason } = hunkDiscard;
+  const messages = React.useMemo(() => hunkDiscard.messagesFor(filePath), [hunkDiscard.messagesFor, filePath]);
+  const readCurrentText = React.useMemo(() => hunkDiscard.readCurrentTextFor(filePath), [hunkDiscard.readCurrentTextFor, filePath]);
   React.useEffect(() => retireUndo, [retireUndo, filePath]);
-  const remember = (result: DiscardChangeResult) => {
-    latestResult.current = result;
-    setUndoAvailable(result.ok && Boolean(result.undo));
-  };
-  const undo = React.useCallback(() => {
-    const result = latestResult.current;
-    if (!result?.ok || !result.undo) return;
-    latestResult.current = null;
-    setUndoAvailable(false);
-    void result.undo();
-  }, []);
-
-  const discardDisabledReason = reachability.unreachable
-    ? t('hunkReview.discardNeeds', { machine: machineName })
-    : null;
-  const onDiscard = React.useCallback(
-    async (hunkTarget: HunkReviewActionTarget) => {
-      const against =
-        hunkTarget.source.kind === 'captured'
-          ? {
-              source: hunkTarget.source.comparison.source,
-              comparisonId: hunkTarget.source.comparison.id,
-              ...(sessionId ? { sessionId } : {}),
-            }
-          : { source: { kind: 'workingTree' as const } };
-      const range = describeDiffHunkRange(rangeOfUnit(hunkTarget));
-      const result = await discardChange({
-        target,
-        entry: {
-          kind: 'comparison',
-          path: hunkTarget.path,
-          against,
-          changeKeys: [hunkTarget.changeKey],
-          ...(hunkTarget.expectedHash
-            ? { expectedHash: hunkTarget.expectedHash }
-            : {}),
-        },
-        messages: {
-          ...messages,
-          discarded: t('hunkReview.noticeDiscardedAt', { range }),
-        },
-        readCurrentText,
-        refresh,
-        sessionTarget,
-      });
-      remember(result);
-    },
-    [target, sessionId, messages, readCurrentText, refresh, sessionTarget],
-  );
+  const onDiscard = hunkDiscard.discard;
 
   // Ask about this change (`/`, row): the one Ask owner builds an anchored draft over the change's lines.
   const onAsk = React.useCallback(async (hunkTarget: HunkReviewActionTarget) => {
     if (!sessionId || !unifiedDiff) return;
-    const range = rangeOfUnit(hunkTarget);
+    const range = rangeOfReviewUnit(hunkTarget);
     const deletion = !hunkTarget.unit.hunk.lines.some(line => line.kind === 'add');
     await askAboutRanges({
       workspaceScope: scope,
@@ -367,21 +265,3 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
 }
 
 export type FileChangesReview = ReturnType<typeof useFileChangesReview>;
-
-function rangeOfUnit(
-  target: HunkReviewActionTarget,
-): Readonly<{ rangeStart: number; rangeEnd: number }> {
-  const hunk = target.unit.hunk;
-  let o = hunk.oldStart;
-  let n = hunk.newStart;
-  let added: [number, number] | null = null;
-  let removed: [number, number] | null = null;
-  for (const line of hunk.lines) {
-    if (line.kind === 'add') added = added ? [added[0], n] : [n, n];
-    if (line.kind === 'remove') removed = removed ? [removed[0], o] : [o, o];
-    if (line.kind !== 'add') o += 1;
-    if (line.kind !== 'remove') n += 1;
-  }
-  const range = added ?? removed ?? [hunk.newStart, hunk.newStart];
-  return { rangeStart: range[0], rangeEnd: range[1] };
-}

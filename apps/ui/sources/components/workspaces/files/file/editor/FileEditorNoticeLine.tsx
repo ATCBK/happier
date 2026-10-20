@@ -13,6 +13,7 @@ export const FileEditorNoticeLine = React.memo(function FileEditorNoticeLine(
     editing: boolean;
     reachability: FileEditorNoticeReachability;
     agentName: string | null;
+    onOpenApproval?: (() => void) | null;
   }>,
 ) {
   const line = resolveFileEditorNoticeLine({ ...props, onRetryReachability: retryMachineReachability });

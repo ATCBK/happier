@@ -9802,6 +9802,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
                 writtenIn: ({ title, time }: { title: string; time: string }) => `Ещё не в коммите. Написано в ${title} в ${time}.`,
                 askedBy: ({ name }: { name: string }) => `Попросил(а): ${name}.`,
                 uncommittedBody: "Ещё не в коммите. Ни один ход этой сессии не писал эти строки в нынешнем виде.",
+                uncommittedNoSession: "Ещё не в коммите.",
                 newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `Ещё не в коммите. Все строки новые; ${agent} написал их: ${turn}.`,
                 noHistory: "Истории пока нет. Этот файл не в коммите.",
                 failed: "Не удалось прочитать историю этого файла.",

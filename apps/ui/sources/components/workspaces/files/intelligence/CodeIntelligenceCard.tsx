@@ -1,0 +1,606 @@
+import * as React from 'react';
+import { Platform, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import type { LanguageIntelligenceDiagnostic } from '@happier-dev/protocol/machines/languageIntelligence';
+
+import type { Rect } from '@/components/ui/code/editor/codeEditorTypes';
+import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
+import { Icon } from '@/components/ui/icons/Icon';
+import { SimpleSyntaxHighlighter } from '@/components/ui/media/SimpleSyntaxHighlighter';
+import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
+import { Popover } from '@/components/ui/popover';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
+import type { CodeIdentifier } from '@/sync/domains/workspaces/languageIntelligence/codeIdentifiers';
+import { t } from '@/text';
+
+import type {
+  CodeHoverContent,
+  LanguageStateNote,
+} from './codeIntelligencePresentation';
+import { CodeIntelligencePaneTab } from './CodeIntelligencePaneTab';
+import {
+  CodeReferencesList,
+  type CodeReferenceRow,
+} from './CodeReferencesList';
+
+const CARD_MAX_WIDTH = 460;
+const CARD_MAX_HEIGHT = 420;
+
+export type CodeIntelligenceCardModel = Readonly<{
+  /** The name the answer is about, and the line's other names (phones: a near miss is one tap). */
+  name: CodeIdentifier | null;
+  names: readonly CodeIdentifier[];
+  hover: CodeHoverContent | null;
+  /** The problem under the pointer leads the card (LS4). */
+  diagnostic: LanguageIntelligenceDiagnostic | null;
+  /** The definition lies outside the workspace (OD-7): its absolute path, never opened. */
+  outsidePath: string | null;
+  /** One quiet line while the server starts or loads the project. */
+  progress: LanguageStateNote | null;
+  searching: boolean;
+  /** "TypeScript · NLDW3"; absent when no server answered (name search). */
+  sourceLabel: string | null;
+  /** Phones: references grow out of the card in the same sheet (L3 `ls2-R`). */
+  references: Readonly<{
+    rows: readonly CodeReferenceRow[];
+    textMatches: boolean;
+    partial: boolean;
+    searching: boolean;
+  }> | null;
+}>;
+
+export type CodeIntelligenceCardProps = Readonly<{
+  open: boolean;
+  anchor: Rect | null;
+  model: CodeIntelligenceCardModel;
+  onRequestClose: () => void;
+  onDefinition: () => void;
+  onReferences: () => void;
+  onCopyName: () => void;
+  onCopyPath: (path: string) => void;
+  onChooseName: (name: CodeIdentifier) => void;
+  onOpenReference: (row: CodeReferenceRow) => void;
+  /** The pointer is over the card: a hover card stays while it is read. */
+  onHoverChange?: (hovered: boolean) => void;
+}>;
+
+/**
+ * The language answer about one name (LS1 `rv-hover`, LS2 phone sheet): its signature, its
+ * documentation, the problem on it, and the two ways on (definition, references). On desktop it is a
+ * non-modal card at the name; on a phone the shared sheet, with the line's other names as chips.
+ */
+export function CodeIntelligenceCard(
+  props: CodeIntelligenceCardProps,
+): React.ReactElement | null {
+  const anchor = props.anchor;
+  const popoverAnchor = React.useMemo(
+    () =>
+      anchor
+        ? {
+            kind: 'rect' as const,
+            rect: {
+              left: anchor.x,
+              top: anchor.y,
+              width: Math.max(1, anchor.width),
+              height: Math.max(1, anchor.height),
+            },
+            coordinateSpace: 'window' as const,
+          }
+        : null,
+    [anchor?.x, anchor?.y, anchor?.width, anchor?.height],
+  );
+  if (!props.open) return null;
+  return (
+    <Popover
+      open
+      anchor={popoverAnchor ?? undefined}
+      backdrop={false}
+      boundaryRef={null}
+      onRequestClose={props.onRequestClose}
+      phonePresentation="sheet"
+      sheetHeader="none"
+      sheetMaterial="solid"
+      accessibilityLabel={
+        props.model.name?.symbol ?? t('files.pane.intelligence.cardLabel')
+      }
+      portal={{
+        web: true,
+        native: true,
+        matchAnchorWidth: false,
+        anchorAlign: 'start',
+        sizeToContent: true,
+      }}
+      placement="bottom"
+      flip
+      gap={4}
+      minWidth={0}
+      maxWidthCap={CARD_MAX_WIDTH}
+      maxHeightCap={CARD_MAX_HEIGHT}
+    >
+      {({ presentation, maxHeight }) =>
+        presentation === 'sheet' ? (
+          <CodeIntelligenceSheetContent {...props} />
+        ) : (
+          <FloatingOverlay
+            maxHeight={Math.min(maxHeight, CARD_MAX_HEIGHT)}
+            role="menu"
+            edgeFades={{ top: true, bottom: true }}
+          >
+            <View
+              testID="code-hover-card"
+              accessibilityRole={Platform.OS === 'web' ? undefined : 'summary'}
+              style={styles.card}
+              {...(Platform.OS === 'web'
+                ? {
+                    onPointerEnter: () => props.onHoverChange?.(true),
+                    onPointerLeave: () => props.onHoverChange?.(false),
+                  }
+                : {})}
+            >
+              <CodeIntelligenceAnswer
+                model={props.model}
+                onCopyPath={props.onCopyPath}
+              />
+              <CodeIntelligenceFooter
+                model={props.model}
+                onDefinition={props.onDefinition}
+                onReferences={props.onReferences}
+              />
+            </View>
+          </FloatingOverlay>
+        )
+      }
+    </Popover>
+  );
+}
+
+function CodeIntelligenceAnswer(
+  props: Readonly<{
+    model: CodeIntelligenceCardModel;
+    onCopyPath: (path: string) => void;
+    sheet?: boolean;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const { model } = props;
+  const hasAnswer = Boolean(
+    model.diagnostic || model.hover || model.outsidePath,
+  );
+  return (
+    <>
+      {model.diagnostic ? (
+        <View
+          style={[styles.block, styles.diagnostic]}
+          testID="code-hover-card-diagnostic"
+        >
+          <Icon
+            name="x-circle"
+            size={14}
+            color={
+              model.diagnostic.severity === 'error'
+                ? theme.colors.state.danger.foreground
+                : theme.colors.state.warning.foreground
+            }
+          />
+          <Text variant="body" style={styles.diagnosticText}>
+            {model.diagnostic.message}
+          </Text>
+        </View>
+      ) : null}
+      {model.hover?.signature ? (
+        <View
+          style={[
+            styles.block,
+            props.sheet ? styles.sheetSignature : styles.signature,
+            model.diagnostic ? styles.divided : null,
+          ]}
+          testID="code-hover-card-signature"
+        >
+          <SimpleSyntaxHighlighter
+            code={model.hover.signature.code}
+            language={model.hover.signature.language ?? 'typescript'}
+            selectable
+            wrap
+          />
+        </View>
+      ) : null}
+      {model.hover?.documentation ? (
+        <View
+          style={[
+            styles.block,
+            !props.sheet && (model.hover.signature || model.diagnostic)
+              ? styles.divided
+              : null,
+          ]}
+        >
+          <Text variant="body" selectable style={styles.documentation}>
+            {model.hover.documentation}
+          </Text>
+        </View>
+      ) : null}
+      {model.outsidePath ? (
+        <View
+          style={[
+            styles.block,
+            hasAnswer && (model.hover || model.diagnostic)
+              ? styles.divided
+              : null,
+          ]}
+          testID="code-hover-card-outside"
+        >
+          <Text variant="label" emphasis="medium" style={styles.primaryText}>
+            {t('files.pane.intelligence.definedOutside')}
+          </Text>
+          <View style={styles.pathRow}>
+            <Text
+              variant="meta"
+              numberOfLines={2}
+              selectable
+              style={styles.path}
+            >
+              {model.outsidePath}
+            </Text>
+            <HappierPressable
+              accessibilityRole="button"
+              testID="code-hover-card-copy-path"
+              onPress={() => props.onCopyPath(model.outsidePath!)}
+              style={({ hovered, pressed }) => [
+                styles.inlineAction,
+                pressed ? styles.pressed : hovered ? styles.hovered : null,
+              ]}
+            >
+              <Text variant="label" emphasis="medium" style={styles.link}>
+                {t('files.pane.intelligence.copy')}
+              </Text>
+            </HappierPressable>
+          </View>
+        </View>
+      ) : null}
+      {!hasAnswer && model.progress ? (
+        <View
+          style={[styles.block, styles.progress]}
+          testID="code-hover-card-progress"
+        >
+          <Text variant="body" style={styles.secondaryText}>
+            {model.progress.text}
+          </Text>
+          {model.progress.detail ? (
+            <Text variant="meta" style={styles.tertiaryText}>
+              {model.progress.detail}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+      {!hasAnswer && !model.progress && model.searching ? (
+        <View style={styles.block}>
+          <Text variant="meta" style={styles.tertiaryText}>
+            {t('files.pane.intelligence.lookingUp')}
+          </Text>
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+function CodeIntelligenceFooter(
+  props: Readonly<{
+    model: CodeIntelligenceCardModel;
+    onDefinition: () => void;
+    onReferences: () => void;
+  }>,
+) {
+  const definitionKey = useKeyboardShortcutLabel('code.goToDefinition');
+  const referencesKey = useKeyboardShortcutLabel('code.findReferences');
+  return (
+    <View
+      style={[
+        styles.footer,
+        props.model.hover || props.model.diagnostic || props.model.outsidePath
+          ? styles.divided
+          : null,
+      ]}
+    >
+      {props.model.outsidePath ? null : (
+        <FooterAction
+          label={t('files.pane.intelligence.goToDefinition')}
+          shortcut={definitionKey}
+          onPress={props.onDefinition}
+          testID="code-hover-card-definition"
+        />
+      )}
+      <FooterAction
+        label={t('files.pane.intelligence.findReferences')}
+        shortcut={referencesKey}
+        onPress={props.onReferences}
+        testID="code-hover-card-references"
+      />
+      <View style={styles.footerSpacer} />
+      {props.model.sourceLabel ? (
+        <Text variant="meta" numberOfLines={1} style={styles.tertiaryText}>
+          {props.model.sourceLabel}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function FooterAction(
+  props: Readonly<{
+    label: string;
+    shortcut?: string;
+    onPress: () => void;
+    testID: string;
+  }>,
+) {
+  return (
+    <HappierPressable
+      accessibilityRole="button"
+      testID={props.testID}
+      onPress={props.onPress}
+      style={({ hovered, pressed }) => [
+        styles.inlineAction,
+        pressed ? styles.pressed : hovered ? styles.hovered : null,
+      ]}
+    >
+      <Text variant="label" emphasis="medium" style={styles.link}>
+        {props.label}
+      </Text>
+      {props.shortcut && Platform.OS === 'web' ? (
+        <Text variant="meta" style={styles.shortcut}>
+          {props.shortcut}
+        </Text>
+      ) : null}
+    </HappierPressable>
+  );
+}
+
+function CodeIntelligenceSheetContent(props: CodeIntelligenceCardProps) {
+  const { model } = props;
+  const referencesKey = model.references?.searching
+    ? null
+    : model.references?.rows.length;
+  return (
+    <View style={styles.sheet} testID="code-name-sheet">
+      {model.names.length > 1 ? (
+        <View
+          style={styles.chips}
+          accessibilityRole="radiogroup"
+          accessibilityLabel={t('files.pane.intelligence.namesOnLine')}
+        >
+          {model.names.map((name) => {
+            const selected =
+              model.name?.startCharacter === name.startCharacter &&
+              model.name.symbol === name.symbol;
+            return (
+              <HappierPressable
+                key={`${name.startCharacter}:${name.symbol}`}
+                accessibilityRole="radio"
+                selected={selected}
+                testID={`code-name-sheet-chip-${name.symbol}`}
+                onPress={() => props.onChooseName(name)}
+                style={({ pressed }) => [
+                  styles.chip,
+                  selected ? styles.chipSelected : null,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                <Text
+                  variant="label"
+                  numberOfLines={1}
+                  style={[
+                    styles.chipText,
+                    selected ? styles.primaryText : null,
+                  ]}
+                >
+                  {name.symbol}
+                </Text>
+              </HappierPressable>
+            );
+          })}
+        </View>
+      ) : null}
+      {model.references ? (
+        <CodeReferencesList
+          rows={model.references.rows}
+          textMatches={model.references.textMatches}
+          partial={model.references.partial}
+          searching={model.references.searching}
+          progress={model.progress}
+          onOpen={props.onOpenReference}
+        />
+      ) : (
+        <>
+          <CodeIntelligenceAnswer
+            model={model}
+            onCopyPath={props.onCopyPath}
+            sheet
+          />
+          <SelectionTiles
+            variant="action"
+            accessibilityLabel={model.name?.symbol}
+            testIdPrefix="code-name-sheet-action"
+            options={[
+              {
+                id: 'definition',
+                title: t('files.pane.intelligence.definition'),
+                subtitle: model.name?.symbol,
+                icon: 'arrow-right',
+              },
+              {
+                id: 'references',
+                title: t('files.pane.intelligence.references'),
+                ...(referencesKey ? { subtitle: String(referencesKey) } : {}),
+                icon: 'list',
+              },
+              { id: 'copy', title: t('files.pane.intelligence.copy'), icon: 'copy' },
+            ]}
+            onPress={(id) =>
+              id === 'definition'
+                ? props.onDefinition()
+                : id === 'references'
+                  ? props.onReferences()
+                  : props.onCopyName()
+            }
+          />
+          {model.sourceLabel ? (
+            <Text
+              variant="meta"
+              style={[styles.tertiaryText, styles.sheetSource]}
+            >
+              {model.sourceLabel}
+            </Text>
+          ) : null}
+        </>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  problemsSheet: {
+    minHeight: 280,
+  },
+  card: {
+    maxWidth: CARD_MAX_WIDTH,
+  },
+  block: {
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s8,
+    gap: theme.space.s4,
+  },
+  divided: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  signature: {
+    paddingVertical: theme.space.s8,
+  },
+  sheetSignature: {
+    backgroundColor: theme.colors.surface.sectionTint,
+    borderRadius: theme.borderRadius.md,
+    marginHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s10,
+  },
+  diagnostic: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.space.s8,
+  },
+  diagnosticText: {
+    flex: 1,
+    color: theme.colors.text.primary,
+  },
+  documentation: {
+    color: theme.colors.text.secondary,
+  },
+  progress: {
+    paddingVertical: theme.space.s10,
+  },
+  primaryText: {
+    color: theme.colors.text.primary,
+  },
+  secondaryText: {
+    color: theme.colors.text.secondary,
+  },
+  tertiaryText: {
+    color: theme.colors.text.tertiary,
+  },
+  pathRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s8,
+  },
+  path: {
+    ...Typography.mono(),
+    flex: 1,
+    color: theme.colors.text.secondary,
+  },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s4,
+    paddingHorizontal: theme.space.s6,
+    paddingVertical: theme.space.s4,
+  },
+  footerSpacer: {
+    flex: 1,
+    minWidth: theme.space.s8,
+  },
+  inlineAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s6,
+    paddingHorizontal: theme.space.s6,
+    paddingVertical: theme.space.s4,
+    borderRadius: theme.borderRadius.sm,
+  },
+  hovered: {
+    backgroundColor: theme.colors.surface.pressed,
+  },
+  pressed: {
+    opacity: 0.7,
+  },
+  link: {
+    color: theme.colors.text.link,
+  },
+  shortcut: {
+    ...Typography.mono(),
+    color: theme.colors.text.tertiary,
+  },
+  sheet: {
+    gap: theme.space.s12,
+    paddingTop: theme.space.s4,
+    paddingBottom: theme.space.s12,
+  },
+  sheetSource: {
+    paddingHorizontal: theme.space.s16,
+  },
+  chips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.space.s8,
+    paddingHorizontal: theme.space.s12,
+  },
+  chip: {
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s6,
+    borderRadius: 999,
+    backgroundColor: theme.colors.surface.sectionTint,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'transparent',
+  },
+  chipSelected: {
+    borderColor: theme.colors.border.strong,
+    backgroundColor: theme.colors.surface.selected,
+  },
+  chipText: {
+    ...Typography.mono(),
+    color: theme.colors.text.secondary,
+  },
+}));
+
+/** Phones: Problems as a sheet over the File page, opened from the "3 problems" fact (L3 `ls2-P`). */
+export function CodeProblemsSheet(props: Readonly<{ scopeId: string; onRequestClose: () => void }>): React.ReactElement {
+  return (
+    <Popover
+      open
+      backdrop={false}
+      boundaryRef={null}
+      onRequestClose={props.onRequestClose}
+      phonePresentation="sheet"
+      sheetMaterial="solid"
+      accessibilityLabel={t('files.pane.intelligence.problemsTitle')}
+      portal={{ web: true, native: true, matchAnchorWidth: false }}
+      placement="bottom"
+    >
+      {() => (
+        <View style={styles.problemsSheet} testID="code-problems-sheet">
+          <CodeIntelligencePaneTab scopeId={props.scopeId} kind="problems" active />
+        </View>
+      )}
+    </Popover>
+  );
+}

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { DiffViewerHunks } from '@/components/ui/code/diff/diffViewerTypes';
@@ -12,13 +12,12 @@ import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { ImageCompare } from '@/components/workspaces/scm/review/imageCompare/ImageCompare';
 import { useImageCompare } from '@/components/workspaces/scm/review/imageCompare/useImageCompare';
 import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
+import { FileReadAskControls } from '@/components/workspaces/files/file/FileReadAskControls';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { t } from '@/text';
 import {
-  useFileChangesReview,
   type FileChangesReview,
-  type FileChangesReviewParams,
   type FileChangesScopeKind,
 } from './useFileChangesReview';
 
@@ -64,6 +63,8 @@ export function FileChangesStrip(
   );
 }
 
+export type FileChangesAsk = Readonly<{ scopeId: string; scope: WorkspaceScopeBase; filePath: string; sessionId: string | null; active: boolean }>;
+
 export type FileChangesDiffSurface = Readonly<{
   unifiedDiff: string;
   hunks: DiffViewerHunks;
@@ -84,10 +85,13 @@ export function FileChangesBody(
     containsFocus?: () => boolean;
     /** Image and SVG files compare as images instead of the text diff. */
     image?: Readonly<{ scope: WorkspaceScopeBase; filePath: string; liveChangeKind?: string | null }> | null;
+    /** The shared selection toolbar over the diff (web): the pane scope and Session Ask writes to. */
+    ask?: FileChangesAsk | null;
     children: (surface: FileChangesDiffSurface) => React.ReactNode;
   }>,
 ) {
   const { review } = props;
+  const diffRootRef = React.useRef<View | null>(null);
   const phone = useDeviceType() === 'phone';
   useReviewKeyboard(review.keyboard, {
     active: props.keyboardActive && review.status === 'ready',
@@ -152,13 +156,17 @@ export function FileChangesBody(
     );
   }
   return (
-    <View style={styles.body}>
+    <View ref={diffRootRef} collapsable={false} style={styles.body}>
       {props.children({
         unifiedDiff: review.unifiedDiff,
         hunks: review.hunks,
         reviewUnits: review.reviewUnits,
         scrollToLineId: review.scrollToLineId,
       })}
+      {Platform.OS === 'web' && props.ask ? (
+        <FileReadAskControls rootRef={diffRootRef} mode="diff" scopeId={props.ask.scopeId} scope={props.ask.scope}
+          filePath={props.ask.filePath} text={review.unifiedDiff} sessionId={props.ask.sessionId} active={props.ask.active} />
+      ) : null}
       {phone && strip.total > 0 ? (
         <ReviewBar
           testID="file-review-bar"
@@ -197,40 +205,29 @@ const styles = StyleSheet.create({
 /**
  * The whole Changes region as the File page places it in its body slot: the review strip under the
  * page's notices, then the scope's diff (supplied by the page through `children`) and, on phones,
- * the review bar. Restore / Discard-all menu items are handed up through `onMenuChanges`.
+ * the review bar. The page owns the one `useFileChangesReview` (its menu reads the same review).
  */
-export function FileChangesSection(props: FileChangesReviewParams & Readonly<{
+export function FileChangesSection(props: Readonly<{
+    review: FileChangesReview;
+    scope: WorkspaceScopeBase;
+    filePath: string;
     keyboardActive: boolean;
     containsFocus?: () => boolean;
-    onMenuChanges?: (changes: FileChangesReview['menuChanges'] | null) => void;
     liveChangeKind?: string | null;
+    /** Mounts the shared selection toolbar (Ask · Comment · Copy) over the diff; the page's pane scope and Session. */
+    ask?: Readonly<{ scopeId: string; sessionId: string | null; active: boolean }>;
     children: (surface: FileChangesDiffSurface) => React.ReactNode;
 }>) {
-    const { keyboardActive, containsFocus, onMenuChanges, children, liveChangeKind, ...params } = props;
-    const review = useFileChangesReview(params);
+    const { review, keyboardActive, containsFocus, children, liveChangeKind } = props;
     const { theme } = useUnistyles();
-    // The page's menu receives stable runners keyed by which items exist; each run reads the latest owner.
-    const latestMenu = React.useRef(review.menuChanges);
-    latestMenu.current = review.menuChanges;
-    const hasDiscardAll = Boolean(review.menuChanges.discardAll);
-    const hasRestore = Boolean(review.menuChanges.restoreBeforeTurn);
-    const restoreTitle = review.menuChanges.restoreBeforeTurnTitle;
-    const menuChanges = React.useMemo(() => ({
-        ...(hasDiscardAll ? { discardAll: () => latestMenu.current.discardAll?.() } : {}),
-        ...(hasRestore ? { restoreBeforeTurn: () => latestMenu.current.restoreBeforeTurn?.() } : {}),
-        ...(restoreTitle ? { restoreBeforeTurnTitle: restoreTitle } : {}),
-    }), [hasDiscardAll, hasRestore, restoreTitle]);
-    React.useEffect(() => {
-        onMenuChanges?.(menuChanges);
-    }, [onMenuChanges, menuChanges]);
-    React.useEffect(() => () => onMenuChanges?.(null), [onMenuChanges]);
     return (
         <View testID="file-changes-section" style={sectionStyles.section}>
             <View style={[sectionStyles.stripRow, { borderBottomColor: theme.colors.border.subtle }]}>
                 <FileChangesStrip review={review} />
             </View>
             <FileChangesBody review={review} keyboardActive={keyboardActive} containsFocus={containsFocus}
-        image={{ scope: params.scope, filePath: params.filePath, liveChangeKind }}>
+        image={{ scope: props.scope, filePath: props.filePath, liveChangeKind }}
+        ask={props.ask ? { ...props.ask, scope: props.scope, filePath: props.filePath } : null}>
                 {children}
             </FileChangesBody>
         </View>

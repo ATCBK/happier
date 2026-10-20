@@ -99,6 +99,13 @@ vi.mock('@/scm/diff/defaultMode', () => ({
     resolveDefaultDiffModeForFile: () => 'pending',
 }));
 
+// The Machine RPC facade is the boundary: what the page's Discard sends is the contract under test.
+const machineScmChangeDiscardMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ success: true, entries: [] as unknown[] })));
+vi.mock('@/sync/ops/scm/machineScm', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/ops/scm/machineScm')>(),
+    machineScmChangeDiscard: machineScmChangeDiscardMock,
+}));
+
 const canUseLineSelectionMock = vi.fn(() => false);
 
 vi.mock('@/scm/scmLineSelection', () => ({
@@ -141,6 +148,7 @@ const fileEditorState = vi.hoisted(() => ({
         startEditingFile: vi.fn(),
         cancelEditingFile: vi.fn(),
         saveFileEdits: vi.fn(),
+        readSnapshot: () => ({ isEditingFile: false, hash: null, dirty: false, conflict: null }),
 }));
 
 vi.mock('@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState', () => ({
@@ -295,6 +303,8 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
     });
 
     it('keeps line selection active after the toolbar starts explicit commit selection mode', async () => {
+        // Select lines is a commit-selection write: the ⋯ item exists only with SCM writes on.
+        featureEnabledMock.mockImplementation((featureId: string) => featureId === 'scm.writeOperations');
         canUseLineSelectionMock.mockReturnValueOnce(true).mockReturnValue(true);
         refreshSpy.mockResolvedValueOnce({
             status: 'ready' as const,
@@ -332,6 +342,8 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
     });
 
     it('owns range selection state and passes it to file content while selecting commit lines', async () => {
+        // Select lines is a commit-selection write: the ⋯ item exists only with SCM writes on.
+        featureEnabledMock.mockImplementation((featureId: string) => featureId === 'scm.writeOperations');
         canUseLineSelectionMock.mockReturnValueOnce(true).mockReturnValue(true);
         refreshSpy.mockResolvedValueOnce({
             status: 'ready' as const,
@@ -425,6 +437,8 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
     });
 
     it('clears range selection state when applying or canceling commit line selection', async () => {
+        // Select lines is a commit-selection write: the ⋯ item exists only with SCM writes on.
+        featureEnabledMock.mockImplementation((featureId: string) => featureId === 'scm.writeOperations');
         canUseLineSelectionMock.mockReturnValueOnce(true).mockReturnValue(true);
         refreshSpy.mockResolvedValueOnce({
             status: 'ready' as const,
@@ -537,6 +551,8 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
     });
 
     it('seeds explicit line selection from an applied partial commit selection', async () => {
+        // Select lines is a commit-selection write: the ⋯ item exists only with SCM writes on.
+        featureEnabledMock.mockImplementation((featureId: string) => featureId === 'scm.writeOperations');
         canUseLineSelectionMock.mockReturnValue(true);
         workspaceCommitSelectionPatches = [{
             path: 'src/a.txt',
@@ -585,6 +601,8 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
     });
 
     it('keeps explicit line selection active when applying selected lines fails', async () => {
+        // Select lines is a commit-selection write: the ⋯ item exists only with SCM writes on.
+        featureEnabledMock.mockImplementation((featureId: string) => featureId === 'scm.writeOperations');
         canUseLineSelectionMock.mockReturnValue(true);
         workspaceStageActionsMock.applySelectedLines.mockResolvedValueOnce(false);
         workspaceCommitSelectionPatches = [{
@@ -878,6 +896,8 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
                 scope={{ serverId: 'srv1', machineId: 'm1', rootPath: '/repo' }}
                 filePath="src/a.txt"
                 sessionIdForAugmentation={null}
+                // A modified file opens in Changes, where the body is the diff; the too-large body is View's.
+                initialView={{ view: 'view' }}
             />,
         );
 
@@ -885,8 +905,40 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
 
         expect(screen.findAllByType('FileErrorState')).toHaveLength(0);
         expect(screen.findAllByType(FilePageHeader)).toHaveLength(1);
-        // One cause, one place: the body says it is too large and offers Download; no second banner.
+        // One cause, one place: no second banner; Download stays reachable without a Session.
         expect(screen.findAllHostsByTestId('file-preview-unavailable-banner')).toHaveLength(0);
-        expect(screen.findAllHostsByTestId('file-details-too-large-download')).toHaveLength(1);
+        expect(screen.findAllByType(FilePageHeader)[0]?.props.menuActions.map((action: { id: string }) => action.id)).toContain('download');
+    });
+
+    it('discards the whole file through the comparison arm in View, with one Discard item and no HEAD arm', async () => {
+        machineScmChangeDiscardMock.mockClear();
+        refreshSpy.mockResolvedValueOnce({
+            status: 'ready' as const,
+            error: null,
+            diffContent: 'diff --git a/src/a.txt b/src/a.txt\n@@ -1 +1 @@\n-old\n+new\n',
+            fileContent: { content: 'new', isBinary: false },
+            fileWriteSupported: true,
+        } as any);
+        const { WorkspaceFileDetailsView } = await import('./WorkspaceFileDetailsView');
+        const screen = await renderScreen(
+            <WorkspaceFileDetailsView
+                scopeId="workspace:srv1:m1:/repo"
+                scope={{ serverId: 'srv1', machineId: 'm1', rootPath: '/repo' }}
+                filePath="src/a.txt"
+                sessionIdForAugmentation={null}
+                initialView={{ view: 'view' }}
+            />,
+        );
+        await act(async () => {});
+        const header = screen.findAllByType(FilePageHeader)[0];
+        expect(header?.props.displayMode).not.toBe('diff');
+        const discards = header?.props.menuActions.filter((action: { id: string }) => action.id === 'discard') ?? [];
+        expect(discards).toHaveLength(1);
+        await act(async () => { await discards[0].onSelect(); });
+        expect(machineScmChangeDiscardMock).toHaveBeenCalledTimes(1);
+        const request = machineScmChangeDiscardMock.mock.calls[0]?.[1] as { entries: unknown[] };
+        expect(request.entries).toEqual([expect.objectContaining({
+            kind: 'comparison', path: 'src/a.txt', against: { source: { kind: 'workingTree' } },
+        })]);
     });
 });

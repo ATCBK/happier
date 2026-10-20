@@ -45,7 +45,8 @@ import { showUploadConflictResolutionDialog } from '@/components/workspaces/file
 import { readRepositoryFileDropTarget } from '@/components/workspaces/files/repositoryTree/repositoryFileDropTarget';
 import type { WebFileDragEvent } from '@/components/ui/treeDragDrop/externalFileDropAdapter';
 import { promptRepositoryUploadDestination } from '@/components/workspaces/files/repositoryTree/promptRepositoryUploadDestination';
-import { RepositoryTreeRowActionsMenu } from '@/components/workspaces/files/repositoryTree/RepositoryTreeRowActionsMenu';
+import { RepositoryTreeRowActionsMenu, type RepositoryTreeRowShareTarget } from '@/components/workspaces/files/repositoryTree/RepositoryTreeRowActionsMenu';
+import type { WorkspaceFileTarget } from '@happier-dev/protocol/actions/workspaceActionFamily';
 import type { FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
 import { useWorkspaceRepositoryTreeWebDropState } from '@/hooks/workspaces/files/useWorkspaceRepositoryTreeWebDropState';
 import { useRepositoryUploadActionTarget } from '@/components/workspaces/files/repositoryTree/useRepositoryUploadActionTarget';
@@ -86,8 +87,10 @@ export type WorkspaceRepositoryTreeBrowserViewProps = Readonly<{
     onWebDropTargetChange?: ((target: WorkspaceRepositoryTreeWebDropTarget) => void) | null;
     webDropHoverPath?: string | null;
     renderRowActions?: React.ComponentProps<typeof WorkspaceRepositoryTreeList>['renderRowActions'];
-    /** Target-aware Share/review callbacks are supplied by the Session/Project opener owner. */
+    /** Target-aware review callbacks (Discard) are supplied by the Session/Project opener owner. */
     buildFileMenuContext?: (path: string) => Partial<FileMenuContext>;
+    /** Where a row's Copy Happier link opens; a Session tree defaults to its Session. */
+    fileLinkTarget?: WorkspaceFileTarget | null;
     /** An inline create/rename field retains its rows until the interaction finishes. */
     reconciliationPaused?: boolean;
     /** The file open in Details: its row stays selected (lab F1). */
@@ -623,6 +626,21 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         void startNativeUploads(destinationDir, isCurrent);
     }, [captureCurrentUploadAcquisition, startNativeUploads, transferActionsAvailable]);
 
+    // Row Share items run through the File page's share owner, for the row's path (lab FB1k).
+    const fileMenuAccountScope = useActiveServerAccountScope(workspaceScope.serverId);
+    const sessionIdForFiles = props.sessionId?.trim() || null;
+    const rowShareTarget = React.useMemo<RepositoryTreeRowShareTarget>(() => ({
+        workspaceScope,
+        actionScope: fileMenuAccountScope,
+        linkTarget: props.fileLinkTarget ?? (sessionIdForFiles
+            ? { kind: 'session', sessionId: sessionIdForFiles, serverId: workspaceScope.serverId } : null),
+        composer: sessionIdForFiles && fileMenuAccountScope ? {
+            scope: { serverId: fileMenuAccountScope.serverId, accountId: fileMenuAccountScope.accountId },
+            ref: { kind: 'session', sessionId: sessionIdForFiles },
+            workspace: workspaceScope,
+        } : null,
+    }), [fileMenuAccountScope, props.fileLinkTarget, sessionIdForFiles, workspaceScope]);
+
     const defaultRenderRowActions = React.useCallback<NonNullable<WorkspaceRepositoryTreeBrowserViewProps['renderRowActions']>>((node, control) => {
         if (node.type !== 'file' && node.type !== 'directory') return null;
         const nodeKind: 'file' | 'directory' = node.type === 'file' ? 'file' : 'directory';
@@ -637,6 +655,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 kind={nodeKind}
                 disableWriteActions={!allowCreateActions}
                 downloadActionsEnabled={transferActionsAvailable && (transferSizeBytes == null || transferSizeBytes >= 0)}
+                share={rowShareTarget}
                 fileMenuContext={nodeKind === 'file' ? { ...fileMenuContext,
                     machineReachable: machineRpcTargetAvailable,
                     open: fileMenuContext?.open ?? (() => handleTreeOpenFile(node.path)),
@@ -650,7 +669,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 control={control}
             />
         );
-    }, [allowCreateActions, createFolder, handleTreeOpenFile, machineRpcTargetAvailable, props.buildFileMenuContext, props.fileHref, rowActions, transferActionsAvailable, uploadInto]);
+    }, [allowCreateActions, createFolder, handleTreeOpenFile, machineRpcTargetAvailable, props.buildFileMenuContext, props.fileHref, rowActions, rowShareTarget, transferActionsAvailable, uploadInto]);
 
     // This pane has no header of its own, so its + menu ends the toolbar (the session pane's header carries it).
     const machineName = props.machineName ?? (machine ? getMachineDisplayName(machine).trim() || null : null);

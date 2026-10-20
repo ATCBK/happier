@@ -48,7 +48,12 @@ export function resolveFilePageHeaderModel(input: Readonly<{
     return { modes, findAvailable: input.hasText && !input.pluginViewerSelected, editUnavailableReason };
 }
 
-/** Edit → Done while clean → Save once dirty (lab delta 7); Save is the one primary only while it can save. */
+/**
+ * Edit → Done while clean → Save once dirty (lab delta 7). Save is the one primary only while it can save and
+ * nothing else on the page carries the save: while the Machine isn't answering or a save waits for approval the
+ * notice line speaks and its own Save (when back) is the primary, so the header's steps down to quiet (ED2o, ED2o-back).
+ * On a phone the editor's key row carries Save (ED1p): the page then offers no second Save.
+ */
 export type FilePageEditControl = Readonly<{
     kind: 'edit' | 'done' | 'save';
     onPress: () => void;
@@ -64,6 +69,10 @@ export function resolveFilePageEditControl(input: Readonly<{
     onStart?: () => void;
     onSave?: () => void;
     onCancel?: () => void;
+    /** The checkout's Machine isn't answering (the notice line names it). */
+    machineUnreachable?: boolean;
+    /** The phone editor's key row is up and carries Save. */
+    keyRowCarriesSave?: boolean;
 }>): FilePageEditControl | null {
     if (!input.fileEditorEnabled) return null;
     if (!input.isEditingFile) return input.onStart ? { kind: 'edit', onPress: input.onStart } : null;
@@ -74,7 +83,10 @@ export function resolveFilePageEditControl(input: Readonly<{
         const done = input.editor?.onDone ?? input.onCancel;
         return done ? { kind: 'done', onPress: done } : null;
     }
+    if (input.keyRowCarriesSave) return null;
     const save = input.editor?.onSave ?? input.onSave;
     if (!save) return null;
-    return { kind: 'save', onPress: save, busy: status === 'saving', primary: input.editor?.canSave !== false };
+    const refusal = input.editor?.refusal?.kind;
+    const elsewhere = input.machineUnreachable === true || refusal === 'unreachable' || refusal === 'awaitingApproval';
+    return { kind: 'save', onPress: save, busy: status === 'saving', primary: input.editor?.canSave !== false && !elsewhere };
 }

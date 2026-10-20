@@ -85,7 +85,8 @@ it.each(['code', 'markdown'])('passes focused Monaco shortcuts and reopens %s Fi
     </KeyboardShortcutProvider>);
     try {
         // The real composition must reach Monaco's measured layout, beyond forwarding props.
-        expect(measuredLayout.contentLeft).toBe(8 + 32 + 4 + 39 + 18);
+        // The code view's geometry: five 11 px digits (33), and on the File page's canvas its 16 px inset.
+        expect(measuredLayout.contentLeft).toBe((kind === 'code' ? 16 : 0) + 8 + 32 + 4 + 33 + 18);
         await act(async () => { bodyInput.focus(); });
         const first = new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', ctrlKey: true, bubbles: true, cancelable: true });
         await act(async () => { bodyInput.dispatchEvent(first); });

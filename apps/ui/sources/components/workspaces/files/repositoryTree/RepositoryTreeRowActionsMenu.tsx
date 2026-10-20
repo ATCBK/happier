@@ -4,11 +4,25 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
+import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import type { FilesystemBrowserRowActionsControl } from '@/components/ui/filesystemBrowser/FilesystemBrowserRow';
 import { useWorkspaceOpenActions } from '@/components/appShell/workspace/useWorkspaceOpenActions';
 import { resolveFileMenuItems, type FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
+import { useWorkspaceFileShareActions, type WorkspaceFileShareActionsInput } from '@/components/workspaces/files/file/useWorkspaceFileShareActions';
+import type { WorkspaceFileTarget } from '@happier-dev/protocol/actions/workspaceActionFamily';
+
+/** What a tree row's Share items act on: the canonical share owner runs them for the row's own path. */
+export type RepositoryTreeRowShareTarget = Readonly<{
+    workspaceScope: WorkspaceShareScope;
+    actionScope: WorkspaceFileShareActionsInput['actionScope'];
+    /** Where a Happier link to the file opens (its Session or Project); no target, no Copy Happier link. */
+    linkTarget?: WorkspaceFileTarget | null;
+    /** The composer Attach to message adds the file to (the Session's own); none, no Attach. */
+    composer?: WorkspaceFileShareActionsInput['composer'];
+}>;
+type WorkspaceShareScope = WorkspaceFileShareActionsInput['workspaceScope'];
 
 export type RepositoryTreeRowActionMenuItemId =
     | 'repository-tree-menuitem-rename'
@@ -48,6 +62,7 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
     disableWriteActions: boolean;
     downloadActionsEnabled: boolean;
     fileMenuContext?: Partial<FileMenuContext>;
+    share?: RepositoryTreeRowShareTarget | null;
     onSelect: (itemId: RepositoryTreeRowActionMenuItemId) => void;
     /**
      * A folder's own creation actions (lab p-code ACTIONS): a new folder or uploaded files land inside it.
@@ -59,19 +74,38 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const workspaceOpen = useWorkspaceOpenActions(props.kind === 'file' ? props.href ?? null : null);
+    const machineReachable = props.fileMenuContext?.machineReachable ?? !props.disableWriteActions;
+    const unavailableReason = props.fileMenuContext?.unavailableReason ?? t('errors.daemonUnavailableBody');
+    const file = props.kind === 'file';
+    // The File page's share owner, for this row's path: Copy path / Happier link, Attach and Open in go through it.
+    const share = useWorkspaceFileShareActions({
+        workspaceScope: props.share?.workspaceScope ?? null,
+        path: props.path,
+        actionScope: props.share?.actionScope ?? null,
+        linkInput: file && props.share?.linkTarget ? { target: props.share.linkTarget, path: props.path } : undefined,
+        machineReachable,
+        unavailableReason,
+        composer: file ? props.share?.composer ?? null : null,
+    });
     const sharedContext = React.useMemo<FileMenuContext>(() => ({
         ...props.fileMenuContext,
-        machineReachable: props.fileMenuContext?.machineReachable ?? !props.disableWriteActions,
-        unavailableReason: props.fileMenuContext?.unavailableReason ?? t('errors.daemonUnavailableBody'),
+        machineReachable,
+        unavailableReason,
         hasCachedContent: props.fileMenuContext?.hasCachedContent ?? false,
         platform: props.fileMenuContext?.platform ?? (Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web'),
         isDirectory: props.kind === 'directory',
-        copyPath: props.fileMenuContext?.copyPath ?? (() => props.onSelect('repository-tree-menuitem-copy-path')),
+        copyPath: props.fileMenuContext?.copyPath ?? (share.copyPath ? () => share.copyPath?.()
+            : () => props.onSelect('repository-tree-menuitem-copy-path')),
+        copyLink: props.fileMenuContext?.copyLink ?? share.copyLink,
+        attachToMessage: props.fileMenuContext?.attachToMessage ?? share.attachToMessage,
+        openInDefaultApp: props.fileMenuContext?.openInDefaultApp ?? (file ? share.openInDefaultApp : undefined),
+        shareFile: props.fileMenuContext?.shareFile ?? (file ? share.shareFile : undefined),
         rename: props.fileMenuContext?.rename ?? (() => props.onSelect('repository-tree-menuitem-rename')),
         download: props.fileMenuContext?.download ?? (props.kind === 'file' && props.downloadActionsEnabled ? () => props.onSelect('repository-tree-menuitem-download') : undefined),
         openBeside: props.fileMenuContext?.openBeside ?? (workspaceOpen.items.some(item => item.id === 'workspace.open.right')
             ? () => { workspaceOpen.open('splitRight'); } : undefined),
-    }), [props.disableWriteActions, props.downloadActionsEnabled, props.fileMenuContext, props.kind, props.onSelect, workspaceOpen]);
+    }), [file, machineReachable, props.downloadActionsEnabled, props.fileMenuContext, props.kind, props.onSelect, share.attachToMessage,
+        share.copyLink, share.copyPath, share.openInDefaultApp, share.shareFile, unavailableReason, workspaceOpen]);
     const sharedItems = React.useMemo(() => resolveFileMenuItems(sharedContext, 'treeRow'), [sharedContext]);
     const sharedActions = React.useMemo(() => sharedItems.map(item => ({
         id: `repository-tree-menuitem-${item.id === 'copyPath' ? 'copy-path' : item.id}`,
@@ -152,6 +186,13 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
         ];
     }, [items, menuTitle, props.onSelect, sharedActions, sharedItems, workspaceOpen]);
 
+    // Room for the whole menu (its title row, every item, each group's padding), so no item is cut at the
+    // menu's foot on a desktop window (lab FB1k); the popover still shrinks to a shorter window and scrolls.
+    const menuGroupCount = new Set(rowActions.map(action => action.group?.id)).size;
+    const menuContentHeightPx = (rowActions.length + 1) * MENU_ROW_METRICS.minHeightPx
+        + menuGroupCount * 2 * MENU_ROW_METRICS.sectionPaddingVerticalPx;
+    const folder = props.path.split('/').filter(Boolean).slice(0, -1).join('/');
+    const phoneSheet = React.useMemo(() => (folder ? { subtitle: folder } : {}), [folder]);
     const safePath = React.useMemo(() => toTestIdSafeValue(props.path), [props.path]);
     const triggerId = `repository-tree-row-menu-${safePath}`;
 
@@ -162,6 +203,9 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
             actions={rowActions}
             overflowTriggerTestID={triggerId}
             compactThreshold={Number.POSITIVE_INFINITY}
+            overflowMaxHeightCap={menuContentHeightPx}
+            // Phone (lab FB1kp): the same items in the bottom sheet over a scrim, named by the row's file and folder.
+            overflowPhoneSheet={phoneSheet}
             compactActionIds={[]}
             iconSize={14}
             // Tree rows are 28 px (session tabs lab F1): the ⋯ is drawn at 24 and its press frame grows

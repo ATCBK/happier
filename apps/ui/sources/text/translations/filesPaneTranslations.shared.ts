@@ -76,6 +76,46 @@ export type FilesPaneTranslations = Readonly<{
         partialFact: (params: Readonly<{ slice: string; size: string }>) => string;
         fromMachine: (params: Readonly<{ machine: string }>) => string;
     }>;
+    /** P7 language features on the File page: the card, the state note, Problems and References. */
+    intelligence: Readonly<{
+        cardLabel: string;
+        languageServer: string;
+        starting: (params: Readonly<{ server: string; machine: string }>) => string;
+        startingDetail: string;
+        serverStopped: (params: Readonly<{ server: string; machine: string }>) => string;
+        serverCouldNotStart: (params: Readonly<{ server: string; machine: string }>) => string;
+        serverMissing: (params: Readonly<{ server: string; machine: string }>) => string;
+        machineOffline: (params: Readonly<{ machine: string }>) => string;
+        machineNeedsUpdate: (params: Readonly<{ machine: string }>) => string;
+        restart: string;
+        copy: string;
+        lookingUp: string;
+        goToDefinition: string;
+        findReferences: string;
+        definition: string;
+        references: string;
+        definedOutside: string;
+        namesOnLine: string;
+        noReferences: string;
+        textMatches: string;
+        textMatchesPartial: string;
+        problemsTitle: string;
+        referencesTitle: string;
+        problemsScope: string;
+        problemsIdle: string;
+        checkProblems: string;
+        checking: string;
+        noProblems: string;
+        addedToMessage: string;
+        showProblems: string;
+        problemsCount: (params: Readonly<{ count: number }>) => string;
+        askAgent: (params: Readonly<{ agent: string; count: number }>) => string;
+        saveAndAskAgent: (params: Readonly<{ agent: string; count: number }>) => string;
+        ask: (params: Readonly<{ count: number }>) => string;
+        saveAndAsk: (params: Readonly<{ count: number }>) => string;
+        referencesEmpty: string;
+        problemsEmpty: string;
+    }>;
 }>;
 
 
@@ -153,5 +193,44 @@ export const filesPaneTranslationsEnglish = { en: {
             showingLast: ({ slice, size }) => "Showing the last " + slice + " of " + size,
             partialFact: ({ slice, size }) => slice + " of " + size,
             fromMachine: ({ machine }) => "from " + machine,
+        },
+        intelligence: {
+            cardLabel: "About this name",
+            languageServer: "the language server",
+            starting: ({ server, machine }) => "Starting " + server + " on " + machine + "…",
+            startingDetail: "First answers take a few seconds on a large project.",
+            serverStopped: ({ server, machine }) => server + " stopped on " + machine + ".",
+            serverCouldNotStart: ({ server, machine }) => server + " couldn’t start on " + machine + ".",
+            serverMissing: ({ server, machine }) => server + " isn’t installed on " + machine + ".",
+            machineOffline: ({ machine }) => "Language features need " + machine + ", which is offline. Reading and reviewing work as usual.",
+            machineNeedsUpdate: ({ machine }) => "Language features need a newer Happier on " + machine + ".",
+            restart: "Restart",
+            copy: "Copy",
+            lookingUp: "Looking it up…",
+            goToDefinition: "Go to definition",
+            findReferences: "Find references",
+            definition: "Definition",
+            references: "References",
+            definedOutside: "Defined outside the workspace",
+            namesOnLine: "Names on this line",
+            noReferences: "No references found",
+            textMatches: "Text matches: no language server answers for this file.",
+            textMatchesPartial: "Text matches, first results: no language server answers for this file.",
+            problemsTitle: "Problems",
+            referencesTitle: "References",
+            problemsScope: "In files you have open",
+            problemsIdle: "Check this file for type errors and other problems.",
+            checkProblems: "Check problems",
+            checking: "Checking…",
+            noProblems: "No problems in files you have open",
+            addedToMessage: "Added to your message",
+            showProblems: "Show problems",
+            problemsCount: ({ count }) => String(count) + " " + (count === 1 ? "problem" : "problems"),
+            askAgent: ({ agent, count }) => "Ask " + agent + " to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
+            saveAndAskAgent: ({ agent, count }) => "Save and ask " + agent + " to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
+            ask: ({ count }) => "Ask to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
+            saveAndAsk: ({ count }) => "Save and ask to fix " + String(count) + " " + (count === 1 ? "problem" : "problems"),
+            referencesEmpty: "Find references on a name in a file to see where it is used.",
+            problemsEmpty: "Open a file to check it for problems.",
         },
     } } as const satisfies Pick<Record<string, FilesPaneTranslations>, "en">;

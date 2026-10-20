@@ -3,6 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HAPPIER_TREE_ROW_METRICS, HappierPressable, HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 
+import type { WorkspaceFileTarget } from '@happier-dev/protocol/actions/workspaceActionFamily';
 import { WorkspaceRepositoryTreeBrowserView } from '@/components/projects/files/WorkspaceRepositoryTreeBrowserView';
 import type { WorkspaceRepositoryDirectoryState } from '@/components/projects/files/WorkspaceRepositoryTreeList';
 import { WorkspaceFileDetailsView } from '@/components/workspaces/files/details/WorkspaceFileDetailsView';
@@ -76,6 +77,8 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     onOpenHistory?: ((location: WorkspaceCodeLocation) => void) | null;
     onEditFile?: ((path: string) => void) | null;
     fileHref?: (path: string) => string | null;
+    /** Where a row's Copy Happier link opens (the Project). */
+    fileLinkTarget?: WorkspaceFileTarget | null;
     history?: WorkspaceCodeEntryHistory | null;
     onOpenFilePinned?: (path: string) => void;
     selectedPath?: string | null;
@@ -278,6 +281,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
                 selectedPath={props.selectedPath}
                 revealRequest={props.revealRequest}
                 fileHref={props.fileHref}
+                fileLinkTarget={props.fileLinkTarget}
                 showSearchBar={false}
                 // Code is the repository as committed pages (lab p-code): change marks belong to Changes.
                 scmSnapshot={null}
@@ -297,7 +301,8 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
             {strip}
             {/* The reader sits inside the Code page, under the Project's own header: it doesn't take the pane's controls into its band. */}
             <HeaderActionsScope scopeKey={null}>
-                <WorkspaceFileDetailsView scopeId={props.paneScopeId} scope={props.scope} filePath={location.path} presentation="screen" hostNamesFile />
+                <WorkspaceFileDetailsView scopeId={props.paneScopeId} scope={props.scope} filePath={location.path} presentation="screen"
+                    breadcrumbRoot={props.rootLabel} onOpenFolder={openFolder} />
             </HeaderActionsScope>
         </GlassSurface>
     );
@@ -328,6 +333,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     const page = (
         // The Code column (lab `.pj-solo`) is the wide page column: a name, a commit subject and a time.
         <PageFrame column="wide" content="column" style={styles.fileColumn}>
+            {/* A file names itself and its folders in its own header (P3 §3.2); the bar keeps only quick open. */}
             {fileMode ? <CodeBrowserBar
                 testID={`${testID}-bar`}
                 rootLabel={props.rootLabel}
@@ -335,6 +341,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
                 onNavigateFolder={openFolder}
                 onQuickOpen={openQuickOpen}
                 compact={phone}
+                crumbs={false}
             /> : null}
             {fileMode ? reachabilityLine : null}
             {body}

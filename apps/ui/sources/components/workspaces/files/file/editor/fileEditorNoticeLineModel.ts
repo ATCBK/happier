@@ -30,6 +30,8 @@ export function resolveFileEditorNoticeLine(
     reachability: FileEditorNoticeReachability;
     agentName: string | null;
     onRetryReachability: () => void;
+    /** Opens the save's approval review (the Inbox request); absent until the request exists. */
+    onOpenApproval?: (() => void) | null;
   }>,
 ): FileEditorNoticeLineModel | null {
   const { editor, reachability, agentName } = input;
@@ -71,7 +73,9 @@ export function resolveFileEditorNoticeLine(
       tone: 'neutral',
       glyph: 'hourglass',
       reason: t('files.editing.awaitingApproval'),
-      actions: [],
+      actions: input.onOpenApproval
+        ? [{ label: t('approvals.review'), onPress: input.onOpenApproval, testID: 'file-editor-approval-review' }]
+        : [],
     };
   }
   if (reachability.unreachable) {

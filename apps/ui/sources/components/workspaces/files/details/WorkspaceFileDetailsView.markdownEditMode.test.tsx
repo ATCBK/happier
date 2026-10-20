@@ -199,6 +199,7 @@ const editorState = vi.hoisted(() => ({
     startEditingFile: vi.fn(),
     cancelEditingFile: vi.fn(),
     saveFileEdits: vi.fn(),
+    readSnapshot: () => ({ isEditingFile: false, hash: null, dirty: false, conflict: null }),
 }));
 
 vi.mock('@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState', () => ({

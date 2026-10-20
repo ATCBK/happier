@@ -42,7 +42,7 @@ export const KEYBOARD_SHORTCUT_COMMAND_GROUP_ORDER: readonly KeyboardShortcutCom
 
 /** Commands are grouped by their id's area; anything new and unrecognised lands under General. */
 export function resolveKeyboardShortcutCommandGroupId(commandId: KeyboardCommandId): KeyboardShortcutCommandGroupId {
-    if (commandId.startsWith('review.') || commandId === 'editor.selection.ask' || commandId === 'files.track.toggle') return 'review';
+    if (commandId.startsWith('review.') || commandId === 'editor.selection.ask' || commandId === 'files.track.toggle' || commandId === 'file.blame.toggle') return 'review';
     const area = commandId.split('.')[0];
     switch (area) {
         case 'shell':

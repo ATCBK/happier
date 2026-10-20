@@ -28,7 +28,7 @@ export type FileMenuContext = Readonly<{
     /** P4: leave editing and drop the unsaved draft (the editor's own owner decides what that means). */
     discardEdits?: FileMenuRun;
     toggleBlame?: FileMenuRun;
-    commands?: Partial<Readonly<Record<'code.goToDefinition' | 'code.showInfo' | 'code.restart', FileMenuRun>>>;
+    commands?: Partial<Readonly<Record<'code.goToDefinition' | 'code.showInfo' | 'code.showProblems' | 'code.restart', FileMenuRun>>>;
     changes?: Readonly<{ discardAll?: FileMenuRun; restoreBeforeTurn?: FileMenuRun; restoreBeforeTurnTitle?: string }>;
     copyPath?: FileMenuRun;
     copyLink?: FileMenuRun;
@@ -101,9 +101,10 @@ export const FILE_MENU_ITEMS: readonly FileMenuItem[] = [
     item({ id: 'openChanges', group: 'view', titleKey: 'files.openChanges', callback: c => c.openChanges, surfaces: pageSurfaces }),
     item({ id: 'blame', group: 'code', titleKey: 'files.pane.menu.showBlame', callback: c => c.toggleBlame,
         surfaces: pageSurfaces, visible: c => c.readBlame === true && !c.isDirectory }),
-    ...(['code.goToDefinition', 'code.showInfo', 'code.restart'] as const).map(id => item({
+    ...(['code.goToDefinition', 'code.showInfo', 'code.showProblems', 'code.restart'] as const).map(id => item({
         id, group: 'code', titleKey: id === 'code.goToDefinition' ? 'files.pane.menu.goToDefinition'
-            : id === 'code.showInfo' ? 'files.pane.menu.showInfo' : 'files.pane.menu.restartLanguageServices',
+            : id === 'code.showInfo' ? 'files.pane.menu.showInfo'
+                : id === 'code.showProblems' ? 'files.pane.intelligence.checkProblems' : 'files.pane.menu.restartLanguageServices',
         callback: c => c.commands?.[id], surfaces: pageSurfaces, requiresMachine: true,
     })),
     item({ id: 'copyPath', group: 'share', titleKey: 'files.pane.menu.copyPath', callback: c => c.copyPath }),

@@ -9597,6 +9597,7 @@ const zhHansValues = {
                 writtenIn: ({ title, time }: { title: string; time: string }) => `尚未提交。${time} 写于 ${title}。`,
                 askedBy: ({ name }: { name: string }) => `由 ${name} 发起。`,
                 uncommittedBody: "尚未提交。本会话中没有哪一轮写出了这些行的当前内容。",
+                uncommittedNoSession: "尚未提交。",
                 newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `尚未提交。每一行都是新的；${agent} 在${turn}写下。`,
                 noHistory: "还没有历史。此文件尚未提交。",
                 failed: "无法读取此文件的历史。",

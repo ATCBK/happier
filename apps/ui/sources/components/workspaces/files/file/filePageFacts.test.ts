@@ -17,6 +17,12 @@ describe('File page facts', () => {
         expect(buildFilePageCrumbs('README.md')).toEqual([]);
     });
 
+    it('leads with the repository root when the host names it, and the root opens the root listing', () => {
+        expect(buildFilePageCrumbs('README.md', 'happier')).toEqual([{ key: '/', label: 'happier', path: '' }]);
+        expect(buildFilePageCrumbs('src/settings/SettingsModal.tsx', 'happier').map((crumb) => crumb.label))
+            .toEqual(['happier', 'src', 'settings']);
+    });
+
     it('says "Updated by {agent} just now" for a minute, then the agent and the age', () => {
         const at = 1_000_000;
         const base = { agentName: 'Claude', requesterName: null, updatedAt: at };

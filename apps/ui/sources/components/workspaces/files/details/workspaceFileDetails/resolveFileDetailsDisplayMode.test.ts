@@ -57,3 +57,13 @@ it('honors the user selection ahead of restored or linked file intent', () => {
         hasRenderableDiff: true, hasFileContent: false, markdownPreviewAvailable: false,
     })).toBe('diff');
 });
+
+it('waits in View, not Changes, while an unchanged file loads or is too large to hold', () => {
+    const waiting = { persistedEditing: false, deepLinkSource: null, hasRenderableDiff: false, hasFileContent: false,
+        markdownPreviewAvailable: false } as const;
+    expect(resolveFileDetailsDisplayMode({ ...waiting, knownChanged: false })).toBe('file');
+    // A file the tree / SCM already knows changed waits for its diff in Changes.
+    expect(resolveFileDetailsDisplayMode({ ...waiting, knownChanged: true })).toBe('diff');
+    // A Markdown file waits on its Preview, so the segment does not jump when the text arrives.
+    expect(resolveFileDetailsDisplayMode({ ...waiting, knownChanged: false, previewKind: true })).toBe('markdown');
+});

@@ -3,6 +3,7 @@ import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
 import { CodeLinesView, type CodeLinesViewProps } from '@/components/ui/code/view/CodeLinesView';
+import type { Rect } from '@/components/ui/code/editor/codeEditorTypes';
 import { cancelAnimation, useSharedValue, withTiming } from 'react-native-reanimated';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
@@ -34,6 +35,7 @@ import { resolveCodeLineAnchor } from '@/components/ui/code/reviewComments/resol
 import { ReviewCommentInlineComposer } from '@/components/ui/code/reviewComments/ReviewCommentInlineComposer';
 import { ReviewCommentSavedDrafts } from '@/components/ui/code/reviewComments/ReviewCommentSavedDrafts';
 import { isWorkspaceFileReferenceAnchorForFile } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
+import { CODE_CANVAS_CONTENT_PADDING } from '@/components/ui/code/editor/codeEditorFontMetrics';
 import { useMarkdownReadingAnchor } from './useMarkdownReadingAnchor';
 import { useFileContentScrollTarget } from './useFileContentScrollTarget';
 import type { FileDisplayMode } from './filePageModel';
@@ -49,6 +51,12 @@ const MARKDOWN_PREVIEW_COMPACT_PADDING = 16;
 const MARKDOWN_PREVIEW_WIDE_HORIZONTAL_PADDING = 32;
 const MARKDOWN_PREVIEW_WIDE_TOP_PADDING = 24;
 const MARKDOWN_PREVIEW_WIDE_BOTTOM_PADDING = 32;
+
+export type FileCodeIntelligenceBinding = Readonly<{
+    onPointer: (line: number, character: number, rect: Rect | null) => void;
+    onPointerAway: () => void;
+    onActivate: (line: number, character: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>) => void;
+}>;
 
 type FileContentPanelProps = {
     theme: any;
@@ -66,6 +74,8 @@ type FileContentPanelProps = {
     selectedLineKeys: Set<string>;
     lineSelectionEnabled: boolean;
     onToggleLine: (key: string) => void;
+    /** Open the inline comment composer on these file lines (the selection toolbar's Comment). */
+    commentRangeRequest?: Readonly<{ startLine: number; endLine: number; key: number }> | null;
     wrapLines?: boolean;
     showLineNumbers?: boolean;
     showPrefix?: boolean;
@@ -80,11 +90,18 @@ type FileContentPanelProps = {
     find?: FileViewerFindSnapshot;
     /** A lane before the line numbers (the Blame region's run column), in View and Changes. */
     renderLeadingLane?: CodeLinesViewProps['renderLeadingLane'];
+    /** New-side lines to emphasize while their Blame card is open (lab BL1 Bc); a jump highlight wins. */
+    emphasizedLines?: Readonly<{ startLine: number; lineCount: number }> | null;
     /**
      * An agent's write landed while you read (P3-R8): its new lines take the add tint once and fade over
      * `liveEdit.flashMs`; a later batch redirects the running fade from where it is, never back to full.
      */
     liveMoment?: WorkspaceFileLiveMoment | null;
+    /**
+     * Language features on the read view (P7): the pointer, a modifier-click or a tap on a name, in
+     * 1-based file lines and 0-based UTF-16 characters. Keep it referentially stable.
+     */
+    intelligence?: FileCodeIntelligenceBinding | null;
     scrollTestID?: string;
     onLayout?: (e: any) => void;
     onContentSizeChange?: (width: number, height: number) => void;
@@ -194,6 +211,7 @@ function FileContentPanelInner({
     selectedLineKeys,
     lineSelectionEnabled,
     onToggleLine,
+    commentRangeRequest,
     wrapLines,
     showLineNumbers,
     showPrefix,
@@ -207,7 +225,9 @@ function FileContentPanelInner({
     jumpToAnchor,
     find,
     renderLeadingLane,
+    emphasizedLines,
     liveMoment,
+    intelligence,
     scrollTestID,
     onLayout,
     onContentSizeChange,
@@ -291,6 +311,14 @@ function FileContentPanelInner({
         onError: onReviewCommentError,
     });
     const reviewCommentLineActionsEnabled = codeGeometry.reviewLaneWidth > 0 && Boolean(reviewCommentControls);
+    const handledCommentRangeKey = React.useRef<number | null>(null);
+    React.useEffect(() => {
+        if (!commentRangeRequest || handledCommentRangeKey.current === commentRangeRequest.key || !reviewCommentControls) return;
+        handledCommentRangeKey.current = commentRangeRequest.key;
+        const rangeLines = lines.filter((line) => typeof line.newLine === 'number'
+            && line.newLine >= commentRangeRequest.startLine && line.newLine <= commentRangeRequest.endLine);
+        if (rangeLines.length > 0) reviewCommentControls.onPressAddCommentRange(rangeLines);
+    }, [commentRangeRequest, lines, reviewCommentControls]);
     const markdownSourceRangeActionsEnabled = reviewCommentsEnabled === true
         && reviewCommentModeActive === true
         && displayMode === 'markdown';
@@ -322,6 +350,14 @@ function FileContentPanelInner({
         if (!first) return null;
         return { scrollToLineId: first.id, highlightLineIds: new Set(resolution.lines.map((line) => line.id)) };
     }, [displayMode, filePath, jumpToAnchor, lines]);
+
+    const emphasizedLineIds = React.useMemo(() => {
+        if (!emphasizedLines) return undefined;
+        const end = emphasizedLines.startLine + emphasizedLines.lineCount;
+        return new Set(lines.filter((line) => typeof line.newLine === 'number'
+            && line.newLine >= emphasizedLines.startLine && line.newLine < end).map((line) => line.id));
+    }, [emphasizedLines, lines]);
+    const highlightLineIds = jumpHighlight?.highlightLineIds ?? emphasizedLineIds;
 
     const markdownHighlightRange = React.useMemo<MarkdownSourceRange | null>(() => {
         if (displayMode !== 'markdown') return null;
@@ -501,6 +537,22 @@ function FileContentPanelInner({
     }, [byteThreshold, diffContent, displayMode, fileContent, lineThreshold, reviewCommentControlsEnabled]);
 
     const liveTint = useFileLiveEditTint(liveMoment ?? null, lines);
+    const codeIntelligence = React.useMemo(() => {
+        if (!intelligence) return undefined;
+        const fileLines = new Map(lines.map(line => [line.id, line.newLine]));
+        const lineOf = (lineId: string) => fileLines.get(lineId) ?? null;
+        return {
+            onPointerToken: (lineId: string, offset16: number, rect: Rect | null) => {
+                const line = lineOf(lineId);
+                if (line !== null) intelligence.onPointer(line, offset16, rect);
+            },
+            onPointerAway: intelligence.onPointerAway,
+            onActivateToken: (lineId: string, offset16: number, activation: Readonly<{ via: 'modifier' | 'touch'; rect: Rect | null }>) => {
+                const line = lineOf(lineId);
+                if (line !== null) intelligence.onActivate(line, offset16, activation);
+            },
+        };
+    }, [intelligence, lines]);
     const fileCodeView = fileContent && displayMode === 'file'
         ? (
             <CodeLinesView
@@ -516,14 +568,15 @@ function FileContentPanelInner({
                 renderAfterLine={reviewCommentControls?.renderAfterLine}
                 renderLeadingLane={renderLeadingLane}
                 liveTint={liveTint}
-                contentPaddingHorizontal={16}
-                contentPaddingVertical={16}
+                intelligence={codeIntelligence}
+                contentPaddingHorizontal={CODE_CANVAS_CONTENT_PADDING}
+                contentPaddingVertical={CODE_CANVAS_CONTENT_PADDING}
                 externalScrollView={!virtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
                 virtualized={virtualized}
                 scrollToLineId={scrollToLineId}
                 findRangesByLineId={find?.lineRanges}
                 highlightLineId={jumpHighlight?.scrollToLineId}
-                highlightLineIds={jumpHighlight?.highlightLineIds}
+                highlightLineIds={highlightLineIds}
                 wrapLines={effectiveWrapLines}
                 showLineNumbers={effectiveShowLineNumbers}
                 showPrefix={effectiveShowPrefix}
@@ -557,15 +610,15 @@ function FileContentPanelInner({
                 isCommentActive={reviewCommentControls?.isCommentActive}
                 renderAfterLine={reviewCommentControls?.renderAfterLine}
                 renderLeadingLane={renderLeadingLane}
-                contentPaddingHorizontal={16}
-                contentPaddingVertical={16}
+                contentPaddingHorizontal={CODE_CANVAS_CONTENT_PADDING}
+                contentPaddingVertical={CODE_CANVAS_CONTENT_PADDING}
                 externalScrollView={!effectiveDiffVirtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
                 virtualized={effectiveDiffVirtualized}
                 scrollToLineId={scrollToLineId}
                 findActive={find?.open}
                 findRangesByLineId={find?.lineRanges}
                 highlightLineId={jumpHighlight?.scrollToLineId}
-                highlightLineIds={jumpHighlight?.highlightLineIds}
+                highlightLineIds={highlightLineIds}
                 wrapLines={effectiveWrapLines}
                 showLineNumbers={effectiveShowLineNumbers}
                 showPrefix={effectiveShowPrefix}

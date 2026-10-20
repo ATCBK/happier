@@ -1,14 +1,14 @@
-function normalizeNonEmptyString(value: unknown): string | null {
+function normalizeNonEmptyString(value: unknown, preserveWhitespace: boolean): string | null {
     if (typeof value !== 'string') {
         return null;
     }
 
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
+    const normalized = preserveWhitespace ? value : value.trim();
+    return normalized.length > 0 ? normalized : null;
 }
 
-export function normalizeFileSystemPath(value: unknown): string | null {
-    const normalized = normalizeNonEmptyString(value);
+export function normalizeFileSystemPath(value: unknown, options?: Readonly<{ preserveWhitespace?: boolean }>): string | null {
+    const normalized = normalizeNonEmptyString(value, options?.preserveWhitespace === true);
     if (!normalized) {
         return null;
     }

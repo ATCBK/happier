@@ -3,6 +3,8 @@ import { readFileChangesScope } from '@/components/workspaces/files/file/changes
 import type { FileDisplayMode } from '@/components/workspaces/files/file/filePageModel';
 
 export type WorkspaceFileView = Readonly<{
+    /** One-shot: open straight into the built-in editor (Edit from a plugin viewer's header). */
+    startEditing?: boolean;
     mode?: FileDisplayMode;
     changesScope?: FileChangesScope;
     blame?: boolean;
@@ -28,6 +30,7 @@ export function readWorkspaceFileView(tabState: unknown): WorkspaceFileView {
         ...(typeof view.wrap === 'boolean' ? { wrap: view.wrap } : {}),
         ...(typeof view.findQuery === 'string' ? { findQuery: view.findQuery } : {}),
         ...(view.previewSlice === 'head' || view.previewSlice === 'tail' ? { previewSlice: view.previewSlice } : {}),
+        ...(view.startEditing === true ? { startEditing: true } : {}),
     };
 }
 

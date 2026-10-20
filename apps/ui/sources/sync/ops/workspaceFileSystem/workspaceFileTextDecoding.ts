@@ -7,14 +7,19 @@ export type WorkspaceFileTextDecoding =
     | Readonly<{ kind: 'notUtf8'; hash: string }>
     | Readonly<{ kind: 'binary' }>;
 
+/** Restore only the BOM removed by the UTF8 decoder; callers own EOL policy. */
+export function restoreWorkspaceFileTextBom(text: string, encoding?: Readonly<{ hasBom: boolean }>): string {
+    return (encoding?.hasBom ? '\uFEFF' : '') + text;
+}
+
 /** Reconstruct an already-held complete text read for a byte-preserving export. */
 export function reconstructWorkspaceFileTextBytes(input: Readonly<{
     text: string;
     complete: boolean;
     encoding?: Readonly<{ hasBom: boolean; editable: boolean; reason?: 'notUtf8' }>;
 }>): Uint8Array | null {
-    if (!input.complete) return null;
-    return new TextEncoder().encode(input.text);
+    if (!input.complete || input.encoding?.editable !== true || input.encoding.reason === 'notUtf8') return null;
+    return new TextEncoder().encode(restoreWorkspaceFileTextBom(input.text, input.encoding));
 }
 
 export async function decodeWorkspaceFileText(base64: string): Promise<WorkspaceFileTextDecoding> {

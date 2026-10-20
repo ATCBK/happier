@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 import { FilesystemWriteFileOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { workspaceWriteFile, classifyWorkspaceWriteFileFailure, type WorkspaceWriteFileResponse } from '@/sync/domains/workspaces/files/workspaceFileReadWrite';
+import { restoreWorkspaceFileTextBom } from '@/sync/ops/workspaceFileSystem/workspaceFileTextDecoding';
 import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { createAdvancedDebounce } from '@/utils/timing/debounce';
 import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
@@ -261,7 +262,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
             if (!shown && (conflictNow() || sent === baseRef.current.text)) return false;
             const encoding = shown ? shown.encoding : baseRef.current.encoding ?? latest.current.encoding;
             const normalized = encoding ? sent.replace(/\r\n|\r|\n/g, encoding.eol === 'crlf' ? '\r\n' : '\n') : sent;
-            const content = (encoding?.hasBom ? '\uFEFF' : '') + normalized;
+            const content = restoreWorkspaceFileTextBom(normalized, encoding);
             const expectedHash = shown?.hash ?? baseRef.current.hash;
             const target = latest.current;
             const response = await writeWithApproval(target, content, expectedHash, identity.signal);
@@ -303,7 +304,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
         const identity = new AbortController(); saving.current = identity; setIsSavingEdits(true);
         const isCurrentWrite = () => saving.current === identity && !identity.signal.aborted && isCurrentOwner() && target.mountedRef.current;
         try {
-            const response = await writeWithApproval(target, (snapshot.encoding?.hasBom ? '\uFEFF' : '') + snapshot.text, snapshot.hash, identity.signal);
+            const response = await writeWithApproval(target, restoreWorkspaceFileTextBom(snapshot.text, snapshot.encoding), snapshot.hash, identity.signal);
             if (!isCurrentWrite()) return;
             if (!response.success) {
                 if (response.kind !== 'conflict') updateRefusal({ kind: response.kind === 'approval_required' ? 'awaitingApproval' : response.kind, message: response.error });

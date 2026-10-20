@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveFilePageAttribution, resolveFilePageHeaderModel } from './filePageModel';
+import { resolveFilePageAttribution, resolveFilePageEditControl, resolveFilePageHeaderModel } from './filePageModel';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -36,5 +36,21 @@ describe('File page header behaviour model', () => {
     it('does not offer an editor for a partial buffer, even when writes are supported', () => {
         expect(resolveFilePageHeaderModel({ ...text, partial: true }).editUnavailableReason).toBe('partial');
         expect(resolveFilePageHeaderModel({ ...text, hasText: false }).editUnavailableReason).toBe('binary');
+    });
+
+    it('keeps one primary Save: quiet while the notice line carries the save, absent while the key row does', () => {
+        const editor = { status: 'dirty', canSave: true, refusal: null, onSave: vi.fn(), onDone: vi.fn() } as unknown as
+            NonNullable<Parameters<typeof resolveFilePageEditControl>[0]['editor']>;
+        const base = { fileEditorEnabled: true, isEditingFile: true, editor };
+        expect(resolveFilePageEditControl(base)).toMatchObject({ kind: 'save', primary: true });
+        expect(resolveFilePageEditControl({ ...base, machineUnreachable: true })).toMatchObject({ kind: 'save', primary: false });
+        expect(resolveFilePageEditControl({ ...base, editor: { ...editor, refusal: { kind: 'unreachable' } } }))
+            .toMatchObject({ kind: 'save', primary: false });
+        expect(resolveFilePageEditControl({ ...base, editor: { ...editor, refusal: { kind: 'awaitingApproval' } } }))
+            .toMatchObject({ kind: 'save', primary: false });
+        expect(resolveFilePageEditControl({ ...base, keyRowCarriesSave: true })).toBeNull();
+        // Leaving a clean editor stays reachable on a phone.
+        expect(resolveFilePageEditControl({ ...base, keyRowCarriesSave: true, editor: { ...editor, status: 'clean' } }))
+            .toMatchObject({ kind: 'done' });
     });
 });

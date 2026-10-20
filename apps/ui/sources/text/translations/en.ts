@@ -11721,6 +11721,7 @@ const enFiles = {
       writtenIn: ({ title, time }: { title: string; time: string }) => `Not committed yet. Written in ${title} at ${time}.`,
       askedBy: ({ name }: { name: string }) => `Asked by ${name}.`,
       uncommittedBody: "Not committed yet. No turn of this session wrote these lines as they are now.",
+      uncommittedNoSession: "Not committed yet.",
       newFileByTurn: ({ agent, turn }: { agent: string; turn: string }) => `Not committed yet. Every line is new; ${agent} wrote it in ${turn}.`,
       noHistory: "No history yet. This file isn’t committed.",
       failed: "Couldn’t read this file’s history.",
