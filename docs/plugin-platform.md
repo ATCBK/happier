@@ -3079,6 +3079,14 @@ readiness, `waitUntilHealthy` returns typed unavailable. HTTP requests require
 an observed, validated endpoint. Existing HTTP spawn and attach modes retain
 their endpoint and health contracts.
 
+In 0.3 development source, declarative launches of a plugin's own system tools
+use its invocation-bound system-tool resolver, including an Agent's selected
+managed CLI or override. Local and same-plugin qualified references consume
+the same launch, environment and argument policy as `exec.systemTools.resolve`.
+An unavailable selection refuses the launch. Foreign-plugin tool references
+retain their qualified executable resolver; retained physical Provider launches
+and runner-preauthorized launches retain their existing custody owners.
+
 In unreleased 0.3 source, omitting `startupTimeoutMs` and the healthy-wait
 `timeoutMs` leaves establishment pending for the owning lifetime; the host does
 not inject a startup deadline. An explicitly authored startup deadline also
