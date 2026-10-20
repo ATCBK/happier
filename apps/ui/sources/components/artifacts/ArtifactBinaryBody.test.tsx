@@ -9,6 +9,23 @@ import { hashArtifactBinaryContent, openArtifactBinaryContent } from '@/sync/dom
 import { fetchArtifactBlob } from '@/sync/api/artifacts/apiArtifacts';
 import type { ArtifactBlobReferenceV1 } from '@happier-dev/protocol';
 
+const nativeBoundary = vi.hoisted(() => ({
+    filesystem: null as ReturnType<typeof import('@/dev/testkit/mocks/expoFileSystem').createExpoFileSystemFileMock> | null,
+    share: async (_uri: string, _name?: string, _mime?: string | null) => {},
+}));
+vi.mock('expo-file-system', async () => {
+    nativeBoundary.filesystem = (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock();
+    return nativeBoundary.filesystem.module;
+});
+vi.mock('expo-sharing', () => ({ isAvailableAsync: async () => true,
+    shareAsync: async (uri: string) => nativeBoundary.share(uri) }));
+vi.mock('expo-modules-core', async importOriginal => ({
+    ...await importOriginal<typeof import('expo-modules-core')>(),
+    requireOptionalNativeModule: (name: string) => name === 'HappierFileActions'
+        ? { shareFile: (uri: string, fileName: string, mimeType?: string | null) => nativeBoundary.share(uri, fileName, mimeType) }
+        : null,
+}));
+
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit');
     return createModalModuleMock().module;
@@ -21,11 +38,13 @@ vi.mock('@/text', async () => {
 import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 
 beforeEach(async () => {
+    await import('expo-file-system');
+    nativeBoundary.filesystem!.files.clear();
     const { storage } = await import('@/sync/domains/state/storage');
     storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0, filesImagePreviewMaxBytes: 1_000_000 });
 });
 
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.resetModules(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
 function binarySource(mime: string, bytes = new Uint8Array([0, 255, 128])) {
     const reference: ArtifactBlobReferenceV1 = { blobId: 'b6a4bb92-8b93-4b18-b8b4-230041388a62', mime,
@@ -96,32 +115,25 @@ describe('ArtifactBinaryBody', () => {
         const previous = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
         const source = binarySource('application/pdf');
-        const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
-        const filesystem = createExpoFileSystemFileMock();
+        const filesystem = nativeBoundary.filesystem!;
         const files = filesystem.files;
         const androidShares: string[] = [];
         const iosShares: string[] = [];
         // Only Expo filesystem/native SDK boundaries are substituted; artifact HTTP/schema,
         // content validation, cache lifetime and the sharing adapters remain real.
-        vi.doMock('expo-file-system', () => filesystem.module);
-        vi.doMock('expo-sharing', () => ({ isAvailableAsync: async () => true,
-            shareAsync: async (uri: string) => {
+        nativeBoundary.share = async (uri, name, mimeType) => {
+            if (platform === 'ios') {
                 iosShares.push(uri);
                 expect(files.get(uri)).toEqual([...source.bytes]);
                 if (outcome === 'failure') throw new Error('Share sheet failed');
-            } }));
-        vi.doMock('expo-modules-core', async importOriginal => ({
-            ...await importOriginal<typeof import('expo-modules-core')>(),
-            requireOptionalNativeModule: (name: string) => name === 'HappierFileActions' ? {
-                shareFile: async (uri: string, name: string, mimeType?: string) => {
-                    androidShares.push(uri);
-                    expect(name).toBe('Quarterly report');
-                    expect(mimeType).toBe('application/pdf');
-                    expect(files.get(uri)).toEqual([...source.bytes]);
-                    if (outcome === 'failure') throw new Error('Share chooser failed');
-                },
-            } : null,
-        }));
+            } else {
+                androidShares.push(uri);
+                expect(name).toBe('Quarterly report');
+                expect(mimeType).toBe('application/pdf');
+                expect(files.get(uri)).toEqual([...source.bytes]);
+                if (outcome === 'failure') throw new Error('Share chooser failed');
+            }
+        };
         try {
             const screen = await renderScreen(<ArtifactBinaryBody artifactId="pdf" name="Quarterly report" {...source} />);
             await flushHookEffects();
@@ -141,7 +153,6 @@ describe('ArtifactBinaryBody', () => {
             await screen.unmount();
         } finally {
             Object.defineProperty(Platform, 'OS', { configurable: true, value: previous });
-            vi.doUnmock('expo-file-system'); vi.doUnmock('expo-sharing'); vi.doUnmock('expo-modules-core');
         }
     });
 
@@ -174,11 +185,6 @@ describe('ArtifactBinaryBody', () => {
         const previous = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
         const source = binarySource('image/png');
-        const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
-        const filesystem = createExpoFileSystemFileMock();
-        // Loading the real shared image viewer reaches native filesystem imports;
-        // keep that dependency at the Expo SDK boundary in this web host test.
-        vi.doMock('expo-file-system', () => filesystem.module);
         const urls: Blob[] = [];
         vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => {
             if (!(blob instanceof Blob)) throw new Error('Expected binary preview Blob');
@@ -204,7 +210,6 @@ describe('ArtifactBinaryBody', () => {
             expect(Modal.hide).toHaveBeenCalledWith('modal-id');
         } finally {
             Object.defineProperty(Platform, 'OS', { configurable: true, value: previous });
-            vi.doUnmock('expo-file-system');
         }
     });
 
