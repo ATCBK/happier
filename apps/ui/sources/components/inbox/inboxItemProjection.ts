@@ -1,5 +1,6 @@
 import type { DiscussionAttentionResultV1 } from '@happier-dev/protocol/discussions/actions';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { inboxItemViewV1, type InboxItemTypeV1, type InboxItemViewV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 
 export type InboxDiscussionSource = Readonly<{
     scope: ServerAccountScope;
@@ -8,12 +9,10 @@ export type InboxDiscussionSource = Readonly<{
     sessionDisplayNames?: ReadonlyMap<string, string | null>;
 }>;
 
-export type InboxItemView = 'needs_you' | 'updates' | 'mentions';
-export type InboxItemType = 'decision' | 'approval' | 'blocked' | 'update' | 'mention';
+export type InboxItemView = InboxItemViewV1;
+export type InboxItemType = InboxItemTypeV1;
 
-export function inboxItemView(type: InboxItemType): InboxItemView {
-    return type === 'mention' ? 'mentions' : type === 'update' ? 'updates' : 'needs_you';
-}
+export const inboxItemView = inboxItemViewV1;
 
 /** Shared source admission; the badge needs neither thread reads nor row display joins. */
 export function* admittedInboxDiscussionOccurrences(source: InboxDiscussionSource) {

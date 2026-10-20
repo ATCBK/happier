@@ -1,6 +1,7 @@
 import type { InboxWorkGroup } from '@/activity/presentation/buildInboxWorkGroups';
 import { classifyInboxSessionCandidate, type InboxSessionPresentation } from '@/activity/presentation/buildInboxSessionPresentation';
-import { isOpenAccountNotice, type AccountNoticeArtifact } from '@/sync/domains/artifacts/usageNoticeArtifacts';
+import { type AccountNoticeArtifact } from '@/sync/domains/artifacts/usageNoticeArtifacts';
+import { projectAccountNoticeInboxItemV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { createInboxItemRoute, readInboxApprovalServerId, resolveInboxItemPageRoute, type InboxItemFocus } from './inboxItemFocus';
 import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
 import type { SessionQuestionContextV1 } from '@happier-dev/protocol/sessions/permissions/questionV1';
@@ -135,16 +136,12 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
     }
     if (input.accountServerId) {
         for (const entry of input.notices) {
-            if (!isOpenAccountNotice(entry.header)) continue;
             const focus = { kind: 'notice', id: entry.artifact.id, serverId: input.accountServerId } as const;
-            rows.push({ key: `notice:${input.accountServerId}:${entry.artifact.id}`, producer: 'notice', type: entry.header.type,
-                view: inboxItemView(entry.header.type), title: entry.header.title, context: entry.header.body ?? null,
-                createdAt: entry.artifact.createdAt, read: entry.header.readAt !== undefined, focus,
+            const row = projectAccountNoticeInboxItemV1({ artifactId: entry.artifact.id, serverId: input.accountServerId,
+                createdAt: entry.artifact.createdAt, header: entry.header,
                 pageRoute: resolveInboxItemPageRoute(focus, { notice: entry.header }),
-                author: null, excerpt: entry.header.body ?? entry.header.excerpt ?? null,
-                source: { kind: 'account_notice', id: entry.artifact.id, serverId: input.accountServerId,
-                    displayName: entry.header.source.kind === 'plugin'
-                        ? input.pluginDisplayNames?.get(entry.header.source.pluginId) ?? null : null } });
+                pluginDisplayName: entry.header.source.kind === 'plugin' ? input.pluginDisplayNames?.get(entry.header.source.pluginId) : null });
+            if (row) rows.push(row);
         }
     }
     if (input.discussions) {

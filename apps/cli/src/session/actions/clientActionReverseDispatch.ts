@@ -41,7 +41,6 @@ export function createClientActionReverseDispatcher(
     const method = actionId === 'session.work.get' && input && typeof input === 'object'
       && typeof Reflect.get(input, 'sessionId') === 'string'
       ? mountedWorkReadClientRpcMethod(actionId, Reflect.get(input, 'sessionId'))
-      : actionId === 'inbox.get' ? mountedWorkReadClientRpcMethod(actionId)
       : actionId === 'ui.current_context.read' ? currentUiContextReadClientRpcMethod()
       : (actionId === 'ui.current_context.command.invoke' || actionId === 'account.home_continuation.invoke')
         && input && typeof input === 'object'

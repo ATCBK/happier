@@ -1,4 +1,4 @@
-import { AppShellActionInputSchemas, AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
+import { AppShellActionInputSchemas, AppShellActionOutputSchemas, projectInboxReadItemV1 } from '@happier-dev/protocol/actions/appShellActionFamily';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { resolveWorkReadPresentation, type WorkItem, type WorkProjection } from '@/components/sessions/work/workProjection';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
@@ -27,8 +27,6 @@ function publishMountedReadAddresses(): void {
         && address.sessionId === owner.sessionId && areServerAccountScopesEqual(address.scope, owner.scope))) {
         next.push({ scope: owner.scope, actionId: 'session.work.get', sessionId: owner.sessionId });
     }
-    for (const owner of inboxOwners) if (!next.some(address => address.actionId === 'inbox.get'
-        && areServerAccountScopesEqual(address.scope, owner.scope))) next.push({ scope: owner.scope, actionId: 'inbox.get' });
     if (next.length === mountedReadAddresses.length && next.every((address, index) => {
         const previous = mountedReadAddresses[index];
         return previous?.actionId === address.actionId && previous.sessionId === address.sessionId
@@ -90,11 +88,7 @@ function canonicalInboxItem(item: InboxItem, scope: ServerAccountScope) {
         || item.discussion.messageRef.messageId !== item.focus.messageId
         || item.discussion.messageRef.discussion.discussionId !== item.source.id
         || !areServerProfileIdentifiersEquivalent(item.discussion.messageRef.discussion.serverId, scope.serverId))) return null;
-    return { key: item.key, producer: item.producer, type: item.type, view: item.view, title: item.title,
-        context: item.context, createdAt: item.createdAt, read: item.read, focus: item.focus,
-        pageRoute: item.pageRoute, source: item.source,
-        ...(item.question ? { question: item.question } : {}),
-        ...(item.discussion ? { discussion: item.discussion } : {}) };
+    return projectInboxReadItemV1(item);
 }
 
 export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellAction']> = async ({ actionId, input, context }) => {
