@@ -149,6 +149,20 @@ describe('CLI machine terminal Action', () => {
     }, { surface: 'cli', serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'operation_not_found' });
     expect(requests.map(request => request.method)).toEqual(['custodian:actionOperation.get.v2']);
   });
+  it('runs code text references through the existing workspace search dependency and exact Machine transport', async () => {
+    const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
+    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+      sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
+    responses.push({ ok: true, files: [{ path: 'src/a.ts', matches: [{ line: 2, column16: 1, length16: 6,
+      text: 'needle()', before: [], after: [] }] }], hasMore: false, coverage: 'complete' });
+    expect(await executor.execute('code.references.list', { machineId: 'machine', rootPath: '/project', path: 'src/a.ts', line: 2, symbol: 'needle' },
+      { surface: 'cli', serverId: 'home' })).toMatchObject({ ok: true, result: { status: 'ok', source: 'text_matches',
+        locations: [{ path: 'src/a.ts', range: { start: { line: 1, character: 0 } } }] } });
+    expect(requests).toMatchObject([{ method: `machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH}`, params: {
+      rootPath: '/project', query: expect.stringContaining('needle'), regex: true, matchCase: true,
+    } }]);
+  });
+
   it('searches workspace content through the exact machine transport with cancellation', async () => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
     const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,

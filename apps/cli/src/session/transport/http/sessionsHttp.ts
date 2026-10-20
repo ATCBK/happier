@@ -1,6 +1,6 @@
 import axios, { type AxiosResponse } from 'axios';
 import { readActionCredentialScopeDeniedHttpFailureV1, type ActionCredentialScopeDeniedFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
-import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { classifyHomeDomainHttpMutationFailureV1, readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import type { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { readSessionCreationInitialTriggerError } from '@/api/session/sessionCreationInitialTriggerError';
@@ -1522,6 +1522,10 @@ export async function postSessionCreationRequest<T>(params: Readonly<{
   validateStatus?: (status: number) => boolean;
 }>): Promise<AxiosResponse<T>> {
   params.signal?.throwIfAborted();
+  const refuseConfirmedRollback = (status: number, data: unknown): void => {
+    const rollback = readHomeDomainConfirmedRollbackV1(status, data);
+    if (rollback) throw createHttpStatusError(status, 'Session creation transaction rolled back', rollback.code);
+  };
   const response = await axios.post<T>(`${params.serverUrl}/v1/sessions`, params.body, {
     headers: {
       ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
@@ -1537,6 +1541,9 @@ export async function postSessionCreationRequest<T>(params: Readonly<{
   }).catch((cause: unknown) => {
     // A response is handled by the existing refusal/rollback readers. Losing
     // the response after dispatch cannot prove that Session birth rolled back.
+    if (axios.isAxiosError(cause) && cause.response) {
+      refuseConfirmedRollback(cause.response.status, cause.response.data);
+    }
     if (readHttpStatus(cause) !== null || classifyHomeDomainHttpMutationFailureV1({
       error: cause, issued: true, aborted: params.signal?.aborted === true,
     }) !== 'outcome_unknown') throw cause;
@@ -1545,6 +1552,7 @@ export async function postSessionCreationRequest<T>(params: Readonly<{
       cause: { ...serializeAxiosErrorForLog(cause), code: readNormalizedConnectionErrorCode(cause) },
     });
   });
+  refuseConfirmedRollback(response.status, response.data);
   // Cancellation cannot undo a remote commit, but it cannot report success to
   // an invocation that has already retired either.
   params.signal?.throwIfAborted();

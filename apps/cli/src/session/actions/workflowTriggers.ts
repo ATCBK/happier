@@ -6,6 +6,7 @@ import type { WorkflowDefinitionV1, WorkflowTriggerActionsDependencies } from '@
 import { createAutomationDefinition, deleteAutomationDefinition, getAutomationDefinition,
   listAutomationDefinitions, reconcileAutomationDefinition, runAutomationNowReceipt } from '@/api/automations';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { getRandomBytes } from '@/api/encryption';
 import type { StoredCredentials } from '@/persistence';
 import { createAutomationAccountEncryptionMaterialSnapshotV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
@@ -52,6 +53,8 @@ export function createCliWorkflowTriggerActions(params: Readonly<{
         }),
         resolveAccountEncryptionMaterial: async () => createAutomationAccountEncryptionMaterialSnapshotV1(params.credentials),
       });
+      if (resolved.kind === 'unavailable' && 'cause' in resolved
+        && classifyServerEndpointError(resolved.cause).retryable) throw resolved.cause;
       if (resolved.kind !== 'available') throw Object.assign(new Error('content_unavailable'), { code: 'content_unavailable' });
       return resolved;
     },

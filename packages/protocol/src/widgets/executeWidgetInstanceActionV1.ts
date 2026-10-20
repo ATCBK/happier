@@ -41,6 +41,18 @@ export async function admitWidgetInstanceConfigurationV1(
   return validation.status === 'ready' ? null : { ...failure('widget_inputs_invalid'), details: validation };
 }
 
+/**
+ * A refusal is only a determination about the inputs when the read could answer. A caller whose authority
+ * cannot make a Home read (an agent's Session caller signs with its root Action's authorization) is
+ * answered "not authenticated" for every pick, which says nothing about this one: the approved execution,
+ * where the person's own Account reads, decides.
+ */
+export function isWidgetAdmissionUndecidableHereV1(refusal: Extract<ActionExecuteResult, { ok: false }>): boolean {
+  const details = refusal.details as Readonly<{ status?: unknown; fields?: unknown }> | undefined;
+  const fields = details?.status === 'unavailable' && Array.isArray(details.fields) ? details.fields : [];
+  return fields.length > 0 && fields.every(field => (field as Readonly<{ reasonCode?: unknown }>)?.reasonCode === 'not_authenticated');
+}
+
 /** A refused owner write is known not to have committed; all other failures stay unknown. */
 const knownRefusal = (code: string) => SessionBoardErrorCodeSchema.safeParse(code).success
   || code === 'widget_shared_input_forbidden' || code === 'artifact_access_forbidden'
