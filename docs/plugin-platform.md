@@ -48,11 +48,16 @@ existing Settings Action approval and Account CAS writer retain admission and
 mutation ownership.
 
 Agent policy, usage and outcome projections are available through the public
-SDK Agent runtime domain. Native Lima operations use the machine-provisioner
-domain, Git comparison/index operations use SCM, and path identity uses FS.
+SDK Agent runtime domain. Native Lima operations use the daemon-only
+`machine-provisioners/lima` subpath, and Git index operations use daemon-only
+`scm/git`. The comparison parser stays in the pure SCM domain; path identity uses FS.
 These projections retain the existing canonical implementations; plugin leaves
 do not import the private Protocol or CLI-common packages. The bounded Claude
 predecessor message-metadata build translation remains a build-only exception.
+
+In 0.3 development source, a missing or wrong-tier generated UI artifact has no
+verified release slot. Its declaration remains visible with the UI projection's
+typed unavailable reason; neighbouring valid slots and daemon startup remain usable.
 
 In 0.3 development source, dynamic Resources and Composer References do not
 activate an otherwise undemanded daemon plugin during serving startup. Resource
