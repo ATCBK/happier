@@ -45,7 +45,7 @@ import { useHomeDisplayLabel } from '@/components/settings/server/homeDisplayNam
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useSessionListQueryHomeSupportByServerId, useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import { buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
-import { storage, useLocalSettingMutable, useSessionListRowRenderablesForItems } from '@/sync/domains/state/storage';
+import { storage, useLocalSetting, useSessionListRowRenderablesForItems } from '@/sync/domains/state/storage';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
@@ -181,13 +181,13 @@ export function BotsPopoverContent(
 ) {
   const { theme } = useUnistyles();
   const styles = stylesheet;
-  const [collapsedPreference, setCollapsedPreference] = useLocalSettingMutable('collapsedGroupKeysV1');
+  const collapsedPreference = useLocalSetting('collapsedGroupKeysV1');
   const collapsed = collapsedPreference ?? NO_COLLAPSED_GROUPS;
   const collapsedRef = React.useRef(collapsed);
   collapsedRef.current = collapsed;
   const setCollapsed = React.useCallback((nodeId: string, value: boolean) => {
-    setCollapsedPreference({ ...collapsedRef.current, [nodeId]: value });
-  }, [setCollapsedPreference]);
+    storage.getState().applyLocalSettings({ collapsedGroupKeysV1: { ...collapsedRef.current, [nodeId]: value } }, { source: 'ui' });
+  }, []);
   const queryHomes = useBotsRosterQueryHomes();
   const pane = useVisibleSessionListPaneState('all', {
     botsRoster: true,

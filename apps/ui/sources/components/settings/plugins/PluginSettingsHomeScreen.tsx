@@ -21,7 +21,8 @@ import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactive
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
@@ -120,12 +121,12 @@ export const PluginSettingsHomeScreen = React.memo(function PluginSettingsHomeSc
     }, [requestedView, setActiveView]);
 
     // Grid | List, remembered per view on this device.
-    const [presentationByView, setPresentationByView] = useLocalSettingMutable('pluginsCollectionViewV1');
+    const presentationByView = useLocalSetting('pluginsCollectionViewV1');
     const presentationKey = state.activeView === 'installed' ? 'installed' : 'discover';
     const presentation: PluginsCollectionPresentation = presentationByView?.[presentationKey] ?? 'grid';
     const setPresentation = React.useCallback((next: PluginsCollectionPresentation) => {
-        setPresentationByView({ ...(presentationByView ?? {}), [presentationKey]: next });
-    }, [presentationByView, presentationKey, setPresentationByView]);
+        getStorage().getState().applyLocalSettings({ pluginsCollectionViewV1: { ...(presentationByView ?? {}), [presentationKey]: next } }, { source: 'ui' });
+    }, [presentationByView, presentationKey]);
 
     // Installed search and status filter narrow the machine's list locally; Browse searches every source.
     // The page owns the collection's one search control; the column only chooses the destination.

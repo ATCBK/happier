@@ -25,7 +25,8 @@ import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { Text } from '@/components/ui/text/Text';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
-import { useArtifacts, useArtifactsLoaded, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useArtifacts, useArtifactsLoaded, useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { sync } from '@/sync/sync';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { t } from '@/text';
@@ -125,11 +126,11 @@ export function ArtifactsBrowser(props: Readonly<{
     const [query, setQuery] = React.useState('');
     const [kind, setKind] = React.useState<ArtifactBrowserKind | 'all'>('all');
     const [sort, setSort] = React.useState<ArtifactBrowserSort>('updated_desc');
-    const [view, setView] = useLocalSettingMutable('artifactsBrowserViewV1');
+    const view = useLocalSetting('artifactsBrowserViewV1');
     const deviceType = useDeviceType();
     // A phone lists by default (one card per screen hides the collection); wider screens show cards.
     const presentation: BrowserPresentation = view?.presentation ?? (deviceType === 'phone' ? 'list' : 'grid');
-    const setPresentation = React.useCallback((next: BrowserPresentation) => setView({ presentation: next }), [setView]);
+    const setPresentation = React.useCallback((next: BrowserPresentation) => getStorage().getState().applyLocalSettings({ artifactsBrowserViewV1: { presentation: next } }, { source: 'ui' }), []);
     const filter = React.useMemo(() => ({ query, kind, sort }), [query, kind, sort]);
     const folderTree = React.useRef<ArtifactFolderTreeHandle>(null);
 

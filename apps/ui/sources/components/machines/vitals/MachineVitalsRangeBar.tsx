@@ -4,7 +4,8 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import type { MachineVitalsRange } from '@/sync/domains/machines/resources/machineRpc';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
@@ -28,7 +29,10 @@ export function useMachineVitalsRange(): readonly [
   MachineVitalsRange,
   (next: MachineVitalsRange) => void,
 ] {
-  const [range, setRange] = useLocalSettingMutable('machineVitalsRangeV1');
+  const range = useLocalSetting('machineVitalsRangeV1');
+  const setRange = React.useCallback((next: MachineVitalsRange) => {
+    getStorage().getState().applyLocalSettings({ machineVitalsRangeV1: next }, { source: 'ui' });
+  }, []);
   return [range, setRange] as const;
 }
 

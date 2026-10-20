@@ -36,7 +36,7 @@ import {
 } from '@/sync/domains/capabilities/reach/useReachProjection';
 import { useFoundSkillsCache } from '@/sync/domains/skills/useFoundSkills';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -343,7 +343,7 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
   ]);
   const orderedMcp = useStableScopeOrder(placeKey, mcpRows);
 
-  const [migrationSeenAt, setMigrationSeenAt] = useLocalSettingMutable(
+  const migrationSeenAt = useLocalSetting(
     'projectSkillsMigrationNoteSeenAt',
   );
   const migratedNames = React.useMemo(() => {
@@ -355,8 +355,8 @@ export function useCapabilityScope(place: ScopePlace): CapabilityScopeData {
     ].map((row) => row.name);
   }, [mcpRows, migrationSeenAt, place, skillRows]);
   const dismiss = React.useCallback(
-    () => setMigrationSeenAt(Date.now()),
-    [setMigrationSeenAt],
+    () => getStorage().getState().applyLocalSettings({ projectSkillsMigrationNoteSeenAt: Date.now() }, { source: 'ui' }),
+    [],
   );
 
   const skills = React.useMemo<ScopeListData>(

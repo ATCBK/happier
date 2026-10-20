@@ -2,7 +2,8 @@ import * as React from 'react';
 
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import { useRegistrySuggestions } from '@/registries/useRegistrySuggestions';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 import { buildMcpServerCollection } from '../collection/mcpServerCollectionModel';
 import { useMcpSignInViewOf } from '../signIn/useMcpSignInViewOf';
@@ -24,7 +25,7 @@ export function useMcpHome() {
   const { resolveReference } = savedSecretCatalog;
   const secretAvailability = React.useMemo(() => ({ resolveReference }), [resolveReference]);
   const shelf = useRegistrySuggestions('mcpServer');
-  const [dismissedAt, setDismissedAt] = useLocalSettingMutable(
+  const dismissedAt = useLocalSetting(
     'mcpFirstVisitDismissedAt',
   );
   const suggestions = React.useMemo(
@@ -48,8 +49,8 @@ export function useMcpHome() {
     [dismissedAt, rows, secretAvailability, signInOf, suggestions],
   );
   const dismissFirstVisit = React.useCallback(
-    () => setDismissedAt(Date.now()),
-    [setDismissedAt],
+    () => getStorage().getState().applyLocalSettings({ mcpFirstVisitDismissedAt: Date.now() }, { source: 'ui' }),
+    [],
   );
   const loading = snapshot.status === 'loading' && settings.servers.length === 0;
   // A partial read that shows nothing is not "no servers yet": it says it couldn't load, with a retry.

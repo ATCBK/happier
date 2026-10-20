@@ -1,7 +1,8 @@
 import * as React from 'react';
 
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import type { ResolvedPermissionPromptSurface } from '@/utils/sessions/permissions/permissionPromptPolicy';
 
 /**
@@ -9,10 +10,10 @@ import type { ResolvedPermissionPromptSurface } from '@/utils/sessions/permissio
  * the approval is unchanged and nothing is sent anywhere, so it needs no confirmation.
  */
 export function useFailedApprovalDismissal() {
-    const [dismissed, setDismissed] = useLocalSettingMutable('dismissedFailedApprovalsV1');
+    const dismissed = useLocalSetting('dismissedFailedApprovalsV1');
     const dismiss = React.useCallback((artifactId: string) => {
-        setDismissed({ ...dismissed, [artifactId]: Date.now() });
-    }, [dismissed, setDismissed]);
+        getStorage().getState().applyLocalSettings({ dismissedFailedApprovalsV1: { ...dismissed, [artifactId]: Date.now() } }, { source: 'ui' });
+    }, [dismissed]);
     return { dismissed, dismiss };
 }
 

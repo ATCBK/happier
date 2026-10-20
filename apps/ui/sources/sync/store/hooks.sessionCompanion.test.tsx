@@ -12,6 +12,7 @@ import {
 } from '@/components/sessions/companion/state/useSessionCompanionController';
 import { storage } from '@/sync/domains/state/storageStore';
 import { applyLocalSettings } from '@/sync/domains/settings/localSettings';
+import { settingsParse } from '@/sync/domains/settings/settings';
 
 const activeServerRuntimeState = vi.hoisted(() => ({
     listener: null as null | ((snapshot: { serverId: string; serverUrl: string; generation: number }) => void),
@@ -49,6 +50,8 @@ async function renderController(options: Readonly<{
 }> = {}) {
     storage.setState((state) => ({
         ...state,
+        settings: settingsParse({ ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }),
         profileScope: options.accountId === null
             ? null
             : { serverId: 'active-server', accountId: options.accountId ?? 'account-a' },
@@ -129,7 +132,7 @@ describe('useSessionCompanionController', () => {
         }
     });
 
-    it('seeds the built-in Session Summary on first show and persists one realm entry', async () => {
+    it('remembers the built-in Session Summary in one realm with Settings writes Off', async () => {
         const previousState = storage.getState();
         try {
             const hook = await renderController();
