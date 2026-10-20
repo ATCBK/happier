@@ -129,12 +129,13 @@ describe('Profile entity operation parity', () => {
 });
 
 describe('Composer state mutation Actions', () => {
-  it('keeps the reversible config-option mutation UI-only', () => {
+  it('shares the reversible config-option mutation through its answering client', () => {
     expect(getActionSpec('session.config_option.set')).toMatchObject({
       sideEffectClass: 'write',
       safety: 'safe',
+      executionPlacement: 'client',
       placements: [],
-      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+      surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
     });
   });
   it('uses one Session capability Action on the UI and automation surfaces', () => {
@@ -150,8 +151,9 @@ describe('Composer state mutation Actions', () => {
     expect(getActionSpec('session.connected_services_auth.set')).toMatchObject({
       sideEffectClass: 'write',
       safety: 'danger',
+      executionPlacement: 'client',
       placements: [],
-      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+      surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
     });
   });
 });
@@ -1660,8 +1662,8 @@ describe('Action Spec Registry', () => {
       mcp: false,
       voice: false,
     });
-    expect(grantsList.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: false, mcp: false, voice: false });
-    expect(grantsRevoke.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: false, mcp: false, voice: false });
+    expect(grantsList.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false });
+    expect(grantsRevoke.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false });
 
     expect(respond.inputSchema.safeParse({
       sessionId: 'session-1',
