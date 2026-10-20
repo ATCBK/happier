@@ -1898,8 +1898,8 @@ export function createCliActionDeps(params: Readonly<{
     const candidates = await readWidgetCandidates(signal);
     const referenced = new Set(layout ? flattenWidgetLayoutWidgetsV1(layout.items).flatMap(({ instance }) => instance.definition.kind === 'artifact' ? [instance.definition.artifactId] : []) : []);
     if (referenced.size === 0) return candidates;
-    const definitions = await actionDeps.widgetDefinitionArtifacts?.list(signal) ?? [];
-    return [...candidates, ...definitions.filter(summary => referenced.has(summary.artifactId)).map(summary => ({
+    const definitions = await actionDeps.widgetDefinitionArtifacts?.summaries([...referenced], signal) ?? [];
+    return [...candidates, ...definitions.map(summary => ({
       key: `artifact:${summary.artifactId}`, homeDefault: 'available' as const,
       definition: { kind: 'artifact' as const, artifactId: summary.artifactId }, sizeDeclaration: summary.sizeDeclaration,
     }))];

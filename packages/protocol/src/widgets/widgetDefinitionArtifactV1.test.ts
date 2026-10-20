@@ -81,6 +81,16 @@ describe('Account widget definition Artifact owner', () => {
         expect(await listed.list()).toEqual([{ artifactId: 'definition', name: 'Checks', bodyKind: 'declarative',
             inputs: original().inputs, inputSchema: original().inputSchema, sizeDeclaration: original().sizeDeclaration, resources: [] }]);
     });
+    it('reads the named definitions\' summaries by exact id without paging the Account inventory', async () => {
+        const b = boundary();
+        const port = createWidgetDefinitionArtifactPortV1(b.transport, { accountId: 'owner' });
+        await port.create(original('wanted'));
+        await port.create(original('other'));
+        await b.transport.create({ artifactId: 'note', header: { kind: 'note.v1', v: 1, title: 'Note' }, body: '{}' });
+        const exact = createWidgetDefinitionArtifactPortV1({ ...b.transport, list: async () => { throw new Error('inventory_must_not_be_listed'); } }, { accountId: 'owner' });
+        expect(await exact.summaries(['wanted', 'wanted', 'note', 'absent'])).toMatchObject([{ artifactId: 'wanted', name: 'Checks' }]);
+        expect(await createWidgetDefinitionArtifactPortV1(b.transport, { accountId: 'someone-else' }).summaries(['wanted'])).toEqual([]);
+    });
     it('replays independent changes on the CAS winner, updates every reference, duplicates independently and leaves deleted refs intact', async () => {
         const b = boundary();
         const port = createWidgetDefinitionArtifactPortV1(b.transport, { accountId: 'owner' });

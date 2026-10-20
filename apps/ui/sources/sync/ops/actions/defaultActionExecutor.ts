@@ -1411,10 +1411,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         if ('ok' in candidates) throw Object.assign(new Error(candidates.error), { code: candidates.errorCode });
         const referenced = new Set(layout ? flattenWidgetLayoutWidgetsV1(layout.items).flatMap(({ instance }) => instance.definition.kind === 'artifact' ? [instance.definition.artifactId] : []) : []);
         if (referenced.size === 0) return candidates;
-        const definitions = await widgetDefinitionDeps.widgetDefinitionArtifacts?.list(signal) ?? [];
+        const definitions = await widgetDefinitionDeps.widgetDefinitionArtifacts?.summaries([...referenced], signal) ?? [];
         accountContext.assertCurrent();
         const { describeWidgetDefinitionSummaryV1 } = await import('@/components/widgets/widgetCatalog');
-        return [...candidates, ...definitions.filter(summary => referenced.has(summary.artifactId)).map(summary => describeWidgetDefinitionSummaryV1(summary,
+        return [...candidates, ...definitions.map(summary => describeWidgetDefinitionSummaryV1(summary,
           summary.sourceDefinition ? candidates.find(candidate => isSameWidgetDefinitionV1(
             widgetCandidateDefinitionV1(candidate), summary.sourceDefinition!)) : null))];
       },
