@@ -1,8 +1,15 @@
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { zhHant as actionTitlesZhHant } from './actionTitles/zh-Hant';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -676,9 +683,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersScopeProviderProject: '代理程式專案設定',
   mcpServersScopeProviderUser: '代理程式使用者設定',
   mcpServersScopeBuiltIn: '內建',
-  mcpServersStatusActive: '啟用中',
-  mcpServersStatusAvailable: '可用',
-  mcpServersStatusUnavailable: '不可用',
   mcpServersStatusDetected: ({ provider }: { provider: string }) => `已在 ${provider} 中啟用`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) => `已在 ${provider} 中停用`,
   mcpServersDeliveryNativeTitle: '原生 MCP',
@@ -1264,6 +1268,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
 
 
 const zhHantOverrides: DeepPartial<typeof zhHans> = {
+  panes: { mainColumn: paneMainColumnTranslations['zh-Hant'] },
   capabilities: capabilityKitTranslations.zhHant,
     resourceProposal: resourceProposalTranslations.zhHant,
     actionPresentation: { ...actionPresentationTranslations.zhHant, titles: actionTitlesZhHant },
@@ -1548,7 +1553,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
       empty: '沒有可用的應用程式外掛分頁。',
     },
   },
-  settingsKeyboard: {
+    settingsKeyboard: {
+        groupReview: '審查',
       title: '鍵盤快速鍵',
       entrySubtitle: '變更執行應用程式命令的按鍵，或將其關閉。',
       generalGroupTitle: '快速鍵',
@@ -1576,7 +1582,11 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
       groupComposer: '輸入框',
       groupTranscript: '對話記錄',
       groupSplitView: '分割畫面',
-      groupBrowser: '瀏覽器',
+  groupBrowser: '瀏覽器',
+  paneGroups: paneKeyboardTranslations['zh-Hant'].groups,
+  paneRegions: paneRegionLabels['zh-Hant'],
+  shortcutHostDesktop: paneKeyboardTranslations['zh-Hant'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['zh-Hant'].browser,
         setCommandButton: '變更',
         setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
         setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
@@ -1589,7 +1599,11 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             findOpen: transcriptFindTranslations['zh-Hant'].findOpen,
             findNext: transcriptFindTranslations['zh-Hant'].findNext,
             findPrevious: transcriptFindTranslations['zh-Hant'].findPrevious,
-          ...workspaceTabKeyboardTranslations,
+    ...workspaceTabKeyboardTranslations,
+    ...paneKeyboardTranslations['zh-Hant'].commands,
+    ...mediaKeyboardTranslations['zh-Hant'],
+    ...quickOpenTranslations['zh-Hant'].commands,
+    ...reviewKeyboardTranslations['zh-Hant'],
           ...terminalWorkspaceKeyboardTranslations,
           composerAbortConfirm: '確認中止',
           composerFocus: '聚焦輸入框',
@@ -1630,6 +1644,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
           transcriptScrollPageUp: '轉錄向上翻頁',
           transcriptScrollTop: '捲動到轉錄頂部',
           workflowSave: '儲存工作流程',
+          filesEditorSave: '儲存檔案編輯',
           workflowRun: '執行工作流程',
       },
   },
@@ -3773,9 +3788,6 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
 		        mcpServersScopeProviderProject: '代理程式專案設定',
 		        mcpServersScopeProviderUser: '代理程式使用者設定',
 		        mcpServersScopeBuiltIn: '內建',
-		        mcpServersStatusActive: '啟用中',
-		        mcpServersStatusAvailable: '可用',
-		        mcpServersStatusUnavailable: '不可用',
 		        mcpServersDeliveryNativeTitle: '原生 MCP',
 		        mcpServersDeliveryNativeSubtitle: '此後端會以原生 MCP 伺服器的方式接收 Happier 工具。',
 		        mcpServersDeliveryShellBridgeTitle: 'Happier Shell 橋接',
@@ -4325,6 +4337,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
         editorFooter: '設定檔案編輯器的行為。',
         editorAutoSave: '自動儲存',
         editorAutoSaveDescription: '編輯後自動儲存檔案。',
+        trackAgentEdits: '跟隨智慧體編輯',
+        trackAgentEditsDescription: '在此裝置上跟隨智慧體正在編輯的檔案與區域。',
         markdownEditMode: {
             title: '預設 Markdown 編輯模式',
             footer: '選擇 Markdown 檔案以何種方式開啟進行編輯。豐富模式提供所見即所得 (WYSIWYG) 編輯器；原始模式直接編輯 Markdown 原始碼。無法安全雙向轉換的檔案一律以原始模式開啟。',
@@ -6891,8 +6905,6 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
                 unpinTabA11y: '取消釘選分頁',
                 pinnedTabA11y: '已釘選分頁',
                 closeTabA11y: '關閉分頁',
-                enterFocusModeA11y: '進入面板專注模式',
-                exitFocusModeA11y: '退出面板專注模式',
           },
           actionsDraft: {
               noInputHints: '此操作沒有輸入提示。',
@@ -7076,6 +7088,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
 
     universalSearch: {
         content: fileContentSearchTranslations["zh-Hant"],
+    quickOpen: quickOpenTranslations['zh-Hant'].search,
         scopeFilterLabel: 'Home',
         commitsUpdateRequired: '請更新此機器上的 Happier 以搜尋提交。',
         groupFailed: ({ group }: { group: string }) => `無法搜尋${group}。`,
@@ -7963,6 +7976,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
 
     files: {
             pane: filesPaneTranslations['zh-Hant'],
+            agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} 正在寫入此檔案`,
             revealInFiles: "在檔案中顯示",
             openChanges: "開啟變更",
         searchPlaceholder: '搜尋檔案...',
@@ -8203,12 +8217,12 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
         fileTooLargeToPreview: '檔案過大，無法預覽',
         fileWriteFailed: '寫入檔案失敗',
         fileEditor: {
-            experimentalHint: '編輯功能為實驗性。儲存以將變更寫回工作階段 worktree。',
             frontmatterReadOnly: 'Frontmatter (唯讀)',
         },
         fileEditingUnsupported: '連線的守護程式不支援檔案編輯。請在該機器上更新 Happier 以啟用寫入操作。',
         fileChangedExternally: '你編輯時，此檔案已在磁碟上變更。草稿已保持不變；儲存前請查看最新檔案。',
         selectionFailed: '更新選取失敗',
+        askSelection: fileSelectionAskTranslations["zh-Hant"],
         openReviewCommentsFailed: '無法開啟審閱評論',
         reviewPreviousFile: "上一個檔案",
                   reviewNextFile: "下一個檔案",
@@ -14113,5 +14127,5 @@ settingsSession: {
 
 
 export function createZhHant(base: typeof zhHans) {
-    return defineTranslations(deepMerge(base, zhHantOverrides));
+    return defineTranslations(deepMerge(base, { ...zhHantOverrides, fileReviewNote: fileReviewNoteTranslations['zh-Hant'] }));
 }

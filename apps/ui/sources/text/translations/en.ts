@@ -1,6 +1,13 @@
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -682,9 +689,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersScopeProviderProject: 'Agent project config',
   mcpServersScopeProviderUser: 'Agent user config',
   mcpServersScopeBuiltIn: 'Built-in',
-  mcpServersStatusActive: 'Active',
-  mcpServersStatusAvailable: 'Available',
-  mcpServersStatusUnavailable: 'Unavailable',
   mcpServersStatusDetected: ({ provider }: { provider: string }) =>
     `Enabled in ${provider}`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) =>
@@ -1342,6 +1346,7 @@ const enPluginSurfaces = {
 };
 
 const enSettingsKeyboard = {
+  groupReview: 'Review',
   title: 'Keyboard shortcuts',
   entrySubtitle: 'Change the keys that run app commands, or turn them off.',
   generalGroupTitle: 'Shortcuts',
@@ -1374,6 +1379,10 @@ const enSettingsKeyboard = {
   groupTranscript: 'Transcript',
   groupSplitView: 'Split view',
   groupBrowser: 'Browser',
+  paneGroups: paneKeyboardTranslations['en'].groups,
+  paneRegions: paneRegionLabels['en'],
+  shortcutHostDesktop: paneKeyboardTranslations['en'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['en'].browser,
   setCommandButton: 'Change',
   setCommandAccessibility: ({ command }: { command: string }) =>
     `Set ${command} shortcut`,
@@ -1392,6 +1401,10 @@ const enSettingsKeyboard = {
     findNext: transcriptFindTranslations['en'].findNext,
     findPrevious: transcriptFindTranslations['en'].findPrevious,
     ...workspaceTabKeyboardTranslations,
+    ...reviewKeyboardTranslations['en'],
+    ...paneKeyboardTranslations['en'].commands,
+    ...mediaKeyboardTranslations['en'],
+    ...quickOpenTranslations["en"].commands,
     ...terminalWorkspaceKeyboardTranslations,
     composerAbortConfirm: 'Confirm abort',
     composerFocus: 'Focus composer',
@@ -1433,6 +1446,7 @@ const enSettingsKeyboard = {
     transcriptScrollPageUp: 'Scroll transcript page up',
     transcriptScrollTop: 'Scroll transcript to top',
     workflowSave: 'Save workflow',
+    filesEditorSave: 'Save file edits',
     workflowRun: 'Run workflow',
 
     permissionCycle: 'Cycle permission mode',
@@ -5639,6 +5653,8 @@ const enSettingsSourceControl = {
   editorFooter: 'Configure the file editor behavior.',
   editorAutoSave: 'Auto-save',
   editorAutoSaveDescription: 'Automatically save files after editing.',
+  trackAgentEdits: 'Track agent edits',
+  trackAgentEditsDescription: 'Follow the file and region the agent is editing on this device.',
   markdownEditMode: {
     title: 'Default markdown edit mode',
     footer:
@@ -7907,9 +7923,6 @@ const enSettingsAppearance = {
     preview: 'Preview tab',
     persistent: 'Persistent tabs',
   },
-  editorFocusMode: 'Editor focus mode',
-  editorFocusModeDescription:
-    'Hide the session transcript and sidebar while you review files (web/tablet)',
   inlineToolCalls: 'Inline Tool Calls',
   inlineToolCallsDescription: 'Display tool calls directly in chat messages',
   expandTodoLists: 'Expand Todo Lists',
@@ -9828,8 +9841,6 @@ const enSession = {
     unpinTabA11y: 'Unpin tab',
     pinnedTabA11y: 'Pinned tab',
     closeTabA11y: 'Close tab',
-    enterFocusModeA11y: 'Enter pane focus mode',
-    exitFocusModeA11y: 'Exit pane focus mode',
 
     emptyTitle: 'No tabs open',
   },
@@ -10147,6 +10158,7 @@ const enSession = {
 
 const enUniversalSearch = {
   content: fileContentSearchTranslations['en'],
+    quickOpen: quickOpenTranslations["en"].search,
   scopeFilterLabel: 'Home',
   commitsUpdateRequired: 'Update Happier on this machine to search commits.',
   moreResultsAvailable: 'More results are available. Refine your search.',
@@ -11630,6 +11642,7 @@ const enTools = {
 
 const enFiles = {
   pane: filesPaneTranslations.en,
+  agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} is writing this file`,
   revealInFiles: 'Reveal in Files',
   openChanges: 'Open Changes',
   searchPlaceholder: 'Search files...',
@@ -11922,8 +11935,6 @@ const enFiles = {
   fileTooLargeToPreview: 'File is too large to preview',
   fileWriteFailed: 'Failed to write file',
   fileEditor: {
-    experimentalHint:
-      'Editing is experimental. Save to write changes back to the session worktree.',
     frontmatterReadOnly: 'Frontmatter (read-only)',
   },
   fileEditingUnsupported:
@@ -11931,6 +11942,7 @@ const enFiles = {
   fileChangedExternally:
     'This file changed on disk while you were editing. Your draft was kept unchanged; review the latest file before saving.',
   selectionFailed: 'Failed to update selection',
+  askSelection: fileSelectionAskTranslations["en"],
   openReviewCommentsFailed: 'Failed to open review comments',
   reviewPreviousFile: 'Previous file',
   reviewNextFile: 'Next file',
@@ -21791,6 +21803,8 @@ const enConversationSearch = {
 };
 
 export const en: TranslationStructure = {
+    fileReviewNote: fileReviewNoteTranslations.en,
+  panes: { mainColumn: paneMainColumnTranslations['en'] },
     sessionCoordinator: {
         make: {
             title: "Make this session a coordinator",
@@ -22530,6 +22544,7 @@ type EnglishNamespaces10 = TranslationOverlay<
     readonly sessionRemotePermissionGrants: typeof enSessionRemotePermissionGrants;
     readonly pluginSurfaces: typeof enPluginSurfaces;
     readonly settingsKeyboard: typeof enSettingsKeyboard;
+    readonly panes: Readonly<{ mainColumn: typeof paneMainColumnTranslations.en }>;
     readonly tabs: typeof enTabs;
     readonly transcript: typeof enTranscript;
     readonly inbox: typeof enInbox;
@@ -22898,7 +22913,7 @@ type EnglishNamespaces29 = TranslationOverlay<
   typeof projectWorkers
 >;
 
-export type TranslationsEn = EnglishNamespaces29;
+export type TranslationsEn = EnglishNamespaces29 & Readonly<{ fileReviewNote: typeof fileReviewNoteTranslations.en }>;
 
 // Shape contract for all locales: enforce identical key structure without requiring English literal
 // string values. Functions are preserved so parameter lists remain typechecked.

@@ -1,8 +1,14 @@
 import { pt as actionTitlesPt } from './actionTitles/pt';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -693,9 +699,6 @@ const mcpServersUxTranslationExtension = {
     "Configuração de projeto do agente",
   mcpServersScopeProviderUser: "Configuração de usuário do agente",
   mcpServersScopeBuiltIn: "Integrado",
-  mcpServersStatusActive: "Ativo",
-  mcpServersStatusAvailable: "Disponível",
-  mcpServersStatusUnavailable: "Indisponível",
   mcpServersStatusDetected: ({
     provider,
   }: {
@@ -1309,6 +1312,8 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const ptValues = {
+    fileReviewNote: fileReviewNoteTranslations['pt'],
+  panes: { mainColumn: paneMainColumnTranslations['pt'] },
   sessionCoordinator: {
     make: {
       title: "Tornar esta sessão coordenadora",
@@ -1802,6 +1807,7 @@ const ptValues = {
         },
     },
     settingsKeyboard: {
+        groupReview: 'Revisão',
         title: 'Atalhos de teclado',
         entrySubtitle: 'Altere as teclas que executam os comandos do app ou desative-as.',
         generalGroupTitle: 'Atalhos',
@@ -1829,7 +1835,11 @@ const ptValues = {
         groupComposer: 'Compositor',
         groupTranscript: 'Transcrição',
         groupSplitView: 'Tela dividida',
-        groupBrowser: 'Navegador',
+  groupBrowser: 'Navegador',
+  paneGroups: paneKeyboardTranslations['pt'].groups,
+  paneRegions: paneRegionLabels['pt'],
+  shortcutHostDesktop: paneKeyboardTranslations['pt'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['pt'].browser,
         setCommandButton: 'Alterar',
         setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
         setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
@@ -1842,7 +1852,11 @@ const ptValues = {
             findOpen: transcriptFindTranslations['pt'].findOpen,
             findNext: transcriptFindTranslations['pt'].findNext,
             findPrevious: transcriptFindTranslations['pt'].findPrevious,
-            ...workspaceTabKeyboardTranslations,
+    ...workspaceTabKeyboardTranslations,
+    ...reviewKeyboardTranslations['pt'],
+    ...paneKeyboardTranslations['pt'].commands,
+    ...mediaKeyboardTranslations['pt'],
+    ...quickOpenTranslations["pt"].commands,
             ...terminalWorkspaceKeyboardTranslations,
             composerAbortConfirm: 'Confirmar interrupção',
             composerFocus: 'Focar compositor',
@@ -1883,6 +1897,7 @@ const ptValues = {
             transcriptScrollPageUp: 'Subir uma página na transcrição',
             transcriptScrollTop: 'Ir para o início da transcrição',
             workflowSave: 'Salvar fluxo de trabalho',
+            filesEditorSave: 'Salvar alterações do arquivo',
             workflowRun: 'Executar fluxo de trabalho',
 
             permissionCycle: "Modo de permissão de ciclo",
@@ -5225,6 +5240,8 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     editorFooter: 'Configure o comportamento do editor de arquivos.',
     editorAutoSave: 'Salvamento automático',
     editorAutoSaveDescription: 'Salva arquivos automaticamente após a edição.',
+    trackAgentEdits: 'Seguir edições do agente',
+    trackAgentEditsDescription: 'Siga o arquivo e a região que o agente está editando neste dispositivo.',
     markdownEditMode: {
       title: 'Modo de edição Markdown padrão',
       footer: 'Escolha como os arquivos Markdown abrem para edição. O modo rico oferece um editor WYSIWYG; o modo bruto edita o código-fonte Markdown diretamente. Arquivos que não podem ser convertidos com segurança nos dois sentidos sempre abrem como bruto.',
@@ -6681,8 +6698,6 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
   },
 
   settingsAppearance: {
-    editorFocusMode: 'Modo de foco do editor',
-    editorFocusModeDescription: 'Oculte a conversa da sessão e a barra lateral enquanto revisa arquivos (web/tablet)',
     visualEffects: {
       title: 'Movimento e efeitos',
       footer: 'Ajuste o movimento e os indicadores em todo o app. Níveis menores reduzem as animações e economizam bateria. A configuração Reduzir Movimento do dispositivo sempre força o nível mínimo.',
@@ -8334,8 +8349,6 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
           unpinTabA11y: "Desafixar aba",
           pinnedTabA11y: "Aba fixada",
           closeTabA11y: "Fechar aba",
-          enterFocusModeA11y: "Entrar no modo de foco do painel",
-          exitFocusModeA11y: "Sair do modo de foco do painel",
 
         emptyTitle: "Nenhuma aba aberta",},
 
@@ -8645,6 +8658,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
         thisMachine: 'esta máquina',
         sessionInventoryIncomplete: 'Algumas sessões não puderam ser carregadas. Limpe a pesquisa e tente novamente.',
         content: fileContentSearchTranslations["pt"],
+    quickOpen: quickOpenTranslations["pt"].search,
         scopeFilterLabel: 'Home',
         commitsUpdateRequired: 'Atualize o Happier nesta máquina para pesquisar commits.',
     moreResultsAvailable: 'Há mais resultados disponíveis. Refine a pesquisa.',
@@ -9972,6 +9986,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
 
   files: {
             pane: filesPaneTranslations.pt,
+            agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} está escrevendo este arquivo`,
             revealInFiles: "Mostrar em Arquivos",
             openChanges: "Abrir alterações",
     searchPlaceholder: "Buscar arquivos...",
@@ -10259,8 +10274,6 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       fileTooLargeToPreview: "O arquivo é grande demais para pré-visualizar",
       fileWriteFailed: "Falha ao escrever o arquivo",
       fileEditor: {
-        experimentalHint:
-          "A edição é experimental. Salve para gravar as alterações de volta no worktree da sessão.",
         frontmatterReadOnly: 'Frontmatter (somente leitura)',
       },
       fileEditingUnsupported:

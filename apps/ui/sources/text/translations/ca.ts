@@ -1,8 +1,15 @@
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { ca as actionTitlesCa } from './actionTitles/ca';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -668,9 +675,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersScopeProviderProject: 'Configuració de projecte de l’agent',
   mcpServersScopeProviderUser: 'Configuració d’usuari de l’agent',
   mcpServersScopeBuiltIn: 'Integrat',
-  mcpServersStatusActive: 'Actiu',
-  mcpServersStatusAvailable: 'Disponible',
-  mcpServersStatusUnavailable: 'No disponible',
   mcpServersStatusDetected: ({ provider }: { provider: string }) => `Habilitat a ${provider}`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) => `Deshabilitat a ${provider}`,
   mcpServersDeliveryNativeTitle: 'MCP natiu',
@@ -1240,6 +1244,8 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  * Must match the exact structure of the English translations
  */
 const caValues = {
+    fileReviewNote: fileReviewNoteTranslations['ca'],
+  panes: { mainColumn: paneMainColumnTranslations['ca'] },
   sessionCoordinator: {
     make: {
       title: "Converteix aquesta sessió en coordinadora",
@@ -1600,6 +1606,7 @@ const caValues = {
         },
     },
     settingsKeyboard: {
+        groupReview: 'Revisió',
         title: 'Dreceres de teclat',
         entrySubtitle: 'Canvia les tecles que executen les ordres de l\'app, o desactiva-les.',
         generalGroupTitle: 'Dreceres',
@@ -1627,7 +1634,11 @@ const caValues = {
         groupComposer: 'Compositor',
         groupTranscript: 'Transcripció',
         groupSplitView: 'Vista dividida',
-        groupBrowser: 'Navegador',
+  groupBrowser: 'Navegador',
+  paneGroups: paneKeyboardTranslations['ca'].groups,
+  paneRegions: paneRegionLabels['ca'],
+  shortcutHostDesktop: paneKeyboardTranslations['ca'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['ca'].browser,
         setCommandButton: 'Canvia',
         setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
         setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
@@ -1640,7 +1651,11 @@ const caValues = {
             findOpen: transcriptFindTranslations['ca'].findOpen,
             findNext: transcriptFindTranslations['ca'].findNext,
             findPrevious: transcriptFindTranslations['ca'].findPrevious,
-            ...workspaceTabKeyboardTranslations,
+    ...workspaceTabKeyboardTranslations,
+    ...reviewKeyboardTranslations['ca'],
+    ...paneKeyboardTranslations['ca'].commands,
+    ...mediaKeyboardTranslations['ca'],
+    ...quickOpenTranslations["ca"].commands,
             ...terminalWorkspaceKeyboardTranslations,
             composerAbortConfirm: 'Confirma la interrupció',
             composerFocus: 'Enfoca el compositor',
@@ -1681,6 +1696,7 @@ const caValues = {
             transcriptScrollPageUp: 'Puja una pàgina de la transcripció',
             transcriptScrollTop: 'Ves a l’inici de la transcripció',
             workflowSave: 'Desa el flux de treball',
+            filesEditorSave: 'Desa els canvis del fitxer',
             workflowRun: 'Executa el flux de treball',
 
             permissionCycle: "Mode de permís de cicle",
@@ -4790,6 +4806,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         editorFooter: 'Configura el comportament de l’editor de fitxers.',
         editorAutoSave: 'Desament automàtic',
         editorAutoSaveDescription: 'Desa els fitxers automàticament després d’editar-los.',
+        trackAgentEdits: 'Segueix els canvis de l’agent',
+        trackAgentEditsDescription: 'Segueix el fitxer i la zona que l’agent està editant en aquest dispositiu.',
         markdownEditMode: {
             title: 'Mode d\'edició Markdown predeterminat',
             footer: 'Tria com s\'obren els fitxers Markdown per editar. El mode enriquit ofereix un editor WYSIWYG; el mode en cru edita el codi font Markdown directament. Els fitxers que no es poden convertir de manera segura en tots dos sentits sempre s\'obren en cru.',
@@ -6071,7 +6089,6 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
 
     settingsAppearance: {
         settingsNavSidebar: 'Barra lateral de configuració', settingsNavSidebarDescription: 'Mostra les categories al costat de les pàgines de configuració.',
-        editorFocusMode: 'Mode de focus de l’editor', editorFocusModeDescription: 'Amaga la transcripció i la barra lateral mentre revises fitxers (web/tauleta)',
         visualEffects: {
             title: 'Moviment i efectes', footer: 'Ajusta el moviment i els indicadors de l’app. Els nivells més baixos redueixen l’animació i estalvien bateria. L’opció Reduir el moviment del dispositiu sempre força el nivell mínim.', level: 'Efectes', levelDescription: 'Quant de moviment i profunditat fan servir els indicadors',
             levelOptions: { full: 'Complets', fullDescription: 'Indicadors fluids, molles i profunditat', subtle: 'Subtils', subtleDescription: 'Molles lleugeres, sense efectes de shader', minimal: 'Mínims', minimalDescription: 'Estàtic, sense animació' },
@@ -7542,8 +7559,6 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
                         unpinTabA11y: 'Desfixa la pestanya',
                         pinnedTabA11y: 'Pestanya fixada',
                         closeTabA11y: 'Tanca la pestanya',
-                        enterFocusModeA11y: 'Entra al mode de focus del panell',
-                        exitFocusModeA11y: 'Surt del mode de focus del panell',
               },
 
           actionsDraft: {
@@ -7830,6 +7845,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         commitsUnavailableOnMachine: ({ machine }: { machine: string }) => `La cerca de commits no està disponible a ${machine}. Comprova que hi hagi Git instal·lat i torna-ho a provar.`,
         thisMachine: 'aquesta màquina',
         content: fileContentSearchTranslations["ca"],
+    quickOpen: quickOpenTranslations["ca"].search,
         scopeFilterLabel: 'Home',
         commitsUpdateRequired: 'Actualitza Happier en aquesta màquina per cercar commits.',
         moreResultsAvailable: 'Hi ha més resultats disponibles. Refina la cerca.',
@@ -9060,6 +9076,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
 
       files: {
             pane: filesPaneTranslations.ca,
+            agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} està escrivint aquest fitxer`,
             revealInFiles: "Mostra a Fitxers",
             openChanges: "Obre els canvis",
           searchPlaceholder: 'Cerca fitxers...',
@@ -9317,7 +9334,6 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             fileTooLargeToPreview: 'El fitxer és massa gran per previsualitzar-lo',
             fileWriteFailed: "No s'ha pogut escriure el fitxer",
             fileEditor: {
-                experimentalHint: 'L\'edició és experimental. Desa per escriure els canvis al worktree de la sessió.',
                 frontmatterReadOnly: 'Frontmatter (només de lectura)',
             },
             fileEditingUnsupported:
@@ -9325,6 +9341,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             fileChangedExternally:
                 "Aquest fitxer ha canviat al disc mentre l'editaves. L'esborrany s'ha mantingut sense canvis; revisa el fitxer més recent abans de desar.",
           selectionFailed: "No s'ha pogut actualitzar la selecció",
+          askSelection: fileSelectionAskTranslations["ca"],
           openReviewCommentsFailed: "No s'han pogut obrir els comentaris de revisió",
               reviewPreviousFile: "Fitxer anterior",
                   reviewNextFile: "Fitxer següent",

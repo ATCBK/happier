@@ -1,8 +1,15 @@
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { ja as actionTitlesJa } from './actionTitles/ja';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -675,9 +682,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersScopeProviderProject: 'エージェントのプロジェクト設定',
   mcpServersScopeProviderUser: 'エージェントのユーザー設定',
   mcpServersScopeBuiltIn: '組み込み',
-  mcpServersStatusActive: '有効',
-  mcpServersStatusAvailable: '利用可能',
-  mcpServersStatusUnavailable: '利用不可',
   mcpServersStatusDetected: ({ provider }: { provider: string }) => `${provider} で有効`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) => `${provider} で無効`,
   mcpServersDeliveryNativeTitle: 'ネイティブ MCP',
@@ -1257,6 +1261,8 @@ const settingsSessionHandoffTranslationExtensions = {
 
 
 const jaValues = {
+    fileReviewNote: fileReviewNoteTranslations['ja'],
+  panes: { mainColumn: paneMainColumnTranslations['ja'] },
   sessionCoordinator: {
     make: {
       title: "このセッションをコーディネーターにする",
@@ -1749,6 +1755,7 @@ const jaValues = {
         },
     },
     settingsKeyboard: {
+        groupReview: 'レビュー',
         title: 'キーボードショートカット',
         entrySubtitle: 'アプリのコマンドを実行するキーを変更したり、オフにしたりします。',
         generalGroupTitle: 'ショートカット',
@@ -1776,7 +1783,11 @@ const jaValues = {
         groupComposer: '入力欄',
         groupTranscript: 'トランスクリプト',
         groupSplitView: '分割ビュー',
-        groupBrowser: 'ブラウザー',
+  groupBrowser: 'ブラウザー',
+  paneGroups: paneKeyboardTranslations['ja'].groups,
+  paneRegions: paneRegionLabels['ja'],
+  shortcutHostDesktop: paneKeyboardTranslations['ja'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['ja'].browser,
         setCommandButton: '変更',
         setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
         setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
@@ -1789,7 +1800,11 @@ const jaValues = {
             findOpen: transcriptFindTranslations['ja'].findOpen,
             findNext: transcriptFindTranslations['ja'].findNext,
             findPrevious: transcriptFindTranslations['ja'].findPrevious,
-            ...workspaceTabKeyboardTranslations,
+    ...workspaceTabKeyboardTranslations,
+    ...reviewKeyboardTranslations['ja'],
+    ...paneKeyboardTranslations['ja'].commands,
+    ...mediaKeyboardTranslations['ja'],
+    ...quickOpenTranslations["ja"].commands,
             ...terminalWorkspaceKeyboardTranslations,
             composerAbortConfirm: '中断を確認',
             composerFocus: 'コンポーザーにフォーカス',
@@ -1830,6 +1845,7 @@ const jaValues = {
             transcriptScrollPageUp: 'トランスクリプトを1ページ上へ',
             transcriptScrollTop: 'トランスクリプトの先頭へ移動',
             workflowSave: 'ワークフローを保存',
+            filesEditorSave: 'ファイルの編集を保存',
             workflowRun: 'ワークフローを実行',
 
             permissionCycle: "サイクル許可モード",
@@ -5446,6 +5462,8 @@ localTailscale: {
   editorFooter: 'ファイルエディタの動作を設定します。',
   editorAutoSave: '自動保存',
   editorAutoSaveDescription: '編集後にファイルを自動的に保存します。',
+  trackAgentEdits: 'エージェントの編集を追跡',
+  trackAgentEditsDescription: 'このデバイスで、エージェントが編集中のファイルと領域を追跡します。',
   markdownEditMode: {
     title: 'デフォルトの Markdown 編集モード',
     footer: 'Markdown ファイルを編集用に開く方法を選択します。リッチは WYSIWYG エディタを提供し、ローは Markdown ソースを直接編集します。安全に往復変換できないファイルは常にローで開きます。',
@@ -6893,8 +6911,6 @@ localTailscale: {
   },
 
   settingsAppearance: {
-    editorFocusMode: 'エディターの集中モード',
-    editorFocusModeDescription: 'ファイルの確認中はセッションのトランスクリプトとサイドバーを非表示にします（Web／タブレット）',
     visualEffects: {
       title: 'モーションとエフェクト',
       footer: 'アプリ全体のモーションと計器表示を調整します。レベルを下げるとアニメーションが減り、バッテリーを節約できます。デバイスの「視差効果を減らす」が有効な場合は、常に最小レベルになります。',
@@ -8534,8 +8550,6 @@ localTailscale: {
           unpinTabA11y: "タブの固定を解除",
           pinnedTabA11y: "固定されたタブ",
           closeTabA11y: "タブを閉じる",
-          enterFocusModeA11y: "ペイン集中モードに入る",
-          exitFocusModeA11y: "ペイン集中モードを終了",
 
         emptyTitle: "開いているタブはありません",},
 
@@ -8836,6 +8850,7 @@ localTailscale: {
       thisMachine: 'このマシン',
       sessionInventoryIncomplete: '一部のセッションを読み込めませんでした。検索をクリアして、もう一度お試しください。',
         content: fileContentSearchTranslations["ja"],
+    quickOpen: quickOpenTranslations["ja"].search,
         scopeFilterLabel: 'Home',
         commitsUpdateRequired: 'コミットを検索するには、このマシンの Happier を更新してください。',
     moreResultsAvailable: 'さらに結果があります。検索条件を絞り込んでください。',
@@ -10153,6 +10168,7 @@ localTailscale: {
 
   files: {
             pane: filesPaneTranslations.ja,
+            agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} がこのファイルに書き込んでいます`,
             revealInFiles: "ファイルで表示",
             openChanges: "変更を開く",
     searchPlaceholder: "ファイルを検索...",
@@ -10436,8 +10452,6 @@ localTailscale: {
       fileTooLargeToPreview: "ファイルが大きすぎてプレビューできません",
       fileWriteFailed: "ファイルを書き込めませんでした",
       fileEditor: {
-        experimentalHint:
-          "編集は実験的です。保存すると変更がセッションの worktree に書き戻されます。",
         frontmatterReadOnly: 'フロントマター (読み取り専用)',
       },
       fileEditingUnsupported:
@@ -10445,6 +10459,7 @@ localTailscale: {
       fileChangedExternally:
         "編集中にこのファイルがディスク上で変更されました。下書きは変更していません。保存する前に最新のファイルを確認してください。",
       selectionFailed: "選択を更新できませんでした",
+      askSelection: fileSelectionAskTranslations["ja"],
       openReviewCommentsFailed: "レビューコメントを開けませんでした",
         reviewPreviousFile: "前のファイル",
                   reviewNextFile: "次のファイル",

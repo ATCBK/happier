@@ -1,8 +1,15 @@
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { ru as actionTitlesRu } from './actionTitles/ru';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -669,9 +676,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersScopeProviderProject: 'Конфигурация проекта агента',
   mcpServersScopeProviderUser: 'Пользовательская конфигурация агента',
   mcpServersScopeBuiltIn: 'Встроенный',
-  mcpServersStatusActive: 'Активно',
-  mcpServersStatusAvailable: 'Доступно',
-  mcpServersStatusUnavailable: 'Недоступно',
   mcpServersStatusDetected: ({ provider }: { provider: string }) => `Включено в ${provider}`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) => `Отключено в ${provider}`,
   mcpServersDeliveryNativeTitle: 'Нативный MCP',
@@ -1287,6 +1291,8 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const ruValues = {
+    fileReviewNote: fileReviewNoteTranslations['ru'],
+  panes: { mainColumn: paneMainColumnTranslations['ru'] },
   sessionCoordinator: {
     make: {
       title: "Сделать эту сессию координатором",
@@ -1594,6 +1600,7 @@ const ruValues = {
         },
     },
     settingsKeyboard: {
+        groupReview: 'Проверка',
         title: 'Сочетания клавиш',
         entrySubtitle: 'Меняйте клавиши для команд приложения или отключайте их.',
         generalGroupTitle: 'Сочетания клавиш',
@@ -1621,7 +1628,11 @@ const ruValues = {
         groupComposer: 'Поле ввода',
         groupTranscript: 'Переписка',
         groupSplitView: 'Разделённый вид',
-        groupBrowser: 'Браузер',
+  groupBrowser: 'Браузер',
+  paneGroups: paneKeyboardTranslations['ru'].groups,
+  paneRegions: paneRegionLabels['ru'],
+  shortcutHostDesktop: paneKeyboardTranslations['ru'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['ru'].browser,
         setCommandButton: 'Изменить',
         setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
         setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
@@ -1634,7 +1645,11 @@ const ruValues = {
             findOpen: transcriptFindTranslations['ru'].findOpen,
             findNext: transcriptFindTranslations['ru'].findNext,
             findPrevious: transcriptFindTranslations['ru'].findPrevious,
-            ...workspaceTabKeyboardTranslations,
+    ...workspaceTabKeyboardTranslations,
+    ...reviewKeyboardTranslations['ru'],
+    ...paneKeyboardTranslations['ru'].commands,
+    ...mediaKeyboardTranslations['ru'],
+    ...quickOpenTranslations["ru"].commands,
             ...terminalWorkspaceKeyboardTranslations,
             composerAbortConfirm: 'Подтвердить остановку',
             composerFocus: 'Перейти к вводу',
@@ -1675,6 +1690,7 @@ const ruValues = {
             transcriptScrollPageUp: 'Прокрутить стенограмму на страницу вверх',
             transcriptScrollTop: 'К началу стенограммы',
             workflowSave: 'Сохранить рабочий процесс',
+            filesEditorSave: 'Сохранить изменения файла',
             workflowRun: 'Запустить рабочий процесс',
 
             permissionCycle: "Режим разрешения цикла",
@@ -4852,6 +4868,8 @@ const ruValues = {
   editorFooter: 'Настройте поведение редактора файлов.',
   editorAutoSave: 'Автосохранение',
   editorAutoSaveDescription: 'Автоматически сохранять файлы после редактирования.',
+  trackAgentEdits: 'Следить за правками агента',
+  trackAgentEditsDescription: 'Следите за файлом и областью, которые агент редактирует на этом устройстве.',
   markdownEditMode: {
     title: 'Режим редактирования Markdown по умолчанию',
     footer: 'Выберите, как открываются файлы Markdown для редактирования. Rich - это WYSIWYG-редактор; raw редактирует исходный код Markdown напрямую. Файлы, которые нельзя безопасно преобразовать туда и обратно, всегда открываются как raw.',
@@ -6338,8 +6356,6 @@ const ruValues = {
   },
 
   settingsAppearance: {
-    editorFocusMode: 'Режим фокуса редактора',
-    editorFocusModeDescription: 'Скрывать разговор сессии и боковую панель при просмотре файлов (веб/планшет)',
     visualEffects: {
       title: 'Анимация и эффекты',
       footer: 'Настройте анимацию и индикаторы приложения. Снижение уровня уменьшает анимацию и расход батареи. Системная настройка уменьшения движения всегда включает минимальный уровень.',
@@ -8607,8 +8623,6 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
           unpinTabA11y: "Открепить вкладку",
           pinnedTabA11y: "Закрепленная вкладка",
           closeTabA11y: "Закрыть вкладку",
-          enterFocusModeA11y: "Включить режим фокуса панели",
-          exitFocusModeA11y: "Выключить режим фокуса панели",
 
         emptyTitle: "Нет открытых вкладок",},
 
@@ -8914,6 +8928,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
         thisMachine: 'этой машине',
         sessionInventoryIncomplete: 'Некоторые сессии не удалось загрузить. Очистите поиск и попробуйте снова.',
         content: fileContentSearchTranslations["ru"],
+    quickOpen: quickOpenTranslations["ru"].search,
         scopeFilterLabel: 'Home',
         commitsUpdateRequired: 'Обновите Happier на этом компьютере, чтобы искать коммиты.',
     moreResultsAvailable: 'Доступны дополнительные результаты. Уточните поиск.',
@@ -9707,6 +9722,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
 
   files: {
             pane: filesPaneTranslations.ru,
+            agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} записывает этот файл`,
             revealInFiles: "Показать в файлах",
             openChanges: "Открыть изменения",
     searchPlaceholder: "Поиск файлов...",
@@ -9989,8 +10005,6 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
 	      fileTooLargeToPreview: "Файл слишком большой для предварительного просмотра",
 	      fileWriteFailed: "Не удалось записать файл",
 	      fileEditor: {
-	        experimentalHint:
-	          "Редактирование экспериментально. Сохраните, чтобы записать изменения обратно в worktree сессии.",
 	        frontmatterReadOnly: "Frontmatter (только для чтения)",
       },
       fileEditingUnsupported:
@@ -9998,6 +10012,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       fileChangedExternally:
         "Этот файл изменился на диске, пока вы его редактировали. Черновик оставлен без изменений; проверьте последнюю версию файла перед сохранением.",
       selectionFailed: "Не удалось обновить выбор",
+      askSelection: fileSelectionAskTranslations["ru"],
       openReviewCommentsFailed: "Не удалось открыть комментарии к ревью",
         reviewPreviousFile: "Предыдущий файл",
                   reviewNextFile: "Следующий файл",

@@ -1,8 +1,15 @@
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { pl as actionTitlesPl } from './actionTitles/pl';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -668,9 +675,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersScopeProviderProject: 'Konfiguracja projektu agenta',
   mcpServersScopeProviderUser: 'Konfiguracja użytkownika agenta',
   mcpServersScopeBuiltIn: 'Wbudowane',
-  mcpServersStatusActive: 'Aktywny',
-  mcpServersStatusAvailable: 'Dostępny',
-  mcpServersStatusUnavailable: 'Niedostępny',
   mcpServersStatusDetected: ({ provider }: { provider: string }) => `Włączone w ${provider}`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) => `Wyłączone w ${provider}`,
   mcpServersDeliveryNativeTitle: 'Natywny MCP',
@@ -1286,6 +1290,8 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const plValues = {
+    fileReviewNote: fileReviewNoteTranslations['pl'],
+  panes: { mainColumn: paneMainColumnTranslations['pl'] },
   sessionCoordinator: {
     make: {
       title: "Ustaw tę sesję jako koordynatora",
@@ -1593,6 +1599,7 @@ const plValues = {
         },
     },
     settingsKeyboard: {
+        groupReview: 'Przegląd',
         title: 'Skróty klawiaturowe',
         entrySubtitle: 'Zmień klawisze uruchamiające polecenia aplikacji lub je wyłącz.',
         generalGroupTitle: 'Skróty',
@@ -1620,7 +1627,11 @@ const plValues = {
         groupComposer: 'Pole wiadomości',
         groupTranscript: 'Transkrypcja',
         groupSplitView: 'Widok dzielony',
-        groupBrowser: 'Przeglądarka',
+  groupBrowser: 'Przeglądarka',
+  paneGroups: paneKeyboardTranslations['pl'].groups,
+  paneRegions: paneRegionLabels['pl'],
+  shortcutHostDesktop: paneKeyboardTranslations['pl'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['pl'].browser,
         setCommandButton: 'Zmień',
         setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
         setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
@@ -1633,7 +1644,11 @@ const plValues = {
             findOpen: transcriptFindTranslations['pl'].findOpen,
             findNext: transcriptFindTranslations['pl'].findNext,
             findPrevious: transcriptFindTranslations['pl'].findPrevious,
-            ...workspaceTabKeyboardTranslations,
+    ...workspaceTabKeyboardTranslations,
+    ...reviewKeyboardTranslations['pl'],
+    ...paneKeyboardTranslations['pl'].commands,
+    ...mediaKeyboardTranslations['pl'],
+    ...quickOpenTranslations["pl"].commands,
             ...terminalWorkspaceKeyboardTranslations,
             composerAbortConfirm: 'Potwierdź przerwanie',
             composerFocus: 'Ustaw fokus na edytorze',
@@ -1674,6 +1689,7 @@ const plValues = {
             transcriptScrollPageUp: 'Przewiń transkrypcję stronę w górę',
             transcriptScrollTop: 'Przewiń transkrypcję na górę',
             workflowSave: 'Zapisz przepływ pracy',
+            filesEditorSave: 'Zapisz zmiany pliku',
             workflowRun: 'Uruchom przepływ pracy',
 
             permissionCycle: "Tryb uprawnień rowerowych",
@@ -4960,6 +4976,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     editorFooter: 'Skonfiguruj zachowanie edytora plików.',
     editorAutoSave: 'Autozapis',
     editorAutoSaveDescription: 'Automatycznie zapisuj pliki po edycji.',
+    trackAgentEdits: 'Śledź zmiany agenta',
+    trackAgentEditsDescription: 'Śledź plik i obszar edytowany przez agenta na tym urządzeniu.',
     markdownEditMode: {
       title: 'Domyslny tryb edycji Markdown',
       footer: 'Wybierz, jak pliki Markdown otwieraja sie do edycji. Tryb wizualny oferuje edytor WYSIWYG; tryb surowy edytuje zrodlo Markdown bezposrednio. Pliki, ktorych nie da sie bezpiecznie przekonwertowac w obie strony, zawsze otwieraja sie jako surowe.',
@@ -6419,8 +6437,6 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
   },
 
   settingsAppearance: {
-    editorFocusMode: 'Tryb skupienia edytora',
-    editorFocusModeDescription: 'Ukryj transkrypt sesji i pasek boczny podczas przeglądania plików (przeglądarka/tablet)',
     visualEffects: {
       title: 'Ruch i efekty',
       footer: 'Dostosuj ruch i wskaźniki w całej aplikacji. Niższe poziomy ograniczają animacje i oszczędzają baterię. Ustawienie ograniczenia ruchu na urządzeniu zawsze wymusza poziom minimalny.',
@@ -8063,8 +8079,6 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
           unpinTabA11y: "Odepnij kartę",
           pinnedTabA11y: "Przypięta karta",
           closeTabA11y: "Zamknij kartę",
-          enterFocusModeA11y: "Włącz tryb skupienia panelu",
-          exitFocusModeA11y: "Wyłącz tryb skupienia panelu",
 
         emptyTitle: "Brak otwartych kart",},
 
@@ -8373,6 +8387,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       thisMachine: 'tej maszynie',
       sessionInventoryIncomplete: 'Nie udało się wczytać niektórych sesji. Wyczyść wyszukiwanie i spróbuj ponownie.',
         content: fileContentSearchTranslations["pl"],
+    quickOpen: quickOpenTranslations["pl"].search,
         scopeFilterLabel: 'Home',
         commitsUpdateRequired: 'Zaktualizuj Happier na tym komputerze, aby wyszukiwać commity.',
     moreResultsAvailable: 'Dostępne są dalsze wyniki. Zawęź wyszukiwanie.',
@@ -9687,6 +9702,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
 
   files: {
             pane: filesPaneTranslations.pl,
+            agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} zapisuje ten plik`,
             revealInFiles: "Pokaż w plikach",
             openChanges: "Otwórz zmiany",
     searchPlaceholder: "Wyszukaj pliki...",
@@ -9970,8 +9986,6 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       fileTooLargeToPreview: "Plik jest zbyt duży, aby go wyświetlić",
       fileWriteFailed: "Nie udało się zapisać pliku",
       fileEditor: {
-        experimentalHint:
-          "Edycja jest eksperymentalna. Zapisz, aby zapisać zmiany z powrotem do worktree sesji.",
         frontmatterReadOnly: 'Frontmatter (tylko do odczytu)',
       },
       fileEditingUnsupported:
@@ -9979,6 +9993,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       fileChangedExternally:
         "Ten plik zmienił się na dysku podczas edycji. Szkic pozostał bez zmian; sprawdź najnowszą wersję pliku przed zapisaniem.",
       selectionFailed: "Nie udało się zaktualizować wyboru",
+      askSelection: fileSelectionAskTranslations["pl"],
       openReviewCommentsFailed: "Nie udało się otworzyć komentarzy do przeglądu",
         reviewPreviousFile: "Poprzedni plik",
                   reviewNextFile: "Następny plik",

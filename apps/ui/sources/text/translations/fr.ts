@@ -1,8 +1,15 @@
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fr as actionTitlesFr } from './actionTitles/fr';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -668,9 +675,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersScopeProviderProject: 'Config projet de l’agent',
   mcpServersScopeProviderUser: 'Config utilisateur de l’agent',
   mcpServersScopeBuiltIn: 'Intégré',
-  mcpServersStatusActive: 'Actif',
-  mcpServersStatusAvailable: 'Disponible',
-  mcpServersStatusUnavailable: 'Indisponible',
   mcpServersStatusDetected: ({ provider }: { provider: string }) => `Activé dans ${provider}`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) => `Désactivé dans ${provider}`,
   mcpServersDeliveryNativeTitle: 'MCP natif',
@@ -1230,6 +1234,8 @@ function plural({
  * Must match the exact structure of the English translations
  */
 const frValues = {
+    fileReviewNote: fileReviewNoteTranslations['fr'],
+  panes: { mainColumn: paneMainColumnTranslations['fr'] },
   sessionCoordinator: {
     make: {
       title: "Faire de cette session un coordinateur",
@@ -1601,6 +1607,7 @@ const frValues = {
         },
     },
     settingsKeyboard: {
+        groupReview: 'Révision',
         title: 'Raccourcis clavier',
         entrySubtitle: 'Modifie les touches qui lancent les commandes de l\'app, ou désactive-les.',
         generalGroupTitle: 'Raccourcis',
@@ -1628,7 +1635,11 @@ const frValues = {
         groupComposer: 'Compositeur',
         groupTranscript: 'Transcription',
         groupSplitView: 'Vue partagée',
-        groupBrowser: 'Navigateur',
+  groupBrowser: 'Navigateur',
+  paneGroups: paneKeyboardTranslations['fr'].groups,
+  paneRegions: paneRegionLabels['fr'],
+  shortcutHostDesktop: paneKeyboardTranslations['fr'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['fr'].browser,
         setCommandButton: 'Modifier',
         setCommandAccessibility: ({ command }: { command: string }) => `Raccourci de ${command} — définir`,
         setShortcutPromptTitle: ({ command }: { command: string }) => `Définir le raccourci de ${command}`,
@@ -1641,7 +1652,11 @@ const frValues = {
             findOpen: transcriptFindTranslations['fr'].findOpen,
             findNext: transcriptFindTranslations['fr'].findNext,
             findPrevious: transcriptFindTranslations['fr'].findPrevious,
-            ...workspaceTabKeyboardTranslations,
+    ...workspaceTabKeyboardTranslations,
+    ...reviewKeyboardTranslations['fr'],
+    ...paneKeyboardTranslations['fr'].commands,
+    ...mediaKeyboardTranslations['fr'],
+    ...quickOpenTranslations["fr"].commands,
             ...terminalWorkspaceKeyboardTranslations,
             composerAbortConfirm: 'Confirmer l’interruption',
             composerFocus: 'Placer le focus sur le composer',
@@ -1682,6 +1697,7 @@ const frValues = {
             transcriptScrollPageUp: 'Page précédente dans la transcription',
             transcriptScrollTop: 'Aller en haut de la transcription',
             workflowSave: 'Enregistrer le flux de travail',
+            filesEditorSave: 'Enregistrer les modifications du fichier',
             workflowRun: 'Exécuter le flux de travail',
 
             permissionCycle: "Changer de mode d’autorisation",
@@ -4951,6 +4967,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     editorFooter: 'Configure le comportement de l’éditeur de fichiers.',
     editorAutoSave: 'Enregistrement automatique',
     editorAutoSaveDescription: 'Enregistre automatiquement les fichiers après modification.',
+    trackAgentEdits: 'Suivre les modifications de l’agent',
+    trackAgentEditsDescription: 'Suis le fichier et la zone que l’agent modifie sur cet appareil.',
     markdownEditMode: {
       title: 'Mode d’édition markdown par défaut',
       footer: 'Choisis comment les fichiers markdown s’ouvrent en édition. Le mode enrichi offre un éditeur WYSIWYG ; le mode brut modifie directement la source markdown. Les fichiers qui ne peuvent pas être reconvertis sans perte s’ouvrent toujours en brut.',
@@ -6405,8 +6423,6 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
   },
 
   settingsAppearance: {
-    editorFocusMode: 'Mode concentration de l’éditeur',
-    editorFocusModeDescription: 'Masquer la conversation et la barre latérale pendant la lecture des fichiers (web et tablette)',
     visualEffects: {
       title: 'Mouvement et effets',
       footer: 'Ajuste les animations et les indicateurs de l’app. Les niveaux réduits économisent la batterie. L’option Réduire les animations de ton appareil impose toujours le niveau minimal.',
@@ -8067,8 +8083,6 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
                 unpinTabA11y: "Désépingler l’onglet",
                 pinnedTabA11y: "Onglet épinglé",
                 closeTabA11y: "Fermer l’onglet",
-                enterFocusModeA11y: "Activer le mode focus du panneau",
-                exitFocusModeA11y: "Quitter le mode focus du panneau",
 
             emptyTitle: "Aucun onglet ouvert",},
 
@@ -8378,6 +8392,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     thisMachine: 'cette machine',
     sessionInventoryIncomplete: 'Certaines sessions n’ont pas pu être chargées. Efface la recherche et réessaie.',
         content: fileContentSearchTranslations["fr"],
+    quickOpen: quickOpenTranslations["fr"].search,
         scopeFilterLabel: 'Home',
         commitsUpdateRequired: 'Mets à jour Happier sur cette machine pour rechercher des commits.',
     moreResultsAvailable: 'D’autres résultats sont disponibles. Affine la recherche.',
@@ -9689,6 +9704,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
 
   files: {
             pane: filesPaneTranslations.fr,
+            agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} écrit dans ce fichier`,
             revealInFiles: "Afficher dans Fichiers",
             openChanges: "Ouvrir les modifications",
     searchPlaceholder: "Rechercher des fichiers…",
@@ -9975,8 +9991,6 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       fileTooLargeToPreview: "Fichier trop volumineux pour être prévisualisé",
       fileWriteFailed: "Échec de l’écriture du fichier",
     fileEditor: {
-      experimentalHint:
-        "L’édition est expérimentale. Enregistre pour réécrire les modifications dans le worktree de la session.",
       frontmatterReadOnly: 'Frontmatter (lecture seule)',
     },
       fileEditingUnsupported:
@@ -9984,6 +9998,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       fileChangedExternally:
         "Ce fichier a changé sur le disque pendant ton édition. Ton brouillon est resté inchangé ; relis la dernière version avant d’enregistrer.",
       selectionFailed: "Échec de la mise à jour de la sélection",
+      askSelection: fileSelectionAskTranslations["fr"],
       openReviewCommentsFailed: "Échec de l’ouverture des commentaires de revue",
           reviewPreviousFile: "Fichier précédent",
                   reviewNextFile: "Fichier suivant",

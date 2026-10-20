@@ -1,8 +1,15 @@
+import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { zhHans as actionTitlesZhHans } from './actionTitles/zh-Hans';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
+import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
+import { paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
+import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
+import { quickOpenTranslations } from './quickOpenTranslations';
+import { paneMainColumnTranslations } from './paneMainColumnTranslations';
 import { actionSettingsResourcesTranslations } from './actionSettingsResourcesTranslations.shared';
 import { resourceProposalTranslations } from './resourceProposalTranslations.shared';
 import { machineResourceUiTranslations } from './machineResourceUiTranslations.shared';
@@ -675,9 +682,6 @@ const mcpServersUxTranslationExtension = {
   mcpServersScopeProviderProject: '智能体项目配置',
   mcpServersScopeProviderUser: '智能体用户配置',
   mcpServersScopeBuiltIn: '内置',
-  mcpServersStatusActive: '活跃',
-  mcpServersStatusAvailable: '可用',
-  mcpServersStatusUnavailable: '不可用',
   mcpServersStatusDetected: ({ provider }: { provider: string }) => `已在 ${provider} 中启用`,
   mcpServersStatusDisabledInProvider: ({ provider }: { provider: string }) => `已在 ${provider} 中禁用`,
   mcpServersDeliveryNativeTitle: '原生 MCP',
@@ -1273,6 +1277,8 @@ function plural({
 
 
 const zhHansValues = {
+    fileReviewNote: fileReviewNoteTranslations['zh-Hans'],
+  panes: { mainColumn: paneMainColumnTranslations['zh-Hans'] },
   sessionCoordinator: {
     make: {
       title: "将此会话设为协调者",
@@ -1580,6 +1586,7 @@ const zhHansValues = {
         },
     },
     settingsKeyboard: {
+        groupReview: '审查',
         title: '键盘快捷键',
         entrySubtitle: '更改运行应用命令的按键，或将其关闭。',
         generalGroupTitle: '快捷键',
@@ -1607,7 +1614,11 @@ const zhHansValues = {
         groupComposer: '输入框',
         groupTranscript: '对话记录',
         groupSplitView: '分屏视图',
-        groupBrowser: '浏览器',
+  groupBrowser: '浏览器',
+  paneGroups: paneKeyboardTranslations['zh-Hans'].groups,
+  paneRegions: paneRegionLabels['zh-Hans'],
+  shortcutHostDesktop: paneKeyboardTranslations['zh-Hans'].desktop,
+  shortcutHostBrowser: paneKeyboardTranslations['zh-Hans'].browser,
         setCommandButton: '更改',
         setCommandAccessibility: ({ command }: { command: string }) => `Set ${command} shortcut`,
         setShortcutPromptTitle: ({ command }: { command: string }) => `Set shortcut for ${command}`,
@@ -1620,7 +1631,11 @@ const zhHansValues = {
             findOpen: transcriptFindTranslations['zh-Hans'].findOpen,
             findNext: transcriptFindTranslations['zh-Hans'].findNext,
             findPrevious: transcriptFindTranslations['zh-Hans'].findPrevious,
-            ...workspaceTabKeyboardTranslations,
+    ...workspaceTabKeyboardTranslations,
+    ...reviewKeyboardTranslations['zh-Hans'],
+    ...paneKeyboardTranslations['zh-Hans'].commands,
+    ...mediaKeyboardTranslations['zh-Hans'],
+    ...quickOpenTranslations["zh-Hans"].commands,
             ...terminalWorkspaceKeyboardTranslations,
             composerAbortConfirm: '确认中止',
             composerFocus: '聚焦输入框',
@@ -1661,6 +1676,7 @@ const zhHansValues = {
             transcriptScrollPageUp: '转录向上翻页',
             transcriptScrollTop: '滚动到转录顶部',
             workflowSave: '保存工作流',
+            filesEditorSave: '保存文件编辑',
             workflowRun: '运行工作流',
 
             permissionCycle: "循环权限模式",
@@ -4865,6 +4881,8 @@ const zhHansValues = {
   editorFooter: '配置文件编辑器的行为。',
   editorAutoSave: '自动保存',
   editorAutoSaveDescription: '编辑后自动保存文件。',
+  trackAgentEdits: '跟随智能体编辑',
+  trackAgentEditsDescription: '在此设备上跟随智能体正在编辑的文件和区域。',
   markdownEditMode: {
     title: '默认 Markdown 编辑模式',
     footer: '选择 Markdown 文件以何种方式打开进行编辑。富文本提供所见即所得 (WYSIWYG) 编辑器；源码模式直接编辑 Markdown 源码。无法安全双向转换的文件始终以源码模式打开。',
@@ -6322,8 +6340,6 @@ const zhHansValues = {
   },
 
   settingsAppearance: {
-    editorFocusMode: '编辑器专注模式',
-    editorFocusModeDescription: '查看文件时隐藏会话记录和侧边栏（网页/平板）',
     visualEffects: {
       title: '动效与特效',
       footer: '调整应用中的动效和仪表显示。较低级别会减少动画并节省电量。设备的“减少动态效果”设置始终会强制使用最低级别。',
@@ -7911,8 +7927,6 @@ const zhHansValues = {
       unpinTabA11y: "取消固定标签页",
       pinnedTabA11y: "已固定标签页",
       closeTabA11y: "关闭标签页",
-      enterFocusModeA11y: "进入面板专注模式",
-      exitFocusModeA11y: "退出面板专注模式",
 
       emptyTitle: "没有打开的标签页",},
 
@@ -8204,6 +8218,7 @@ const zhHansValues = {
         thisMachine: '这台机器',
         sessionInventoryIncomplete: '部分会话无法加载。请清除搜索后重试。',
         content: fileContentSearchTranslations["zh-Hans"],
+    quickOpen: quickOpenTranslations["zh-Hans"].search,
         scopeFilterLabel: 'Home',
         commitsUpdateRequired: '请更新此机器上的 Happier 以搜索提交。',
     moreResultsAvailable: '还有更多结果。请缩小搜索范围。',
@@ -9502,6 +9517,7 @@ const zhHansValues = {
 
   files: {
             pane: filesPaneTranslations['zh-Hans'],
+            agentWritingThisFile: ({ agent }: { agent: string }) => `${agent} 正在写入此文件`,
             revealInFiles: "在文件中显示",
             openChanges: "打开更改",
     searchPlaceholder: "搜索文件...",
@@ -9777,8 +9793,6 @@ const zhHansValues = {
       fileTooLargeToPreview: "文件过大，无法预览",
       fileWriteFailed: "写入文件失败",
       fileEditor: {
-        experimentalHint:
-          "编辑功能为实验性。保存以将更改写回会话 worktree。",
         frontmatterReadOnly: 'Frontmatter (只读)',
       },
       fileEditingUnsupported:
@@ -9786,6 +9800,7 @@ const zhHansValues = {
       fileChangedExternally:
         "你编辑时，此文件已在磁盘上更改。草稿已保持不变；保存前请查看最新文件。",
       selectionFailed: "更新选择失败",
+      askSelection: fileSelectionAskTranslations["zh-Hans"],
       openReviewCommentsFailed: "打开审阅评论失败",
         reviewPreviousFile: "上一个文件",
                   reviewNextFile: "下一个文件",
