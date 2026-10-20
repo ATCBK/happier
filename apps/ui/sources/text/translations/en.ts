@@ -10186,6 +10186,7 @@ const enUniversalSearch = {
       notText: ({ count }: { count: number }) => `${count} ${count === 1 ? 'file' : 'files'} skipped: not text`,
       partial: "Some files couldn’t be searched; only the files shown are replaced.",
       showMore: "Show more",
+      showAsDiff: "Show as diff",
       whatYouSee: "What you see is what is written. The file is checked again right before it is written.",
       invalidPattern: "This pattern can’t be used for replace. Edit it and try again.",
       noMatches: ({ query, scope }: { query: string; scope: string }) => `No text in ${scope} matches “${query}”`,

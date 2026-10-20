@@ -8239,6 +8239,7 @@ const zhHansValues = {
             notText: ({ count }: { count: number }) => `跳过 ${count} 个文件：不是文本`,
             partial: "部分文件无法搜索；只会替换显示的文件。",
             showMore: "显示更多",
+            showAsDiff: "以差异显示",
             whatYouSee: "所见即所写。写入前会再次检查文件。",
             invalidPattern: "此模式无法用于替换。请修改后重试。",
             noMatches: ({ query, scope }: { query: string; scope: string }) => `${scope} 中没有与“${query}”匹配的文本`,

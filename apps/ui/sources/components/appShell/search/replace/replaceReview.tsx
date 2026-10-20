@@ -218,6 +218,8 @@ function MatchLine({
   );
 }
 
+const QUIET_LINE_HEIGHT = Number(Typography.variant('meta').lineHeight);
+
 function QuietLine({
   icon,
   label,
@@ -234,18 +236,23 @@ function QuietLine({
     tone === 'danger'
       ? theme.colors.state.danger.foreground
       : theme.colors.text.secondary;
+  // The mark sits on the first line and the text wraps beside it (never under it) at phone width.
   return (
     <View
       style={{
         flexDirection: 'row',
-        alignItems: 'center',
-        flexWrap: 'wrap',
+        alignItems: 'flex-start',
         gap: theme.space.s8,
         paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx,
         paddingVertical: MENU_ROW_METRICS.paddingVerticalPx,
       }}
     >
-      {icon ? <Icon name={icon} size={ICON_SIZE.sm} color={color} /> : null}
+      {icon ? (
+        <View style={{ height: QUIET_LINE_HEIGHT, justifyContent: 'center' }}>
+          <Icon name={icon} size={ICON_SIZE.sm} color={color} />
+        </View>
+      ) : null}
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: theme.space.s8 }}>
       <Text
         style={[
           Typography.variant('meta'),
@@ -261,6 +268,7 @@ function QuietLine({
         {label}
       </Text>
       {action}
+      </View>
     </View>
   );
 }
@@ -328,12 +336,15 @@ function ReplaceFileDetail({
   excludedKeys,
   note,
   headline,
+  inColumn = true,
 }: Readonly<{
   file: WorkspaceReplacePreviewFile;
   matcher: WorkspaceReplaceMatcher;
   excludedKeys: ReadonlySet<string>;
   note: string;
   headline: string;
+  /** In the detail column it owns its scroll; pushed as a phone step it flows in the list's scroll. */
+  inColumn?: boolean;
 }>) {
   const { theme } = useUnistyles();
   const patch = React.useMemo(
@@ -341,8 +352,18 @@ function ReplaceFileDetail({
     [excludedKeys, file, matcher],
   );
   const { name } = splitPath(file.path);
+  const diff = (
+    <DiffViewer
+      mode="unified"
+      unifiedDiff={patch}
+      filePath={file.path}
+      wrapLines
+      showPrefix
+      presentationStyleOverride="unified"
+    />
+  );
   return (
-    <View testID="replace-file-detail" style={{ flex: 1, minHeight: 0 }}>
+    <View testID="replace-file-detail" style={inColumn ? { flex: 1, minHeight: 0 } : undefined}>
       <View
         style={{
           flexDirection: 'row',
@@ -371,16 +392,9 @@ function ReplaceFileDetail({
         </Text>
       </View>
       {/* The column's one scroll owner: a long diff scrolls under its headline, the note stays below it. */}
-      <ScrollView style={{ flex: 1, minHeight: 0 }} testID="replace-file-detail-scroll">
-        <DiffViewer
-          mode="unified"
-          unifiedDiff={patch}
-          filePath={file.path}
-          wrapLines
-          showPrefix
-          presentationStyleOverride="unified"
-        />
-      </ScrollView>
+      {inColumn ? (
+        <ScrollView style={{ flex: 1, minHeight: 0 }} testID="replace-file-detail-scroll">{diff}</ScrollView>
+      ) : diff}
       <Text
         style={[
           Typography.variant('meta'),
@@ -409,6 +423,8 @@ export type ReplaceReviewContext = Readonly<{
   reachable: boolean;
   /** Commits the open-at-line result for a row, so the list's activation opens it. */
   commitOpen: (path: string, line: number) => void;
+  /** No detail column beside the list (phone): each file offers its diff as a pushed step instead. */
+  compact: boolean;
 }>;
 
 function matchOptionId(path: string, match: WorkspaceReplaceMatch): string {
@@ -582,13 +598,14 @@ function reviewSections(
       selected: selection.selected,
       total: selection.total,
     });
-    const detail = () => (
+    const detail = (inColumn = true) => (
       <ReplaceFileDetail
         file={file}
         matcher={matcher}
         excludedKeys={keys}
         headline={headline}
         note={t('universalSearch.replace.whatYouSee')}
+        inColumn={inColumn}
       />
     );
     const gutterDigits = String(
@@ -633,6 +650,23 @@ function reviewSections(
         ),
         detailContent: detail,
         onSelect: () => model.toggleMatch(file.path, replaceMatchKey(match)),
+      });
+    }
+    if (context.compact) {
+      // Lists push details on a phone (lab rp-Rp "Show as diff ›").
+      const { name } = splitPath(file.path);
+      options.push({
+        id: `${REPLACE_OPTION_PREFIX}diff:${file.path}`,
+        label: t('universalSearch.replace.showAsDiff'),
+        icon: () => <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx }} />,
+        openStep: {
+          id: `replace-diff:${file.path}`,
+          title: name,
+          disableInputFilter: true,
+          sections: [{ kind: 'static', id: 'replace:diff', options: [
+            staticLine(`diff-body:${file.path}`, name, detail(false)),
+          ] }],
+        },
       });
     }
   }
@@ -816,14 +850,14 @@ function resultSections(
     return {
       id: `${REPLACE_OPTION_PREFIX}result:${result.path}`,
       label: result.path,
-      contentAlign: 'start',
       accessibilityLabel: `${result.path}, ${line.label}`,
       icon: () => <ResultStatusMark icon={line.icon} danger={line.danger} />,
       labelContent: () => <ResultLabel path={result.path} line={line.label} />,
       ...(action
         ? { rightAccessory: action, rightAccessoryOutsidePressable: true }
         : {}),
-      ...(file && (result.status === 'replaced' || result.status === 'restored')
+      // Only a written file shows what was written; an undone file is back as it was (its row says so).
+      ...(file && result.status === 'replaced'
         ? {
             detailContent: () => (
               <ReplaceFileDetail
@@ -831,11 +865,7 @@ function resultSections(
                 matcher={matcher}
                 excludedKeys={model.excluded.get(file.path) ?? NO_KEYS}
                 headline={line.label}
-                note={
-                  result.status === 'replaced'
-                    ? t('universalSearch.replace.undoNote')
-                    : t('universalSearch.replace.resultRestored')
-                }
+                note={t('universalSearch.replace.undoNote')}
               />
             ),
           }

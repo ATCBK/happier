@@ -7115,6 +7115,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             notText: ({ count }: { count: number }) => `略過 ${count} 個檔案：不是文字`,
             partial: "部分檔案無法搜尋；只會取代顯示的檔案。",
             showMore: "顯示更多",
+            showAsDiff: "以差異顯示",
             whatYouSee: "所見即所寫。寫入前會再次檢查檔案。",
             invalidPattern: "此模式無法用於取代。請修改後再試一次。",
             noMatches: ({ query, scope }: { query: string; scope: string }) => `${scope} 中沒有符合「${query}」的文字`,

@@ -988,8 +988,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const replaceSections = React.useMemo(() => replaceMatcher ? buildReplaceReviewSections({
         model: replaceModel, matcher: replaceMatcher, scopeLabel: fileContentFolderLabel ?? t('universalSearch.content.textInFiles'),
         machineLabel, available: Boolean(workspaceScope && workspaceSearchAvailable && selectedCredentialBinding),
-        reachable: workspaceScopeReachable, commitOpen: commitReplaceOpen,
-    }) : null, [commitReplaceOpen, fileContentFolderLabel, machineLabel, replaceMatcher, replaceModel, selectedCredentialBinding, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable]);
+        reachable: workspaceScopeReachable, commitOpen: commitReplaceOpen, compact: deviceType === 'phone',
+    }) : null, [commitReplaceOpen, deviceType, fileContentFolderLabel, machineLabel, replaceMatcher, replaceModel, selectedCredentialBinding, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable]);
     const searchSections = React.useMemo(() => buildUniversalSearchSections({
         query,
         commands: props.commands,

@@ -8871,6 +8871,7 @@ localTailscale: {
             notText: ({ count }: { count: number }) => `${count} 個のファイルをスキップ: テキストではありません`,
             partial: "一部のファイルを検索できませんでした。表示中のファイルだけが置換されます。",
             showMore: "さらに表示",
+            showAsDiff: "差分で表示",
             whatYouSee: "表示どおりの内容が書き込まれます。書き込む直前にファイルを再確認します。",
             invalidPattern: "このパターンは置換に使えません。編集してもう一度お試しください。",
             noMatches: ({ query, scope }: { query: string; scope: string }) => `${scope} に「${query}」と一致するテキストはありません`,
