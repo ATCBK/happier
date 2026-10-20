@@ -1,110 +1,119 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { WorkerPoolManager } from '@pierre/diffs/worker';
+
+// Workers are the browser/process boundary; the real Pierre manager, theme registry,
+// and Happier pool owner run beneath this transport.
+class BrowserWorker extends EventTarget {
+    static instances: BrowserWorker[] = [];
+    static successfulConstructionsBeforeFailure: number | undefined;
+    terminated = false;
+
+    constructor() {
+        super();
+        if (BrowserWorker.successfulConstructionsBeforeFailure === 0) throw new Error('worker disabled');
+        if (BrowserWorker.successfulConstructionsBeforeFailure !== undefined) BrowserWorker.successfulConstructionsBeforeFailure--;
+        BrowserWorker.instances.push(this);
+    }
+
+    postMessage(message: unknown): void {
+        if (typeof message !== 'object' || message === null || !('id' in message) || !('type' in message)) {
+            throw new Error('Expected a Pierre worker request');
+        }
+        const { id, type } = message;
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', {
+            data: { type: 'success', requestType: type, id, sentAt: Date.now() },
+        })));
+    }
+
+    terminate(): void {
+        this.terminated = true;
+    }
+}
+
+const pools: WorkerPoolManager[] = [];
 
 beforeEach(() => {
     vi.resetModules();
-    vi.restoreAllMocks();
-    delete (globalThis as { window?: unknown }).window;
-    delete (globalThis as { document?: unknown }).document;
-    delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
-    delete (globalThis as { Worker?: unknown }).Worker;
+    BrowserWorker.instances = [];
+    BrowserWorker.successfulConstructionsBeforeFailure = undefined;
+    vi.stubGlobal('window', { location: { origin: 'http://localhost' } });
+    vi.stubGlobal('document', { baseURI: 'http://localhost/' });
+    vi.stubGlobal('Worker', BrowserWorker);
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0));
+    vi.stubGlobal('cancelAnimationFrame', (handle: ReturnType<typeof setTimeout>) => clearTimeout(handle));
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
 });
 
-function installBrowserWorkerGlobals(): void {
-    (globalThis as { window?: unknown }).window = {};
-    (globalThis as { document?: unknown }).document = { baseURI: 'http://localhost/' };
-    (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = (cb: FrameRequestCallback) => setTimeout(cb, 0) as unknown as number;
-}
+afterEach(async () => {
+    for (const pool of pools.splice(0)) pool.terminate();
+    // Let the manager's final animation-frame broadcast finish while its browser
+    // clock boundary is still installed.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+});
 
 describe('getPierreDiffWorkerPool', () => {
-    it('fails closed (returns null) when workers cannot be constructed', async () => {
-        installBrowserWorkerGlobals();
-        (globalThis as any).Worker = function Worker() {
-            throw new Error('worker disabled');
-        } as any;
-
+    it('returns null and logs once when the browser cannot construct a worker', async () => {
+        BrowserWorker.successfulConstructionsBeforeFailure = 0;
         const { getPierreDiffWorkerPool } = await import('./pierreWorkerPool.web');
 
-        expect(() => getPierreDiffWorkerPool({ style: 'unified' })).not.toThrow();
         expect(getPierreDiffWorkerPool({ style: 'unified' })).toBeNull();
-        expect(() => getPierreDiffWorkerPool({ style: 'split' })).not.toThrow();
-        expect(getPierreDiffWorkerPool({ style: 'split' })).toBeNull();
+        expect(getPierreDiffWorkerPool({ style: 'unified' })).toBeNull();
+        expect(console.debug).toHaveBeenCalledTimes(1);
+        expect(console.debug).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ message: 'worker disabled' }));
     });
 
-    it('initializes render options with effective dynamic theme ids', async () => {
-        installBrowserWorkerGlobals();
-        const highlighterOptions: unknown[] = [];
-
-        vi.doMock('./pierreWorkerFactory.web', () => ({
-            createPierreDiffWorker: () => ({ terminate: vi.fn() }),
-        }));
-        vi.doMock('./pierreThemeRegistry.web', () => ({
-            ensureHappierPierreThemesRegistered: vi.fn(),
-            HAPPIER_PIERRE_THEME_IDS: { light: 'happier-light', dark: 'happier-dark' },
-        }));
-        vi.doMock('@pierre/diffs/worker', () => ({
-            WorkerPoolManager: class WorkerPoolManager {
-                initialize = vi.fn(async () => {});
-
-                constructor(_poolOptions: unknown, options: unknown) {
-                    highlighterOptions.push(options);
-                }
-            },
-        }));
-
+    it('fails the pool if worker construction fails during asynchronous initialization', async () => {
+        BrowserWorker.successfulConstructionsBeforeFailure = 1;
         const { getPierreDiffWorkerPool } = await import('./pierreWorkerPool.web');
-        const getPoolWithThemeIds = getPierreDiffWorkerPool as unknown as (params: Readonly<{
-            style: 'split';
-            themeIds: Readonly<{ light: string; dark: string }>;
-        }>) => unknown;
+        const pool = getPierreDiffWorkerPool({ style: 'unified' });
+        if (!pool) throw new Error('Expected the preflight to succeed');
+        pools.push(pool);
 
-        getPoolWithThemeIds({
-            style: 'split',
-            themeIds: { light: 'happier-light-custom', dark: 'happier-dark-custom' },
-        });
+        await expect(pool.initialize()).rejects.toThrow('worker disabled');
+        await Promise.resolve();
 
-        expect(highlighterOptions[0]).toMatchObject({
-            theme: {
-                light: 'happier-light-custom',
-                dark: 'happier-dark-custom',
-            },
-        });
+        expect(getPierreDiffWorkerPool({ style: 'unified' })).toBeNull();
+        expect(console.debug).toHaveBeenCalledTimes(1);
     });
 
-    it('updates active render options with effective dynamic theme ids', async () => {
-        installBrowserWorkerGlobals();
-        const setRenderOptionsSpy = vi.fn(async () => {});
+    it('fails only the affected style after a worker error and releases its workers', async () => {
+        const owner = await import('./pierreWorkerPool.web');
+        const unified = owner.getPierreDiffWorkerPool({ style: 'unified' });
+        if (!unified) throw new Error('Expected a unified pool');
+        pools.push(unified);
+        await unified.initialize();
+        const worker = BrowserWorker.instances.find((candidate) => !candidate.terminated);
+        if (!worker) throw new Error('Expected a live unified worker');
+        const split = owner.getPierreDiffWorkerPool({ style: 'split' });
+        if (!split) throw new Error('Expected a split pool');
+        pools.push(split);
+        await split.initialize();
 
-        vi.doMock('./pierreWorkerFactory.web', () => ({
-            createPierreDiffWorker: () => ({ terminate: vi.fn() }),
-        }));
-        vi.doMock('./pierreThemeRegistry.web', () => ({
-            ensureHappierPierreThemesRegistered: vi.fn(),
-            HAPPIER_PIERRE_THEME_IDS: { light: 'happier-light', dark: 'happier-dark' },
-        }));
-        vi.doMock('@pierre/diffs/worker', () => ({
-            WorkerPoolManager: class WorkerPoolManager {
-                initialize = vi.fn(async () => {});
-                setRenderOptions = setRenderOptionsSpy;
-            },
-        }));
+        const event = new Event('error', { cancelable: true });
+        worker.dispatchEvent(event);
 
+        expect(owner.getPierreDiffWorkerPool({ style: 'unified' })).toBeNull();
+        expect(owner.getPierreDiffWorkerPool({ style: 'split' })).toBe(split);
+        expect(worker.terminated).toBe(true);
+        expect(event.defaultPrevented).toBe(true);
+        worker.dispatchEvent(new Event('error'));
+        expect(console.debug).toHaveBeenCalledTimes(1);
+    });
+
+    it('reuses a style pool when the effective theme changes', async () => {
         const { getPierreDiffWorkerPool } = await import('./pierreWorkerPool.web');
-        const getPoolWithThemeIds = getPierreDiffWorkerPool as unknown as (params: Readonly<{
-            style: 'split';
-            themeIds?: Readonly<{ light: string; dark: string }>;
-        }>) => unknown;
+        const { ensureHappierPierreThemeRegistered, resolveHappierPierreThemeIds } = await import('./pierreThemeRegistry.web');
+        const pool = getPierreDiffWorkerPool({ style: 'split' });
+        if (!pool) throw new Error('Expected a split pool');
+        pools.push(pool);
+        await pool.initialize();
+        const colors = { text: { primary: '#123456' } };
+        ensureHappierPierreThemeRegistered({ isDark: false, colors });
+        const themeIds = resolveHappierPierreThemeIds({ isDark: false, colors });
 
-        getPoolWithThemeIds({ style: 'split' });
-        getPoolWithThemeIds({
-            style: 'split',
-            themeIds: { light: 'happier-light-custom', dark: 'happier-dark-custom' },
-        });
-
-        expect(setRenderOptionsSpy).toHaveBeenCalledWith(expect.objectContaining({
-            theme: {
-                light: 'happier-light-custom',
-                dark: 'happier-dark-custom',
-            },
-        }));
+        expect(getPierreDiffWorkerPool({ style: 'split', themeIds })).toBe(pool);
+        await vi.waitFor(() => expect(pool.getDiffRenderOptions().theme).toEqual(themeIds));
     });
 });
