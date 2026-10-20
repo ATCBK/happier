@@ -698,4 +698,18 @@ describe('Claude plugin SDK query', () => {
 
         await expect(nextMessage).rejects.toThrow('Claude Code login expired');
     });
+
+    it.each([
+        'You cannot use --strict-mcp-config when an enterprise MCP config is present',
+        'You cannot dynamically configure MCP servers when an enterprise MCP config is present',
+    ])('classifies the native managed MCP startup refusal: %s', async stderr => {
+        const { ctx, stream } = createContextFixture();
+        const running = query(ctx, { prompt: prompt(), options: { strictMcpConfig: true } });
+        const rejection = expect(running.next()).rejects.toMatchObject({
+            code: 'claude_managed_mcp_policy_conflict', retryable: false,
+        });
+        await stream.exitWith({ exitCode: 1, signal: null, stderr });
+        await rejection;
+        await running.dispose();
+    });
 });

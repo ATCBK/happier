@@ -181,6 +181,32 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     expect(exec.spawnClient).not.toHaveBeenCalled();
   });
 
+  it('surfaces a managed MCP isolation limitation without retrying with weaker restrictions', async () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+      { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({ ctx, directory: '/tmp/claude-managed-project',
+      launchEnv: { HOME: '/tmp/claude-managed-project/home', USERPROFILE: '/tmp/claude-managed-project/home',
+        CLAUDE_CONFIG_DIR: '/tmp/claude-managed-project/home/.claude' },
+      permissionMode: 'default', allowedTools: [], unlistedTools: 'deny' });
+    const events: unknown[] = [];
+    operations.subscribeProviderEvents(event => events.push(event));
+    try {
+      operations.beginProviderTurn('managed-policy-turn');
+      await operations.sendProviderTurnPrompt('Answer without tools');
+      expect(exec.spawnClient.mock.calls[0]?.[0].launch.args).toContain('--strict-mcp-config');
+      const completion = operations.waitForProviderTurnCompletion();
+      const rejection = expect(completion).rejects.toMatchObject({ code: 'claude_managed_mcp_policy_conflict', retryable: false });
+      await exec.exitWith({ exitCode: 1, signal: null,
+        stderr: 'You cannot use --strict-mcp-config when an enterprise MCP config is present' });
+      await rejection;
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-failed', issue: expect.objectContaining({
+        code: 'claude_managed_mcp_policy_conflict',
+      }) }));
+      expect(exec.spawnClient).toHaveBeenCalledOnce();
+    } finally { await operations.disposeProviderSession(); }
+  });
+
   it('enforces scoped tools through Run-owned hooks without fabricating a Session', async () => {
     const exec = createSdkExecFixture();
     const hooks = createSessionHooksFixture();

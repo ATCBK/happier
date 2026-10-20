@@ -18,6 +18,7 @@ import { parseMcpToolWireNameV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { buildClaudeMcpConfigArgs, materializeClaudeMcpConfigArgsForSpawn } from '../../../mcp/materializeConfigArgs.js';
 import {
     redactBugReportSensitiveText,
+    isPluginError,
     PluginError,
     type JsonValue,
 } from '@happier-dev/plugin-sdk';
@@ -1776,7 +1777,7 @@ export function createClaudeAgentSdkTurnOperations(
                 kind: 'turn-failed',
                 turnId: turnId ?? 'claude-agent-sdk-turn',
                 issue: buildClaudeSessionRuntimeIssue({
-                    code,
+                    code: isPluginError(error) && error.code === 'claude_managed_mcp_policy_conflict' ? error.code : code,
                     source,
                     occurredAt: Date.now(),
                     agentId: 'claude',
