@@ -3,7 +3,7 @@ import { ProviderContributionV1Schema } from '@happier-dev/protocol';
 
 import type { ResolvedProviderContribution } from '@/plugins/projection/registry/types';
 import type { ProviderContributionRegistryView } from '@/providers/registry';
-import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
+import { normalizeLocalServiceScan, type NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
 import { projectProviderDiscoveryCandidates } from './project';
 
 const contributionKey = 'happier.provider.ollama/ollama';
@@ -98,6 +98,20 @@ const registry: ProviderContributionRegistryView = {
 };
 
 describe('projectProviderDiscoveryCandidates', () => {
+  it.each([
+    ['/usr/local/bin/ollama', `--model-config=${'m'.repeat(5_000)}`, 'serve'].join(' '),
+    ['/usr/local/bin/ollama', ...Array.from({ length: 130 }, (_, index) => `--option-${index}`), 'serve'].join(' '),
+  ])('matches a complete attributed command from the canonical inventory producer (%#)', (command) => {
+    const observed = normalizeLocalServiceScan({
+      machineId: 'machine-a', now: 100, previous: null,
+      listeners: [{ pid: 42, address: '127.0.0.1', port: 22434, protocol: 'tcp' }],
+      processes: new Map([[42, { pid: 42, command }]]), workspaces: [],
+    });
+    expect(projectProviderDiscoveryCandidates({ snapshot: observed, registry })).toMatchObject([{
+      evidence: { kind: 'attributed_listener' }, normalizedEndpointUrl: 'http://127.0.0.1:22434/',
+    }]);
+  });
+
   it('matches exact executable basename and literal argv tokens on a custom port', () => {
     expect(projectProviderDiscoveryCandidates({ snapshot: snapshot({ port: 22434 }), registry })).toEqual([{
       v: 1,

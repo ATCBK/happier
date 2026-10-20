@@ -339,6 +339,7 @@ export function createRuntimeProviderServices(input: Readonly<{
       descriptor: NonNullable<ReturnType<typeof sourceCatalogFallback>>;
       endpointUrl: string;
       contributedCatalogParsers?: ContributedProviderCatalogParsers;
+      lifetime?: import('../operationLifetime').ProviderOperationLifetime;
     }>): Promise<ProviderLocalCatalogFallbackResult>;
   }>;
   managedCatalogRuntime?: ProviderManagedCatalogRuntimePort<

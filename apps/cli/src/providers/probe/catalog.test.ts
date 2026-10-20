@@ -390,10 +390,10 @@ describe('provider catalog service', () => {
     await expect(service.refresh({ connectionId, machineId, endpoints, probes, catalogFallback }))
       .resolves.toMatchObject({ status: 'success', models: [{ id: 'local-model' }] });
     expect(transport).toHaveBeenCalledTimes(2);
-    expect(commandFallback).toHaveBeenCalledWith({
+    expect(commandFallback).toHaveBeenCalledWith(expect.objectContaining({
       descriptor: catalogFallback,
       endpointUrl: 'https://models.example/v1',
-    });
+    }));
     const state = await runtimeStore.read();
     expect(state.catalogs[0]?.state).toMatchObject({
       catalogObservationId: 'observation-command',
@@ -922,10 +922,10 @@ describe('provider catalog service', () => {
     expect(managedRequest).toHaveBeenNthCalledWith(2, expect.objectContaining({
       pathAndQuery: '/v1/models-secondary',
     }));
-    expect(fallback).toHaveBeenCalledWith({
+    expect(fallback).toHaveBeenCalledWith(expect.objectContaining({
       descriptor: catalogFallback,
       endpointUrl: 'http://127.0.0.1:45123/v1',
-    });
+    }));
     expect(transport).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
   });

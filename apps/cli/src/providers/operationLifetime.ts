@@ -103,7 +103,12 @@ export async function awaitAbortableWithinProviderOperation<T>(
   lifetime.signal?.addEventListener('abort', cancel, { once: true });
   if (lifetime.signal?.aborted) controller.abort();
   try {
-    return await awaitWithinProviderOperation(work(controller.signal), lifetime);
+    const result = await awaitWithinProviderOperation(work(controller.signal), lifetime);
+    // Aborting a transport may synchronously settle its promise. Such a
+    // withdrawal result cannot outrun the containing operation's cancellation.
+    if (lifetime.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
+    if (providerOperationRemainingMs(lifetime) <= 0) throw new ProviderOperationAbandonedError('deadline');
+    return result;
   } finally {
     lifetime.signal?.removeEventListener('abort', cancel);
     controller.abort();

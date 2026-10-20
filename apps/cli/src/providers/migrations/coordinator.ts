@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import type { StoredCredentials } from '@/persistence';
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import type { ProviderAccountSettingsMigrationContextV1, ProviderContributionV1, ProviderSettingsV1 } from '@happier-dev/protocol';
 import type { ResolvedProviderContribution } from '@/plugins/projection/registry/types';
 import {
@@ -84,7 +83,7 @@ export function createLegacyProfileMigrationCoordinator(deps: Readonly<{
   const now = deps.now ?? Date.now;
 
   const ensureMigrated = (
-    input: Readonly<{ accountKey: string; credentials: StoredCredentials; providersEnabled: boolean; machineId: string;
+    input: Readonly<{ accountKey: string; credentials: StoredCredentials; providersEnabled: boolean; machineId: string; signal?: AbortSignal;
       readAuthoringMemory?: () => Promise<Readonly<{ lastUsedProfile: string | null }>> }>,
   ): Promise<LegacyProfileMigrationCoordinatorResult> => {
     if (input.providersEnabled !== true) return Promise.resolve({ status: 'feature_disabled' } as const);
@@ -92,9 +91,7 @@ export function createLegacyProfileMigrationCoordinator(deps: Readonly<{
     if (existing) return existing;
     const operation = (async (): Promise<LegacyProfileMigrationCoordinatorResult> => {
       try {
-        const lifetime = createProviderOperationLifetime({
-          wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-        });
+        const lifetime = createProviderOperationLifetime({ signal: input.signal });
         const authoringMemory = input.readAuthoringMemory
           ? await awaitWithinProviderOperation(input.readAuthoringMemory(), lifetime) : undefined;
         const pendingLease = deps.acquireRegistryLease();

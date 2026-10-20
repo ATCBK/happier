@@ -6,6 +6,8 @@ import {
   runDeclaredProviderLocalCommand,
 } from './localCommand';
 import { createProviderProbeScheduler } from './scheduler';
+import { createProviderOperationLifetime } from '../operationLifetime';
+import type { ProviderLocalCommandRunner } from './localCommand';
 
 describe('runDeclaredProviderLocalCommand', () => {
   it('runs literal argv through the canonical system-tool port without a shell', async () => {
@@ -65,6 +67,58 @@ describe('createProviderLocalCatalogFallbackRunner', () => {
     endpointEnvName: 'OLLAMA_HOST',
   };
 
+  it.each([false, true])('uses the catalog lifetime for a slow command and caller cancellation (cancel=%s)', async cancelled => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    let complete!: () => void;
+    let commandSignal: AbortSignal | undefined;
+    const fallback = createProviderLocalCatalogFallbackRunner({ runner: {
+      runSystemTool: request => new Promise(resolve => {
+        // This is the OS command boundary: it obeys the timeout/signal supplied
+        // by the real catalog owner rather than simulating internal policy.
+        commandSignal = (request as typeof request & { signal?: AbortSignal }).signal;
+        const timer = setTimeout(() => resolve({ ok: false, reasonCode: 'timeout' }), request.timeoutMs);
+        complete = () => { clearTimeout(timer); resolve({ ok: true, exitCode: 0,
+          stdout: 'NAME ID SIZE MODIFIED\nslow-model id 1 GB now\n', stderr: '' }); };
+        commandSignal?.addEventListener('abort', () => { clearTimeout(timer);
+          resolve({ ok: false, reasonCode: 'aborted' }); }, { once: true });
+      }),
+    } satisfies ProviderLocalCommandRunner });
+    const request = { descriptor, endpointUrl: 'http://127.0.0.1:11434/',
+      lifetime: createProviderOperationLifetime({ wallTimeMs: 30_000, signal: caller.signal }) };
+    const pending = fallback.run(request).then(value => ({ value }), error => ({ reason: error.reason }));
+    try {
+      await vi.advanceTimersByTimeAsync(cancelled ? 1_000 : 6_000);
+      if (cancelled) { caller.abort(); complete(); }
+      else complete();
+      expect(await pending).toEqual(cancelled ? { reason: 'cancelled' }
+        : { value: { status: 'success', models: [{ id: 'slow-model', name: 'slow-model' }] } });
+      if (cancelled) expect(commandSignal?.aborted).toBe(true);
+    } finally { complete?.(); await pending; vi.useRealTimers(); }
+  });
+
+  it('uses the catalog lifetime size boundary for valid command output beyond the former local cap', async () => {
+    const fallback = createProviderLocalCatalogFallbackRunner({ runner: {
+      runSystemTool: async () => ({ ok: true, exitCode: 0,
+        stdout: `NAME ID SIZE MODIFIED\n${' '.repeat(1024 * 1024)}valid-model id 1 GB now\n`, stderr: '' }),
+    } });
+    await expect(fallback.run({ descriptor, endpointUrl: 'http://127.0.0.1:11434/' }))
+      .resolves.toMatchObject({ status: 'success', models: [{ id: 'valid-model' }] });
+  });
+
+  it('refuses oversized command output even when a contributed parser returns a valid row', async () => {
+    const fallback = createProviderLocalCatalogFallbackRunner({ runner: {
+      // The command port returns its limit+1 overflow sentinel. A plugin parser
+      // cannot turn that truncated capture into an apparently complete catalog.
+      runSystemTool: async () => ({ ok: true, exitCode: 0,
+        stdout: 'x'.repeat(5 * 1024 * 1024 + 1), stderr: '' }),
+    } });
+    await expect(fallback.run({
+      descriptor: { ...descriptor, parser: 'acme-list-v1' }, endpointUrl: 'http://127.0.0.1:11434/',
+      contributedCatalogParsers: { 'acme-list-v1': () => ({ models: [{ id: 'partial-model' }] }) },
+    })).resolves.toEqual({ status: 'unavailable' });
+  });
+
   it('parses the official Ollama table and supplies only the declared endpoint environment', async () => {
     const runSystemTool = vi.fn(async () => ({
       ok: true as const,
@@ -85,7 +139,6 @@ describe('createProviderLocalCatalogFallbackRunner', () => {
       lookupNames: ['ollama'],
       args: ['list'],
       env: { OLLAMA_HOST: 'http://127.0.0.1:22434/' },
-      timeoutMs: 5_000,
     }));
   });
 

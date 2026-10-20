@@ -1,4 +1,3 @@
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
 import { ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
 import { createProviderDiscoveryCandidateIdV1 } from '@happier-dev/protocol/providers/detection/v1';
@@ -44,9 +43,7 @@ export function createProviderLocalOperations(context: ProviderConnectionService
     const machineError = assertMachine(input.machineId, input.connectionId);
     if (machineError) return { status: 'error', error: machineError };
 
-    const lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    });
+    const lifetime = createProviderOperationLifetime({});
     const initialSnapshot = await deps.loadSnapshot();
     const registryProjection = {
       registry: initialSnapshot.registry,

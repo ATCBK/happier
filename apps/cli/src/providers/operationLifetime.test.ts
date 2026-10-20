@@ -9,7 +9,12 @@ it.each([false, true])('keeps an uncapped containing operation cancellable after
   const caller = new AbortController();
   let finish = () => {};
   const response = new Promise<string>(resolve => { finish = () => resolve('admitted'); });
-  const result = awaitAbortableWithinProviderOperation(async () => response,
+  const result = awaitAbortableWithinProviderOperation(signal => {
+    // A real cancelled transport may settle successfully during its abort
+    // callback. Cancellation must still win over that withdrawal settlement.
+    signal.addEventListener('abort', finish, { once: true });
+    return response;
+  },
     createProviderOperationLifetime({ signal: caller.signal }));
   // Install the rejection observer before cancellation can settle the race.
   const observed = result.then(value => ({ value }), error => ({ reason: error.reason }));

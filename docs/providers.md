@@ -438,6 +438,22 @@ Endpoint validation rejects credentials in URLs, unsafe metadata destinations, a
 
 A catalog probe is bounded end to end, not per hop: one wall budget covers pre-dispatch resolution, request establishment and the complete response body across every redirect, and one idle budget bounds the gap between body chunks. Both apply identically to a public endpoint and to a Provider the daemon supervises — a managed probe reaches its service through that service's own supervised request handle, so a response that returns headers and never finishes its body cannot hold a Provider probe slot.
 
+In 0.3 development, connection descriptions and mutations, Profile migration
+admission, and binding-status reads follow their containing operation's lifetime.
+The endpoint-probe budget does not expire a slow Home or registry read in those
+operations. A local command catalog fallback consumes the remaining catalog
+deadline and cancellation, with the same canonical catalog-response byte bound
+as HTTP catalogs. Transport settlement during cancellation cannot publish a
+successful withdrawal as a completed operation.
+
+Connected Account currentness conflicts and group-generation convergence also
+follow the owning operation's cancellation. Settled credential leases expire or
+retire with their exact credential authority. Pending usage writes and durable
+failure reports remain queued through temporary disconnection; resident key
+counts, elapsed queue age and per-drain batch counts do not discard them.
+The existing whole-operation retry, replay, refresh and maintenance policies
+retain their typed exhausted, paused or unavailable outcomes.
+
 In development source, transient Account catalog reads and an exhausted catalog
 admission or managed-establishment budget return retryable
 `provider_catalog_unavailable`. These failures precede an endpoint response and

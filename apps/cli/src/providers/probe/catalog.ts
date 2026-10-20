@@ -29,6 +29,7 @@ import { providerProbeFailureHealthState, providerProbeSuccessHealthState } from
 import {
   awaitWithinProviderOperation,
   ProviderOperationAbandonedError,
+  type ProviderOperationLifetime,
 } from '../operationLifetime';
 
 export type ProviderProbeEndpoint = Readonly<{
@@ -273,6 +274,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
       descriptor: ProviderCatalogCommandFallbackV1;
       endpointUrl: string;
       contributedCatalogParsers?: ContributedProviderCatalogParsers;
+      lifetime?: ProviderOperationLifetime;
     }>): Promise<Readonly<{
       status: 'success';
       models: readonly ProviderModelDescriptorV1[];
@@ -678,6 +680,10 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
               const fallback = await dependencies.localCatalogFallback.run({
                 descriptor: input.catalogFallback,
                 endpointUrl: fallbackEndpointUrl,
+                lifetime: operationScope?.lifetime ?? {
+                  signal: input.signal,
+                  wallDeadlineAtMs: input.wallDeadlineAtMs ?? Infinity,
+                },
                 ...(contributedParsers
                   ? { contributedCatalogParsers: contributedParsers.parsersByFormat }
                   : {}),
@@ -970,6 +976,10 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
         const fallback = await dependencies.localCatalogFallback.run({
           descriptor: input.catalogFallback,
           endpointUrl: fallbackEndpoint.normalizedUrl,
+          lifetime: operationScope?.lifetime ?? {
+            signal: input.signal,
+            wallDeadlineAtMs: input.wallDeadlineAtMs ?? Infinity,
+          },
           ...(contributedParsers
             ? { contributedCatalogParsers: contributedParsers.parsersByFormat }
             : {}),

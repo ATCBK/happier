@@ -39,6 +39,7 @@ import {
 } from './client';
 import { PROVIDER_HEALTH_REFRESH_TTL_MS } from './scheduler';
 import { createProviderLocalCatalogFallbackRunner } from './localCommand';
+import type { ProviderLocalCommandRunner } from './localCommand';
 
 const temporaryPaths: string[] = [];
 afterEach(async () => {
@@ -1231,7 +1232,7 @@ describe('runtime provider services', () => {
     expect(refreshed.modelLoadStates).toEqual(baseline.modelLoadStates);
   });
 
-  it('threads a trusted local contribution command fallback through the saved authorized probe path', async () => {
+  it.each([false, true])('threads the remaining catalog lifetime through the saved command fallback (expired=%s)', async expired => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-provider-runtime-local-fallback-'));
     temporaryPaths.push(happyHomeDir);
     const localConnectionId = ProviderConnectionIdSchema.parse('pc_ollama_fixture');
@@ -1297,12 +1298,18 @@ describe('runtime provider services', () => {
         confirmedAt: 1,
       }],
     });
-    const runSystemTool = vi.fn(async () => ({
-      ok: true as const,
-      exitCode: 0,
-      stdout: 'NAME ID SIZE MODIFIED\nqwen3:8b model-digest 5GB today\n',
-      stderr: '',
-    }));
+    let commandOutcome: 'completed' | 'aborted' | null = null;
+    const runSystemTool = vi.fn<ProviderLocalCommandRunner['runSystemTool']>(async request => {
+      request.signal?.addEventListener('abort', () => {
+        if (commandOutcome === null) commandOutcome = 'aborted';
+      }, { once: true });
+      await vi.advanceTimersByTimeAsync(expired ? 11_000 : 6_000);
+      commandOutcome = request.signal?.aborted ? 'aborted' : 'completed';
+      return request.signal?.aborted ? { ok: false, reasonCode: 'aborted' }
+        : { ok: true, exitCode: 0,
+            stdout: 'NAME ID SIZE MODIFIED\nqwen3:8b model-digest 5GB today\n', stderr: '' };
+    });
+    let firstProbe = true;
     const services = createRuntimeProviderServices({
       machineId: 'machine-a', happyHomeDir, registry: localRegistry,
       featureGate: { isEnabled: () => true },
@@ -1310,14 +1317,25 @@ describe('runtime provider services', () => {
       getAccountSettingsSnapshot: (() => { const snapshot = providerSnapshot(settings); return () => snapshot; })(),
       client: createProviderProbeHttpClient({
         resolveAddresses: async () => ['127.0.0.1'],
-        transport: async () => ({ status: 503, headers: {}, body: Buffer.alloc(0) }),
+        transport: async () => {
+          if (firstProbe) { firstProbe = false; await vi.advanceTimersByTimeAsync(20_000); }
+          return { status: 503, headers: {}, body: Buffer.alloc(0) };
+        },
       }),
       localCatalogFallback: createProviderLocalCatalogFallbackRunner({ runner: { runSystemTool } }),
       createObservationId: () => 'local-command-observation',
     });
 
-    await expect(services.probe({ connectionId: localConnectionId, machineId: 'machine-a' }))
-      .resolves.toMatchObject({ status: 'success', models: [{ id: 'qwen3:8b' }] });
+    vi.useFakeTimers();
+    const pending = services.probe({ connectionId: localConnectionId, machineId: 'machine-a' });
+    if (expired) {
+      await expect(pending).rejects.toMatchObject({ reason: 'deadline' });
+      expect(commandOutcome).toBe('aborted');
+      return;
+    }
+    const result = await pending;
+    expect(commandOutcome).toBe('completed');
+    expect(result).toMatchObject({ status: 'success', models: [{ id: 'qwen3:8b' }] });
     expect(runSystemTool).toHaveBeenCalledWith(expect.objectContaining({
       lookupNames: ['ollama'],
       args: ['list'],

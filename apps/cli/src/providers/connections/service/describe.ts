@@ -1,4 +1,3 @@
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { PROVIDER_SETTINGS_LIMITS_V1 } from '@happier-dev/protocol/providers/settings/limits';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { readOwnRecordValue } from '@happier-dev/protocol/providers/ownRecordValue';
@@ -84,9 +83,7 @@ export async function describeProviderConnections(
   // A standalone description is an admission boundary. Mutations pass their
   // already-started lifetime and registry projection so their final read never
   // restarts DNS or switches contribution generations.
-  const lifetime = input.lifetime ?? createProviderOperationLifetime({
-    wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-  });
+  const lifetime = input.lifetime ?? createProviderOperationLifetime({});
   const snapshot = await deps.loadSnapshot(input.registryProjection);
   const read = { settings: snapshot.providerSettings, diagnostics: snapshot.providerSettingsDiagnostics ?? [] };
   if (read.diagnostics.some((diagnostic) => diagnostic.path === 'providerSettingsV1')) {

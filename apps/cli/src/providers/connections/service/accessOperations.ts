@@ -1,4 +1,3 @@
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { ProviderSettingsLimitError } from '@happier-dev/protocol/providers/settings/v1';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { z as zodMiniCore0 } from 'zod/mini';
@@ -37,9 +36,7 @@ export function createProviderAccessOperations(context: ProviderConnectionServic
     if (input.scope !== 'machine') return { status: 'error', error: createProviderErrorV1('provider_connection_invalid', {
       connectionId: input.connectionId, machineId: input.machineId,
     }) };
-    const lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    });
+    const lifetime = createProviderOperationLifetime({});
     const snapshot = await deps.loadSnapshot();
     const registryProjection = {
       registry: snapshot.registry,
@@ -123,9 +120,7 @@ export function createProviderAccessOperations(context: ProviderConnectionServic
     if (input.scope !== 'machine') return { status: 'error', error: createProviderErrorV1('provider_connection_invalid', {
       connectionId: input.connectionId, machineId: input.machineId,
     }) };
-    const lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    });
+    const lifetime = createProviderOperationLifetime({});
     const snapshot = await deps.loadSnapshot();
     const registryProjection = {
       registry: snapshot.registry,

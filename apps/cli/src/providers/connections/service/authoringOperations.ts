@@ -1,4 +1,3 @@
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
 import { ProviderSettingsLimitError, ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
 import { compareProviderCanonicalStringsV1 } from '@happier-dev/protocol/providers/canonicalOrderV1';
@@ -414,9 +413,7 @@ export function createProviderAuthoringOperations(context: ProviderConnectionSer
     if (!deps.featureGate.isEnabled('providers')) return { status: 'error', error: featureError(input.connectionId) };
     const machineError = assertMachine(input.machineId, input.connectionId);
     if (machineError) return { status: 'error', error: machineError };
-    const lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    });
+    const lifetime = createProviderOperationLifetime({});
     const snapshot = await deps.loadSnapshot();
     const discoveryCandidates = await currentAuthoringDiscoveryCandidates({
       deps, snapshot, machineId: input.machineId, connectionId: input.connectionId,
@@ -450,9 +447,7 @@ export function createProviderAuthoringOperations(context: ProviderConnectionSer
     if (!deps.featureGate.isEnabled('providers')) return { status: 'error', error: featureError(input.connectionId) };
     const machineError = assertMachine(input.machineId, input.connectionId);
     if (machineError) return { status: 'error', error: machineError };
-    const lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    });
+    const lifetime = createProviderOperationLifetime({});
     try {
       const snapshot = await deps.loadSnapshot();
       const registryProjection = {
@@ -625,9 +620,7 @@ export function createProviderAuthoringOperations(context: ProviderConnectionSer
     if (input.scope !== 'machine') return { status: 'error', error: createProviderErrorV1('provider_connection_invalid', {
       connectionId: input.connectionId, machineId: input.machineId,
     }) };
-    const lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    });
+    const lifetime = createProviderOperationLifetime({});
     const snapshot = await deps.loadSnapshot();
     const registryProjection = {
       registry: snapshot.registry,

@@ -5,9 +5,11 @@ import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/de
 import type { BundledProviderCommandCatalogParserV1, ProviderCatalogCommandFallbackV1, ProviderCommandCatalogParserV1, ProviderModelDescriptorV1 } from '@happier-dev/protocol';
 
 import type { ProviderCatalogFormatParser } from './parsers';
+import { awaitAbortableWithinProviderOperation, awaitWithinProviderOperation, createProviderOperationLifetime,
+  providerOperationRemainingMs, type ProviderOperationLifetime } from '../operationLifetime';
 
 const LITERAL_TOKEN = /^[^\u0000-\u001f\u007f;&|`$<>]+$/u;
-const LOCAL_CATALOG_COMMAND_MAX_BYTES = 1024 * 1024;
+const LOCAL_CATALOG_COMMAND_MAX_BYTES = PROVIDER_CATALOG_LIMITS_V1.maxCatalogResponseBytes;
 
 export type ProviderLocalCommandRunner = Readonly<{
   runSystemTool(input: Readonly<{
@@ -15,7 +17,8 @@ export type ProviderLocalCommandRunner = Readonly<{
     lookupNames: readonly string[];
     args: readonly string[];
     env?: Readonly<Record<string, string>>;
-    timeoutMs: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
     maxStdoutBytes: number;
     maxStderrBytes: number;
     reason: string;
@@ -125,7 +128,7 @@ function runCommandCatalogFormat(
   if (!parse) return { status: 'unavailable' };
   let rows: ReturnType<ProviderCatalogFormatParser>;
   try {
-    rows = parse(stdout);
+    rows = parse(commandStdout(stdout));
   } catch {
     return { status: 'unavailable' };
   }
@@ -161,20 +164,27 @@ export function createProviderLocalCatalogFallbackRunner(input: Readonly<{
      * never taken from here.
      */
     contributedCatalogParsers?: Readonly<Record<string, ProviderCatalogFormatParser>>;
+    lifetime?: ProviderOperationLifetime;
   }>): Promise<ProviderLocalCatalogFallbackResult> => {
     const descriptor = ProviderCatalogCommandFallbackV1Schema.parse(raw.descriptor);
     const endpointUrl = ProviderEndpointUrlSyntaxSchema.parse(raw.endpointUrl);
     // The enclosing catalog scheduler owns freshness and single-flight work.
-    const result = await input.runner.runSystemTool({
+    const lifetime = raw.lifetime ?? createProviderOperationLifetime({});
+    // Fallback is one phase of catalog refresh. It consumes the caller's
+    // remaining budget and cannot start after that operation was abandoned.
+    await awaitWithinProviderOperation(Promise.resolve(), lifetime);
+    const result = await awaitAbortableWithinProviderOperation(signal => input.runner.runSystemTool({
       toolId: `provider-catalog-fallback:${descriptor.endpointTemplateId}`,
       lookupNames: [...descriptor.lookupNames],
       args: [...descriptor.fixedArgs],
       ...(descriptor.endpointEnvName ? { env: { [descriptor.endpointEnvName]: endpointUrl } } : {}),
-      timeoutMs: 5_000,
+      ...(Number.isFinite(lifetime.wallDeadlineAtMs)
+        ? { timeoutMs: providerOperationRemainingMs(lifetime) } : {}),
+      signal,
       maxStdoutBytes: LOCAL_CATALOG_COMMAND_MAX_BYTES + 1,
       maxStderrBytes: 16 * 1024,
       reason: 'provider local catalog fallback',
-    });
+    }), lifetime);
     if (!result.ok || result.exitCode !== 0) return { status: 'unavailable' };
     return runCommandCatalogFormat(descriptor.parser, result.stdout, raw.contributedCatalogParsers);
   };

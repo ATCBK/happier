@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
 import type { StoredCredentials } from '@/persistence';
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import type { AccountSettings, LegacyProfileMigrationConflictResolutionV1, LegacyProfileReviewedMappingV1 } from '@happier-dev/protocol';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -45,13 +44,15 @@ export function triggerLegacyProfileMigration(input: Readonly<{
   credentials: StoredCredentials;
   providersEnabled: boolean;
   machineId: string;
+  signal?: AbortSignal;
 }>) {
   return coordinator.ensureMigrated({
     accountKey: resolveAccountSettingsScopeKey(input.credentials),
     credentials: input.credentials,
     providersEnabled: input.providersEnabled,
     machineId: input.machineId,
-    readAuthoringMemory: async () => ({ lastUsedProfile: await readAuthoringMemoryLastUsedProfile(input.credentials) }),
+    signal: input.signal,
+    readAuthoringMemory: async () => ({ lastUsedProfile: await readAuthoringMemoryLastUsedProfile(input.credentials, input.signal) }),
   });
 }
 
@@ -82,10 +83,9 @@ export async function confirmLegacyProfileMigrationConflict(input: Readonly<{
   machineId: string;
   resolution: LegacyProfileMigrationConflictResolutionV1;
   migratedAt: number;
+  signal?: AbortSignal;
 }>) {
-  const lifetime = createProviderOperationLifetime({
-    wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-  });
+  const lifetime = createProviderOperationLifetime({ signal: input.signal });
   const pendingLease = acquireAuthoritativePluginRuntimeRegistryLease();
   let lease: Awaited<typeof pendingLease>;
   try {

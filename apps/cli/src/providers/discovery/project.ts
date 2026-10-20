@@ -23,7 +23,7 @@ export type ProviderDiscoveryConnectionView = Readonly<{
 type CommandTokens = Readonly<{ executableBasename: string; argv: readonly string[] }>;
 
 function tokenizeCommand(command: string): readonly string[] {
-  if (command.length === 0 || command.length > 4_096) return [];
+  if (command.length === 0) return [];
   const tokens: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
@@ -42,13 +42,12 @@ function tokenizeCommand(command: string): readonly string[] {
       if (current) {
         tokens.push(current);
         current = '';
-        if (tokens.length >= 128) return tokens;
       }
       continue;
     }
     current += character;
   }
-  if (current && tokens.length < 128) tokens.push(current);
+  if (current) tokens.push(current);
   return tokens;
 }
 

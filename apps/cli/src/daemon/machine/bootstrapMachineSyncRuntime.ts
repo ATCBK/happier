@@ -1268,7 +1268,9 @@ export async function bootstrapMachineSyncRuntime(
       modelSettingsMutation: providerConnectionRuntimeServices?.service.mutateModelSettings
         ?? providerConnectionUnavailable,
       localCatalogFallback: createProviderLocalCatalogFallbackRunner({
-        runner: providerLocalToolContext,
+        runner: { runSystemTool: ({ signal, ...request }) => createDaemonSpawnToolResolutionContext({
+          processEnv: process.env, signal,
+        }).runSystemTool(request) },
       }),
       ...(params.resolveManagedPurposeBindingIntent
         ? {
