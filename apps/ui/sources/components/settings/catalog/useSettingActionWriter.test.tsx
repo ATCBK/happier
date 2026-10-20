@@ -31,6 +31,7 @@ import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclare
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { Modal } from '@/modal';
 import { readDirectConnectionsEnabled } from '@happier-dev/protocol/account/settings/peerMediationPreferencesV1';
+import { usePaneArrangement } from '@/components/appShell/panes/arrangement/usePaneArrangement';
 
 const routerPush = vi.hoisted(() => vi.fn());
 const routeParams = vi.hoisted(() => ({ current: {} as Record<string, string> }));
@@ -64,6 +65,25 @@ beforeEach(() => { previousAuth = getCurrentAuth(); });
 afterEach(() => { standardCleanup(); setCurrentAuth(previousAuth); storage.setState(originalState, true); routeParams.current = {}; });
 
 describe('declared setting Action writer', () => {
+    it('admits pane arrangement through the declared Settings Action before changing local layout', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        storage.setState({ localSettings: { ...storage.getState().localSettings, paneArrangement: 'session' } });
+        const probe = await renderHook(usePaneArrangement);
+        try {
+            await act(async () => { probe.getCurrent().setArrangement('editor'); });
+            expect(storage.getState().localSettings.paneArrangement).toBe('session');
+            expect(probe.getCurrent().arrangement).toBe('session');
+            await act(async () => { account.replaceSettings(settingsParse({
+                ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+            })); });
+            await act(async () => { probe.getCurrent().setArrangement('editor'); });
+            await vi.waitFor(() => expect(storage.getState().localSettings.paneArrangement).toBe('editor'));
+            expect(probe.getCurrent().arrangement).toBe('editor');
+        } finally { standardCleanup(); await account.dispose(); }
+    });
     it('admits the mounted compound terminal host choice under Off, Ask and Allowed', async () => {
         const account = await createSecretSettingsTestHarness({ settings: settingsParse({
             sessionTerminalHost: 'none', sessionUseTmux: false,
