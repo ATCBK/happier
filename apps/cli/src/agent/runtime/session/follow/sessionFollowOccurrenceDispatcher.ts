@@ -376,7 +376,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           }));
           logger.debug('[Session Follow] Original admission completed', {
             sourceSessionId: original.sourceSessionId, destinationSessionId,
-            ...('sourceMessage' in original ? { sourceMessage: original.sourceMessage }
+            ...('sourceMessage' in original ? { sourceMessageSeq: original.sourceMessage.seq }
               : { agentStateVersion: original.sourceRequests.agentStateVersion }),
             ok: result.ok,
             ...(result.ok ? { localInputId: result.localId, suppressed: result.suppressed === true } : { code: result.code }),

@@ -12,10 +12,14 @@ import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secret
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { notificationCatalogFixture } from '@/notifications/activity/activityNotification.testkit';
+import { logger } from '@/ui/logger';
+import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
 afterEach(() => vi.restoreAllMocks());
 
 it.each(['receiver', 'source'] as const)('opens the first original range for a fresh rule without an edge or encountered source and keeps an unreadable range pending (%s)', async entry => {
+  const log = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+  const authoredLocalId = 'private-authored-follow-source-id';
   const sourceSessionId = 'c111111111111111111111111';
   const destinationSessionId = 'c222222222222222222222222';
   const token = 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature';
@@ -52,7 +56,7 @@ it.each(['receiver', 'source'] as const)('opens the first original range for a f
     if (path.endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
     if (path.includes('/messages')) {
       afterSequences.push(Number(options?.params?.afterSeq ?? parsed.searchParams.get('afterSeq')));
-      const original = { id: 'original-2', seq: 2, localId: 'new-original', createdAt: 200,
+      const original = { id: 'original-2', seq: 2, localId: authoredLocalId, createdAt: 200,
         content: { t: 'plain' as const, v: { role: 'agent', content: { type: 'event', id: 'goal', data: { type: 'goal-changed' } } } } };
       return { status: 200, data: { messages: [original],
         hasMore: false, nextAfterSeq: null } };
@@ -76,7 +80,7 @@ it.each(['receiver', 'source'] as const)('opens the first original range for a f
     const dispatch = () => entry === 'receiver' ? dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [] })
       : dispatcher.dispatch(SessionFollowRuleSourceOccurrenceV1Schema.parse({ sourceSessionId,
           sourcePublisher: { machineId: 'source-machine', publisherGeneration: '1', committedFenceMs: 1 },
-          sourceMessage: { localId: 'new-original', seq: 2 }, evidence: { v: 1, ownerAccountId: 'account-1',
+          sourceMessage: { localId: authoredLocalId, seq: 2 }, evidence: { v: 1, ownerAccountId: 'account-1',
             event: { kind: 'goal_changed' }, facts: { serverId: 'home', kind: 'session', source: 'persisted' } } }));
     await dispatch();
     expect(pending).toEqual([]);
@@ -85,9 +89,17 @@ it.each(['receiver', 'source'] as const)('opens the first original range for a f
     expect(afterSequences).toEqual([1]);
     if (entry === 'receiver') expect(available).toMatchObject({ coveredEvents: [{ sourceSessionId, kind: 'goal_changed' }] });
     expect(pending).toHaveLength(1);
-    expect(pending[0]).toMatchObject({ followSources: [entry === 'source'
+    const localInputId = deriveSessionFollowInputLocalIdV1({ destinationSessionId,
+      original: { sourceSessionId, sourceMessage: { localId: authoredLocalId, seq: 2 } } });
+    expect(pending[0]).toMatchObject({ localId: localInputId, followSources: [{ sourceMessage: { localId: authoredLocalId, seq: 2 }, ...(entry === 'source'
       ? { expectedSourcePublisherGeneration: '1', machineId: 'source-machine', installationId: 'installation' }
-      : { evaluation: 'receiver' }] });
+      : { evaluation: 'receiver' }) }] });
+    const admissionLogs = log.mock.calls.filter(([message]) => message === '[Session Follow] Original admission completed');
+    expect(admissionLogs).toHaveLength(1);
+    expect(JSON.stringify(admissionLogs)).not.toContain(authoredLocalId);
+    expect(admissionLogs).toEqual([[expect.any(String), expect.objectContaining({
+      sourceSessionId, destinationSessionId, sourceMessageSeq: 2, ok: true, localInputId,
+    })]]);
   } finally { dispatcher.dispose(); }
 });
 
