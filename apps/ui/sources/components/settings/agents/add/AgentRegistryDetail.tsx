@@ -6,6 +6,7 @@ import type { RegistryItemV1 } from '@happier-dev/protocol/registries';
 
 import type { ResolvedAgentCatalogEntry } from '@/agents/backendCatalog/agentCatalogProjection';
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
+import { areAgentRegistryChecksumsPublished } from '@/agents/registry/agentRegistryChecksums';
 import { CapabilityDetailHeader } from '@/components/capabilities/detail/CapabilityDetailHeader';
 import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
 import { AcpAgentGlyph } from '@/components/settings/acpCatalog/CustomAcpAgentMark';
@@ -204,10 +205,9 @@ export function AgentRegistryDetail(
 
   // The one checksum line (IR-32): about the builds your machines would download, else every published build.
   const runnableTargets = fits.flatMap(({ fit }) => (fit.kind === 'can_run' && fit.target ? [fit.target] : []));
-  const checkedAssets = selected?.kind === 'archive'
-    ? (runnableTargets.length > 0 ? runnableTargets.map((target) => agent.distributions.binary?.[target]) : Object.values(agent.distributions.binary ?? {}))
-    : [];
-  const checksum = selected?.kind === 'archive' ? checkedAssets.length > 0 && checkedAssets.every((asset) => Boolean(asset?.sha256)) : null;
+  const checksum = selected?.kind === 'archive'
+    ? areAgentRegistryChecksumsPublished(agent.distributions.binary ?? {}, runnableTargets)
+    : null;
   const file = (() => {
     if (selected?.kind === 'npm')
       return {

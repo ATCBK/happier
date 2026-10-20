@@ -28,6 +28,13 @@ import { MAX_PLUGIN_IDENTIFIER_BYTES } from '../../plugins/pluginId.js';
 import { AccountSettingsPersistedObjectSchema } from './accountSettingsPersistedObject.js';
 import { readRetainedConnectedAccountCatalogRecordV1 } from '../../connect/connectedAccountCatalogV1.js';
 
+describe('file Ask target preference', () => {
+  it('defaults old Accounts to side runs and preserves an explicit new-session choice', () => {
+    expect(accountSettingsParse({}).filesAskWithoutSessionTarget).toBe('detached_run');
+    expect(accountSettingsParse({ filesAskWithoutSessionTarget: 'session' }).filesAskWithoutSessionTarget).toBe('session');
+  });
+});
+
 describe('numeric glass tint storage', () => {
   it('reads absent and obsolete string values as 12, retaining canonical integers without clamping', () => {
     for (const value of [undefined, 'subtle', 'medium', 'strong', -1, 101, 20.5]) {

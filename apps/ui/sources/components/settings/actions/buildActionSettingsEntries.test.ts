@@ -2,9 +2,75 @@ import { describe, expect, it } from 'vitest';
 
 import { ActionsSettingsV1Schema, DEFAULT_ACTIONS_SETTINGS_V1, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
+import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { PLUGIN_MANIFEST as githubManifest } from '../../../../../../packages/plugins/scm-github/src/manifest';
 
 describe('buildActionSettingsEntries', () => {
+    it('lists the Files and Editor program Actions with their declared audience approval defaults', async () => {
+        const { buildActionSettingsEntries } = await import('./buildActionSettingsEntries');
+        const { resolveActionSettingsEntryStatusSummary } = await import('./resolveActionSettingsEntryStatusSummary');
+        const settings = DEFAULT_ACTIONS_SETTINGS_V1;
+        const entries = buildActionSettingsEntries({
+            query: '', settings,
+            availability: {
+                executionRunsEnabled: true, memorySearchEnabled: true, voiceEnabled: true,
+                sessionHandoffEnabled: true, voiceShareDeviceInventory: true,
+            },
+        });
+        // Approved P1–P8 Action tables: custody (`approval.result`) is not confirmation.
+        // A bare Discard is the incumbent whole-file/HEAD operation; P5's reversible
+        // comparison input has its own contextual confirmation contract.
+        const defaults = [
+            ['workspace.tabs.open', false, false],
+            ['file.view.get', false, false],
+            ['file.view.set', false, false],
+            ['workspace.files.link.get', false, false],
+            ['file.editor.save', true, true],
+            ['file.editor.resolve', true, true],
+            ['daemon.filesystem.writeFile', false, true],
+            ['daemon.filesystem.rename', false, true],
+            ['daemon.filesystem.readFile', false, false],
+            ['scm.change.discard', true, true],
+            ['scm.diffSummary.reviewed.mark', false, false],
+            ['scm.diffSummary.reviewed.unmark', false, false],
+            ['scm.file.read', false, false],
+            ['shell.column.get', false, false],
+            ['shell.column.set', false, false],
+            ['code.hover.get', false, false],
+            ['code.definition.get', false, false],
+            ['code.references.list', false, false],
+            ['code.symbols.list', false, false],
+            ['code.diagnostics.list', false, false],
+            ['code.restart', false, false],
+            ['workspace.files.replace.preview', false, false],
+            ['workspace.files.replace', false, true],
+            ['scm.blame.get', false, false],
+        ] as const;
+        for (const [id, uiApproval, automationApproval] of defaults) {
+            const entry = entries.find((candidate) => candidate.actionId === id);
+            expect.soft(entry?.kind, id).toBe('host');
+            if (!entry) continue;
+            const actionId = ActionIdSchema.parse(id);
+            const audienceTargets = (['contextual_ui', 'agent', 'mcp'] as const).map((targetId) => {
+                const target = entry.targets.find((candidate) => candidate.id === targetId);
+                expect(target?.state, `${id}/${targetId}`).toBe('on');
+                if (!target) throw new Error(`Missing ${id}/${targetId} audience`);
+                return target;
+            });
+            for (const surface of ['ui', 'agent', 'mcp'] as const) {
+                expect.soft(isApprovalRequiredByActionsSettings(actionId, settings, {
+                    surface, authority: surface === 'ui' ? 'present_user' : 'account_automation',
+                }), `${id}/${surface}`).toBe(surface === 'ui' ? uiApproval : automationApproval);
+            }
+            expect.soft(resolveActionSettingsEntryStatusSummary({ settings, actionId, targets: audienceTargets }).audiences, id).toEqual([
+                { audience: 'human', allowedCount: uiApproval ? 0 : 1, askFirstCount: uiApproval ? 1 : 0, offCount: 0 },
+                { audience: 'agent', allowedCount: automationApproval ? 0 : 1, askFirstCount: automationApproval ? 1 : 0, offCount: 0 },
+                { audience: 'integration', allowedCount: automationApproval ? 0 : 1, askFirstCount: automationApproval ? 1 : 0, offCount: 0 },
+            ]);
+        }
+    });
+
     it('preserves GitHub mutation approval defaults through projection, waiver and reset', async () => {
         const { adaptDaemonContributionRegistryProjectionToMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
         const { buildActionSettingsContributedActions, buildActionSettingsEntries } = await import('./buildActionSettingsEntries');

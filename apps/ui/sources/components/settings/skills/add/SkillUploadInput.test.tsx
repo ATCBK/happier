@@ -65,7 +65,7 @@ describe('SkillUploadInput', () => {
         return { ok: true, result: { items: [PREVIEW] } };
       writes.push(actionId);
       return actionId === 'skills.install'
-        ? { ok: false, error: 'rules unavailable', details: { skillIds: ['uploaded'], incomplete: [{ skillId: 'uploaded', step: 'rules' }] } }
+        ? { ok: false, error: 'rules unavailable', errorCode: 'skill_rules_write_failed', details: { skillIds: ['uploaded'], incomplete: [{ skillId: 'uploaded', step: 'rules' }] } }
         : { ok: true, result: { ok: true, revision: 2, items: [{ skillId: 'uploaded', previous: [], rules: [] }] } };
     };
     const { SkillUploadInput } = await import('./SkillUploadInput');

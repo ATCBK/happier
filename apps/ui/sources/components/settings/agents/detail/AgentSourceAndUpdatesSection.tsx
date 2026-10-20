@@ -9,6 +9,7 @@ import {
 import { BUILT_IN_REGISTRY_SOURCES_V1 } from '@happier-dev/protocol/registries';
 import type { AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
 
+import { areAgentRegistryChecksumsPublished } from '@/agents/registry/agentRegistryChecksums';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
@@ -104,9 +105,7 @@ export function AgentSourceAndUpdatesSection(
   const archive =
     definition.launch.kind === 'archive' ? definition.launch : null;
   const checksumPublished = archive
-    ? Object.values(archive.assetsByPlatform).some((asset) =>
-        Boolean(asset?.sha256),
-      )
+    ? areAgentRegistryChecksumsPublished(archive.assetsByPlatform)
     : false;
 
   return (

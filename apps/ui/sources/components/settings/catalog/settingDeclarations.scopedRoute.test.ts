@@ -2,8 +2,18 @@ import { describe, expect, it } from 'vitest';
 
 import { buildSettingHref, defineSettingsPage } from './settingDeclarations';
 import { SESSION_SETTINGS } from '@/components/settings/session/sessionSettings';
+import { SOURCE_CONTROL_SETTINGS } from '@/components/settings/sourceControl/sourceControlSettings';
 
 describe('scoped setting links', () => {
+    it('keeps Track’s canonical settings Action anchor when its row lives on the source-control page', () => {
+        const ref = SOURCE_CONTROL_SETTINGS.settings.trackAgentEdits;
+        expect(ref).toMatchObject({ anchor: 'files.trackAgentEdits', sectionId: 'sourceControl.files',
+            storage: { scope: 'local', key: 'filesTrackAgentEdits', access: 'read_write' } });
+        expect(buildSettingHref('/settings/source-control', ref)).toBe('/settings/source-control?setting=files.trackAgentEdits');
+        expect(() => defineSettingsPage({ pageId: 'sourceControl', sections: { files: { settings: {
+            one: { anchor: 'files.trackAgentEdits' }, two: { anchor: 'files.trackAgentEdits' },
+        } } } })).toThrow('Duplicate setting anchor');
+    });
     it('projects the MCP failure policy from its Sessions declaration and links to that page', () => {
         const setting = SESSION_SETTINGS.settings.mcpServersStrictMode;
         expect(setting).toMatchObject({ anchor: 'session.mcpServersStrictMode',

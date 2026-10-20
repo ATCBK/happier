@@ -148,6 +148,7 @@ it('shows registry source, pinned version and checksum and offers checking then 
         id: 'registry-review', name: 'review', title: 'Review',
         launch: { kind: 'archive', version: '1.0', args: [], assetsByPlatform: {
             'linux-x64': { archiveUrl: 'https://registry.example.test/review.tar.gz', executableSubpath: 'review' },
+            'darwin-arm64': { archiveUrl: 'https://registry.example.test/review-mac.tar.gz', executableSubpath: 'review', sha256: 'a'.repeat(64) },
         } },
         env: {}, createdAt: 1, updatedAt: 1,
         origin: { kind: 'registry', publisher: 'Review authors', provenance: {
@@ -163,6 +164,7 @@ it('shows registry source, pinned version and checksum and offers checking then 
     expect(screen.findByTestId('agent-source:registry')).toBeTruthy();
     expect(screen.getTextContent()).toContain('1.0');
     expect(screen.getTextContent()).toContain('settingsAgents.detailPage.checksumNotPublished');
+    expect(screen.getTextContent()).not.toContain('settingsAgents.detailPage.checksumVerified');
     await screen.pressByTestIdAsync('agent-source:checkNow');
     expect(checkNow).toHaveBeenCalled();
     await act(async () => screen.update(<AgentSourceAndUpdatesSection {...props} definition={{

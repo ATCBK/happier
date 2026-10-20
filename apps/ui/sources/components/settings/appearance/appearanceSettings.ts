@@ -61,6 +61,7 @@ export const APPEARANCE_PAGE_SETTINGS = defineSettingsPage({
                 contentWidth: {},
                 editorTabs: {},
                 rightPanels: {},
+                paneArrangement: {},
                 settingsSidebar: {},
                 navigationPlacements: { storage: navigationPlacementStorageBinding },
             },

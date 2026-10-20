@@ -14,6 +14,10 @@ import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
+import { PromptLibraryCatalogKeyV1Schema, PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import type { RegistryItemSummaryV1 } from '@happier-dev/protocol/registries';
+import type { CapabilityAddModalConfig } from '@/components/capabilities/add/CapabilityAddModal';
 
 import type {
     DetectedMcpServerV1,
@@ -95,6 +99,7 @@ function installMcpServersScreenMocks() {
             const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
             return createExpoRouterMock({
                 pathname: '/(app)/settings/mcp-servers',
+                params: () => mcpServersModuleState.routerSearchParams,
                 segments: ['(app)', 'settings', 'mcp-servers'],
                 router: {
                     push: routerPushSpy,
@@ -134,6 +139,9 @@ const { useMcpServerTools } = await import('./tools/useMcpServerTools');
 const { McpServerToolsSection } = await import('./tools/McpServerToolsSection');
 const { McpServerDetailPage } = await import('./detail/McpServerDetailPage');
 const { McpServerWhereAndTools } = await import('./detail/McpServerDetailBody');
+const { useMcpServerDetail } = await import('./detail/McpServerDetailBody');
+const { McpAddModal } = await import('./add/openMcpAddModal');
+const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
 const { CapabilityBlockingBanner } = await import('@/components/capabilities/detail/CapabilityBlockingBanner');
 const { resolveSavedSecretReference } = await import('@/sync/store/settings/savedSecretCatalogSnapshot');
 const { useMcpServerMachineTests } = await import('./status/useMcpServerMachineTests');
@@ -150,6 +158,7 @@ let targetMachineUnavailable = false;
 let catalogReadGate: ReturnType<typeof createDeferred<void>> | null = null;
 let testResponseGate: ReturnType<typeof createDeferred<void>> | null = null;
 let runtimeMissing = false;
+let registryOAuth = false;
 const catalogWrites: unknown[] = [];
 const accountSettingsWrites: unknown[] = [];
 const rpcRequests: Array<Readonly<{ home: string | undefined; method: string; input: unknown }>> = [];
@@ -215,6 +224,7 @@ describe('MCP servers collection and tools', () => {
         rpcRequests.length = 0;
         targetMachineUnavailable = false;
         runtimeMissing = false;
+        registryOAuth = false;
         accountSettings = { mcpServersStrictMode: false, actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
             'mcp.found.list': ['ui'], 'mcp.servers.create': ['ui'], 'settings.set': ['ui'],
         } } };
@@ -276,6 +286,13 @@ describe('MCP servers collection and tools', () => {
             const target = parsed.origin === targetUrl;
             const selectedMachine = target ? targetMachine : machine;
             const accountId = target ? 'machine-owner' : 'collection-owner';
+            if (parsed.origin === 'https://registry.modelcontextprotocol.io') {
+                const item = { server: { name: registryOAuth ? 'example.test/oauth-docs' : 'example.test/stdio-docs', title: 'Docs', description: 'Read documentation.', version: '1.0.0',
+                    packages: registryOAuth ? [] : [{ registryType: 'npm', identifier: '@example/docs', version: '1.0.0', transport: { type: 'stdio' } }],
+                    remotes: registryOAuth ? [{ type: 'streamable-http', url: 'https://docs.example.test/mcp' }] : [],
+                }, _meta: { 'io.modelcontextprotocol.registry/official': { status: 'active', isLatest: true } } };
+                return Response.json(parsed.pathname.endsWith('/servers') ? { servers: [item], metadata: { count: 1 } } : item);
+            }
             if (parsed.pathname.startsWith('/v1/account/') || parsed.pathname === '/v2/account/settings') {
                 expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${token(accountId)}`);
             }
@@ -292,6 +309,8 @@ describe('MCP servers collection and tools', () => {
                     pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
             }));
             if (parsed.pathname === '/v1/artifacts') return Response.json([]);
+            if (parsed.pathname === PROMPT_LIBRARY_ROWS_ROUTE_V1) return Response.json({ status: 'listed', rows:
+                PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) });
             if (parsed.pathname === '/v1/account/authoring-memory') return Response.json({ rows: [] });
             if (parsed.pathname === '/v1/account/project-rows/list') return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
             if (parsed.pathname === '/v2/account/settings') {
@@ -402,6 +421,71 @@ describe('MCP servers collection and tools', () => {
         expect(settingsState.value.servers[0]!.tools?.default).toBe('ask');
         const { Modal } = await import('@/modal');
         expect(Modal.confirm).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])('carries the acknowledged Registry Add to the saved-page follow-up (OAuth=%s)', async oauth => {
+        registryOAuth = oauth;
+        const itemId = oauth ? 'example.test/oauth-docs' : 'example.test/stdio-docs';
+        const query = oauth ? 'oauth' : 'stdio';
+        const onAdded = vi.fn();
+        const onClose = vi.fn();
+        const screen = await renderSettingsView(React.createElement(McpAddModal, { params: { query, onAdded, onCustom() {} }, onClose }));
+        // React's renderer exposes untyped component props at its boundary.
+        const config = () => screen.tree.root.findByType(CapabilityAddModalBody).props.config as CapabilityAddModalConfig<RegistryItemSummaryV1>;
+        await vi.waitFor(() => expect(config().catalog.items.some(row => row.itemId === itemId)).toBe(true));
+        const row = config().catalog.items.find(row => row.itemId === itemId)!;
+        const details = await renderSettingsView(React.createElement(React.Fragment, null,
+            config().renderDetail(row, { pushed: false, added: false })));
+        await vi.waitFor(() => expect(config().detailFooter(row).primary.disabledReason).toBeUndefined());
+        // Keep the exact pre-await shell callback: creation updates modal state
+        // before the shell closes, so this also catches stale callback captures.
+        const before = config();
+        let receipt!: Awaited<ReturnType<ReturnType<typeof before.detailFooter>['primary']['onPress']>>;
+        await act(async () => { receipt = await before.detailFooter(row).primary.onPress(); });
+        if (!receipt) throw new Error('Expected an acknowledged create');
+        before.onAdded?.(receipt);
+        expect(onAdded).toHaveBeenCalledWith('uuid', { afterRegistryAdd: true });
+        const added = settingsState.value.servers.find(server => server.id === 'uuid');
+        expect(added?.remote?.auth?.kind === 'oauth').toBe(oauth);
+        expect(catalogWrites).toHaveLength(1);
+        expect(rpcRequests.filter(request => request.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_TEST))).toEqual([]);
+        await details.unmount();
+        await screen.unmount();
+        const openAdded = vi.fn();
+        const reopened = await renderSettingsView(React.createElement(McpAddModal, { params: { query, onAdded: openAdded, onCustom() {} }, onClose }));
+        const reopenedConfig = () => reopened.tree.root.findByType(CapabilityAddModalBody).props.config as CapabilityAddModalConfig<RegistryItemSummaryV1>;
+        const open = await reopenedConfig().detailFooter(row).primary.onPress();
+        if (!open) throw new Error('Expected an existing server');
+        reopenedConfig().onAdded?.(open);
+        expect(openAdded).toHaveBeenCalledWith('uuid', undefined);
+        expect(catalogWrites).toHaveLength(1);
+    });
+
+    it.each([true, false])('runs one administrative Test only for the Registry Add navigation intent (%s)', async afterRegistryAdd => {
+        settingsState.value = { ...settingsState.value, servers: settingsState.value.servers.map(server => ({ ...server,
+            origin: { kind: 'registry', provenance: { sourceId: 'source', itemId: 'docs', format: 'mcp-registry',
+                sourceUrl: 'https://registry.example.test', ref: { kind: 'version', version: '1.0.0' }, importedAt: 1 } },
+        })) };
+        await refreshCatalogFixture();
+        await selectMachineFixture({ serverIdentityId: 'srv_mcp_collection', machineId: machine.id });
+        mcpServersModuleState.routerSearchParams = afterRegistryAdd ? { afterRegistryAdd: '1' } : {};
+        const server = settingsState.value.servers[0]!;
+        const scope = storage.getState().settingsScope;
+        const hook = await renderHook(() => useMcpServerDetail(server, catalogRevision, {
+            resolveReference: ref => resolveSavedSecretReference(scope, [], ref),
+        }));
+        if (afterRegistryAdd) {
+            await vi.waitFor(() => expect(routerSetParamsSpy).toHaveBeenCalledWith({ afterRegistryAdd: undefined }));
+            await vi.waitFor(() => expect(hook.getCurrent().tests.results[machine.id]).toMatchObject({ ok: true }));
+        }
+        else await flushHookEffects();
+        expect(rpcRequests.filter(request => request.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_TEST)))
+            .toHaveLength(afterRegistryAdd ? 1 : 0);
+        if (afterRegistryAdd) expect(routerSetParamsSpy).toHaveBeenCalledWith({ afterRegistryAdd: undefined });
+        await hook.rerender();
+        await flushHookEffects();
+        expect(rpcRequests.filter(request => request.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_TEST)))
+            .toHaveLength(afterRegistryAdd ? 1 : 0);
     });
 
     it('retires held Test facts on configuration and Account changes, including when reopened', async () => {

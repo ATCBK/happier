@@ -174,6 +174,8 @@ export function resolveSettingsHost(): SettingsHost {
 }
 
 export type SettingDeclaration = Readonly<{
+    /** Retain a portable setting's canonical identity when its row lives on another page. */
+    anchor?: string;
     /** Built-in labels are projected by defineSettingsPage from the portable registry. */
     titleKey?: TranslationKeyNoParams;
     descriptionKey?: TranslationKeyNoParams;
@@ -389,13 +391,16 @@ export function defineSettingsPage<const Sections extends Record<string, Setting
     sections: Sections;
 }>): SettingsPageDeclaration<Sections> {
     const settings: Record<string, SettingRef> = {};
+    const declaredAnchors = new Set<string>();
     const sectionRefs: Record<string, SettingsSectionRef> = {};
     const sections: Record<string, SettingsSectionDeclaration> = {};
     const anchorPrefix = input.subpage && input.subpage.anchors !== 'page' ? `${input.pageId}.${input.subpage.id}` : input.pageId;
     for (const [sectionKey, section] of Object.entries(input.sections)) {
         const sectionId = `${anchorPrefix}.${sectionKey}`;
         const firstSettingId = Object.keys(section.settings)[0];
-        const sharedSection = firstSettingId ? portableLabelsByAnchor.get(`${anchorPrefix}.${firstSettingId}`) : undefined;
+        const sharedSection = firstSettingId
+            ? portableLabelsByAnchor.get(section.settings[firstSettingId]?.anchor ?? `${anchorPrefix}.${firstSettingId}`)
+            : undefined;
         const sectionTitleKey = sharedSection ? sharedSection.sectionTitleKey : section.titleKey;
         const featureId = sharedSection ? sharedSection.featureId : section.featureId;
         sections[sectionKey] = { ...section, titleKey: sectionTitleKey, featureId };
@@ -404,7 +409,9 @@ export function defineSettingsPage<const Sections extends Record<string, Setting
             if (settings[settingId]) {
                 throw new Error(`Duplicate setting id "${settingId}" on settings page "${input.pageId}"`);
             }
-            const anchor = `${anchorPrefix}.${settingId}`;
+            const anchor = declaration.anchor ?? `${anchorPrefix}.${settingId}`;
+            if (declaredAnchors.has(anchor)) throw new Error(`Duplicate setting anchor "${anchor}" on settings page "${input.pageId}"`);
+            declaredAnchors.add(anchor);
             const portable = readBuiltInSettingDeclarationV1(anchor);
             if (portable && portable.sectionId !== sectionId) {
                 throw new Error(`Setting adapter section differs from its shared declaration: ${anchor}`);
