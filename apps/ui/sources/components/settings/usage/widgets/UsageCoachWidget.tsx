@@ -850,7 +850,8 @@ const styles = StyleSheet.create((theme) => ({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.default,
   },
-  rowWide: { alignItems: 'center' },
+  // The glyph, trend, impact and menu stay on the finding's head when Why opens and the row grows.
+  rowWide: { alignItems: 'flex-start' },
   // Overview strip: equal columns divided by hairlines, no boxes (lab wgusage-CD Coach).
   strip: { flexDirection: 'row', alignItems: 'stretch' },
   card: { flex: 1, minWidth: 0, borderTopWidth: 0, paddingVertical: theme.space.s4 },
