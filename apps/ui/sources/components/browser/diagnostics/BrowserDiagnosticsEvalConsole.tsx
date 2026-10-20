@@ -170,6 +170,7 @@ type RemoteObjectNode = Readonly<{
     objectId?: string;
     className?: string;
     description?: string;
+    previewTruncated?: boolean;
 }>;
 
 function BrowserDiagnosticsObjectNode(props: Readonly<{
@@ -204,7 +205,7 @@ function BrowserDiagnosticsObjectNode(props: Readonly<{
         <View testID={testID} style={stylesheet.node}>
             <View style={stylesheet.nodeRow}>
                 <Text style={stylesheet.nodeName}>{props.name}</Text>
-                <Text style={stylesheet.nodeValue}>{describeRemoteValue(remote)}</Text>
+                <Text style={stylesheet.nodeValue}>{describeRemoteValue(remote)}{remote.previewTruncated ? ' …' : ''}</Text>
                 {expandable ? (
                     <ToolbarButton
                         onPress={onToggle}

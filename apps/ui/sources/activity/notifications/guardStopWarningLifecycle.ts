@@ -70,9 +70,11 @@ export function observeGuardStopWarningNotifications(notifications: ExpoNotifica
     let disposed = false;
     let refreshing = false;
     let refreshRequested = false;
+    let sourceRefreshRequested = false;
     const demands = new Map<string, () => void>();
-    const refresh = () => {
+    const refresh = (refreshSource = false) => {
         if (disposed) return;
+        sourceRefreshRequested ||= refreshSource;
         refreshRequested = true;
         if (refreshing) return;
         refreshing = true;
@@ -80,7 +82,10 @@ export function observeGuardStopWarningNotifications(notifications: ExpoNotifica
             try {
                 while (refreshRequested && !disposed) {
                     refreshRequested = false;
+                    const refreshSource = sourceRefreshRequested;
+                    sourceRefreshRequested = false;
                     const wanted = new Set<string>();
+                    const refreshed = new Set<string>();
                     const presented = await notifications.getPresentedNotificationsAsync();
                     for (const notification of presented) {
                         if (disposed) return;
@@ -91,10 +96,17 @@ export function observeGuardStopWarningNotifications(notifications: ExpoNotifica
                         if (!home) continue;
                         const binding = await resolveServerCredentialAccountScope(home.id);
                         if (binding.kind !== 'bound' || disposed) continue;
-                        const key = { serverId: home.id, expectedAccountId: binding.scope.accountId, machineId: warning.machineId };
+                        const key = { serverId: binding.scope.serverId, expectedAccountId: binding.scope.accountId, machineId: warning.machineId };
                         const id = JSON.stringify([key.serverId, key.expectedAccountId, key.machineId]);
+                        // A push can precede an already-open view's watch answer. Invalidate before
+                        // demanding so a cold view reads once, and an in-flight old read is followed
+                        // by the shared owner's fresh read before absence becomes authoritative.
+                        if ((refreshSource || !demands.has(id)) && !refreshed.has(id)) {
+                            refreshed.add(id);
+                            machineGuardStore.refreshMachine(key);
+                        }
                         if (!demands.has(id)) {
-                            const stopObserving = machineGuardStore.observeView(key, refresh);
+                            const stopObserving = machineGuardStore.observeView(key, () => refresh());
                             const stopDemanding = machineGuardStore.demandView(key);
                             demands.set(id, () => { stopObserving(); stopDemanding(); });
                         }
@@ -104,7 +116,10 @@ export function observeGuardStopWarningNotifications(notifications: ExpoNotifica
                             const admittedHome = resolveNotificationSavedHome({ serverId: warning.serverId, serverUrl: warning.serverUrl ?? '' });
                             const admitted = await resolveServerCredentialAccountScope(home.id);
                             if (disposed) return;
-                            if (admittedHome?.id === home.id && admitted.kind === 'bound' && admitted.scope.accountId === key.expectedAccountId) {
+                            const latest = machineGuardStore.getView(key);
+                            if (admittedHome?.id === home.id && admittedHome.serverUrl === home.serverUrl
+                                && admitted.kind === 'bound' && admitted.scope.accountId === key.expectedAccountId
+                                && latest.status === 'ready' && !latest.pending && latest.view && warningCurrent(warning, latest.view) === false) {
                                 await notifications.dismissNotificationAsync(notification.request.identifier);
                                 continue;
                             }
@@ -117,9 +132,9 @@ export function observeGuardStopWarningNotifications(notifications: ExpoNotifica
             finally { refreshing = false; }
         })();
     };
-    const arrival = notifications.addNotificationReceivedListener(refresh);
-    refresh();
-    return { refresh, dispose: () => {
+    const arrival = notifications.addNotificationReceivedListener(() => refresh(true));
+    refresh(true);
+    return { refresh: () => refresh(true), dispose: () => {
         disposed = true;
         arrival.remove();
         for (const release of demands.values()) release();
