@@ -11,7 +11,7 @@ import type { ValueRefV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
 
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import type { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
-import { CapabilityAddFooter } from '@/components/capabilities/add/CapabilityAddModal';
+import { CapabilityAddFooter, useAddDialogEdge } from '@/components/capabilities/add/CapabilityAddModal';
 import {
   useDraftReachRules,
   WhereItsOnControl,
@@ -67,6 +67,7 @@ export function McpPasteInput(
   }>,
 ) {
   const { theme } = useUnistyles();
+  const edge = useAddDialogEdge();
   const router = useRouter();
   const { execute, approval } = props.execution;
   const [text, setText] = React.useState(props.initialText ?? '');
@@ -242,7 +243,7 @@ export function McpPasteInput(
     <View style={styles.fill}>
       <ScrollView
         style={styles.fill}
-        contentContainerStyle={styles.body}
+        contentContainerStyle={[styles.body, edge]}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.paste}>
@@ -454,7 +455,6 @@ export function McpPasteInput(
 const styles = StyleSheet.create((theme) => ({
   fill: { flex: 1, minHeight: 0 },
   body: {
-    paddingHorizontal: theme.space.s24,
     paddingBottom: theme.space.s24,
     gap: theme.space.s24,
   },

@@ -3,7 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
-import { CapabilityAddFooter } from '@/components/capabilities/add/CapabilityAddModal';
+import { CapabilityAddFooter, useAddDialogEdge } from '@/components/capabilities/add/CapabilityAddModal';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -28,6 +28,7 @@ export function SkillLinkInput(
   }>,
 ) {
   const { theme } = useUnistyles();
+  const edge = useAddDialogEdge();
   const [url, setUrl] = React.useState('');
   const [state, setState] = React.useState<
     | Readonly<{ kind: 'idle' }>
@@ -142,6 +143,7 @@ export function SkillLinkInput(
               items={found}
               ticked={ticked}
               onToggle={(path) => setTicked((previous) => toggleSkillPreview(found, previous, path))}
+              onOpen={props.onAdded}
               facts={(item) => ({
                 presentation: 'row',
                 source: {

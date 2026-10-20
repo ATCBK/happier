@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, ScrollView, View } from 'react-native';
+import { Platform, ScrollView, View, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   Collection,
@@ -178,9 +178,11 @@ export function openCapabilityAddModalHost<P extends Readonly<Record<string, unk
   return { close: () => Modal.hide(id) };
 }
 
-function capabilityAddChrome(frame: Readonly<{ title: string; subtitle?: string; testID: string }>) {
+export function capabilityAddChrome(frame: Readonly<{ title: string; subtitle?: string; testID: string }>) {
   return {
     kind: 'card' as const,
+    // The tools band and the rows stand on 24: the title and the close control share that edge.
+    headerInset: 'wide' as const,
     title: frame.title,
     // Explicit nulls: the chrome owner merges patches, so leaving Registries must clear its back link and subtitle.
     leading: null,
@@ -201,6 +203,8 @@ export function CapabilityAddModalBody<Item>(
   props: BodyProps<Item>,
 ): React.ReactElement {
   const { config, onClose, setChrome } = props;
+  const edge = useAddDialogEdge();
+  const onPhone = useDeviceType() === 'phone';
   const { catalog } = config;
   const [modeKey, setModeKey] = React.useState(
     config.initialModeKey ?? config.modes[0]?.key ?? '',
@@ -341,7 +345,7 @@ export function CapabilityAddModalBody<Item>(
   if (mode?.kind === 'input') {
     return (
       <View style={styles.fill}>
-        <View style={styles.toolsBand}>{tools(null)}</View>
+        <View style={[styles.toolsBand, edge]}>{tools(null)}</View>
         <View style={styles.fill}>
           {/* An input mode's body is a contained column like the details: sections keep its edge, not a page's. */}
           <ListPresentationProvider value="page" pageInsets="contained">
@@ -364,7 +368,7 @@ export function CapabilityAddModalBody<Item>(
   const failures = catalog.sourceFailures ?? [];
   const onlyFailures = failures.length > 0 && catalog.items.length === 0 && !catalog.loading;
   const failureLines = failures.length === 0 ? null : (
-    <View style={onlyFailures ? styles.failuresAlone : styles.failures}>
+    <View style={onlyFailures ? [styles.failuresAlone, edge] : styles.failures}>
       {failures.map((failure) => (
         <SurfaceStateCard
           key={failure.sourceId}
@@ -381,7 +385,7 @@ export function CapabilityAddModalBody<Item>(
   return (
     <CoreCollectionScope>
       {/* The dialog's list keeps one rhythm: the same ruled rows and insets at rest, beside the details and loading. */}
-      <HappierCollectionRestingRowsContext.Provider value="ruled">
+      <HappierCollectionRestingRowsContext.Provider value={onPhone ? 'ruled-page' : 'ruled'}>
         <View style={styles.fill}>
           <Collection<Item>
             model={model}
@@ -411,10 +415,20 @@ export function CapabilityAddModalBody<Item>(
         </View>
       </HappierCollectionRestingRowsContext.Provider>
       {catalog.footer === undefined || openKey !== null ? null : (
-        <View style={styles.listFooter} testID={`${config.testID}:list-footer`}>{catalog.footer}</View>
+        <View style={[styles.listFooter, edge]} testID={`${config.testID}:list-footer`}>{catalog.footer}</View>
       )}
     </CoreCollectionScope>
   );
+}
+
+/**
+ * The one content edge of the dialog: the tools band, the failure line and the list footer stand on it, with the
+ * title (the chrome's `headerInset`) and the rows (`restingRows`): 24 in a card, the page gutter on a phone.
+ */
+export function useAddDialogEdge(): ViewStyle {
+  const { theme } = useUnistyles();
+  const onPhone = useDeviceType() === 'phone';
+  return { paddingHorizontal: onPhone ? theme.space.s16 : theme.space.s24 };
 }
 
 /**
@@ -477,8 +491,9 @@ function CapabilityAddBackLink(props: Readonly<{ label: string; onPress: () => v
 /** The tools band; on a phone the pushed details are the page, so the band steps aside while they show. */
 function CatalogToolsBand(props: Readonly<{ open: boolean; children: React.ReactNode }>): React.ReactElement | null {
     const layout = useHappierCollectionLayout();
+    const edge = useAddDialogEdge();
     if (props.open && layout?.mode === 'stacked') return null;
-    return <View style={styles.toolsBand}>{props.children}</View>;
+    return <View style={[styles.toolsBand, edge]}>{props.children}</View>;
 }
 
 /**
@@ -491,17 +506,18 @@ export function CapabilityAddFooter(
   props: Readonly<{ start: React.ReactNode; children: React.ReactNode; stacked?: boolean; testID?: string }>,
 ): React.ReactElement {
   const narrow = useAddDialogNarrow();
+  const edge = useAddDialogEdge();
   const stacked = props.stacked ?? narrow;
   if (stacked) {
     return (
-      <View testID={props.testID} style={[styles.footer, styles.footerStacked]}>
+      <View testID={props.testID} style={[styles.footer, styles.footerStacked, edge]}>
         {props.start === null || props.start === undefined ? null : props.start}
         <View style={styles.footerActionsStacked}>{props.children}</View>
       </View>
     );
   }
   return (
-    <View testID={props.testID} style={styles.footer}>
+    <View testID={props.testID} style={[styles.footer, edge]}>
       <View style={styles.footerStart}>{props.start}</View>
       {props.children}
     </View>
@@ -647,7 +663,6 @@ function CapabilityAddDetail<Item>(
 const styles = StyleSheet.create((theme) => ({
   fill: { flex: 1, minHeight: 0 },
   toolsBand: {
-    paddingHorizontal: theme.space.s24,
     paddingBottom: theme.space.s12,
   },
   tools: {
@@ -658,7 +673,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   search: { flexGrow: 1, flexBasis: 240, minWidth: 0 },
   failures: { paddingTop: theme.space.s12 },
-  failuresAlone: { paddingHorizontal: theme.space.s24, paddingTop: theme.space.s16 },
+  failuresAlone: { paddingTop: theme.space.s16 },
   detail: { flex: 1, minHeight: 0 },
   detailClose: {
     position: 'absolute',
@@ -678,7 +693,6 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.space.s16,
-    paddingHorizontal: theme.space.s24,
     paddingVertical: theme.space.s12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
@@ -690,7 +704,6 @@ const styles = StyleSheet.create((theme) => ({
   footerActionsFill: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
   footerSlot: { flex: 1, minWidth: 0 },
   listFooter: {
-    paddingHorizontal: theme.space.s24,
     paddingVertical: theme.space.s12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,

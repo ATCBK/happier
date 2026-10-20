@@ -24,6 +24,8 @@ type ModalCardFrameProps = Readonly<{
     material?: 'glass' | 'solid';
     /** `none`: no title band; the content is the top of the card. The title remains the accessible name. */
     header?: 'band' | 'none';
+    /** `wide`: the band's text and close stand on the content's 24 edge (a phone keeps the page gutter). */
+    headerInset?: 'wide';
     leading?: React.ReactNode;
     title?: React.ReactNode;
     subtitle?: React.ReactNode;
@@ -197,6 +199,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                         subtitle={props.subtitle}
                         actions={props.actions}
                         onClose={props.onClose}
+                        inset={props.headerInset}
                         titleTestID={props.titleTestID}
                         subtitleTestID={props.subtitleTestID}
                         closeButtonTestID={props.closeButtonTestID}

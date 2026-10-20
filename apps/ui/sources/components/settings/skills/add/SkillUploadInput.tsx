@@ -6,7 +6,7 @@ import type {
   SkillInstallPreviewV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
-import { CapabilityAddFooter } from '@/components/capabilities/add/CapabilityAddModal';
+import { CapabilityAddFooter, useAddDialogEdge } from '@/components/capabilities/add/CapabilityAddModal';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -68,6 +68,7 @@ export function SkillUploadInput(
   }>,
 ) {
   const { theme } = useUnistyles();
+  const edge = useAddDialogEdge();
   const [state, setState] = React.useState<
     | Readonly<{ kind: 'idle' }>
     | Readonly<{ kind: 'reading' }>
@@ -284,18 +285,27 @@ export function SkillUploadInput(
       </ScrollView>
       {state.kind === 'ready' ? (
         <CapabilityAddFooter testID={`${props.testID}.footer`} start={null}>
-          <RoundButton
-            size="normal"
-            title={
-              state.items.length > 1
-                ? t('capabilities.skillAdd.link.addSelected', { count: ticked.size })
-                : t('capabilities.skillAdd.addToLibrary')
-            }
-            loading={adding}
-            disabled={state.items.length > 1 && ticked.size === 0}
-            onPress={() => void add()}
-            testID={`${props.testID}.add`}
-          />
+          {openWhenHeld !== null ? (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.skillAdd.open')}
+              onPress={() => props.onAdded(openWhenHeld)}
+              testID={`${props.testID}.add`}
+            />
+          ) : (
+            <RoundButton
+              size="normal"
+              title={
+                state.items.length > 1
+                  ? t('capabilities.skillAdd.link.addSelected', { count: ticked.size })
+                  : t('capabilities.skillAdd.addToLibrary')
+              }
+              loading={adding}
+              disabled={state.items.length > 1 && ticked.size === 0}
+              onPress={() => void add()}
+              testID={`${props.testID}.add`}
+            />
+          )}
         </CapabilityAddFooter>
       ) : null}
     </View>

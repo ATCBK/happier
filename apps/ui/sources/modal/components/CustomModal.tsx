@@ -60,6 +60,7 @@ function areChromeConfigsEqual(
 
     if (a.kind === 'card' && b.kind === 'card') {
         return a.header === b.header
+            && a.headerInset === b.headerInset
             && a.material === b.material
             && a.title === b.title
             && a.subtitle === b.subtitle
@@ -104,6 +105,7 @@ function mergeChromeConfig(
             kind: 'card',
             material: override.material !== undefined ? override.material : base.material,
             header: override.header !== undefined ? override.header : base.header,
+            headerInset: override.headerInset !== undefined ? override.headerInset : base.headerInset,
             leading: override.leading !== undefined ? override.leading : base.leading,
             title: override.title !== undefined ? override.title : base.title,
             subtitle: override.subtitle !== undefined ? override.subtitle : base.subtitle,
@@ -237,6 +239,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, visible, zIn
                 framed={chrome !== null}
                 material={chrome?.material}
                 header={chrome?.header}
+                headerInset={chrome?.headerInset}
                 leading={chrome?.leading}
                 title={chrome?.title}
                 subtitle={chrome?.subtitle}
