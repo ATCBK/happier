@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { createMachineFixture, renderScreen as renderActualScreen, standardCleanup } from '@/dev/testkit';
 import type { PathSelectionListProps } from '@/components/sessions/new/components/PathSelectionList';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { CustomModalChromeConfig } from '@/modal';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -13,9 +14,11 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 type RoundButtonProps = React.ComponentProps<typeof import('@/components/ui/buttons/RoundButton').RoundButton>;
-type ChromeWithFooter = Readonly<{
-    footer: React.ReactElement<React.PropsWithChildren>;
-}>;
+
+function requireCardChrome(chrome: CustomModalChromeConfig | null | undefined) {
+    if (chrome?.kind !== 'card') throw new Error('Expected card modal chrome');
+    return chrome;
+}
 
 let machinesState: Machine[] = [];
 let recentMachinePathsState: Array<{ machineId: string; path: string }> = [];
@@ -37,8 +40,10 @@ function createMachine(overrides: Partial<Machine> = {}): Machine {
     });
 }
 
-function findCreateButton(chrome: ChromeWithFooter): React.ReactElement<RoundButtonProps> | undefined {
-    return React.Children.toArray(chrome.footer.props.children)
+function findCreateButton(chrome: CustomModalChromeConfig | null | undefined): React.ReactElement<RoundButtonProps> | undefined {
+    const footer = requireCardChrome(chrome).footer;
+    if (!React.isValidElement<React.PropsWithChildren>(footer)) throw new Error('Expected modal footer element');
+    return React.Children.toArray(footer.props.children)
         .find((child): child is React.ReactElement<RoundButtonProps> => {
             if (!React.isValidElement<RoundButtonProps>(child)) return false;
             return child.props.title === t('common.create');
@@ -124,21 +129,21 @@ describe('VoiceSessionSpawnPickerModal', () => {
 
     it('names the current step in the title band and goes back from its leading control', async () => {
         const { VoiceSessionSpawnPickerModal } = await import('./VoiceSessionSpawnPickerModal');
-        let chrome: { subtitle?: unknown; leading?: React.ReactNode } | null = null;
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const screen = await renderScreen(<VoiceSessionSpawnPickerModal
             onClose={() => {}}
             onResolve={() => {}}
-            setChrome={(next) => { chrome = next; }}
+            setChrome={setChrome}
         />);
 
-        expect(chrome).toEqual(expect.objectContaining({ subtitle: t('newSession.selectMachineTitle') }));
-        expect(chrome!.leading ?? null).toBeNull();
+        expect(setChrome.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ subtitle: t('newSession.selectMachineTitle') }));
+        expect(requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).leading ?? null).toBeNull();
         await act(async () => { screen.findByType(MachineSelector).props.onSelect(machinesState[0]); });
-        expect(chrome).toEqual(expect.objectContaining({ subtitle: t('newSession.selectWorkingDirectoryTitle') }));
+        expect(setChrome.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ subtitle: t('newSession.selectWorkingDirectoryTitle') }));
         // The step is named once, by the title band, not again inside the body.
         expect(screen.getTextContent()).not.toContain(t('newSession.selectWorkingDirectoryTitle'));
 
-        const leading = await renderScreen(<>{chrome!.leading}</>);
+        const leading = await renderScreen(<>{requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).leading}</>);
         await act(async () => { await leading.pressByTestIdAsync('voice-session-spawn-back'); });
         expect(screen.findByType(MachineSelector)).toBeTruthy();
     });
@@ -206,13 +211,13 @@ describe('VoiceSessionSpawnPickerModal', () => {
             { machineId: 'machine-2', path: '/srv/test/new-repo' },
         ];
         const { VoiceSessionSpawnPickerModal } = await import('./VoiceSessionSpawnPickerModal');
-        let chrome: { leading?: React.ReactNode } | null = null;
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
 
         const screen = await renderScreen(
             <VoiceSessionSpawnPickerModal
                 onClose={() => {}}
                 onResolve={() => {}}
-                setChrome={(next) => { chrome = next; }}
+                setChrome={setChrome}
             />,
         );
 
@@ -225,7 +230,7 @@ describe('VoiceSessionSpawnPickerModal', () => {
         });
 
         // Back to machines lives in the title band's leading slot.
-        const leading = await renderScreen(<>{chrome!.leading}</>);
+        const leading = await renderScreen(<>{requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).leading}</>);
         await act(async () => { await leading.pressByTestIdAsync('voice-session-spawn-back'); });
         const nextMachineSelector = screen.findByType(MachineSelector);
         await act(async () => {
@@ -242,7 +247,7 @@ describe('VoiceSessionSpawnPickerModal', () => {
     it('uses live PathSelectionList draft edits when creating from the footer', async () => {
         const onResolve = vi.fn();
         const onClose = vi.fn();
-        const setChrome = vi.fn();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const { VoiceSessionSpawnPickerModal } = await import('./VoiceSessionSpawnPickerModal');
 
         const screen = await renderScreen(
@@ -264,7 +269,7 @@ describe('VoiceSessionSpawnPickerModal', () => {
             onChangeDraftPath?.('/Users/test/typed-project');
         });
 
-        const lastChrome = setChrome.mock.calls.at(-1)?.[0] as ChromeWithFooter;
+        const lastChrome = setChrome.mock.calls.at(-1)?.[0];
         const createButton = findCreateButton(lastChrome);
         expect(createButton).toBeTruthy();
 
@@ -282,7 +287,7 @@ describe('VoiceSessionSpawnPickerModal', () => {
     it('uses the committed PathSelectionList value when creating the session', async () => {
         const onResolve = vi.fn();
         const onClose = vi.fn();
-        const setChrome = vi.fn();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const { VoiceSessionSpawnPickerModal } = await import('./VoiceSessionSpawnPickerModal');
 
         const screen = await renderScreen(
@@ -304,7 +309,7 @@ describe('VoiceSessionSpawnPickerModal', () => {
             onCommit?.('/Users/test/project');
         });
 
-        const lastChrome = setChrome.mock.calls.at(-1)?.[0] as ChromeWithFooter;
+        const lastChrome = setChrome.mock.calls.at(-1)?.[0];
         const createButton = findCreateButton(lastChrome);
         expect(createButton).toBeTruthy();
 
@@ -321,7 +326,7 @@ describe('VoiceSessionSpawnPickerModal', () => {
 
     it('allows a structurally ready machine without synthetic spawn readiness to reach the spawn operation', async () => {
         machinesState = [createMachine()];
-        const setChrome = vi.fn();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const onResolve = vi.fn();
         const { VoiceSessionSpawnPickerModal } = await import('./VoiceSessionSpawnPickerModal');
 
@@ -338,7 +343,7 @@ describe('VoiceSessionSpawnPickerModal', () => {
             machineSelector.props.onSelect(machinesState[0]);
         });
 
-        const lastChrome = setChrome.mock.calls.at(-1)?.[0] as ChromeWithFooter;
+        const lastChrome = setChrome.mock.calls.at(-1)?.[0];
         const createButton = findCreateButton(lastChrome);
 
         expect(createButton?.props.disabled).toBe(false);

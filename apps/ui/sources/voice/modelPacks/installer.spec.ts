@@ -29,8 +29,10 @@ describe('modelPacks installer (native)', () => {
     const changes = { voices: [{ id: 'voice-a', title: 'A corrected', sid: 1 }, { id: 'voice-b', title: 'B', sid: 0 }],
       defaultVoiceId: 'voice-b', frontend: { lang: 'fr-fr' } };
     const updated = { ...manifest, [field]: changes[field] };
-    const fetchImpl = async (url: string) => url.includes('manifest.json')
-      ? Response.json(updated) : new Response(bytes);
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = typeof input === 'string' ? input : 'url' in input ? input.url : input.toString();
+      return url.includes('manifest.json') ? Response.json(updated) : new Response(bytes);
+    };
     const overrides = { fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl),
       invalidatePackRuntime: async () => {} };
     const request = { packId: manifest.packId, manifestUrl: 'https://example.com/manifest.json',
