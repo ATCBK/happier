@@ -234,9 +234,11 @@ it.each(['execute', 'prepare'] as const)('captures the canonical explicit reply 
 
 it.each(['different_reply', 'different_discussion', 'different_participant', 'missing_input', 'human', 'terminal_return'] as const)(
   'does not absorb an unbound explicit publication (%s)', async kind => {
+    const caller = context.actionCaller;
+    if (caller?.kind !== 'session') throw new Error('Expected the original Session caller fixture');
     const explicit = kind === 'different_reply' ? { ...input, replyTarget: { kind: 'message', messageId: 'other-question' } }
       : kind === 'different_discussion' ? { ...input, discussionId: 'other-discussion' } : input;
-    const invocation = kind === 'different_participant' ? { ...context, actionCaller: { kind: 'session' as const, sessionId: 'other-participant' } }
+    const invocation = kind === 'different_participant' ? { ...context, actionCaller: { ...caller, sessionId: 'other-participant' } }
       : kind === 'missing_input' ? { ...context, sessionInputSource: { ...source, sourceInputId: undefined } }
       : kind === 'human' ? { ...context, surface: 'ui' as const, actionCaller: { kind: 'host' as const } }
       : kind === 'terminal_return' ? { ...context, discussionReplyReturn: { serverId: 'home', requestLocalId: 'input', acceptedTurnId: 'turn' } }

@@ -124,14 +124,15 @@ describe('First-class Discussions service (SQLite)', () => {
         const machine = runner ? await db.machine.findUniqueOrThrow({ where: { id: runner.machineId } }) : await plainMachine(accountId);
         if (!runner) await db.accessKey.create({ data: { accountId, machineId: machine.id, sessionId, data: 'encrypted' } });
         const socket = createAuthenticatedFakeSocket(runner ? { data: { ephemeralRunnerAdmission: { kind: 'session-runtime', principal: runner.principal } } } : {});
+        const presence = createSessionPublisherPresence();
         // Only Socket.IO is replaced. Current publisher admission and all writes remain real.
         sessionUpdateHandler(accountId, socket as never, { connectionType: 'session-scoped', socket, userId: accountId, sessionId } as never,
-            { presence: createSessionPublisherPresence(), binding: { accountId, machineId: machine.id, sessionId } },
+            { presence, binding: { accountId, machineId: machine.id, sessionId } },
             runner ? { principalKind: 'ephemeral-session-runner', principal: runner.principal } : undefined);
         let snapshotAck: unknown;
         await getSocketHandler(socket, 'session-runtime-activity-snapshot')({ sessionId, mutationId: crypto.randomUUID(), snapshot: { state: 'idle', activeCount: 0 } }, (value: unknown) => { snapshotAck = value; });
         expect(snapshotAck).toMatchObject({ status: expect.stringMatching(/^(applied|unchanged)$/) });
-        return { socket, machine };
+        return { socket, machine, presence };
     }
     it('rolls back a declined initial Session invitation through the current trusted publisher socket', async () => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
@@ -295,8 +296,10 @@ describe('First-class Discussions service (SQLite)', () => {
         await db.discussionMessage.update({ where: { id: watch.value.message.id }, data: { producerV1: { kind: 'agent' } } });
         expect((await observe()).observations).toEqual([]);
     });
-    it.each([{ explicitNewAsk: false, requester: 'local' }, { explicitNewAsk: true, requester: 'autonomous' },
-        { explicitNewAsk: false, requester: 'foreign' }] as const)('returns one protected answer with its exact admitted cause and authorized requester name (%j)', async ({ explicitNewAsk, requester }) => {
+    it.each([{ explicitNewAsk: false, requester: 'local', queue: 'none' }, { explicitNewAsk: true, requester: 'autonomous', queue: 'none' },
+        { explicitNewAsk: false, requester: 'foreign', queue: 'none' },
+        { explicitNewAsk: false, requester: 'local', queue: 'current' },
+        { explicitNewAsk: false, requester: 'local', queue: 'revoked' }] as const)('returns one protected answer with its exact admitted cause (queued=$queue, requester=$requester, newAsk=$explicitNewAsk)', async ({ explicitNewAsk, requester, queue }) => {
         const { owner, invitee, discussionId } = await fixture();
         await db.account.update({ where: { id: invitee.id }, data: { name: 'Bob Chen' } });
         const team = await db.team.create({ data: { name: 'Requesting Team' } });
@@ -340,7 +343,7 @@ describe('First-class Discussions service (SQLite)', () => {
                     { t: 'text', text: 'My answer. Please review it: ' }, { t: 'mention', participant: { kind: 'session', sessionId: reviewer.id } },
                 ] } }, mentionedSessionIds: [reviewer.id] } : {}),
                 replyTarget: { kind: 'message' as const, messageId: question.value.message.id } } };
-        const { socket } = await publisherSocket(owner.id, answerer.id);
+        const { socket, presence } = await publisherSocket(owner.id, answerer.id);
         const publish = async () => {
             let response: unknown;
             await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: answerer.id, discussionId,
@@ -353,7 +356,33 @@ describe('First-class Discussions service (SQLite)', () => {
             actionRequestAttributionV1: { ...cause, requester: { serverId: home, accountId: owner.id } } } })).toMatchObject({ ok: false });
         expect(await postDiscussionMessage({ ...input, request: { ...input.request,
             replyTarget: { kind: 'message', messageId: 'another-question' } } })).toMatchObject({ ok: false });
-        const posted = await publish();
+        let posted: Awaited<ReturnType<typeof publish>>;
+        if (queue === 'none') posted = await publish();
+        else {
+            let release!: () => void;
+            let entered!: () => void;
+            const blocked = new Promise<void>(resolve => { release = resolve; });
+            const ready = new Promise<void>(resolve => { entered = resolve; });
+            const neighbor = presence.runAsCurrentPublisher({ socket, operation: async () => { entered(); await blocked; } });
+            await ready;
+            const publication = publish();
+            // Reproduce the removed socket-local 5s admission cap using a real
+            // current-publisher neighbor, outside any database transaction.
+            // This is a test delay, not a new product deadline or retry budget.
+            await new Promise(resolve => setTimeout(resolve, 6_000));
+            if (queue === 'revoked') await db.session.update({ where: { id: answerer.id }, data: { active: false } });
+            release();
+            await neighbor;
+            posted = await publication;
+            if (queue === 'revoked') {
+                expect(posted).toMatchObject({ ok: false, error: 'discussion_post_denied' });
+                expect(await db.discussionMessage.count({ where: { discussionId, localId } })).toBe(0);
+                expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: {
+                    sessionId: answerer.id, localId: requestLocalId,
+                } } })).replyProgress).toMatchObject({ disposition: 'return_pending' });
+                return;
+            }
+        }
         expect(posted).toMatchObject({ ok: true, value: { message: { addressingV1: { participantSessionIds: explicitNewAsk ? [reviewer.id] : [] } } } });
         if (!posted.ok) throw new Error(posted.error);
         expect(posted.value.message.producerV1).toMatchObject({ actionRequestAttributionV1: cause });

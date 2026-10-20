@@ -4,7 +4,7 @@ import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema,
-  DiscussionAgentPostPublicationV1Schema, type DiscussionAgentPublisherPublicationV1 } from '@happier-dev/protocol/discussions/api';
+  DiscussionAgentPostPublicationV1Schema, DiscussionAgentPublisherResponseV1Schema, type DiscussionAgentPublisherPublicationV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionSummaryV1Schema, DiscussionMessageV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionMessageContentV1Schema } from '@happier-dev/protocol/discussions/content';
 import { deriveDiscussionMutationEqualityTagV1, serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
@@ -35,7 +35,6 @@ import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/di
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
-import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 
 afterEach(() => { resetInMemoryAccountSettingsContextForTests(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -276,11 +275,15 @@ it.each([
         for (const alternate of alternateRequests) secondKeyResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
           request: alternate, ...replay,
         }, options));
-        return client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1',
+        return DiscussionAgentPublisherResponseV1Schema.parse(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1',
           { request, ...replay },
-          { ...options, rpcContext: { callerAuthority: 'operation' in request ? 'present_user' : publicationAuthority } });
+          { ...options, rpcContext: { callerAuthority: 'operation' in request ? 'present_user' : publicationAuthority } }));
       } });
-    const fresh = () => createActionExecutor({ ...store, ...deps, isApprovalExecutionOriginCurrent: currentness });
+    // The live Session is plain in both Account/Discussion encryption modes;
+    // its Action ports must not reuse the independent Discussion resource key.
+    const fresh = () => createActionExecutor({ ...createCliActionDeps({ credentials, token, sessionId,
+      serverId, serverHttpBaseUrl: serverUrl, mode: 'plain', ctx: null }),
+      ...store, ...deps, isApprovalExecutionOriginCurrent: currentness });
     const actionArgs = { discussionId: summary.id, content }; // Omitted generated localId is a valid approved input.
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'agent', sessionId }, actionId: 'discussion.post', actionArgs,
@@ -534,7 +537,7 @@ it.each([
         }, { rpcContext: { callerAuthority: 'present_user' } })).toMatchObject({ ok: true });
       }
       await client.postAgentDiscussionMessage({ operation: 'create', request: wireCreate.request,
-        sourceSession: request.executionOriginV1.sessionInputSource });
+        sourceSession: request.executionOriginV1.sessionInputSource ?? undefined });
       const expectedQuestion = prepareSecondOpinionQuestionV1({ discussionId: 'created-discussion',
         sessionId: reviewer.selection.session.sessionId, question: secondOpinion.question,
         questionLocalId: secondOpinion.retry.questionLocalId, quoteMessageId: 'created-first' });

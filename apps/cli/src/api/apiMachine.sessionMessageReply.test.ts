@@ -219,8 +219,8 @@ it.each([false, true])('recovers a Discussion result through the actual Session 
     getCreateRuntime: () => null, recoverBootstrap: async () => null });
   const acquired: unknown[] = [], released: unknown[] = [];
   if (hostedRequester) bindApiSessionSocketSequenceMock(io, [machineSocket, publisherSocket]);
-  const client = new ApiMachineClient(os.credentials.token, { id: 'target-machine', encryptionMode: 'plain', encryptionKey: new Uint8Array(32),
-    encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined, {
+  const client = new ApiMachineClient(os.credentials.token, { id: 'target-machine', encryptionMode: 'plain',
+    metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined, {
       ...(hostedRequester ? { requesterSessionRuntime: { serverId: configuration.activeServerId,
         resolve: async sessionId => { const context = await requesterResolver(sessionId); if (context) acquired.push(context); return context; },
         release: async context => { await releaseUnretainedRequesterSessionRuntimeContext(context,

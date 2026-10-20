@@ -63,7 +63,8 @@ describe('Session reply publication through the real Action and publisher', () =
     clients.add(client);
     client.observeHostTurnFacts({ turnId: 'discussion-turn', facts: { initiator: 'user', workDepth: 0 } });
     const executor = createActionExecutor(createCliActionDeps({ credentials, token: credentials.token, sessionId,
-      serverId: 'discussion-home', mode: 'plain', ctx: null, sessionMessageReplyPublisher: client }));
+      serverId: 'discussion-home', serverHttpBaseUrl: 'https://discussion-home.test',
+      mode: 'plain', ctx: null, sessionMessageReplyPublisher: client }));
     const source = { sourceSessionId: sessionId, sourceTurnId: 'discussion-turn', sourceInputId: 'discussion-input',
       via: 'action', discussionAddressing } as const;
     const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: sessionId,
@@ -310,7 +311,7 @@ describe('Session reply publication through the real Action and publisher', () =
     client.observeHostTurnFacts({ turnId: 'accepted-turn', facts: { initiator: 'user', workDepth: 0 } });
     const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId,
       mode: 'plain', ctx: null, sessionMessageReplyPublisher: client });
-    const input = { sessionId, requestLocalId: 'original-input', reply: { kind: 'answer', message: '  Revision 42 is checked.\n' } };
+    const input = { sessionId, requestLocalId: 'original-input', reply: { kind: 'answer' as const, message: '  Revision 42 is checked.\n' } };
     const publication = client.rpcHandlerManager.invokeLocal('session.message.reply', input, {
       rpcContext: { callerAuthority: 'present_user' },
     });

@@ -57,7 +57,7 @@ export function createProductionWorkflowDiscussionContextReader(params: Readonly
         const page = DiscussionReadResultV1Schema.safeParse(await discussionAction({ actionId: 'discussion.read',
           input: { discussionId: origin.discussion.discussionId, ...(throughSeq === undefined ? {} : { throughSeq }),
             ...(beforeSeq === undefined ? {} : { beforeSeq }) },
-          context: { surface: 'background', authority: 'account_automation', serverId: params.serverId,
+          context: { surface: 'api', authority: 'account_automation', serverId: params.serverId,
             ...(params.signal ? { signal: params.signal } : {}) },
           ...(params.signal ? { signal: params.signal } : {}),
         }));
@@ -66,8 +66,9 @@ export function createProductionWorkflowDiscussionContextReader(params: Readonly
           throw new WorkflowInputResolutionError('workflow_discussion_context_unavailable');
         }
         throughSeq ??= page.data.messageSeq;
-        if (page.data.messageSeq !== throughSeq || page.data.messages.some(message => !message.content
-          || message.seq > throughSeq || beforeSeq !== undefined && message.seq >= beforeSeq
+        const pageThroughSeq = throughSeq;
+        if (page.data.messageSeq !== pageThroughSeq || page.data.messages.some(message => !message.content
+          || message.seq > pageThroughSeq || beforeSeq !== undefined && message.seq >= beforeSeq
           || message.discussionId !== origin.discussion.discussionId
           || message.messageRef.messageId !== message.id
           || message.messageRef.discussion.discussionId !== origin.discussion.discussionId

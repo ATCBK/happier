@@ -22,7 +22,7 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { StoredCredentials } from '@/persistence';
 import { deriveApprovedDiscussionMutationLocalId } from './discussionPublicationIdentity';
 import { prepareDocDiscussionMutationV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
-import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
+import { DiscussionInitialParticipantsV1Schema, DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import type { DiscussionDraftReviewV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionSecondOpinionStartInputV1Schema } from '@happier-dev/protocol/discussions/secondOpinionActions';
 import { prepareAnchoredDiscussionCreateV1, prepareSecondOpinionQuestionV1, readDiscussionSecondOpinionSourceV1 } from '@happier-dev/protocol/actions/executor/discussionSecondOpinion';
@@ -76,7 +76,7 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
       || !(origin.caller.kind === 'session' && origin.caller.sessionId === params.sessionId || terminalReturn)
       || origin.sessionId !== undefined && origin.sessionId !== params.sessionId
       || params.request.sessionId !== params.sessionId
-      || !await params.isApprovalExecutionOriginCurrent({ origin, request: approval, actionInput: approval.actionArgs,
+      || !await params.isApprovalExecutionOriginCurrent({ origin, request: approval,
         ...(params.signal ? { signal: params.signal } : {}) })) return null;
     const source = SessionInputSourceSessionV1Schema.safeParse(origin.sessionInputSource);
     const sourceIsExact = source.success && source.data.sourceSessionId === params.sessionId
@@ -180,7 +180,8 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
       const content = DiscussionMessageContentV1Schema.parse(openSessionStoredContent({ ...crypto(key), content: body.firstMessage.content }));
       if ((body.firstMessage.docEditProposal === true) !== isDiscussionDocEditProposalContentV1(content)) return null;
       const expected = serializeDiscussionMutationEqualityIntentV1({ kind: 'create',
-        title: { v: 1, title: input.data.title }, anchor: input.data.anchor, participants: input.data.participants,
+        title: { v: 1, title: input.data.title }, anchor: input.data.anchor,
+        participants: input.data.participants === undefined ? undefined : DiscussionInitialParticipantsV1Schema.parse(input.data.participants),
         firstMessage: { ...messageIntent(input.data.firstMessage), localId: body.firstMessage.localId } });
       const actual = serializeDiscussionMutationEqualityIntentV1({ kind: 'create', title,
         anchor: body.anchor, participants: body.participants, firstMessage: { ...body.firstMessage, content } });

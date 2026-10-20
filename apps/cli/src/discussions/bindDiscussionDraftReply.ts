@@ -1,4 +1,6 @@
 import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { DiscussionPostInputV1Schema, DiscussionReplyInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { SessionInputSourceSessionV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -8,14 +10,15 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 /** Bind explicit and terminal drafts before the existing approval owner captures their operands. */
 export async function bindDiscussionDraftReply(params: Readonly<{
-  actionId: string;
+  actionId: ActionId;
   input: unknown;
   context: ActionExecutorContext;
   serverId: string;
   discussionAction: ActionExecutorDeps['discussionAction'];
   credentials?: Readonly<{ token: string }>;
   serverHttpBaseUrl?: string;
-}>) {
+}>): Promise<Readonly<{ actionId: ActionId; input: unknown; context: ActionExecutorContext }>
+  | Readonly<{ failure: ActionExecuteFailure }>> {
   const unchanged = { actionId: params.actionId, input: params.input, context: params.context };
   const unavailable = () => ({ ...unchanged, failure: { ok: false as const,
     errorCode: 'discussion_content_unavailable', error: 'discussion_content_unavailable' } });

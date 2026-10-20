@@ -6,7 +6,7 @@ import { buildCausalSessionInputAdmissionV1 } from './sessionInputAdmissionIdent
 import { readSessionInputRequest, settleSessionInputRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import { UserMessageSchema } from '@/api/types';
-import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { deriveSessionMessageReplyReturnLocalIdV1, type SessionMessageReplyProgressV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { projectSessionMessageReplyOutcome, recoverSessionMessageRepliesForMachine } from './sessionMessageReply';
 
 afterEach(() => vi.restoreAllMocks());
@@ -225,7 +225,7 @@ it('recovers the original pending return after a lost receipt without a second a
   const originalCause = { requestRef: 'bob-input', requester: { serverId: 'home', accountId: 'bob' },
     persona: { serverId: 'home', sessionId: requestSessionId }, origin: null };
   let disposition: 'return_pending' | 'returned' = 'return_pending';
-  const progress = () => ({ v: 1, mode: 'return', disposition, acceptedTurnId: 'accepted-turn',
+  const progress = (): SessionMessageReplyProgressV1 => ({ v: 1, mode: 'return', disposition, acceptedTurnId: 'accepted-turn',
     sourceSession: { sourceSessionId, sourceTurnId: 'source-turn', via: 'action' }, outcome: { kind: 'pass' },
     actionRequestAttributionV1: originalCause });
   vi.spyOn(axios, 'get').mockImplementation(async url => {

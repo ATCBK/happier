@@ -193,7 +193,7 @@ export function registerDiscussionAgentPublisher(params: Readonly<{
     const parsed = DiscussionAgentPublisherRequestV1Schema.safeParse(raw);
     if (!parsed.success || parsed.data.request.sessionId !== params.session.sessionId) return denied();
     const activePublication = 'witness' in parsed.data;
-    if (activePublication) {
+    if ('witness' in parsed.data) {
       const current = params.session.getActiveTurnAdmissionWitness?.();
       if (!current) return denied();
       try {

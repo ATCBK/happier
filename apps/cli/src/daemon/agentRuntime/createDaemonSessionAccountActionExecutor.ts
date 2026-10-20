@@ -290,7 +290,8 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
               && (!('creationLocalId' in input) || input.creationLocalId === undefined || request.request.creationLocalId === input.creationLocalId)
               && 'firstMessage' in input && input.firstMessage && typeof input.firstMessage === 'object'
               && (!('localId' in input.firstMessage) || input.firstMessage.localId === undefined || request.request.firstMessage.localId === input.firstMessage.localId)
-            : publicationActionId !== 'discussion.create' && 'discussionId' in input && request.discussionId === input.discussionId);
+            : publicationActionId !== 'discussion.create' && 'discussionId' in input
+              && !('operation' in request) && request.discussionId === input.discussionId);
           let sameDocMetadata = true;
           if (docMutation) {
             const expected = docMutation.actionId === 'discussion.create' ? docMutation.input.firstMessage : docMutation.input;
