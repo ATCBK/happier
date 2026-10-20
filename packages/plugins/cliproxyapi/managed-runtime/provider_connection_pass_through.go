@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/gin-gonic/gin"
 )
@@ -63,7 +64,7 @@ func (source ProviderConnectionRequestSource) validate() error {
 		strings.EqualFold(credentialName, ProviderConnectionDescriptorHeader) {
 		return fmt.Errorf("credential header name is invalid")
 	}
-	if len(source.ResolvedAddresses) == 0 || len(source.ResolvedAddresses) > 16 {
+	if len(source.ResolvedAddresses) == 0 {
 		return fmt.Errorf("resolved addresses are invalid")
 	}
 	seenAddresses := make(map[string]struct{}, len(source.ResolvedAddresses))
@@ -89,7 +90,9 @@ func (source ProviderConnectionRequestSource) validate() error {
 	}
 	for rawName, value := range source.PublicHeaders {
 		name := strings.ToLower(rawName)
-		if rawName != name || len(name) > 128 || !headerNamePattern.MatchString(name) || len(value) > 4096 || strings.ContainsAny(value, "\x00\r\n") ||
+		// Protocol's maxHeaderValueChars counts JavaScript UTF-16 code units,
+		// not the UTF-8 bytes used by this private JSON carrier.
+		if rawName != name || len(name) > 128 || !headerNamePattern.MatchString(name) || len(utf16.Encode([]rune(value))) > 4096 || strings.ContainsAny(value, "\x00\r\n") ||
 			name == credentialName || strings.EqualFold(name, ProviderConnectionCredentialHeader) ||
 			strings.EqualFold(name, ProviderConnectionDescriptorHeader) {
 			return fmt.Errorf("public headers are invalid")
@@ -105,11 +108,11 @@ func (source ProviderConnectionRequestSource) validate() error {
 }
 
 func parseProviderConnectionRequestSource(value string) (ProviderConnectionRequestSource, error) {
-	if value == "" || len(value) > 512*1024 {
+	if value == "" {
 		return ProviderConnectionRequestSource{}, fmt.Errorf("provider source is invalid")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(raw) == 0 || len(raw) > 384*1024 {
+	if err != nil || len(raw) == 0 {
 		return ProviderConnectionRequestSource{}, fmt.Errorf("provider source is invalid")
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
@@ -179,7 +182,7 @@ func ProviderConnectionPassThroughMiddleware(configuration ProviderConnectionPas
 		}
 		credentials := c.Request.Header.Values(ProviderConnectionCredentialHeader)
 		descriptors := c.Request.Header.Values(ProviderConnectionDescriptorHeader)
-		if len(credentials) != 1 || credentials[0] == "" || len(credentials[0]) > 128*1024 || strings.ContainsAny(credentials[0], "\x00\r\n") || len(descriptors) != 1 {
+		if len(credentials) != 1 || credentials[0] == "" || strings.ContainsAny(credentials[0], "\x00\r\n") || len(descriptors) != 1 {
 			c.AbortWithStatus(http.StatusServiceUnavailable)
 			return
 		}

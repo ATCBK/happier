@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,64 @@ func providerSourceHeader(t *testing.T, source ProviderConnectionRequestSource) 
 		t.Fatal(err)
 	}
 	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func TestProviderConnectionPassThroughAcceptsCanonicalSourceWithoutLocalCapacityCaps(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name      string
+		addresses int
+		headers   int
+		value     string
+		reject    bool
+	}{
+		{name: "all admitted DNS answers", addresses: 17},
+		{name: "canonical escaped public headers", addresses: 1, headers: 64},
+		{name: "canonical character bound for Latin-1 public headers", addresses: 1, headers: 1, value: strings.Repeat("é", 2500)},
+		{name: "rejects values beyond canonical character bound", addresses: 1, headers: 1, value: strings.Repeat("a", 4097), reject: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			forwarded := make(chan http.Header, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				forwarded <- request.Header.Clone()
+				_, _ = io.WriteString(writer, "ok")
+			}))
+			defer upstream.Close()
+			source := ProviderConnectionRequestSource{BaseURL: upstream.URL, CredentialHeaderName: "authorization", PublicHeaders: make(map[string]string)}
+			for index := 0; index < testCase.addresses; index++ {
+				source.ResolvedAddresses = append(source.ResolvedAddresses, fmt.Sprintf("127.0.0.%d", index+1))
+			}
+			for index := 0; index < testCase.headers; index++ {
+				value := testCase.value
+				if value == "" {
+					value = strings.Repeat("\"", 4096)
+				}
+				source.PublicHeaders[fmt.Sprintf("x-public-%d", index)] = value
+			}
+			router := gin.New()
+			router.Use(ProviderConnectionPassThroughMiddleware(ProviderConnectionPassThroughConfiguration{Protocol: ProtocolOpenAIResponses, DownstreamBasePath: "/v1"}, nil))
+			router.Any("/*path", func(c *gin.Context) { c.Status(http.StatusTeapot) })
+			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("{}"))
+			request.Header.Set(ProviderConnectionCredentialHeader, "Bearer source-secret")
+			request.Header.Set(ProviderConnectionDescriptorHeader, providerSourceHeader(t, source))
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			if testCase.reject {
+				if recorder.Code != http.StatusForbidden || len(forwarded) != 0 {
+					t.Fatalf("invalid public header reached final hop: status %d", recorder.Code)
+				}
+				return
+			}
+			if recorder.Code != http.StatusOK || len(forwarded) != 1 {
+				t.Fatalf("canonical source did not reach final hop: status %d", recorder.Code)
+			}
+			lastHeader := fmt.Sprintf("x-public-%d", testCase.headers-1)
+			headers := <-forwarded
+			if testCase.headers > 0 && headers.Get(lastHeader) != source.PublicHeaders[lastHeader] {
+				t.Fatal("final admitted public header was lost")
+			}
+		})
+	}
 }
 
 func TestProviderConnectionPassThroughOwnsFinalHopAuthorizationForBothProtocols(t *testing.T) {
