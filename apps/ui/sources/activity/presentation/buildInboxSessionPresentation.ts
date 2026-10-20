@@ -1,4 +1,5 @@
 import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol';
+import { resolvePersonalFollowOnceAttentionV1, type PersonalFollowOnceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { Message } from "@happier-dev/session-core/messages";
@@ -32,6 +33,7 @@ export type InboxSessionPresentation = Readonly<{
 export type InboxSessionCandidateClassification = Readonly<{
     section: 'needs_attention' | 'ready' | null;
     type: 'approval' | 'decision' | 'blocked' | 'mention' | 'update';
+    onceDelivery?: PersonalFollowOnceOccurrenceV1;
 }>;
 
 /**
@@ -50,19 +52,24 @@ export function classifyInboxSessionCandidate(
         : reasons.includes('mentioned') ? 'mention' : 'update';
     if (!candidate.hasAttention) return { section: null, type };
 
+    const delivery = candidate.session.viewer?.follow.onceDelivery;
+    const onceReason = resolvePersonalFollowOnceAttentionV1({ delivery });
+    const onceDelivery = type === 'update' && onceReason && reasons.includes(onceReason) ? delivery : undefined;
     const hasSessionReadAttention = reasons.some(isClearedBySessionManualRead);
     const hasOtherAttention = reasons.some((reason) => !isClearedBySessionManualRead(reason));
     const isWorking = candidate.awareness.operational.reasons.includes('working')
         || candidate.awareness.operational.reasons.includes('background_activity');
-    const hasReadyForReviewAttention = !isWorking
-        && hasSessionReadAttention
-        && (
+    // Accepted completion custody names the original turn even while a newer
+    // turn is working. Ordinary unread still waits for the current turn.
+    const hasReadyForReviewAttention = hasSessionReadAttention
+        && (onceDelivery !== undefined && onceReason === 'ready_after_read' || !isWorking && (
             candidate.attentionState === 'ready'
             || reasons.includes('ready_after_read')
             || candidate.awareness.operational.reasons.includes('ready')
-        );
+        ));
 
-    return { section: hasOtherAttention ? 'needs_attention' : hasReadyForReviewAttention ? 'ready' : null, type };
+    return { section: hasOtherAttention ? 'needs_attention' : hasReadyForReviewAttention ? 'ready' : null, type,
+        ...(onceDelivery ? { onceDelivery } : {}) };
 }
 
 /**

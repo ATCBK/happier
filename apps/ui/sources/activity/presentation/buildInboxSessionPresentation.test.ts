@@ -41,11 +41,11 @@ function candidate(
 }
 
 describe('buildInboxSessionPresentation', () => {
-    it('retains the accepted original completion while a newer turn is working, anchoring only known source context', () => {
-        for (const transcriptSeq of [18, undefined]) {
-            const onceDelivery = PersonalFollowOnceOccurrenceV1Schema.parse({ event: 'ready', turnId: 'original-turn',
+    it.each(['ready', 'cancelled', 'failed'] as const)('retains the accepted original %s completion while a newer turn is working, anchoring only known source context', (event) => {
+        for (const transcriptSeq of [18, 0, undefined]) {
+            const onceDelivery = PersonalFollowOnceOccurrenceV1Schema.parse({ event, turnId: 'original-turn',
                 agentStateVersion: 4, ...(transcriptSeq === undefined ? {} : { transcriptSeq }) });
-            const base = candidate('once-session', ['ready_after_read'], 'server-a', {
+            const base = candidate('once-session', [event === 'failed' ? 'failed' : 'ready_after_read'], 'server-a', {
                 active: true, activeAt: 1_000, latestTurnId: 'newer-turn', latestTurnStatus: 'in_progress',
             });
             const session = { ...base.session, viewer: { ...base.session.viewer!,
@@ -53,11 +53,25 @@ describe('buildInboxSessionPresentation', () => {
             } };
             const current = buildSessionActivityAttention({ session, nowMs: 1_000 });
             const sessionPresentation = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([current]) });
-            const rows = buildInboxItems({ sessionPresentation, workGroups: [], workflowServerId: null,
-                accountServerId: 'server-a', notices: [] });
+            const workGroups = buildInboxWorkGroups({ sessionEntries: sessionPresentation.sessionsNeedingAttention,
+                workflowRuns: [], automationRuns: [], automationServerId: null, openApprovals: [], stalledSessions: [], landings: [],
+                snoozed: [], resolveSession: () => session, resolveOriginRunId: () => null });
+            const input = { sessionPresentation, workGroups, workflowServerId: null, accountServerId: 'server-a', notices: [] };
+            const rows = buildInboxItems(input);
             expect(rows).toHaveLength(1);
             expect(rows[0]).toMatchObject({ type: 'update', source: { onceDelivery } });
             expect(rows[0]?.pageRoute).toBe(`/session/once-session?serverId=server-a${transcriptSeq ? `&jumpSeq=${transcriptSeq}` : ''}`);
+            expect(buildInboxItems(input, rows)).toBe(rows);
+
+            const revisedDelivery = { ...onceDelivery, agentStateVersion: 5 };
+            const revise = (value: typeof current) => ({ ...value, session: { ...value.session,
+                viewer: { ...value.session.viewer!, follow: { ...value.session.viewer!.follow, onceDelivery: revisedDelivery } } } });
+            const revised = buildInboxItems({ ...input,
+                sessionPresentation: { ...sessionPresentation, readySessions: sessionPresentation.readySessions.map(revise) },
+                workGroups: workGroups.map(group => ({ ...group, items: group.items.map(item => item.kind === 'session'
+                    ? { ...item, entry: { ...item.entry, candidate: revise(item.entry.candidate) } } : item) })),
+            }, rows);
+            expect(revised[0]?.source).toMatchObject({ onceDelivery: revisedDelivery });
         }
     });
 
@@ -229,8 +243,8 @@ describe('buildInboxSessionPresentation', () => {
         expect(presentation.markAllReadTargets).toHaveLength(0);
     });
 
-    it('defers read-only attention while the canonical runtime projection is working', () => {
-        const workingUnread = candidate('working-unread', ['unread'], 'server-a', {
+    it.each(['unread', 'ready_after_read'] as const)('defers ordinary %s attention while the canonical runtime projection is working', (reason) => {
+        const workingUnread = candidate('working-unread', [reason], 'server-a', {
             active: true,
             presence: 'online',
             latestTurnStatus: 'in_progress',

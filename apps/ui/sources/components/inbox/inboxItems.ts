@@ -4,6 +4,7 @@ import { isOpenAccountNotice, type AccountNoticeArtifact } from '@/sync/domains/
 import { createInboxItemRoute, readInboxApprovalServerId, resolveInboxItemPageRoute, type InboxItemFocus } from './inboxItemFocus';
 import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
 import type { SessionQuestionContextV1 } from '@happier-dev/protocol/sessions/permissions/questionV1';
+import type { PersonalFollowOnceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
 import type { DiscussionAnchorV1 } from '@happier-dev/protocol/discussions/replyTargets';
@@ -33,7 +34,7 @@ export type InboxItem = Readonly<{
     /** Only the shared approval review owner can offer unchanged one-shot decisions. */
     approvalQuickActions?: ApprovalQuickActions;
     /** The owning record, never a mirrored Inbox lifecycle. */
-    source: Readonly<{ kind: string; id: string; serverId: string; displayName?: string | null }>;
+    source: Readonly<{ kind: string; id: string; serverId: string; displayName?: string | null; onceDelivery?: PersonalFollowOnceOccurrenceV1 }>;
     /** Account byline or producing Session name; never inferred from the source owner. */
     author?: Readonly<{ name: string; isSelf?: boolean; avatar?: ReturnType<typeof resolveAccountActorPresentation>['avatar'] }> | null;
     excerpt?: string | null;
@@ -73,15 +74,17 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
             const serverId = candidate.address?.serverId ?? candidate.serverId;
             if (!serverId) continue;
             const question = item.entry.pendingUserActions[0];
-            const { type } = classifyInboxSessionCandidate(candidate, question?.questionV1?.type);
-            const focus = { kind: 'session', id: candidate.sessionId, serverId } as const;
+            const { type, onceDelivery } = classifyInboxSessionCandidate(candidate, question?.questionV1?.type);
+            const focus = { kind: 'session', id: candidate.sessionId, serverId,
+                ...(onceDelivery?.transcriptSeq ? { jumpSeq: onceDelivery.transcriptSeq } : {}) } as const;
             rows.push({ key: item.key, producer: 'live', type, view: inboxItemView(type), title: candidate.title,
                 context: candidate.subtitle || null, createdAt: candidate.session.updatedAt, read: false, focus,
                 ...(question?.questionV1 ? { question: { ...question.questionV1, requestId: question.id,
                     currentHandler: question.currentHandler?.kind === 'session'
                         ? { kind: 'session' as const, address: { serverId, sessionId: question.currentHandler.sessionId } }
                         : { kind: 'person' as const } } } : {}),
-                pageRoute: resolveInboxItemPageRoute(focus), source: { kind: 'session', id: candidate.sessionId, serverId, displayName: candidate.title } });
+                pageRoute: resolveInboxItemPageRoute(focus), source: { kind: 'session', id: candidate.sessionId, serverId, displayName: candidate.title,
+                    ...(onceDelivery ? { onceDelivery } : {}) } });
         } else if (item.kind === 'workflow_run') {
             if (!input.workflowServerId) continue;
             const focus = { kind: 'workflow_run', id: item.runId, serverId: input.workflowServerId } as const;
@@ -122,10 +125,13 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
     for (const candidate of input.sessionPresentation.readySessions) {
         const serverId = candidate.address?.serverId ?? candidate.serverId;
         if (!serverId) continue;
-        const focus = { kind: 'session', id: candidate.sessionId, serverId } as const;
+        const { onceDelivery } = classifyInboxSessionCandidate(candidate);
+        const focus = { kind: 'session', id: candidate.sessionId, serverId,
+            ...(onceDelivery?.transcriptSeq ? { jumpSeq: onceDelivery.transcriptSeq } : {}) } as const;
         rows.push({ key: `session:${serverId}:${candidate.sessionId}`, producer: 'live', type: 'update', view: 'updates',
             title: candidate.title, context: candidate.subtitle || null, createdAt: candidate.lastTurnCompletedAt ?? candidate.session.updatedAt,
-            read: false, focus, pageRoute: resolveInboxItemPageRoute(focus), source: { kind: 'session', id: candidate.sessionId, serverId, displayName: candidate.title } });
+            read: false, focus, pageRoute: resolveInboxItemPageRoute(focus), source: { kind: 'session', id: candidate.sessionId, serverId, displayName: candidate.title,
+                ...(onceDelivery ? { onceDelivery } : {}) } });
     }
     if (input.accountServerId) {
         for (const entry of input.notices) {
@@ -188,6 +194,7 @@ function sameItem(left: InboxItem, right: InboxItem): boolean {
         && left.pageRoute === right.pageRoute && createInboxItemRoute(left.focus).params.item === createInboxItemRoute(right.focus).params.item
         && left.source.kind === right.source.kind && left.source.id === right.source.id && left.source.serverId === right.source.serverId
         && left.source.displayName === right.source.displayName && left.excerpt === right.excerpt
+        && JSON.stringify(left.source.onceDelivery) === JSON.stringify(right.source.onceDelivery)
         && JSON.stringify(left.author) === JSON.stringify(right.author)
         && JSON.stringify(left.question) === JSON.stringify(right.question)
         && JSON.stringify(left.approvalQuickActions) === JSON.stringify(right.approvalQuickActions)
