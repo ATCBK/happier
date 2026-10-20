@@ -1840,6 +1840,21 @@ distinguishes wake intent, next-turn context, hold and drop; enqueue or resume
 success alone is not proof of an accepted new turn. Follow and Discussion delivery
 consume these owners rather than maintaining their own conversation caps.
 
+In unreleased 0.3 source, successful file-review Discard and Restore Actions
+emit one `file_review_note.v1` transcript item per receiving Session, covering
+all affected paths; successful Undo emits the same item kind after its guarded
+write. Keep emits none. Delivery uses the existing receiver's `next_turn`
+intent and never resumes or steers the Agent. Authenticated Pending admission
+stamps the closed, content-free `nextTurnNote: 'file_review_note.v1'` operand
+into its existing receipt. The runtime validates the note and receipt, retains
+it in the existing mode queue, and joins its text to the next actual input
+without adopting the note's permission or primary-input identity. The same
+receipt authorizes retained-context materialization; ordinary inputs cannot
+claim that status through display metadata. Provider dispatch settles the
+represented note through existing Pending custody. A note-delivery failure
+remains separate from a successful file mutation and must not replay that
+mutation. Composed runtime and presentation validation remain program gates.
+
 In 0.3 development, the content-free
 [request attribution projection](../packages/protocol/src/actions/actionRequestAttributionV1.ts)
 also remains separate from Session/process ownership and execution credentials.
