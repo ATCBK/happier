@@ -32,6 +32,7 @@ import {
 } from '@/auth/terminalAuthEnrollmentClient';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { useServerProfile } from '@/server/serverProfiles';
+import { retryTerminalEnrollmentHomeOperation, type TerminalEnrollmentHomeRetry } from '@/auth/retryTerminalEnrollmentHomeOperation';
 
 type PendingAuthState = Readonly<{
   publicKey: string;
@@ -196,12 +197,13 @@ async function completeClaimedCredentialHandoff(params: Readonly<{
   credentials: StoredCredentials;
   statePath: string;
   runtimeOrigin: string;
+  homeRetry: TerminalEnrollmentHomeRetry;
 }>): Promise<string> {
   // The relay claim is one-shot. Once credentials are durable, this request
   // must no longer be retryable even if the subsequent registration fails.
   await removeProtectedLocalStateFile(params.statePath, PENDING_AUTH_STATE_PROTECTION);
   try {
-    return await registerTerminalEnrollmentMachine(params.credentials, params.runtimeOrigin);
+    return await registerTerminalEnrollmentMachine(params.credentials, params.runtimeOrigin, undefined, params.homeRetry);
   } catch (cause) {
     throw new Error(
       'Authentication credentials were saved, but machine registration is incomplete. '
@@ -269,6 +271,7 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
   if (!acquired.ok) throw new AuthWaitError('AUTH_WAIT_TRANSPORT_UNAVAILABLE', 'Unable to acquire the selected Home enrollment carrier');
   const pollIntervalMsRaw = Number(process.env.HAPPIER_AUTH_POLL_INTERVAL_MS ?? '');
   const pollIntervalMs = Number.isFinite(pollIntervalMsRaw) && pollIntervalMsRaw > 0 ? pollIntervalMsRaw : 1000;
+  const homeRetry = { deadlineMs: state.pairingExpiresAtMs, pollIntervalMs, signal };
 
   try {
     if (target.descriptor) {
@@ -317,12 +320,15 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
         throw new AuthWaitError('AUTH_RESPONSE_INVALID', 'Unexpected response from server.');
       }
       if (target.descriptor) {
-        const authenticatedSnapshot = await fetchServerFeaturesSnapshot({
-          serverUrl: acquired.runtime.runtimeOrigin,
-          token,
-          ...(signal ? { signal } : {}),
+        await retryTerminalEnrollmentHomeOperation(homeRetry, async () => {
+          const authenticatedSnapshot = await fetchServerFeaturesSnapshot({
+            serverUrl: acquired.runtime.runtimeOrigin,
+            token,
+            timeoutMs: Math.max(1, homeRetry.deadlineMs - Date.now()),
+            ...(signal ? { signal } : {}),
+          });
+          verifyTerminalAuthEnrollmentRuntime({ target, runtime: acquired.runtime, snapshot: authenticatedSnapshot });
         });
-        verifyTerminalAuthEnrollmentRuntime({ target, runtime: acquired.runtime, snapshot: authenticatedSnapshot });
       }
 
       const terminalSecretKey = decodeBase64(state.secretKey);
@@ -350,11 +356,12 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
         await removeProtectedLocalStateFile(statePath, PENDING_AUTH_STATE_PROTECTION);
         ({ machineId } = await registerAndPersistManagedTerminalEnrollmentCredential({ token, opened,
           runtimeOrigin: acquired.runtime.runtimeOrigin, managedEnrollment: state.managedEnrollment,
+          homeRetry,
           assertCurrent: () => signal?.throwIfAborted() }));
       } else {
         const persisted = await persistTerminalEnrollmentCredential({ token, opened });
         machineId = await completeClaimedCredentialHandoff({
-          credentials: persisted.credentials, statePath, runtimeOrigin: acquired.runtime.runtimeOrigin,
+          credentials: persisted.credentials, statePath, runtimeOrigin: acquired.runtime.runtimeOrigin, homeRetry,
         });
       }
       if (remoteEnrollment) {

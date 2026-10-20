@@ -33,6 +33,10 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
     let claimUnavailable = false;
     let claimReset = false;
     let registrationUnavailable = false;
+    let registrationUnavailableOnce = false;
+    let accountModeUnavailableOnce = false;
+    let authenticatedFeaturesUnavailableOnce = false;
+    let successfulClaims = 0;
     const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
     beforeAll(async () => {
         harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-qb73-', initAuth: true, initEncrypt: true,
@@ -41,8 +45,17 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
         // Inject Home unavailability at its HTTP boundary; keep claim, approval,
         // registration and both real CLI processes unchanged beneath it.
         app.addHook('onRequest', async (request, reply) => {
-            if (registrationUnavailable && request.method === 'POST' && request.url === '/v1/machines') {
+            if ((registrationUnavailable || registrationUnavailableOnce) && request.method === 'POST' && request.url === '/v1/machines') {
+                registrationUnavailableOnce = false;
                 return reply.code(503).send({ error: 'unavailable' });
+            }
+            if (accountModeUnavailableOnce && successfulClaims === 2 && request.url === '/v1/account/encryption') {
+                accountModeUnavailableOnce = false;
+                return reply.code(503).send({ error: 'database_connection_unavailable' });
+            }
+            if (authenticatedFeaturesUnavailableOnce && successfulClaims > 0 && request.url === '/v1/features/authenticated') {
+                authenticatedFeaturesUnavailableOnce = false;
+                return reply.code(503).send({ error: 'database_connection_unavailable' });
             }
             if (claimReset && request.url === '/v1/auth/request/claim') {
                 request.raw.socket.destroy();
@@ -52,7 +65,10 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
                 return reply.code(503).send({ error: 'unavailable' });
             }
         });
-        app.addHook('onResponse', async (request, reply) => { requests.push({ path: request.url.split('?')[0]!, status: reply.statusCode }); });
+        app.addHook('onResponse', async (request, reply) => {
+            if (request.url === '/v1/auth/request/claim' && reply.statusCode === 200) successfulClaims++;
+            requests.push({ path: request.url.split('?')[0]!, status: reply.statusCode });
+        });
         enableAuthentication(app);
         authRoutes(app); machinesRoutes(app); registerAccountEncryptionRoutes(app); registerAccountProfileRoute(app);
         featuresRoutes(app, { homeConnectionDescriptorContinuityStore: createFileHomeConnectionDescriptorContinuityStore(join(harness.baseDir, 'descriptor.json')) });
@@ -60,11 +76,16 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
     }, 120_000);
     afterAll(async () => { await app.close(); if (harness) await harness.close(); });
 
-    it.each(['current', 'current-e2ee', 'retired', 'misbound-approval', 'expired-consent', 'claim-unavailable', 'claim-reset', 'wait-process-killed', 'registration-unavailable'] as const)('enrolls only the current exact admission (%s)', async admission => {
-        const succeeds = admission === 'current' || admission === 'current-e2ee';
+    it.each(['current', 'current-e2ee', 'retired', 'misbound-approval', 'expired-consent', 'claim-unavailable', 'claim-reset', 'wait-process-killed', 'registration-unavailable', 'registration-transient', 'registration-transient-e2ee', 'post-claim-features-transient', 'retry-after-partial'] as const)('enrolls only the current exact admission (%s)', async admission => {
+        const succeeds = ['current', 'current-e2ee', 'registration-transient', 'registration-transient-e2ee', 'post-claim-features-transient', 'retry-after-partial'].includes(admission);
+        const e2ee = admission === 'current-e2ee' || admission === 'registration-transient-e2ee';
         claimUnavailable = admission === 'claim-unavailable';
         claimReset = admission === 'claim-reset';
-        registrationUnavailable = admission === 'registration-unavailable';
+        registrationUnavailable = admission === 'registration-unavailable' || admission === 'retry-after-partial';
+        registrationUnavailableOnce = admission === 'registration-transient' || admission === 'registration-transient-e2ee';
+        accountModeUnavailableOnce = false;
+        authenticatedFeaturesUnavailableOnce = admission === 'post-claim-features-transient';
+        successfulClaims = 0;
         requests.length = 0;
         const beforeRequestIds = new Set((await db.terminalAuthRequest.findMany({ select: { id: true } })).map(request => request.id));
         const address = app.server.address();
@@ -77,14 +98,14 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
             continuityStore: createFileHomeConnectionDescriptorContinuityStore(join(harness.baseDir, 'descriptor.json')) });
         expect(descriptor).toBeDefined();
         const contentKeys = tweetnacl.box.keyPair();
-        const account = await db.account.create({ data: admission === 'current-e2ee'
+        const account = await db.account.create({ data: e2ee
             ? { encryptionMode: 'e2ee', ...createSignedAccountContentBinding(contentKeys.publicKey) }
             : { encryptionMode: 'plain' } });
         const token = await auth.createToken(account.id, undefined, { kind: 'terminal', authority: 'account_automation' });
         const controllerHome = join(harness.baseDir, `controller-${admission}`);
         const guestHome = join(harness.baseDir, `guest-${admission}`);
         await mkdir(guestHome, { recursive: true });
-        const seeded = admission === 'current-e2ee'
+        const seeded = e2ee
             ? await seedCliDataKeyAuthForServer({ cliHome: controllerHome, serverUrl: endpoint, token, machineKey: contentKeys.secretKey })
             : await seedCliTokenOnlyAuthForServer({ cliHome: controllerHome, serverUrl: endpoint, token });
         const settingsPath = join(controllerHome, 'settings.json');
@@ -126,7 +147,7 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
             resource, launch: { provider: resource.contributionRef, schemaVersion: 1, name: 'Guest', choices: {} },
             retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false } });
         const root = fileURLToPath(new URL('../../../../../../../', import.meta.url));
-        const result = await new Promise<{ status: number; stdout: string; stderr: string }>((resolveResult, reject) => {
+        const runController = () => new Promise<{ status: number; stdout: string; stderr: string }>((resolveResult, reject) => {
             const runtime = process.env.HAPPIER_TEST_REMOTE_ENROLLMENT_RUNTIME ?? process.execPath;
             const child = spawn(runtime, ['--conditions=happier-source', ...(runtime === process.execPath ? ['--import', 'tsx'] : []),
                 resolve(root, 'apps/cli/src/testkit/process/fixtures/remoteEnrollmentController.ts')], {
@@ -154,6 +175,26 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
                 misbind: admission === 'misbound-approval', correlation: { homeId: descriptor!.homeServerIdentityId,
                 managedId: row.id, requestId: row.admittedActionRequestId, expectedIntentRevision: row.intentRevision, controller, resource } }));
         });
+        let result = await runController();
+        if (admission === 'retry-after-partial') {
+            expect(result.status).toBe(1);
+            expect(JSON.parse(result.stdout).operation.error.error).toContain('AUTH_WAIT_HOME_UNAVAILABLE');
+            expect(requests).toContainEqual({ path: '/v1/auth/request/claim', status: 200 });
+            expect(requests).toContainEqual({ path: '/v1/machines', status: 503 });
+            const partialSettings = JSON.parse(await readFile(join(guestHome, 'settings.json'), 'utf8'));
+            const partialMachineIds = Object.values(partialSettings.machineIdByServerId ?? {});
+            expect(partialMachineIds).toHaveLength(1);
+            expect(await db.machine.count({ where: { accountId: account.id } })).toBe(1);
+            // The product starts a fresh bootstrap against the same retained
+            // guest and admission. Do not reset guest state between attempts.
+            registrationUnavailable = false;
+            accountModeUnavailableOnce = true;
+            result = await runController();
+            expect(successfulClaims).toBe(2);
+            expect(requests).toContainEqual({ path: '/v1/account/encryption', status: 503 });
+            const retriedSettings = JSON.parse(await readFile(join(guestHome, 'settings.json'), 'utf8'));
+            expect(Object.values(retriedSettings.machineIdByServerId ?? {})).toEqual(partialMachineIds);
+        }
         expect(result.stdout, JSON.stringify(requests)).toContain(succeeds ? '"ok":true' : ['retired', 'claim-unavailable', 'claim-reset', 'wait-process-killed', 'registration-unavailable'].includes(admission) ? 'auth wait' : admission === 'expired-consent' ? 'auth_request_expired' : 'approval_wiring_failed');
         expect(result.status, result.stdout).toBe(succeeds ? 0 : 1);
         if (admission !== 'misbound-approval') {
@@ -172,6 +213,21 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
                 expect(outcome.operation.error.error).toContain('code AUTH_WAIT_HOME_UNAVAILABLE; category http_error; HTTP 503');
                 expect(outcome.operation.error.error).not.toMatch(/diagnostic invalid|AUTH_WAIT_PROCESS_FAILED/);
             }
+            if (admission === 'registration-transient' || admission === 'registration-transient-e2ee') {
+                expect(requests.filter(request => request.path === '/v1/auth/request/claim')).toEqual([{ path: '/v1/auth/request/claim', status: 200 }]);
+                expect(requests.filter(request => request.path === '/v1/machines')).toEqual([
+                    { path: '/v1/machines', status: 503 }, { path: '/v1/machines', status: 200 },
+                ]);
+            }
+            if (admission === 'post-claim-features-transient') {
+                expect(requests.filter(request => request.path === '/v1/auth/request/claim')).toHaveLength(1);
+                const postClaimRequests = requests.slice(requests.findIndex(request => request.path === '/v1/auth/request/claim') + 1);
+                const registrationIndex = postClaimRequests.findIndex(request => request.path === '/v1/machines');
+                expect(registrationIndex).toBeGreaterThanOrEqual(0);
+                expect(postClaimRequests.slice(0, registrationIndex).filter(request => request.path === '/v1/features/authenticated')).toEqual([
+                    { path: '/v1/features/authenticated', status: 503 }, { path: '/v1/features/authenticated', status: 200 },
+                ]);
+            }
             if (admission === 'wait-process-killed') {
                 expect(outcome.operation.error.error).toContain('code AUTH_WAIT_PROCESS_FAILED');
                 expect(outcome.operation.error.error).not.toContain('DIAGNOSTIC_UNAVAILABLE');
@@ -188,7 +244,12 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
         const pending = await db.terminalAuthRequest.findMany();
         // Creating a fresh request may prune expired earlier scenarios. Count
         // this invocation's new row without depending on global retention.
-        expect(pending.filter(request => !beforeRequestIds.has(request.id))).toHaveLength(1);
+        const newPending = pending.filter(request => !beforeRequestIds.has(request.id));
+        if (admission === 'retry-after-partial') {
+            // The second request can prune the expired first attempt.
+            expect(newPending.length).toBeGreaterThanOrEqual(1);
+            expect(newPending.length).toBeLessThanOrEqual(2);
+        } else expect(newPending).toHaveLength(1);
         const ownPending = pending.find(request => request.responseAccountId === account.id);
         if (admission === 'misbound-approval' || admission === 'expired-consent') expect(ownPending).toBeUndefined();
         else {

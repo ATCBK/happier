@@ -56,6 +56,13 @@ failures project a credential-free code through the buffered enrollment error,
 including local expiry and argument/state validation. These are development
 source changes. Transient Home HTTP, network and timeout failures are classified
 as `AUTH_WAIT_HOME_UNAVAILABLE`; the wait does not replay the one-shot claim.
+After a successful claim, buffered and streaming enrollment retain that response
+and retry transient authenticated Home observations and Machine registration
+within their existing lifetime, using the existing polling cadence. Admission
+refusals remain terminal, and managed enrollment saves its bearer only after
+registration succeeds. Retry after an unsuccessful attempt requests fresh
+approval while retaining the guest's Machine identity. Feature-read diagnostics
+preserve the HTTP status or transport failure for the shared recovery policy.
 Shared offline warnings use stderr, keeping finite command stdout valid JSON
 when post-claim machine registration fails.
 A failed wait process without a usable diagnostic code reports

@@ -4,6 +4,7 @@ import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient'
 import { FeaturesResponseSchema, HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol';
 import type { ResolvedHomeTarget } from '@happier-dev/cli-common/homeTarget';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 
 import {
   claimTerminalAuthRequest,
@@ -65,11 +66,12 @@ function readyFeatures(params: Readonly<{
 
 describe('terminal auth enrollment client', () => {
   it.each([
-    [{ status: 'error', reason: 'network' }, 'HOME_FEATURES_NETWORK'],
-    [{ status: 'error', reason: 'timeout' }, 'HOME_FEATURES_TIMEOUT'],
-    [{ status: 'error', reason: 'response_status', httpStatus: 503 }, 'HOME_FEATURES_HTTP_ERROR'],
-    [{ status: 'unsupported', reason: 'endpoint_missing' }, 'HOME_FEATURES_ENDPOINT_MISSING'],
-  ] as const)('preserves the typed feature refusal for %j', (snapshot, code) => {
+    [{ status: 'error', reason: 'network' }, 'HOME_FEATURES_NETWORK', 'network'],
+    [{ status: 'error', reason: 'timeout' }, 'HOME_FEATURES_TIMEOUT', 'timeout'],
+    [{ status: 'error', reason: 'response_status', httpStatus: 503 }, 'HOME_FEATURES_HTTP_ERROR', 'server_error'],
+    [{ status: 'error', reason: 'response_status', httpStatus: 401 }, 'HOME_FEATURES_HTTP_ERROR', 'auth_failed'],
+    [{ status: 'unsupported', reason: 'endpoint_missing' }, 'HOME_FEATURES_ENDPOINT_MISSING', 'protocol_error'],
+  ] as const)('preserves the typed feature refusal for %j', (snapshot, code, kind) => {
     let failure: unknown;
     try {
       verifyTerminalAuthEnrollmentRuntime({
@@ -83,6 +85,7 @@ describe('terminal auth enrollment client', () => {
       });
     } catch (error) { failure = error; }
     expect(failure).toMatchObject({ code });
+    expect(classifyServerEndpointError(failure).kind).toBe(kind);
   });
 
   it('distinguishes an unverified destination from a mismatched Home authority', () => {

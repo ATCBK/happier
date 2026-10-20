@@ -72,7 +72,8 @@ describe('managed enrollment historical custody', () => {
       });
       const { registerAndPersistManagedTerminalEnrollmentCredential } = await import('./persistTerminalEnrollmentCredential');
       const completion = registerAndPersistManagedTerminalEnrollmentCredential({ token: token('new'), opened: { type: 'tokenOnly', authenticated: true },
-        runtimeOrigin: 'https://managed-home.test', managedEnrollment, assertCurrent() {} });
+        runtimeOrigin: 'https://managed-home.test', managedEnrollment,
+        homeRetry: { deadlineMs: Date.now() + 5_000, pollIntervalMs: 1 }, assertCurrent() {} });
       if (denied) await expect(completion).rejects.toMatchObject({ isAxiosError: true, response: { status: 403, data: { error: 'managed_enrollment_not_current' } } });
       else await expect(completion).resolves.toMatchObject({ machineId: fixture.machine.id, encryptionType: 'tokenOnly' });
       expect(writes).toEqual(['transition', 'register']);
