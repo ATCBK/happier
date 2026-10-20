@@ -49,6 +49,14 @@ export function resolveHappierCollectionLayoutState(
  */
 export const HappierCollectionDetailWidthContext = createContext<number | null>(null);
 
+/**
+ * Host-provided: the host page owns the open item in its route, so the navigation's own Back (a phone's header)
+ * already closes a pushed detail and returns to the list, and the pushed detail draws no Back of its own. The page's
+ * selection (`model.openKey`) follows its route. A plugin page gets the same through its page chrome
+ * (`navigationBackSpendsStep`); this is the same fact for a core page that is not a plugin surface.
+ */
+export const HappierCollectionNavigationBackClosesDetailContext = createContext(false);
+
 /** @internal */
 export function useHappierCollectionDetailWidth(): number | null {
   return useContext(HappierCollectionDetailWidthContext);

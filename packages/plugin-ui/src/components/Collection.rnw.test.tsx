@@ -117,6 +117,7 @@ import { Heading } from './Foundation.js';
 import { usePluginUiFocusTarget } from './Focus.js';
 import { PageHeader } from './PageHeader.js';
 import { HappierText } from '../presentation/text/Text.js';
+import { HappierCollectionNavigationBackClosesDetailContext } from '../presentation/collection/collectionLayout.js';
 import {
   HappierCollectionRestingRowsContext,
   useHappierCollectionTableRow,
@@ -366,6 +367,7 @@ type HarnessOptions = Readonly<{
   header?: CollectionProps<Entry>['header'];
   footer?: React.ReactNode;
   detail?: 'auto' | 'none';
+  navigationBackClosesDetail?: boolean;
   restingRows?: HappierCollectionRestingRows;
   scroll?: CollectionProps<Entry>['scroll'];
   groupAction?: (
@@ -407,6 +409,7 @@ function Harness(props: HarnessProps): ReactElement {
   });
   return (
     <HappierCollectionRestingRowsContext.Provider value={props.restingRows ?? 'air'}>
+    <HappierCollectionNavigationBackClosesDetailContext.Provider value={props.navigationBackClosesDetail === true}>
     <Collection
       model={model}
       anatomy={props.anatomy ?? anatomy}
@@ -448,6 +451,7 @@ function Harness(props: HarnessProps): ReactElement {
       listTestID="collection-list"
       detailTestID="collection-detail"
     />
+    </HappierCollectionNavigationBackClosesDetailContext.Provider>
     </HappierCollectionRestingRowsContext.Provider>
   );
 }
@@ -2189,6 +2193,19 @@ describe('detail auto', () => {
     expect(view.openChanges.at(-1)).toBeNull();
     await view.setOpen(null);
     expect(visible(view.query('toolbar'))).toBe(true);
+    view.unmount();
+  });
+
+  it('draws no Back of its own in a pushed detail when the host\'s navigation Back already closes it', async () => {
+    const view = mount({
+      navigationBackClosesDetail: true,
+      renderDetail: (key) => <Text testID={`detail:${key}`}>{`Detail ${key}`}</Text>,
+    });
+    view.measure(390);
+    await view.setOpen('a');
+    expect(visible(view.query('collection-detail'))).toBe(true);
+    expect(view.query('detail:a')).not.toBeNull();
+    expect(view.query('collection-detail:back')).toBeNull();
     view.unmount();
   });
 

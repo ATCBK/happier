@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, HappierCollectionNavigationBackClosesDetailContext } from '@happier-dev/plugin-ui/presentation';
 import {
   Collection,
   useHappierCollection,
@@ -63,6 +63,8 @@ const NEW_KEY = 'registry:new';
 type Row = Readonly<{ key: string; source: RegistrySourceDescriptorV1 | null }>;
 const keyOf = (row: Row) => row.key;
 const NEW_ROW: Row = { key: NEW_KEY, source: null };
+/** A page's scroller already scrolls: the Collection's page scroll draws no scroller of its own. */
+const passThroughScroller = (children: React.ReactNode) => children;
 
 /**
  * Registries, one level in (P4 I-7, lab sa R1/R2): every source that lists this kind as a collection beside its
@@ -80,6 +82,14 @@ export function RegistrySourcesView(
     /** A registry was added (or an existing one matched): the opener selects it. */
     onSourceAdded?: (sourceId: string) => void;
     onBack?: () => void;
+    /** On a settings page the resting list is one hairline sheet under the header (a modal's list stays flat on its pane). */
+    pageSheet?: boolean;
+    /**
+     * The host page owns the open source in its route (a phone: opening one pushes a route and the navigation's own
+     * Back, which the route's parent resolves to the list, closes it), so the pushed detail draws no Back of its own.
+     * `value` is the route's source, `null` the list; `onChange` asks the route to open one (`null`: back to the list).
+     */
+    selection?: Readonly<{ value: string | null; onChange: (next: string | null) => void }>;
     testID: string;
   }>,
 ): React.ReactElement {
@@ -92,21 +102,20 @@ export function RegistrySourcesView(
     ],
     [sources.sources],
   );
-  const [openKey, setOpenKey] = React.useState<string | null>(() =>
-    props.initialIntent === 'add' ? NEW_KEY : null,
+  // The person's own choice (a source, the add form, or "none"); until they make one the page's default stands:
+  // a wide page opens the first registry the person added (else the first one) beside the list, a phone rests on
+  // the list and pushes details.
+  const [localChoice, setLocalChoice] = React.useState<string | null | undefined>(() =>
+    props.initialIntent === 'add' ? NEW_KEY : undefined,
   );
-  // Manage opens on the first registry the person added (else the first one), once the list is known. On a phone
-  // the list is the page and details push, so it lands on the list instead.
   const phone = useDeviceType() === 'phone';
-  const settled = React.useRef(props.initialIntent === 'add' || phone);
-  React.useEffect(() => {
-    if (settled.current || !sources.hasValue) return;
-    settled.current = true;
-    const first =
-      sources.sources.find((source) => source.origin.kind === 'user') ??
-      sources.sources[0];
-    if (first) setOpenKey(first.id);
-  }, [sources.hasValue, sources.sources]);
+  const choice = props.selection ? props.selection.value : localChoice;
+  const setOpenKey = props.selection ? props.selection.onChange : setLocalChoice;
+  const defaultKey = React.useMemo(
+    () => (sources.sources.find((source) => source.origin.kind === 'user') ?? sources.sources[0])?.id ?? null,
+    [sources.sources],
+  );
+  const openKey = choice !== undefined ? choice : phone ? null : defaultKey;
 
   const model = useHappierCollection<Row>({
     items: rows,
@@ -187,10 +196,15 @@ export function RegistrySourcesView(
     );
   };
 
+  const resting = phone || openKey === null;
+  // On a settings page the resting list is the page's sheet (page scroll), under the header; the page already scrolls.
+  const pageResting = props.pageSheet === true && openKey === null;
   return (
-    <CoreCollectionScope>
-      <View style={[styles.fill, phone || openKey === null ? styles.restingGutter : null]} testID={props.testID}>
+    <CoreCollectionScope {...(pageResting ? { renderPageScroller: passThroughScroller } : {})}>
+      <HappierCollectionNavigationBackClosesDetailContext.Provider value={props.selection !== undefined}>
+      <View style={[styles.fill, resting && !pageResting ? styles.restingGutter : null]} testID={props.testID}>
         <Collection<Row>
+          {...(pageResting ? { scroll: 'page' as const } : {})}
           model={model}
           anatomy={anatomy}
           accessibilityLabel={t('capabilities.registries.view.listLabel')}
@@ -206,6 +220,7 @@ export function RegistrySourcesView(
           detailTestID={`${props.testID}:detail-pane`}
         />
       </View>
+      </HappierCollectionNavigationBackClosesDetailContext.Provider>
     </CoreCollectionScope>
   );
 }

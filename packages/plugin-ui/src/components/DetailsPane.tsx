@@ -1,7 +1,8 @@
-import type { ReactElement, ReactNode } from 'react';
+import { useContext, type ReactElement, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { resolveHappierUiPalette, useHappierUiInsets, useOptionalHappierUiPalette } from '../environment/context.js';
+import { HappierCollectionNavigationBackClosesDetailContext } from '../presentation/collection/collectionLayout.js';
 import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 
 import {
@@ -175,7 +176,8 @@ export function PushedDetailHeader(props: Readonly<Pick<DetailsPaneProps, 'title
   const headingRef = useCollectionDetailHeadingBindingInternal();
   const translate = usePluginTranslation();
   // The navigation's own Back already returns to the list here: one way back, not two.
-  const hostBack = useHappierPageChromeInternal()?.navigationBackSpendsStep === true;
+  const chromeBack = useHappierPageChromeInternal()?.navigationBackSpendsStep === true;
+  const hostBack = useContext(HappierCollectionNavigationBackClosesDetailContext) || chromeBack;
   const back = (style?: HappierStyleProp) => <View style={style}><IconButton
     icon={<Icon name="back" tone="secondary" />}
     accessibilityLabel={translate('happier.plugin-ui.detailsPane.back', 'Back')}

@@ -227,6 +227,7 @@ export {
   type HappierListDetailLayoutState,
 } from './collection/ListDetailLayout.js';
 export {
+  HappierCollectionNavigationBackClosesDetailContext,
   useHappierCollectionIndexView,
   useHappierCollectionLayout,
   type HappierCollectionIndexView,
