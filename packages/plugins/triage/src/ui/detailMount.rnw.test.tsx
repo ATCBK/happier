@@ -78,10 +78,11 @@ import {
     buildTriageRouteSubPathV1,
 } from './navigation/location.js';
 import { TRIAGE_SHELL_FILL_TEST_ID_V1, TRIAGE_SHELL_DETAIL_REGION_TEST_ID_V1 } from './shell/root.js';
-import { refreshTriageListWindow } from './window/mountedWindow.js';
+import { readTriageListWindowSnapshot, refreshTriageListWindow } from './window/mountedWindow.js';
 import { renderSurface as renderShellSurface } from './surface.js';
 import { renderSurface as renderTasksSurface } from './tasksSurface.js';
 import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../projection/listWindow.js';
+import { TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS } from '../refresh/refreshEligibility.js';
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
 
 /**
@@ -480,13 +481,14 @@ function createHarness(options: Readonly<{
     otherSourceEntry?: boolean;
     deferLinkedEntry?: boolean;
     taskEdit?: boolean;
+    uninstalledSource?: boolean;
 }> = {}) {
     const { collections, control } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow()));
     if (options.secondInstance === true) {
         control.sourceInstances.seed(toCorpusStoredValue(instanceRow(SECOND_INSTANCE)));
     }
-    if (options.otherSourceEntry === true) {
+    if (options.otherSourceEntry === true || options.uninstalledSource === true) {
         control.sourceInstances.seed(toCorpusStoredValue(otherSourceInstanceRow()));
     }
     /** Every connection the mounted detail actually ran a read under. */
@@ -574,7 +576,7 @@ function createHarness(options: Readonly<{
             viewer: testkitViewer(),
             sourceUpdatedAtMs: 2_000,
         }] : [],
-        evidence: { kind: 'walkFinished' },
+        evidence: options.uninstalledSource === true ? { kind: 'partial', reason: 'projection-budget' } : { kind: 'walkFinished' },
         } satisfies TriageScanResultV1;
     };
 
@@ -800,6 +802,7 @@ async function mountShell(
         onDiagnostic?: (data: Readonly<{ code: string }>) => void;
         fixPullRequestState?: 'unprojected' | 'unreachable';
         taskEdit?: boolean;
+        uninstalledSource?: boolean;
         onTaskEdit?: (input: unknown) => void;
         publishCurrentUiContext?: (context: PluginUiContextEnrichmentV1 | null) => void;
         replacePageLocation?: (request: Readonly<{
@@ -817,6 +820,7 @@ async function mountShell(
         ...(options.otherSourceEntry === undefined ? {} : { otherSourceEntry: options.otherSourceEntry }),
         ...(options.deferLinkedEntry === undefined ? {} : { deferLinkedEntry: options.deferLinkedEntry }),
         ...(options.taskEdit === undefined ? {} : { taskEdit: options.taskEdit }),
+        ...(options.uninstalledSource === undefined ? {} : { uninstalledSource: options.uninstalledSource }),
     });
     currentHarness = harness;
     if (options.linkedSessionCount !== undefined) {
@@ -934,9 +938,23 @@ async function openTheRow(shell: PluginUiTestkit): Promise<void> {
     await act(async () => { await Promise.resolve(); });
 }
 
-it('opens the shared Tasks detail, reads full fields and commits a body-only edit despite truncated row facts', async () => {
+it.each(['current', 'uninstalled', 'aged'] as const)('edits the selected task despite truncated row facts and list freshness: %s', async (state) => {
     const edits: ReturnType<typeof TriageEditTaskActionInputV1Schema.parse>[] = [];
-    const shell = await mountShell({ taskEdit: true, onTaskEdit: input => edits.push(TriageEditTaskActionInputV1Schema.parse(input)) });
+    const shell = await mountShell({ taskEdit: true, uninstalledSource: state === 'uninstalled',
+        onTaskEdit: input => edits.push(TriageEditTaskActionInputV1Schema.parse(input)) });
+    if (state === 'aged') {
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS);
+        await act(async () => { await shell.updateSurface(surfaceContext({ taskEdit: true })); });
+        expect(readTriageListWindowSnapshot(shell.context.hostApi, currentHarness!.ephemeralSharedScope).freshness).toBe('stale');
+    }
+    if (state === 'uninstalled') {
+        const snapshot = readTriageListWindowSnapshot(shell.context.hostApi, currentHarness!.ephemeralSharedScope);
+        expect(snapshot).toMatchObject({ pending: 'idle', freshness: 'stale' });
+        expect(snapshot.configuredSources).toHaveLength(2);
+        expect(snapshot.window?.lanes).toEqual(expect.arrayContaining([
+            expect.objectContaining({ sourceInstanceId: OTHER_INSTANCE, health: { kind: 'unavailable' } }),
+        ]));
+    }
     await openTheRow(shell);
     await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Edit task' })); });
     const notes = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]');

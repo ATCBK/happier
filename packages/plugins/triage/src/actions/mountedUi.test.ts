@@ -103,7 +103,7 @@ it.each([
     let pageMount: Awaited<ReturnType<typeof adapter.mount>> | undefined;
     let page: Awaited<ReturnType<typeof createPluginUiTestkit>> | undefined;
     try {
-      await act(async () => {
+      const mountPage = async () => { await act(async () => {
         page = await createPluginUiTestkit({ identity: { instanceId: 'tasks-page', mountNonce: 'page' },
           authorPlugin: { id: PLUGIN_MANIFEST.id, version: PLUGIN_MANIFEST.version },
           surface: renderTasksSurface, launchInput: launch, subPath: 'tasks,mine',
@@ -124,11 +124,17 @@ it.each([
             throw new Error('Account read unavailable');
           } },
         });
-      });
+      }); };
+      await mountPage();
       expect(document.body.textContent).toContain('Where?');
       await expect(page!.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
       // Context snapshots may reconstruct equal JSON after the form has taken custody.
       await act(async () => { await pageMount!.update({ ...page!.context, launchInput: { ...launch } }); });
+      await expect(page!.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
+      // A host can replace its physical surface while settling the execution
+      // origin. The same navigation must keep its unsubmitted draft available.
+      await page!.dispose();
+      await mountPage();
       await expect(page!.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
     } finally { if (page !== undefined) await page.dispose(); }
     received.discard();
