@@ -11,6 +11,8 @@ import { PROVIDER_SETTINGS_LIMITS_V1 } from './limits.js';
 import { ProfileRecordIdV1Schema } from '../../profiles/v2/profileId.js';
 import { QualifiedConnectedAccountPurposeBindingTargetV1Schema } from '../../connect/connectedAccountPurposeBindings.js';
 import { canonicalizeFingerprintValue } from '../fingerprints.js';
+import { computeCanonicalDomainSeparatedDigest } from '../../crypto/canonicalDigest.js';
+import { ProviderModelConfirmationSourceKeyV1Schema } from '../compatibility/sourceFacts.js';
 export { PROVIDER_SETTINGS_LIMITS_V1 } from './limits.js';
 
 export const ProviderManualModelV1Schema = lazyZodSchema(() => z.strictObject({
@@ -125,6 +127,7 @@ export const ProviderExperimentalBindingConfirmationV1Schema = lazyZodSchema(() 
   // Source projections reuse the connection-shaped catalog ref without saving
   // a Provider connection. The qualified target distinguishes that source.
   connectedAccountTarget: z.optional(QualifiedConnectedAccountPurposeBindingTargetV1Schema),
+  catalogSourceKey: z.optional(ProviderModelConfirmationSourceKeyV1Schema),
   agentTargetKey: ProviderAgentTargetKeySchema,
   modelId: z.nullable(ProviderModelIdSchema),
   compatibilityFingerprint: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
@@ -132,9 +135,17 @@ export const ProviderExperimentalBindingConfirmationV1Schema = lazyZodSchema(() 
 }));
 
 export function getProviderExperimentalConfirmationSourceKeyV1(source: Pick<
+  z.infer<typeof ProviderExperimentalBindingConfirmationV1Schema>, 'connectionId' | 'connectedAccountTarget' | 'catalogSourceKey'
+>): string {
+  return JSON.stringify([source.connectionId, source.catalogSourceKey ?? getProviderExperimentalConfirmationCatalogSourceKeyV1(source)]);
+}
+
+export function getProviderExperimentalConfirmationCatalogSourceKeyV1(source: Pick<
   z.infer<typeof ProviderExperimentalBindingConfirmationV1Schema>, 'connectionId' | 'connectedAccountTarget'
 >): string {
-  return JSON.stringify([source.connectionId, canonicalizeFingerprintValue(source.connectedAccountTarget ?? null)]);
+  return computeCanonicalDomainSeparatedDigest('happier.provider-confirmation-source.v1', [
+    source.connectionId, JSON.stringify(canonicalizeFingerprintValue(source.connectedAccountTarget ?? null)),
+  ]);
 }
 
 export function isCanonicalProviderSavedSecretIdV1(value: unknown): value is string {
@@ -247,7 +258,7 @@ export function refineProviderSettingsV1(value: z.infer<typeof ProviderSettingsV
 
   const confirmations = new Set<string>();
   value.experimentalBindingConfirmations.forEach((confirmation, index) => {
-    if (!confirmation.connectedAccountTarget) {
+    if (!confirmation.connectedAccountTarget && !confirmation.catalogSourceKey) {
       assertConnectionRef(confirmation.connectionId, ['experimentalBindingConfirmations', index, 'connectionId']);
     } else if (connectionIds.has(confirmation.connectionId)) {
       ctx.addIssue({ code: 'custom', path: ['experimentalBindingConfirmations', index, 'connectionId'], message: 'Source confirmation cannot reference a saved connection' });
@@ -491,7 +502,7 @@ export function parseProviderSettingsV1Narrow(value: unknown): ProviderSettingsR
   const experimentalBindingConfirmations = uniqueFirst(
     parseArray('experimentalBindingConfirmations', ProviderExperimentalBindingConfirmationV1Schema, PROVIDER_SETTINGS_LIMITS_V1.experimentalBindingConfirmations)
       .filter((entry, index) => {
-        if (entry.connectedAccountTarget ? !connectionIds.has(entry.connectionId) : connectionIds.has(entry.connectionId)) return true;
+        if (entry.connectedAccountTarget || entry.catalogSourceKey ? !connectionIds.has(entry.connectionId) : connectionIds.has(entry.connectionId)) return true;
         diagnostics.push({ path: `experimentalBindingConfirmations[${index}]`, reason: 'invalid_reference' });
         return false;
       }),

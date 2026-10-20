@@ -62,6 +62,8 @@ import { PluginLocalizedStringV2Schema } from '../plugins/contributions/publicTy
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 import { TeamCredentialSourceBindingV1Schema } from '../teams/credentials/sourceBindingV1.js';
 import { TeamCredentialResourceTestApplicationRequestV1Schema } from '../teams/credentials/externalProviderApiV1.js';
+import { TeamCredentialProviderModelCatalogEntryV1Schema } from '../teams/credentials/resourceV1.js';
+import { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema, ProviderModelConfirmationSourceKeyV1Schema } from '../providers/compatibility/sourceFacts.js';
 
 const ProviderRpcIdentityV1Schema = lazyZodSchema(() => z.strictObject({
   connectionId: ProviderConnectionIdSchema,
@@ -686,6 +688,10 @@ export const DaemonProviderModelProjectionRequestV1Schema = lazyZodSchema(() => 
     expectedConnectionSecurityFingerprint: ProviderConnectionSecurityFingerprintV1Schema,
   })),
   connectedAccountTarget: z.optional(QualifiedConnectedAccountPurposeBindingTargetV1Schema),
+  /** Team source facts do not require the recipient Agent on this Machine. */
+  sourceCatalog: z.optional(z.literal(true)),
+  /** Recipient-side projection: compatibility is recomputed by this Machine. */
+  teamCredentialModel: z.optional(TeamCredentialProviderModelCatalogEntryV1Schema),
   mode: z.optional(z.enum(['picker', 'management'])),
   /** Presentation scope; selecting a source alone never mutates session intent. */
   sourceConnectionId: z.optional(ProviderConnectionIdSchema),
@@ -697,6 +703,10 @@ export const DaemonProviderModelProjectionRequestV1Schema = lazyZodSchema(() => 
   forceRefresh: z.optional(z.literal(true)),
   currentSelection: z.optional(ProviderBoundModelRefSchema),
 }).check(z.superRefine((value, ctx) => {
+  if (value.teamCredentialModel && (value.teamCredentialModel.selection.agentTargetKey !== value.agentTargetKey
+    || value.providerConnection || value.connectedAccountTarget || value.sourceCatalog)) {
+    ctx.addIssue({ code: 'custom', path: ['teamCredentialModel'], message: 'Recipient model projection requires one matching Team model source' });
+  }
   if (value.currentSelection && value.currentSelection.agentTargetKey !== value.agentTargetKey) {
     ctx.addIssue({ code: 'custom', path: ['currentSelection', 'agentTargetKey'], message: 'Current selection belongs to another agent target' });
   }
@@ -811,6 +821,8 @@ export const DaemonProviderModelProjectionRowV1Schema = lazyZodSchema(() => z.st
   /** Admitted source slots for grouping, independent of the selected downstream protocol. */
   gatewaySlots: z.optional(z.array(QualifiedConnectedAccountPurposeBindingV1Schema)),
   application: z.optional(ProviderBrokerApplicationBindingV1Schema),
+  sourceFacts: z.optional(ProviderModelBindingSourceV1Schema),
+  confirmationSource: z.optional(ProviderModelConfirmationSourceV1Schema),
   requestPolicySupport: z.optional(DaemonProviderTeamCredentialRequestPolicySupportV1Schema),
   /** Non-secret source-owned facts needed to materialize an admitted direct API key. */
   directMaterialization: z.optional(z.strictObject({
@@ -1075,8 +1087,7 @@ export function admitTeamCredentialSourceModelRowsV1(response: unknown):
         failure ??= { status: 'unavailable', reason: 'response_invalid' };
         return [];
       }
-      if (row.compatibility.result.status === 'incompatible'
-        || (row.compatibility.result.status === 'experimental' && !row.compatibility.confirmed)) {
+      if (!row.sourceFacts && row.compatibility.result.status === 'incompatible') {
         failure ??= { status: 'unavailable', reason: 'incompatible' };
         return [];
       }
@@ -1141,6 +1152,7 @@ export const DaemonProviderModelSettingsMutationRequestV1Schema = lazyZodSchema(
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderModelSettingsMutationBaseV1Schema, {
     action: z.literal('confirmExperimental'), connectionId: ProviderConnectionIdSchema,
     connectedAccountTarget: z.optional(QualifiedConnectedAccountPurposeBindingTargetV1Schema),
+    catalogSourceKey: z.optional(ProviderModelConfirmationSourceKeyV1Schema),
     expectedConnectionRevision: z.number().check(z.int(), z.nonnegative()),
     agentTargetKey: BackendTargetKeyV2Schema, modelId: z.nullable(ProviderModelIdSchema),
     compatibilityFingerprint: ProviderCompatibilityFingerprintV1Schema,

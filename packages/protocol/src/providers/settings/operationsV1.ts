@@ -186,7 +186,7 @@ export function setProviderExperimentalConfirmationV1(
   input: Readonly<Omit<ProviderSettingsV1['experimentalBindingConfirmations'][number], 'v'>>,
 ): ProviderSettingsV1 {
   const parsed = assertProviderSettingsV1WithinLimits(settings);
-  if (!input.connectedAccountTarget) requireProviderConnection(parsed, input.connectionId);
+  if (!input.connectedAccountTarget && !input.catalogSourceKey) requireProviderConnection(parsed, input.connectionId);
   const confirmation = ProviderExperimentalBindingConfirmationV1Schema.parse({ v: 1, ...input });
   const remaining = parsed.experimentalBindingConfirmations.filter((candidate) => !(
     getProviderExperimentalConfirmationSourceKeyV1(candidate) === getProviderExperimentalConfirmationSourceKeyV1(confirmation)

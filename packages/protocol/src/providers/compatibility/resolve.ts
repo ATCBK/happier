@@ -1,4 +1,5 @@
 import { ProviderEndpointTemplateV1Schema, type ProviderEndpointTemplateV1 } from '../contributions/v1.js';
+import { ProviderModelBindingSourceV1Schema } from './sourceFacts.js';
 import {
   ProviderApiKeyCredentialRequirementV1Schema,
   type ProviderApiKeyCredentialRequirementV1,
@@ -23,6 +24,8 @@ import {
 } from './v1.js';
 
 export type { AgentProviderRequirementsV1 } from './v1.js';
+export { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema, projectProviderModelSourceStateV1 } from './sourceFacts.js';
+export type { ProviderModelBindingSourceV1 } from './sourceFacts.js';
 
 const CAPABILITY_REASON_CODES = {
   streaming: {
@@ -125,6 +128,10 @@ export type ResolveProviderBindingCompatibilityInputV1 = Readonly<{
   compatibilityOverrides?: readonly ProviderCompatibilityOverrideV1[];
 }>;
 
+type ProviderBindingSourceCompatibilityInputV1 = Omit<ResolveProviderBindingCompatibilityInputV1, 'endpoints'> & Readonly<{
+  endpoints: readonly Pick<ProviderEndpointTemplateV1, 'id' | 'protocol' | 'capabilities'>[];
+}>;
+
 function findCompatibilityOverride(
   overrides: readonly ProviderCompatibilityOverrideV1[],
   agentTargetKey: string,
@@ -135,7 +142,7 @@ function findCompatibilityOverride(
 }
 
 function resolveProviderBindingCompatibilityV1(
-  params: ResolveProviderBindingCompatibilityInputV1,
+  params: ProviderBindingSourceCompatibilityInputV1,
 ): ProviderBindingCompatibilityV1 {
   const agentTargetKey = ProviderAgentTargetKeySchema.parse(params.agentTargetKey);
   const compatibilityOverrides = params.compatibilityOverrides ?? [];
@@ -288,6 +295,16 @@ export function resolveProviderBindingCompatibilityWithFingerprintV1(
   result: ProviderBindingCompatibilityV1;
   compatibilityFingerprint: string;
 }> {
+  return resolveCompatibilityWithFingerprint({ ...params,
+    endpoints: params.endpoints.map(endpoint => ProviderEndpointTemplateV1Schema.parse(endpoint)),
+  }, positiveAdapterVersion(params.adapterVersion));
+}
+
+/** Recipient-safe source facts omit endpoint addresses; the same canonical
+ * compatibility decision is evaluated against the worker's actual adapter. */
+export function resolveProviderBindingCompatibilityFromSourceFactsV1(
+  params: ProviderBindingSourceCompatibilityInputV1 & Readonly<{ adapterVersion: number }>,
+) {
   return resolveCompatibilityWithFingerprint(params, positiveAdapterVersion(params.adapterVersion));
 }
 
@@ -295,16 +312,19 @@ export function resolveProviderBindingCompatibilityWithFingerprintV1(
 export function resolveProviderBindingDeclarationCompatibilityV1(
   params: ResolveProviderBindingCompatibilityInputV1,
 ): Readonly<{ result: ProviderBindingCompatibilityV1; compatibilityFingerprint: string }> {
-  return resolveCompatibilityWithFingerprint(params, null);
+  return resolveCompatibilityWithFingerprint({ ...params,
+    endpoints: params.endpoints.map(endpoint => ProviderEndpointTemplateV1Schema.parse(endpoint)),
+  }, null);
 }
 
 function resolveCompatibilityWithFingerprint(
-  params: ResolveProviderBindingCompatibilityInputV1,
+  params: ProviderBindingSourceCompatibilityInputV1,
   adapterVersion: number | null,
 ): Readonly<{ result: ProviderBindingCompatibilityV1; compatibilityFingerprint: string }> {
   if ('result' in params) throw new TypeError('Compatibility result is derived by the canonical resolver');
   const agentTargetKey = ProviderAgentTargetKeySchema.parse(params.agentTargetKey);
-  const endpoints = params.endpoints.map((endpoint) => ProviderEndpointTemplateV1Schema.parse(endpoint));
+  const endpoints = params.endpoints.map(({ id, protocol, capabilities }) =>
+    ProviderModelBindingSourceV1Schema.shape.endpoint.parse({ id, protocol, capabilities }));
   if (new Set(endpoints.map((endpoint) => endpoint.protocol)).size !== endpoints.length) {
     throw new TypeError('Compatibility inputs require at most one endpoint per protocol');
   }
