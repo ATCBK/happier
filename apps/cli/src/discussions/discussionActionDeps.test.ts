@@ -18,8 +18,8 @@ import { verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol/acti
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
-const { axiosRequest } = vi.hoisted(() => ({ axiosRequest: vi.fn() }));
-vi.mock('axios', () => ({ default: { request: axiosRequest } }));
+const { axiosRequest, axiosGet } = vi.hoisted(() => ({ axiosRequest: vi.fn(), axiosGet: vi.fn() }));
+vi.mock('axios', () => ({ default: { request: axiosRequest, get: axiosGet } }));
 
 import { createDiscussionActionDeps } from './discussionActionDeps';
 import { createResourceDataKey, openResourceDataKey } from '@/api/encryption/resourceDataKey';
@@ -27,6 +27,8 @@ import { libsodiumPublicKeyFromSecretKey } from '@/api/encryption';
 import { deriveKey } from '@/utils/deriveKey';
 import { openSessionStoredContent, sealSessionStoredContent, type SessionStoredContentCryptoContext } from '@/session/transport/encryption/sessionStoredContentCodec';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createCurrentSessionProjectionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 
 const credentials = { token: 'token-1', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) } };
 const keyless = { token: 'token-1', encryption: null };
@@ -118,6 +120,19 @@ describe('Home Discussion resource transport', () => {
   });
 
   it('feeds admitted executable participants through the SessionTarget front door without starting model slots', async () => {
+    // The complete CLI host resolves the bound source through its real reader;
+    // only these authenticated Home HTTP responses are substituted.
+    axiosGet.mockImplementation(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: currentness('plain') };
+      if (path === '/v2/sessions/origin-session') return { status: 200, data: {
+        session: createCurrentSessionProjectionRecordFixture({ id: 'origin-session', encryptionMode: 'plain', metadata: '{}', share: null,
+          effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+            capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
+        }),
+      } };
+      throw new Error('Unexpected source Session read: ' + path);
+    });
     const requests: string[] = [];
     axiosRequest.mockImplementation(async (request: { url: string; method: string }) => {
       requests.push(request.url);
@@ -130,8 +145,9 @@ describe('Home Discussion resource transport', () => {
       sessionSendMessage: async ({ sessionId }) => { received.push(sessionId); return { status: 'accepted', localId: 'input-1' }; },
       isActionApprovalRequired: () => false,
     });
-    expect(await executor.execute('session.message.send', { sessionId: { selector: 'discussion', discussionId: 'discussion-1' },
-      message: 'Question' }, { ...context, defaultSessionId: 'origin-session' }))
+    const sent = await executor.execute('session.message.send', { sessionId: { selector: 'discussion', discussionId: 'discussion-1' },
+      message: 'Question' }, { ...context, defaultSessionId: 'origin-session' });
+    expect(sent, JSON.stringify(sent))
       .toMatchObject({ ok: true, result: { kind: 'fanout', results: [{ target: { serverId: 'server-1', sessionId: 'participant-session' },
         result: { ok: true, result: { status: 'accepted' } } }] } });
     expect(received).toEqual(['participant-session']);
@@ -152,7 +168,9 @@ describe('Home Discussion resource transport', () => {
       } };
       return original(request);
     });
-    const executor = discussionExecutor({ discussionAction: action() });
+    // This host has no approval transport; the real Action policy must refuse
+    // until the caller supplies the persisted surface waiver below.
+    const executor = discussionExecutor({ discussionAction: action(), approvalsCreate: undefined });
     const participant = { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } };
     expect(await executor.execute('discussion.create', { ...createInput, participants: [participant] }, context))
       .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
