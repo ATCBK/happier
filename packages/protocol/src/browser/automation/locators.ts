@@ -64,10 +64,19 @@ export function normalizeBrowserAutomationLocator(payload: Readonly<Record<strin
   }
 }
 
+type BrowserLocatorElement = Readonly<{
+  tagName: string;
+  textContent: string | null;
+  getAttribute(name: string): string | null;
+  children?: ArrayLike<BrowserLocatorElement>;
+}>;
+
 /** Browser-safe, self-contained resolution shared by CDP expressions and the installed collector. */
-export function resolveBrowserLocatorElements(locator: ParsedLocator, page: Pick<Document, 'querySelectorAll'>): Element[] {
+export function resolveBrowserLocatorElements<E extends BrowserLocatorElement>(locator: ParsedLocator, page: Readonly<{
+  querySelectorAll(selector: string): ArrayLike<E>;
+}>): E[] {
   // Methods keep this function serializable even when a source runner preserves function names.
-  const names = { read(element: Element) { return (element.getAttribute('aria-label') || element.textContent || '').replace(/\s+/gu, ' ').trim(); } };
+  const names = { read(element: BrowserLocatorElement) { return (element.getAttribute('aria-label') || element.textContent || '').replace(/\s+/gu, ' ').trim(); } };
   try {
     if (locator.strategy === 'css') return Array.from(page.querySelectorAll(locator.selector));
     if (locator.strategy === 'testid') {
@@ -77,7 +86,7 @@ export function resolveBrowserLocatorElements(locator: ParsedLocator, page: Pick
     if (locator.strategy === 'text') {
       const structural = new Set(['html', 'body', 'head', 'script', 'style', 'noscript']);
       const needle = locator.text;
-      const matching = { read(element: Element) { return !structural.has(element.tagName.toLowerCase()) && names.read(element).includes(needle); } };
+      const matching = { read(element: BrowserLocatorElement) { return !structural.has(element.tagName.toLowerCase()) && names.read(element).includes(needle); } };
       return elements.filter(element => {
         if (!matching.read(element)) return false;
         const descendants = Array.from(element.children ?? []);
