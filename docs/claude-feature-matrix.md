@@ -35,6 +35,11 @@ its debug log exists. The entry includes redacted error text and the existing
 error disposition; user cancellation and owned teardown remain debug-only.
 Resume validation and provider identity preservation are unchanged.
 
+Development-source session discovery accepts `SessionStart` hooks and eventless
+SDK/offline discoveries. Other hook events, including `SessionEnd`, continue to
+reach lifecycle handling but cannot replace the active Claude resume identity,
+transcript path, or owned-session lineage during local/remote handoff.
+
 Development-source transcript ingestion and UI normalization share
 `providers.claude.isClaudeInternalEventType` from `@happier-dev/agents` for
 non-conversation records, including Claude SDK `command_lifecycle` status events.
