@@ -6,7 +6,7 @@ import { Parser, type DefaultTreeAdapterMap } from 'parse5';
 /** Retain only the document head needed for CSP admission; the body follows stream backpressure. */
 export function createCollectorHtmlStream(input: Readonly<{
     encoding: string;
-    decoder: TextDecoder;
+    decoder: InstanceType<typeof TextDecoder>;
     maxBytes?: number;
     admitHead: (html: string, tree: DefaultTreeAdapterMap['document']) => string;
     write: (chunk: Uint8Array) => void | Promise<void>;

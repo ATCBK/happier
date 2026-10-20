@@ -166,7 +166,7 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
             if (collectHtml) {
                 const encoding = header(headers, 'content-encoding').trim().toLowerCase();
                 const charset = /charset\s*=\s*["']?([^;"'\s]+)/i.exec(header(headers, 'content-type'))?.[1] ?? 'utf-8';
-                let decoder: TextDecoder | undefined;
+                let decoder: InstanceType<typeof TextDecoder> | undefined;
                 try { decoder = new TextDecoder(charset); } catch { /* Unsupported charsets stream unchanged. */ }
                 if (decoder && ['', 'identity', 'gzip', 'deflate', 'br'].includes(encoding)) {
                     htmlStream = createCollectorHtmlStream({ encoding, decoder, maxBytes: input.preview.policy?.maxResponseBodyBytes,
