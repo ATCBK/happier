@@ -934,8 +934,12 @@ describe('Account encryption current Home authority', () => {
     it('emits the request-bound body only for a restored pinned Account key', async () => {
         const home = await mountCurrentEncryptionHome({ mode: 'plain', retainedCredential: true, password: true, mutableDeviceCustody: true });
         try {
-            await act(async () => { await home.screen.findByTestId('settings-account-encryption-mode-switch')?.props.onValueChange(true); });
-            expect(home.migrations, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toHaveLength(1);
+            await act(async () => {
+                await home.screen.findByTestId('settings-account-encryption-mode-switch')?.props.onValueChange(true);
+                // The rendered Switch dispatches a native event; its return value is
+                // not the completion of the password Worker or migration request.
+                await vi.waitFor(() => expect(home.migrations, home.requests.map(({ method, path }) => `${method} ${path}`).join('\n')).toHaveLength(1));
+            });
             const migration = home.migrations[0];
             expect(migration).toMatchObject({ toMode: 'e2ee', expectedAccountVersion: 4, expectedSettingsVersion: 0,
                 expectedSigningKeyFingerprint: expect.any(String), expectedContentKeyFingerprint: expect.any(String),
