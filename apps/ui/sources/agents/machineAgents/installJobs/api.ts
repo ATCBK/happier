@@ -7,7 +7,7 @@ import {
     type DaemonAgentInstallCancelRequest,
 } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { isRpcMethodNotFoundResult, RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
+import { RpcError, isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
@@ -18,9 +18,10 @@ export type AgentInstallJobRpcTarget = Readonly<{
     signal?: AbortSignal;
 }>;
 
-export class AgentInstallJobRpcError extends Error {
+export class AgentInstallJobRpcError extends RpcError {
     constructor(public readonly code: string, message = code) {
-        super(message);
+        // Preserve the RPC owner's typed refusal through the shared Action executor.
+        super(message, code);
         this.name = 'AgentInstallJobRpcError';
     }
 }
