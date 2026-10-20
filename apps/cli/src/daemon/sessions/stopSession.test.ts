@@ -286,6 +286,7 @@ describe('createStopSession', () => {
     await expect(stop('sess-stranded-dead-host')).resolves.toEqual({ status: 'stopped' });
     expect(recoverStrandedTerminalControlServiceability).toHaveBeenCalledWith({
       sessionId: 'sess-stranded-dead-host',
+      stoppedAt: expect.any(Number),
     });
   });
 
@@ -743,6 +744,7 @@ describe('createStopSession', () => {
     expect(recoverStrandedTerminalControlServiceability).toHaveBeenCalledWith({
       sessionId: attachment.sessionId,
       expectedAttachmentId: attachment.attachmentId,
+      stoppedAt: expect.any(Number),
     });
     expect(removeHostAttachmentInfo).toHaveBeenCalledWith({
       happyHomeDir: expect.any(String),

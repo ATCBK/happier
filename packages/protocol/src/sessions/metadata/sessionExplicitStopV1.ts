@@ -8,7 +8,7 @@ export const SessionExplicitStopV1Schema = lazyZodSchema(() => z.strictObject({
   cause: z.literal('explicit_stop'),
   requestId: z.string().check(z.trim(), z.minLength(1)),
   requestedAtMs: z.number().check(z.int(), z.nonnegative()),
-  /** Present only when an admitted current manager authored Stop. Legacy holds are person-only. */
+  /** Present only when an admitted managing Session authored Stop. Legacy holds are person-only. */
   managerSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
 }));
 export type SessionExplicitStopV1 = z.infer<typeof SessionExplicitStopV1Schema>;

@@ -281,12 +281,19 @@ async function stopSessionViaMarkersBestEffort(params: Readonly<{
       timeoutMs: resolveSessionControlStopTimeoutMs(),
       pollIntervalMs: resolveSessionControlStopPollIntervalMs(),
     }),
-    retireExactTerminalControlServiceability: async ({ attachmentInfo, terminalMode }) => {
+    retireAbsentTerminalControlServiceability: async ({ trackedSession, stoppedAt }) =>
+      await retireExactTerminalControlServiceability({
+        credentials: params.credentials, sessionId, terminalMode: 'plain', stoppedAt,
+        expectedRunner: { pid: trackedSession.sessionRunnerPid ?? trackedSession.pid,
+          startTimeMs: trackedSession.runnerProcessIdentity?.processStartTimeMs ?? trackedSession.processStartTimeMs },
+      }),
+    retireExactTerminalControlServiceability: async ({ attachmentInfo, terminalMode, stoppedAt }) => {
       return await retireExactTerminalControlServiceability({
         credentials: params.credentials,
         sessionId,
         attachmentId: attachmentInfo.attachmentId,
         terminalMode,
+        stoppedAt,
       });
     },
   })(sessionId);

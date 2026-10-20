@@ -5082,12 +5082,13 @@ export async function startDaemonSessionControlRuntime(
   const stopSessionCore = createStopSession({
     ownerRemainder,
     pidToTrackedSession: params.pidToTrackedSession,
-    retireAbsentTerminalControlServiceability: async ({ sessionId, trackedSession, metadataContext }) =>
+    retireAbsentTerminalControlServiceability: async ({ sessionId, trackedSession, metadataContext, stoppedAt }) =>
       await retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession,
         publishRetirement: () => retireTerminalControlServiceabilityForCurrentAccount({
         sessionId,
         ...(metadataContext ? { metadataContext } : {}),
         terminalMode: 'plain',
+        stoppedAt,
         expectedRunner: {
           pid: trackedSession.sessionRunnerPid ?? trackedSession.pid,
           startTimeMs: trackedSession.runnerProcessIdentity?.processStartTimeMs ?? trackedSession.processStartTimeMs,
@@ -5103,6 +5104,7 @@ export async function startDaemonSessionControlRuntime(
       sessionId,
       expectedAttachmentId,
       metadataContext,
+      stoppedAt,
     }) =>
       await recoverStrandedTerminalControlServiceability({
         credentials: metadataContext?.credentials ?? params.credentials,
@@ -5111,6 +5113,7 @@ export async function startDaemonSessionControlRuntime(
         currentMachineId: params.machineId,
         sessionId,
         expectedAttachmentId,
+        stoppedAt,
         loadTerminalHostAdapters: async () =>
           (await params.loadTerminalHostAdapters?.()) ?? {},
         retireExactTerminalControlServiceability: async (input) =>
@@ -5144,11 +5147,13 @@ export async function startDaemonSessionControlRuntime(
       attachmentInfo,
       terminalMode,
       metadataContext,
+      stoppedAt,
     }) => {
       return await retireTerminalControlServiceabilityForCurrentAccount({
         sessionId,
         attachmentId: attachmentInfo.attachmentId,
         terminalMode,
+        stoppedAt,
         ...(metadataContext ? { metadataContext } : {}),
       });
     },

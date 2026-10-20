@@ -58,7 +58,10 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
       const patch = vi.spyOn(axios, 'patch').mockImplementation(async (_url, body) => {
         if (!online) throw refusal();
         const parsed = SessionMetadataTuplePatchV1Schema.parse(body);
-        expect(parsed).toMatchObject({ mode: 'owner_migration', target: { ownerMetadata: { t: 'plain', v: { runtime: {
+        if (modeOnly) expect(parsed).toMatchObject({ mode: 'owner_migration', target: { ownerMetadata: { t: 'plain', v: { runtime: {
+          lifecycleState: 'stopped', lifecycleStateSince: expect.any(Number), terminal: { mode: 'tmux' },
+        } } } } });
+        else expect(parsed).toMatchObject({ mode: 'owner_migration', target: { ownerMetadata: { t: 'plain', v: { runtime: {
           terminal: { mode: wiring === 'missing-owned-host' ? 'tmux' : 'plain', controlServiceabilityV1: {
             retired: true, ...(wiring === 'missing-owned-host' ? { attachmentId: 'retired-owned-host' } : {}) } } } } } } });
         retired = true;
@@ -79,9 +82,9 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
         onFinalTrackedSessionExitStaged: async () => {
           await resolveTrackedSessionTerminalHostExitCandidate({ tracked, pid, happyHomeDir: homeDir, attachmentInfo: null });
         } });
-      const retire = async () => {
+      const retire = async (stoppedAt?: number) => {
         const input = { credentials: { token: 'fixture', encryption: null }, sessionId, terminalMode: 'plain' as const,
-          expectedRunner: { pid, startTimeMs: identity.processStartTimeMs } };
+          expectedRunner: { pid, startTimeMs: identity.processStartTimeMs }, stoppedAt };
         const retirement = await retireExactTerminalControlServiceability(input);
         retirementResult = retirement;
         expect(retirement).toBe('retired');
@@ -93,8 +96,8 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
       try {
         if (wiring !== 'live-child') { child.kill('SIGTERM'); await exited; }
         const stop = createStopSession({ pidToTrackedSession: sessions, areTrackedRunnersExited: observeExit,
-          waitForTrackedRunnersExit: observeExit, retireAbsentTerminalControlServiceability: () =>
-            retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession: tracked, publishRetirement: retire }),
+          waitForTrackedRunnersExit: observeExit, retireAbsentTerminalControlServiceability: ({ stoppedAt }) =>
+            retireStoppedPlainRunnerControlServiceability({ sessionId, trackedSession: tracked, publishRetirement: () => retire(stoppedAt) }),
           // Refuse OS effect authority for the live-child sensitivity vector.
           retireUpstreamAuthorityBeforeProcessStop: wiring === 'live-child' ? async () => false : undefined });
         const result = StopSessionResultSchema.parse(await stop(sessionId));
@@ -110,7 +113,7 @@ describe.skipIf(process.platform !== 'linux')('offline Stop through physical exi
             orphanedDeadDaemonSessions: recovery.orphanedDeadDaemonSessions,
             retireTerminalControlServiceability: async () => { await retire(); } })).toEqual([]);
           expect(await readSessionMarkerForPid(pid)).toBeNull();
-          expect(retired).toBe(false);
+          expect(retired).toBe(true);
         } else if (wiring === 'bound' || wiring === 'missing-owned-host' || wiring === 'mode-only-offline'
             || wiring === 'terminal-started-offline') {
           expect(result).toEqual({ status: 'stopped' });

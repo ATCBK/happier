@@ -54,6 +54,8 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
     sessionId: string;
     currentness?: SessionMetadataMutationCurrentness;
     resolveAuthorizationHeaders?: Parameters<typeof updateSessionMetadataWithRetry>[0]['resolveAuthorizationHeaders'];
+    /** Supplied only by the physical Stop owner after positive process/host retirement. */
+    stoppedAt?: number;
 }> & TerminalControlServiceabilityRetirementTarget): Promise<ExactTerminalControlServiceabilityRetirement> {
     const matchesExpectedRunner = (metadata: Readonly<{ hostPid?: number; hostProcessStartTimeMs?: number }>) =>
         !params.expectedRunner || (metadata.hostPid === params.expectedRunner.pid
@@ -80,6 +82,10 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
     }
     let retiredAttachmentId = params.attachmentId;
     let projectionAlreadyAbsent = false;
+    const withStoppedLifecycle = (metadata: Record<string, unknown>) => params.stoppedAt === undefined
+        || metadata.lifecycleState === 'stopped' && typeof metadata.lifecycleStateSince === 'number'
+        ? metadata
+        : { ...metadata, lifecycleState: 'stopped', lifecycleStateSince: params.stoppedAt };
     const updated = await updateSessionMetadataWithRetry({
         token: params.credentials.token,
         credentials: params.credentials,
@@ -108,7 +114,7 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
                 if (terminal && typeof terminal === 'object' && !Array.isArray(terminal)
                     && !('controlServiceabilityV1' in terminal)) {
                     projectionAlreadyAbsent = true;
-                    return metadata;
+                    return withStoppedLifecycle(metadata);
                 }
                 if (terminal && typeof terminal === 'object' && !Array.isArray(terminal)) {
                     const serviceability = (terminal as Record<string, unknown>).controlServiceabilityV1;
@@ -118,12 +124,20 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
                     }
                 }
             }
-            return clearTerminalControlServiceabilityProjection({
+            const retired = clearTerminalControlServiceabilityProjection({
                 metadata,
                 retiredAttachmentId,
                 retiredAt: Date.now(),
                 terminalMode: params.terminalMode,
             });
+            const serviceability = retired.terminal && typeof retired.terminal === 'object' && !Array.isArray(retired.terminal)
+                ? (retired.terminal as Record<string, unknown>).controlServiceabilityV1 : null;
+            // Clearing a stale attachment is a no-op. It cannot authorize a
+            // terminal fact about the replacement that now owns the Session.
+            return serviceability && typeof serviceability === 'object' && !Array.isArray(serviceability)
+                && (serviceability as Record<string, unknown>).attachmentId === retiredAttachmentId
+                && (serviceability as Record<string, unknown>).retired === true
+                ? withStoppedLifecycle(retired) : retired;
         },
     });
     if (!matchesExpectedRunner(updated.metadata)) return 'superseded';

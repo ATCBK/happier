@@ -6,12 +6,79 @@ import { withConfiguredDaemonTestHome } from '../testkit/fakeDaemonLifecycle.tes
 import { writeTerminalHostAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
 
 import { retireExactTerminalControlServiceability } from './retireTerminalControlServiceability';
+import { recoverStrandedTerminalControlServiceability } from './recoverStrandedTerminalControlServiceability';
 
 describe('retireExactTerminalControlServiceability', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it.each(['current', 'already-retired', 'replacement'] as const)(
+        'publishes confirmed Stop only for the exact %s terminal attachment', async state => {
+        vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200,
+            data: String(url).includes('/v2/sessions/') ? {
+                session: createSessionRecordFixture({ id: 'session-confirmed-stop', encryptionMode: 'plain',
+                    metadataLayoutVersion: 0, metadataVersion: 1,
+                    metadata: JSON.stringify({ path: '/repo', lifecycleState: 'running', terminal: { mode: 'tmux',
+                        controlServiceabilityV1: { v: 1, attachmentId: state === 'replacement' ? 'new-attachment' : 'old-attachment',
+                            state: 'unknown', observedAt: 1, ...(state === 'already-retired' ? { retired: true } : {}) } } }) }),
+            } : { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } }));
+        const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: {
+            success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 0 },
+        } });
+        const result = await retireExactTerminalControlServiceability({ credentials: { token: 'fixture', encryption: null },
+            sessionId: 'session-confirmed-stop', terminalMode: 'tmux', attachmentId: 'old-attachment', stoppedAt: 1234 });
+        if (state === 'replacement') {
+            expect(result).toBe('superseded');
+            expect(patch).not.toHaveBeenCalled();
+        } else {
+            expect(result).toBe('retired');
+            const request = SessionMetadataTuplePatchV1Schema.parse(patch.mock.calls[0]?.[1]);
+            expect(request).toMatchObject({ target: { ownerMetadata: { t: 'plain', v: { runtime: {
+                lifecycleState: 'stopped', lifecycleStateSince: 1234,
+            } } } } });
+        }
+    });
+
+    it.each(['explicit-stop', 'observation', 'replacement'] as const)(
+        'requires explicit Stop and the original dead runner for stranded publication: %s', async scenario => {
+        await withConfiguredDaemonTestHome({ prefix: 'stranded-stop-' }, async () => {
+            let sessionReads = 0;
+            const pid = 999_123_456;
+            vi.spyOn(axios, 'get').mockImplementation(async url => {
+                const sessionRead = String(url).includes('/v2/sessions/');
+                if (sessionRead) sessionReads++;
+                return { status: 200, data: sessionRead ? {
+                    session: createSessionRecordFixture({ id: 'session-stranded-stop', encryptionMode: 'plain',
+                        metadataLayoutVersion: 0, metadataVersion: 1,
+                        metadata: JSON.stringify({ path: '/repo', machineId: 'machine-1', lifecycleState: 'running',
+                            hostPid: scenario === 'replacement' && sessionReads > 1 ? pid + 1 : pid,
+                            hostProcessStartTimeMs: 50, terminal: { mode: 'plain' } }) }),
+                } : { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+            });
+            const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: {
+                success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 0 },
+            } });
+            const credentials = { token: 'fixture', encryption: null };
+            const result = await recoverStrandedTerminalControlServiceability({ credentials, currentMachineId: 'machine-1',
+                sessionId: 'session-stranded-stop', ...(scenario === 'observation' ? {} : { stoppedAt: 1234 }),
+                loadTerminalHostAdapters: async () => ({}),
+                retireExactTerminalControlServiceability: target => retireExactTerminalControlServiceability({ credentials, ...target }),
+            });
+            if (scenario === 'explicit-stop') {
+                expect(result).toEqual({ status: 'stopped' });
+                expect(SessionMetadataTuplePatchV1Schema.parse(patch.mock.calls[0]?.[1])).toMatchObject({
+                    target: { ownerMetadata: { t: 'plain', v: { runtime: { lifecycleState: 'stopped', lifecycleStateSince: 1234 } } } },
+                });
+            } else {
+                expect(result).toEqual(scenario === 'observation' ? { status: 'stopped' }
+                    : { status: 'incomplete', reason: 'attachment_mismatch' });
+                expect(patch).not.toHaveBeenCalled();
+            }
+        });
     });
 
     it.each(['plain', 'tmux'] as const)('finishes %s control retirement when the Session has been deleted', async terminalMode => {
@@ -109,7 +176,7 @@ describe('retireExactTerminalControlServiceability', () => {
                 : { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } }));
             const patch = vi.spyOn(axios, 'patch').mockRejectedValue(new Error('Unexpected metadata retirement'));
             const retirement = retireExactTerminalControlServiceability({ credentials: { token: 'fixture', encryption: null },
-                sessionId, terminalMode: 'plain', expectedRunner: { pid, startTimeMs: 1 } });
+                sessionId, terminalMode: 'plain', expectedRunner: { pid, startTimeMs: 1 }, stoppedAt: 1234 });
             if (state === 'replacement-runner') await expect(retirement).resolves.toBe('superseded');
             else await expect(retirement).rejects.toThrow('terminal_control_serviceability_retirement_runner_or_host_unresolved');
             expect(patch).not.toHaveBeenCalled();
@@ -151,6 +218,7 @@ describe('retireExactTerminalControlServiceability', () => {
                         metadataLayoutVersion: 0,
                         metadata: JSON.stringify({
                             path: '/repo',
+                            lifecycleState: 'running',
                             terminal: {
                                 mode: 'tmux',
                                 controlServiceabilityV1: {
@@ -227,6 +295,7 @@ describe('retireExactTerminalControlServiceability', () => {
             t: 'plain',
             v: {
                 runtime: {
+                    lifecycleState: 'running',
                     terminal: {
                         mode: 'tmux',
                         controlServiceabilityV1: {
