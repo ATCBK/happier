@@ -108,6 +108,7 @@ type BuildCommandPaletteCommandsBaseParams = Readonly<{
     openWorkflowAgentAuthoring?: () => void;
     /** Reopens the canonical Search surface in its content source, retaining exact invocation scope. */
     openTextInFiles?: () => void;
+    openReplaceInFiles?: () => void;
     openFiles?: () => void;
     openSymbols?: () => void;
     /** Opens the shared device-pairing panel while retaining the current page. */
@@ -275,6 +276,16 @@ export function buildCommandPaletteCommands(
       category: t('commandPalette.commands.actionsCategory'),
       shortcut: params.shortcutLabels?.['search.textInFiles'],
       action: nav.openTextInFiles,
+    });
+  }
+  if (nav.openReplaceInFiles) {
+    cmds.push({
+      id: 'search.replaceInFiles',
+      title: t('settingsKeyboard.commands.searchReplaceInFiles'),
+      icon: 'arrows-left-right',
+      category: t('commandPalette.commands.actionsCategory'),
+      shortcut: params.shortcutLabels?.['search.replaceInFiles'],
+      action: nav.openReplaceInFiles,
     });
   }
   for (const [id, title, open] of [

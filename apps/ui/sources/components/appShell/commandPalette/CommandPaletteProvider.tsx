@@ -255,9 +255,11 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         : activeSessionId;
     const commandContextServerId = normalizeSessionId(routeParams.serverId);
     const universalSearchRouteOpenRequestedRef = React.useRef(universalSearchRouteActive);
+    const routeSymbolsRef = React.useRef<UniversalSearchOpenOptions['symbols']>(undefined);
     React.useEffect(() => {
         if (!universalSearchRouteActive) {
             universalSearchRouteOpenRequestedRef.current = false;
+            routeSymbolsRef.current = undefined;
         }
     }, [universalSearchRouteActive]);
     const pluginActionPresentation = useCommandPalettePluginActionPresentation(commandContextSessionId);
@@ -294,6 +296,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             ...(workflowsEnabled ? { 'workflow.new': () => undefined, 'workflow.createWithAgent': () => undefined } : {}),
             'settings.open': () => undefined,
             'search.textInFiles': () => undefined,
+            'search.replaceInFiles': () => undefined,
             'search.files': () => undefined,
             'search.symbols': () => undefined,
             ...(commandPaletteEnabled ? { 'commandPalette.open': () => undefined } : {}),
@@ -374,9 +377,9 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         router.push({ pathname: '/new', params: { draftId, draftOrigin } });
     }, [resolveNewSessionOrdinaryEntryRoute, router]);
 
-    const textSearchOpener = React.useRef<(scope?: UniversalSearchScopeSeed) => void>(() => undefined);
-    const fileSearchOpener = React.useRef<(source: 'files' | 'symbols', scope?: UniversalSearchScopeSeed) => void>(() => undefined);
-    const buildCommands = useCallback((requestedActiveSessionId: string | null = commandContextSessionId, requestedScope?: UniversalSearchScopeSeed) => {
+    const textSearchOpener = React.useRef<(scope?: UniversalSearchScopeSeed, replace?: boolean) => void>(() => undefined);
+    const fileSearchOpener = React.useRef<(source: 'files' | 'symbols', scope?: UniversalSearchScopeSeed, symbols?: UniversalSearchOpenOptions['symbols']) => void>(() => undefined);
+    const buildCommands = useCallback((requestedActiveSessionId: string | null = commandContextSessionId, requestedScope?: UniversalSearchScopeSeed, symbols?: UniversalSearchOpenOptions['symbols']) => {
         // The contributed Action presentation is captured for the rendered
         // route's exact Session. An imperative opener may target another Home
         // or Session, so never attach the ambient Session's Actions to that
@@ -426,8 +429,9 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
                     await startAskHappier({ lifetime: askHappierLifetime, context, currentUiContext: askHappierCurrentContext });
                 },
                 openTextInFiles: () => textSearchOpener.current(requestedScope),
-                openFiles: () => fileSearchOpener.current('files', requestedScope),
-                openSymbols: () => fileSearchOpener.current('symbols', requestedScope),
+                openReplaceInFiles: () => textSearchOpener.current(requestedScope, true),
+                openFiles: () => fileSearchOpener.current('files', requestedScope, symbols),
+                openSymbols: () => fileSearchOpener.current('symbols', requestedScope, symbols),
                 openHomePairingModal: async () => {
                     const { showHomePairingModal } = await import('@/components/auth/pairing/HomePairingModal');
                     showHomePairingModal('phone');
@@ -451,13 +455,14 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         id: string;
         activeSessionId: string | null;
         scope: UniversalSearchScopeSeed;
+        symbols?: UniversalSearchOpenOptions['symbols'];
     }> | null>(null);
     const [paletteOpen, setPaletteOpen] = React.useState(false);
     const refreshOpenPaletteCommands = React.useCallback(() => {
         const openModal = openUniversalSearchModalRef.current;
         if (!openModal) return;
         Modal.update<UniversalSearchModalProps>(openModal.id, {
-            commands: buildCommands(openModal.activeSessionId, openModal.scope),
+            commands: buildCommands(openModal.activeSessionId, openModal.scope, openModal.symbols),
             openWorkspaceFile,
         });
     }, [buildCommands, openWorkspaceFile]);
@@ -498,6 +503,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         if (Platform.OS !== 'web') {
             if (universalSearchRouteActive || universalSearchRouteOpenRequestedRef.current) return;
             universalSearchRouteOpenRequestedRef.current = true;
+            routeSymbolsRef.current = options?.symbols;
             router.push({
                 pathname: UNIVERSAL_SEARCH_ROUTE,
                 params: {
@@ -527,10 +533,12 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             onRequestClose: clearOpenPalette,
             onHostUnmount: clearOpenPalette,
             props: {
-                commands: buildCommands(invocationScope.sessionId, invocationScope),
+                commands: buildCommands(invocationScope.sessionId, invocationScope, options?.symbols),
                 openWorkspaceFile,
+                ...(options?.symbols ? { symbols: options.symbols } : {}),
                 ...(initialQuery ? { initialQuery } : {}),
                 ...(options?.source ? { initialSource: options.source } : {}),
+                ...(options?.replace ? { initialReplace: true } : {}),
                 ...(invocationScope.sessionId ? { activeSessionId: invocationScope.sessionId } : {}),
                 initialScope: invocationScope,
                 ...(options?.terminals ? { terminalJump: options.terminals } : {}),
@@ -540,6 +548,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             id: modalId,
             activeSessionId: invocationScope.sessionId,
             scope: invocationScope,
+            ...(options?.symbols ? { symbols: options.symbols } : {}),
         };
         setPaletteOpen(true);
     }, [activeSessionId, buildCommands, openWorkspaceFile, router, universalSearchRouteActive]);
@@ -547,9 +556,10 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
     const universalSearchRuntime = useMemo<UniversalSearchRuntime>(() => ({
         open: showCommandPalette,
         buildCommands,
+        get routeSymbols() { return routeSymbolsRef.current; },
     }), [buildCommands, showCommandPalette]);
-    textSearchOpener.current = (requestedScope) => showCommandPalette(undefined, requestedScope, { source: 'fileContent' });
-    fileSearchOpener.current = (source, requestedScope) => showCommandPalette(undefined, requestedScope, { source });
+    textSearchOpener.current = (requestedScope, replace) => showCommandPalette(undefined, requestedScope, { source: 'fileContent', ...(replace ? { replace } : {}) });
+    fileSearchOpener.current = (source, requestedScope, symbols) => showCommandPalette(undefined, requestedScope, { source, ...(symbols ? { symbols } : {}) });
 
     const toggleTheme = useToggleThemeMode();
     const keyboardHandlers = useMemo<KeyboardShortcutHandlers>(
@@ -564,6 +574,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             'session.new': openNewSession,
             ...(workflowsEnabled ? { 'workflow.new': openNewWorkflow, 'workflow.createWithAgent': openWorkflowAgentAuthoring } : {}),
             'search.textInFiles': () => showCommandPalette(undefined, undefined, { source: 'fileContent' }),
+            'search.replaceInFiles': () => showCommandPalette(undefined, undefined, { source: 'fileContent', replace: true }),
             'search.files': () => showCommandPalette(undefined, undefined, { source: 'files' }),
             'search.symbols': () => showCommandPalette(undefined, undefined, { source: 'symbols' }),
             'settings.open': () => {

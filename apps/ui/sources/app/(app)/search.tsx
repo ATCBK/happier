@@ -34,6 +34,7 @@ export default function UniversalSearchRoute(): React.ReactElement {
     const router = useRouter();
     const params = useGlobalSearchParams<{ q?: string | string[]; source?: string | string[]; sessionId?: string | string[]; accountId?: string | string[]; serverId?: string | string[]; machineId?: string | string[]; rootPath?: string | string[]; [TERMINAL_JUMP_ROUTE_PARAM]?: string | string[] }>();
     const runtime = useUniversalSearchRuntime();
+    const symbols = runtime.routeSymbols;
     const initialQuery = typeof params.q === 'string' ? params.q : '';
     const initialSource = params.source === 'fileContent' || params.source === 'files' || params.source === 'symbols' ? params.source : undefined;
     const activeSessionId = typeof params.sessionId === 'string' ? params.sessionId : null;
@@ -44,8 +45,8 @@ export default function UniversalSearchRoute(): React.ReactElement {
         [terminalScopeId],
     );
     const commands = React.useMemo(
-        () => runtime.buildCommands(activeSessionId, initialScope ?? undefined),
-        [activeSessionId, initialScope, runtime],
+        () => runtime.buildCommands(activeSessionId, initialScope ?? undefined, symbols),
+        [activeSessionId, initialScope, runtime, symbols],
     );
     const close = React.useCallback(() => {
         if (router.canGoBack()) router.back();
@@ -54,6 +55,7 @@ export default function UniversalSearchRoute(): React.ReactElement {
     const controller = (
         <UniversalSearchController
             commands={commands}
+            symbols={symbols}
             initialQuery={initialQuery}
             initialSource={initialSource}
             activeSessionId={activeSessionId}

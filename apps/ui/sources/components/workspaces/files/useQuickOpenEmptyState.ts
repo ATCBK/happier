@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { useUniversalSearchRuntime } from '@/components/appShell/search/UniversalSearchRuntimeContext';
+import { useOptionalUniversalSearchRuntime } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
 import { useLocalSetting, useWorkspaceScmSnapshot, useWorkspaceScmTouchedPathsForSession } from '@/sync/domains/state/storage';
 import type { FileSearchItem } from '@/sync/domains/fileSystem/fileSearchItem';
@@ -52,12 +52,24 @@ export function useQuickOpenFileSources(input: QuickOpenEmptyStateInput) {
     return { recent, recentPaths: storedPaths, changed, defaultSelectedPath, accountId: credentials.binding?.accountId ?? null };
 }
 
+/**
+ * Opens quick open (Universal Search, Files in this workspace) from a control that is not the keyboard
+ * command: the empty editor column, the Files tree's Go to file field (with what was typed there).
+ * Null where Search is not mounted.
+ */
+export function useQuickOpenFilesLauncher(input: Readonly<{ scope: WorkspaceScopeBase | null; sessionId?: string | null }>) {
+    const runtime = useOptionalUniversalSearchRuntime();
+    const accountId = useServerCredentialAccountScopeBinding(input.scope?.serverId).binding?.accountId ?? null;
+    const scope = input.scope;
+    const sessionId = input.sessionId ?? null;
+    return React.useMemo(() => runtime ? (query?: string) => {
+        runtime.open(query?.trim() ? query : undefined, scope ? { ...scope, accountId, sessionId } : undefined, { source: 'files' });
+    } : null, [accountId, runtime, scope, sessionId]);
+}
+
 export function useQuickOpenEmptyState(input: QuickOpenEmptyStateInput) {
-    const runtime = useUniversalSearchRuntime();
     const sources = useQuickOpenFileSources(input);
-    const openFiles = React.useCallback(() => {
-        runtime.open(undefined, input.scope ? { ...input.scope,
-            accountId: sources.accountId, sessionId: input.sessionId ?? null } : undefined, { source: 'files' });
-    }, [input.scope, input.sessionId, runtime, sources.accountId]);
+    const launch = useQuickOpenFilesLauncher(input);
+    const openFiles = React.useCallback(() => { launch?.(); }, [launch]);
     return { ...sources, openFiles };
 }

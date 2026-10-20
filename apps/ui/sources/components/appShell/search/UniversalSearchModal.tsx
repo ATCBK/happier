@@ -12,8 +12,10 @@ import type { TerminalJumpTarget } from '@/components/sessions/terminal/jump/ter
 export type UniversalSearchModalProps = CustomModalInjectedProps & Readonly<{
     commands: readonly Command[];
     openWorkspaceFile?: UniversalSearchControllerProps['openWorkspaceFile'];
+    symbols?: UniversalSearchControllerProps['symbols'];
     initialQuery?: string;
     initialSource?: UniversalSearchSourceFocus;
+    initialReplace?: boolean;
     activeSessionId?: string | null;
     initialScope?: UniversalSearchScopeSeed;
     /** Open in the Terminals scope of this session pane (Jump to a terminal). */
@@ -36,8 +38,10 @@ export function UniversalSearchModal(props: UniversalSearchModalProps): React.Re
         <UniversalSearchController
             commands={props.commands}
             openWorkspaceFile={props.openWorkspaceFile}
+            symbols={props.symbols}
             initialQuery={props.initialQuery}
             initialSource={props.initialSource}
+            initialReplace={props.initialReplace}
             activeSessionId={props.activeSessionId}
             initialScope={props.initialScope}
             terminalJump={props.terminalJump}

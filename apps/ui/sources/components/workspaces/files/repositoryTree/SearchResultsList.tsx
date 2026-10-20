@@ -13,6 +13,7 @@ import { InlineRepoPathLabel } from '@/components/ui/path/InlineRepoPathLabel';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { VirtualizedList } from '@/components/ui/lists/virtualized/VirtualizedList';
 import { Icon } from '@/components/ui/icons/Icon';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
@@ -24,6 +25,9 @@ type SearchResultsListProps = {
     searchResultsQuery?: string;
     searchError?: boolean;
     hasMore?: boolean;
+    /** Another page of names can be shown (lab FB1 "Show more"); the search owner keeps its source bounds. */
+    canLoadMore?: boolean;
+    onLoadMore?: () => void;
     onRetry?: () => void;
     searchResults: FileItem[];
     onFilePress: (file: FileItem) => void;
@@ -63,6 +67,8 @@ export const SearchResultsList = React.memo(({
     searchResultsQuery,
     searchError,
     hasMore,
+    canLoadMore,
+    onLoadMore,
     onRetry,
     searchResults,
     onFilePress,
@@ -84,9 +90,9 @@ export const SearchResultsList = React.memo(({
     const coverageNotice = React.useMemo(() => searchError ? (
         <SurfaceStateCard testID="files-search-error" size="line" kind="unavailable" title={t('errors.unknownError')}
             action={onRetry ? { label: t('common.retry'), onPress: onRetry } : undefined} />
-    ) : hasMore ? (
+    ) : hasMore && !(canLoadMore && onLoadMore) ? (
         <SurfaceStateCard testID="files-search-incomplete" size="line" kind="warning" title={t('universalSearch.moreResultsAvailable')} />
-    ) : null, [searchError, hasMore, onRetry]);
+    ) : null, [searchError, hasMore, canLoadMore, onLoadMore, onRetry]);
     const listHeaderComponent = React.useMemo(() => (
         Boolean(searchQuery) && hasResults ? (
             <>
@@ -193,12 +199,20 @@ export const SearchResultsList = React.memo(({
         theme,
     ]);
 
+    // Paging, not a cap: the next page arrives under the rows already shown (P3 §3.5).
+    const listFooterComponent = React.useMemo(() => canLoadMore && onLoadMore && hasResults && !showsPreviousResults ? (
+        <View style={{ paddingHorizontal: theme.space.s12, paddingVertical: theme.space.s8, alignItems: 'flex-start' }}>
+            <TextLinkButton testID="files-search-show-more" size="meta" label={t('universalSearch.quickOpen.showMore')} onPress={onLoadMore} />
+        </View>
+    ) : null, [canLoadMore, hasResults, onLoadMore, showsPreviousResults, theme.space.s12, theme.space.s8]);
+
     const sharedListProps = {
         data: listData,
         keyExtractor,
         style: searchResultListStyle,
         ListHeaderComponent: listHeaderComponent,
         ListEmptyComponent: listEmptyComponent,
+        ListFooterComponent: listFooterComponent,
         contentContainerStyle: searchResultContentContainerStyle,
         renderItem,
         initialNumToRender: Platform.OS === 'web'

@@ -3,6 +3,7 @@ import * as React from 'react';
 import type { Command } from '@/components/appShell/commandPalette/types';
 import type { TerminalJumpTarget } from '@/components/sessions/terminal/jump/terminalJumpTarget';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import type { WorkspaceSymbolSearchInput } from './workspaceSymbolSearchSource';
 
 export type UniversalSearchScopeSeed = Readonly<{
     accountId: string | null;
@@ -34,11 +35,17 @@ export type UniversalSearchSourceFocus = 'files' | 'fileContent' | 'symbols';
 export type UniversalSearchOpenOptions = Readonly<{
     terminals?: TerminalJumpTarget;
     source?: UniversalSearchSourceFocus;
+    /** Text in files opens with the Replace field shown (⌘⇧H). */
+    replace?: boolean;
+    /** Existing active document holder; private invocation memory, never a route parameter. */
+    symbols?: WorkspaceSymbolSearchInput;
 }>;
 
 export type UniversalSearchRuntime = Readonly<{
     open(query?: string, scope?: UniversalSearchScopeSeed, options?: UniversalSearchOpenOptions): void;
-    buildCommands(activeSessionId?: string | null, scope?: UniversalSearchScopeSeed): readonly Command[];
+    buildCommands(activeSessionId?: string | null, scope?: UniversalSearchScopeSeed, symbols?: WorkspaceSymbolSearchInput): readonly Command[];
+    /** Retained only while the native Search route owns this invocation. */
+    routeSymbols?: WorkspaceSymbolSearchInput;
 }>;
 
 const UniversalSearchRuntimeContext = React.createContext<UniversalSearchRuntime | null>(null);

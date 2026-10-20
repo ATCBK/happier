@@ -69,9 +69,12 @@ export function isUniversalSearchTargetCurrent(input: Readonly<{
         || capturedScope === null
         || !areServerProfileIdentifiersEquivalent(target.serverId, capturedScope.serverId)
     ) return false;
+    // Remembered files and held symbols remain destinations while their Machine
+    // is offline; the File page owns whether saved/cached content is available.
+    const opensFile = target.kind === 'workspaceFile' || target.kind === 'workspaceSymbol';
     if (target.workspaceRefId) {
         return resolveWorkspaceRefByAddress(input.workspaces, { ...capturedScope, workspaceId: target.workspaceRefId }).kind === 'resolved'
-            && input.isWorkspaceScopeReachable(capturedScope);
+            && (opensFile || input.isWorkspaceScopeReachable(capturedScope));
     }
     if (!target.sessionId) return false;
     const currentScope = input.resolveSessionWorkspaceTarget({
@@ -81,5 +84,5 @@ export function isUniversalSearchTargetCurrent(input: Readonly<{
     });
     return currentScope !== null
         && areWorkspaceScopesEqual(capturedScope, currentScope)
-        && input.isWorkspaceScopeReachable(currentScope);
+        && (opensFile || input.isWorkspaceScopeReachable(currentScope));
 }

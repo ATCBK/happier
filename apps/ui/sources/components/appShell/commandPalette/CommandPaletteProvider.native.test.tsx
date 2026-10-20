@@ -2,6 +2,9 @@ import * as React from 'react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Settings } from '@/sync/domains/settings/settings';
+import type { UniversalSearchRuntime } from '@/components/appShell/search/UniversalSearchRuntimeContext';
+import type { WorkspaceSymbolSearchInput } from '@/components/appShell/search/workspaceSymbolSearchSource';
+import { act } from 'react-test-renderer';
 
 const buildCommandPaletteCommands = vi.hoisted(() => vi.fn(() => []));
 
@@ -30,7 +33,7 @@ vi.mock('react-native', async () => {
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({ segments: testState.segments, params: testState.routeParams, router: { push: routerPushSpy } }).module;
+    return createExpoRouterMock({ segments: () => testState.segments, params: () => testState.routeParams, router: { push: routerPushSpy } }).module;
 });
 
 vi.mock('@/sync/domains/state/storage', async () => {
@@ -165,6 +168,41 @@ describe('CommandPaletteProvider native', () => {
         capturedNative.handlers?.['commandPalette.open']?.();
 
         expect(routerPushSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps native symbols in invocation memory rather than the URL and clears them on route exit', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { useUniversalSearchRuntime } = await import('@/components/appShell/search/UniversalSearchRuntimeContext');
+        const { CommandPaletteProvider } = await import('./CommandPaletteProvider');
+        let runtime: UniversalSearchRuntime | null = null;
+        function Probe() { runtime = useUniversalSearchRuntime(); return <Child />; }
+        const readRuntime = () => {
+            if (!runtime) throw new Error('Search runtime is not mounted');
+            return runtime;
+        };
+        const scope = { accountId: 'account-a', serverId: 'home-a', sessionId: null, machineId: 'machine-a', rootPath: '/repo' };
+        const symbols: WorkspaceSymbolSearchInput = {
+            target: { kind: 'workspaceFile', scope, path: 'src/a.ts', accountId: scope.accountId,
+                serverId: scope.serverId, workspaceRefId: 'workspace-a', sessionId: null },
+            resolverKey: 'native-holder', language: 'typescript', isDark: false, unavailableHint: 'Unavailable',
+            getText: () => 'class PrivateUnsavedSymbol {}', flushPendingChange() {}, isCurrent: () => true,
+            accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+        };
+        const element = <CommandPaletteProvider><Probe /></CommandPaletteProvider>;
+        const screen = await renderScreen(element);
+        await act(async () => { readRuntime().open(undefined, scope, { source: 'symbols', symbols }); });
+        expect(readRuntime().routeSymbols).toBe(symbols);
+        expect(routerPushSpy).toHaveBeenCalledWith({ pathname: '/search', params: {
+            source: 'symbols', accountId: scope.accountId, serverId: scope.serverId,
+            machineId: scope.machineId, rootPath: scope.rootPath,
+        } });
+        expect(JSON.stringify(routerPushSpy.mock.calls)).not.toContain('PrivateUnsavedSymbol');
+        testState.segments = ['(app)', 'search'];
+        await screen.update(<CommandPaletteProvider><Probe /></CommandPaletteProvider>);
+        expect(readRuntime().routeSymbols).toBe(symbols);
+        testState.segments = ['(app)', 'session', '[id]'];
+        await screen.update(<CommandPaletteProvider><Probe /></CommandPaletteProvider>);
+        expect(readRuntime().routeSymbols).toBeUndefined();
     });
 
     it('serializes an explicit requested Session scope instead of the ambient active Session', async () => {

@@ -5,6 +5,7 @@ import type { WorkspaceFileOpenOptions, WorkspaceFileOpenTarget } from '@/compon
 
 import type { UniversalSearchTarget } from './universalSearchResult';
 import { memoryDocumentSearchHitHref } from '@/components/memory/memoryDocumentRoutes';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 /**
  * The one place a built-in Universal Search row turns into navigation.
@@ -97,14 +98,25 @@ export async function activateUniversalSearchResult(
             }
             case 'workspaceSymbol':
             case 'workspaceFile': {
-                const find = target.kind === 'workspaceFile' ? target.find : undefined;
+                const fileFind = target.kind === 'workspaceFile' ? target.find : undefined;
                 const anchorSource = target.kind === 'workspaceFile' ? target.anchorSource : undefined;
                 if (!owners.openFile) return { ok: false, reason: 'unavailable' };
+                const serverId = resolveServerProfileScopeIdForIdentifier(target.scope.serverId);
                 const address: WorkspaceFileOpenTarget | null = target.workspaceRefId
-                    ? { kind: 'project', workspaceRefId: target.workspaceRefId, serverId: target.scope.serverId,
+                    ? { kind: 'project', workspaceRefId: target.workspaceRefId, serverId,
                         machineId: target.scope.machineId, rootPath: target.scope.rootPath, path: target.path }
-                    : target.sessionId ? { kind: 'session', sessionId: target.sessionId, serverId: target.serverId, path: target.path } : null;
+                    : target.sessionId ? { kind: 'session', sessionId: target.sessionId, serverId, path: target.path } : null;
                 if (!address) return { ok: false, reason: 'unavailable' };
+                let find: WorkspaceFileOpenOptions['find'];
+                if (fileFind) {
+                    if (fileFind.target.path !== target.path) return { ok: false, reason: 'unavailable' };
+                    const scope = { serverId, machineId: target.scope.machineId, rootPath: target.scope.rootPath,
+                        path: target.path, ...(fileFind.target.anchor ? { anchor: fileFind.target.anchor } : {}) };
+                    const query = { query: fileFind.query, options: fileFind.options };
+                    find = address.kind === 'project'
+                        ? { ...query, target: { kind: 'project-file', workspaceRefId: address.workspaceRefId, ...scope } }
+                        : { ...query, target: { kind: 'session-file', sessionId: address.sessionId, ...scope } };
+                }
                 return await owners.openFile(address, { intent: options?.intent ?? 'preview',
                     ...(target.anchor ? { anchor: target.anchor } : {}), ...(anchorSource ? { anchorSource } : {}), ...(find ? { find } : {}) })
                     ? { ok: true } : { ok: false, reason: 'unavailable' };

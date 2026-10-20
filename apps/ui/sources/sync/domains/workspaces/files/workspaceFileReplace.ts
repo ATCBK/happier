@@ -1,0 +1,730 @@
+import * as React from 'react';
+import { computeFileReplacement } from '@happier-dev/protocol/machines/workspaceFilesReplace';
+import type {
+  DaemonWorkspaceFileReplaceApplyRequest,
+  DaemonWorkspaceFileReplacePreviewResponse,
+} from '@happier-dev/protocol/machines/workspaceFiles';
+
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import {
+  machineWorkspaceFileReplaceApply,
+  machineWorkspaceFileReplacePreview,
+} from '@/sync/ops/machineWorkspaceFileReplace';
+
+/**
+ * Replace across files (P8 U2): the Universal Search result list is the review. This module owns the
+ * review state (the preview on screen, which matches are left selected, the result and its Undo) and
+ * derives everything the surface draws from it. Matching and replacement stay in the protocol's one
+ * pure `computeFileReplacement`; the Machine applies through its guarded writer.
+ */
+
+export type WorkspaceReplaceMatcher = Readonly<{
+  query: string;
+  replacement: string;
+  matchCase: boolean;
+  regex: boolean;
+}>;
+type PreviewOk = Extract<
+  DaemonWorkspaceFileReplacePreviewResponse,
+  { ok: true }
+>;
+export type WorkspaceReplacePreviewFile = PreviewOk['files'][number];
+export type WorkspaceReplaceMatch =
+  WorkspaceReplacePreviewFile['matches'][number];
+type ReplaceSelection = Extract<
+  DaemonWorkspaceFileReplaceApplyRequest['operation'],
+  { kind: 'replace' }
+>['files'][number];
+type InverseEdit = NonNullable<
+  Extract<
+    DaemonWorkspaceFileReplaceApplyRequest['operation'],
+    { kind: 'restore' }
+  >['files'][number]['edits']
+>[number];
+
+/** Excluded match keys per file path. A file absent from the map has every match selected. */
+export type WorkspaceReplaceExclusions = ReadonlyMap<
+  string,
+  ReadonlySet<string>
+>;
+
+export type WorkspaceReplaceFileStatus =
+  | 'replaced'
+  | 'changed'
+  | 'skipped'
+  | 'failed'
+  | 'cancelled'
+  /** Undo put the reviewed text back. */
+  | 'restored'
+  /** Undo found other bytes in the file and left it alone. */
+  | 'undoChanged';
+export type WorkspaceReplaceFileResult = Readonly<{
+  path: string;
+  status: WorkspaceReplaceFileStatus;
+  matchCount?: number;
+  /** `unsaved` for a file the editor holds a draft of; otherwise the Machine's reason. */
+  reason?: string;
+  hash?: string;
+  edits?: readonly InverseEdit[];
+}>;
+
+export type WorkspaceReplaceErrorCode =
+  | 'invalid_pattern'
+  | 'root_not_allowed'
+  | 'root_not_found'
+  | 'unavailable'
+  | 'update_required'
+  | 'failed'
+  /** The apply request left but its answer never came back: what was written is unknown. */
+  | 'outcome_unknown';
+
+export function replaceMatchKey(
+  match: Readonly<{ line: number; column16: number }>,
+): string {
+  return `${match.line}:${match.column16}`;
+}
+
+export function replaceFileSelection(
+  file: WorkspaceReplacePreviewFile,
+  excluded: WorkspaceReplaceExclusions,
+): Readonly<{
+  selected: number;
+  total: number;
+  state: 'all' | 'some' | 'none';
+}> {
+  const keys = excluded.get(file.path);
+  const total = file.matches.length;
+  const selected = keys
+    ? file.matches.filter((match) => !keys.has(replaceMatchKey(match))).length
+    : total;
+  return {
+    selected,
+    total,
+    state: selected === 0 ? 'none' : selected === total ? 'all' : 'some',
+  };
+}
+
+function isUnsaved(path: string, unsaved: ReadonlySet<string>): boolean {
+  return unsaved.has(path);
+}
+
+/** What Apply sends: loaded files with a selected match that the editor does not hold a draft of. */
+export function buildReplaceApplyFiles(
+  files: readonly WorkspaceReplacePreviewFile[],
+  excluded: WorkspaceReplaceExclusions,
+  unsavedPaths: readonly string[],
+): ReplaceSelection[] {
+  const unsaved = new Set(unsavedPaths);
+  return files.flatMap((file): ReplaceSelection[] => {
+    if (
+      isUnsaved(file.path, unsaved) ||
+      replaceFileSelection(file, excluded).state === 'none'
+    )
+      return [];
+    const keys = excluded.get(file.path);
+    const excludedMatches = keys
+      ? file.matches
+          .filter((match) => keys.has(replaceMatchKey(match)))
+          .map(({ line, column16 }) => ({ line, column16 }))
+      : [];
+    return [
+      {
+        path: file.path,
+        expectedHash: file.hash,
+        ...(excludedMatches.length ? { excludedMatches } : {}),
+      },
+    ];
+  });
+}
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/**
+ * One line after the selected matches on it are replaced, through the same pure function the Machine
+ * applies, so the review shows what is written.
+ */
+export function previewReplacedLine(
+  file: WorkspaceReplacePreviewFile,
+  line: number,
+  matcher: WorkspaceReplaceMatcher,
+  excludedKeys: ReadonlySet<string>,
+): string {
+  const onLine = file.matches.filter((match) => match.line === line);
+  const text = onLine[0]?.text ?? '';
+  const excludedMatches = onLine
+    .filter((match) => excludedKeys.has(replaceMatchKey(match)))
+    .map((match) => ({ line: 1, column16: match.column16 }));
+  if (excludedMatches.length === onLine.length) return text;
+  const result = computeFileReplacement(
+    encoder.encode(text),
+    matcher,
+    excludedMatches,
+  );
+  return result.kind === 'ok' ? decoder.decode(result.newBytes) : text;
+}
+
+/** What one match turns into, for the inline old → new mark in its row. */
+export function previewMatchInsertText(
+  file: WorkspaceReplacePreviewFile,
+  match: WorkspaceReplaceMatch,
+  matcher: WorkspaceReplaceMatcher,
+): string {
+  const others = file.matches
+    .filter(
+      (other) => other.line === match.line && other.column16 !== match.column16,
+    )
+    .map((other) => ({ line: 1, column16: other.column16 }));
+  const result = computeFileReplacement(
+    encoder.encode(match.text),
+    matcher,
+    others,
+  );
+  return result.kind === 'ok' ? (result.edits[0]?.insertText ?? '') : '';
+}
+
+/**
+ * The per-file diff of the review as a standard unified patch (rendered by the shared `DiffViewer`):
+ * each changed line with the context the preview returned; nearby matches share one hunk.
+ */
+export function buildReplacePreviewUnifiedDiff(
+  file: WorkspaceReplacePreviewFile,
+  matcher: WorkspaceReplaceMatcher,
+  excludedKeys: ReadonlySet<string>,
+): string {
+  const known = new Map<number, string>();
+  const changed = new Map<number, string>();
+  for (const match of file.matches) {
+    match.before.forEach((text, index) =>
+      known.set(match.line - match.before.length + index, text),
+    );
+    match.after.forEach((text, index) =>
+      known.set(match.line + 1 + index, text),
+    );
+    known.set(match.line, match.text);
+  }
+  for (const line of new Set(file.matches.map((match) => match.line))) {
+    const next = previewReplacedLine(file, line, matcher, excludedKeys);
+    if (next !== known.get(line)) changed.set(line, next);
+  }
+  const header = `--- a/${file.path}\n+++ b/${file.path}\n`;
+  if (changed.size === 0) return header;
+  const lines = [...known.keys()]
+    .filter((line) => line >= 1)
+    .sort((a, b) => a - b);
+  // Contiguous known runs that contain a change become hunks; a gap in what the preview returned ends one.
+  const hunks: number[][] = [];
+  let run: number[] = [];
+  for (const line of lines) {
+    if (run.length && line !== run[run.length - 1]! + 1) {
+      hunks.push(run);
+      run = [];
+    }
+    run.push(line);
+  }
+  if (run.length) hunks.push(run);
+  const body = hunks
+    .filter((hunk) => hunk.some((line) => changed.has(line)))
+    .map((hunk) => {
+      const rows = hunk.flatMap((line) =>
+        changed.has(line)
+          ? [`-${known.get(line)}`, `+${changed.get(line)}`]
+          : [` ${known.get(line)}`],
+      );
+      return `@@ -${hunk[0]},${hunk.length} +${hunk[0]},${hunk.length} @@\n${rows.join('\n')}\n`;
+    });
+  return header + body.join('');
+}
+
+export type WorkspaceReplaceSummary = Readonly<{
+  replacedFiles: number;
+  replacedMatches: number;
+  changed: number;
+  skipped: number;
+  failed: number;
+  cancelled: number;
+  restored: number;
+}>;
+
+export function summarizeReplaceResults(
+  results: readonly WorkspaceReplaceFileResult[],
+): WorkspaceReplaceSummary {
+  const summary = {
+    replacedFiles: 0,
+    replacedMatches: 0,
+    changed: 0,
+    skipped: 0,
+    failed: 0,
+    cancelled: 0,
+    restored: 0,
+  };
+  for (const result of results) {
+    if (result.status === 'replaced') {
+      summary.replacedFiles += 1;
+      summary.replacedMatches += result.matchCount ?? 0;
+    } else if (result.status === 'changed' || result.status === 'undoChanged')
+      summary.changed += 1;
+    else if (result.status === 'skipped') summary.skipped += 1;
+    else if (result.status === 'failed') summary.failed += 1;
+    else if (result.status === 'cancelled') summary.cancelled += 1;
+    else if (result.status === 'restored') summary.restored += 1;
+  }
+  return summary;
+}
+
+type Preview = Readonly<{
+  key: string;
+  matcher: WorkspaceReplaceMatcher;
+  files: readonly WorkspaceReplacePreviewFile[];
+  notText: number;
+  hasMore: boolean;
+  cursor?: Readonly<{ path: string }>;
+  coverage: 'complete' | 'partial';
+}>;
+
+export type WorkspaceReplaceModel = Readonly<{
+  /** The preview on screen; it stays while a newer one loads. */
+  preview: Preview | null;
+  /** Files listed under "Unsaved in the editor, skipped". */
+  unsavedFiles: readonly WorkspaceReplacePreviewFile[];
+  /** Reviewable files (never the unsaved ones). */
+  files: readonly WorkspaceReplacePreviewFile[];
+  excluded: WorkspaceReplaceExclusions;
+  loading: boolean;
+  loadingMore: boolean;
+  /** What is typed differs from the preview on screen. */
+  stale: boolean;
+  error: WorkspaceReplaceErrorCode | null;
+  totals: Readonly<{
+    selectedMatches: number;
+    totalMatches: number;
+    selectedFiles: number;
+    totalFiles: number;
+  }>;
+  applying: boolean;
+  undoing: boolean;
+  results: readonly WorkspaceReplaceFileResult[] | null;
+  applyError: WorkspaceReplaceErrorCode | null;
+  canApply: boolean;
+  canUndo: boolean;
+  toggleFile: (path: string) => void;
+  toggleMatch: (path: string, key: string) => void;
+  loadMore: () => void;
+  apply: () => Promise<void>;
+  cancelApply: () => void;
+  undo: (path?: string) => Promise<void>;
+  /** Back to the review (Review again / Done). */
+  resetResults: () => void;
+  retry: () => void;
+}>;
+
+const NO_EXCLUSIONS: WorkspaceReplaceExclusions = new Map();
+const NO_FILES: readonly WorkspaceReplacePreviewFile[] = [];
+
+function previewError(
+  response: Awaited<ReturnType<typeof machineWorkspaceFileReplacePreview>>,
+): WorkspaceReplaceErrorCode | null {
+  if (response.ok) return null;
+  if ('errorCode' in response)
+    return response.errorCode === 'method_unavailable'
+      ? 'update_required'
+      : 'unavailable';
+  if (
+    response.code === 'invalid_pattern' ||
+    response.code === 'root_not_allowed' ||
+    response.code === 'root_not_found'
+  )
+    return response.code;
+  return 'failed';
+}
+
+/**
+ * The review's state owner. `matcher` null means the review is off (no Replace field, or no replacement
+ * yet); the last preview is dropped then so a reopened review never shows another query's results.
+ */
+export function useWorkspaceReplace(
+  input: Readonly<{
+    scope: WorkspaceScopeBase | null;
+    accountLifetime: ServerAccountScopeLifetime | null;
+    matcher: WorkspaceReplaceMatcher | null;
+    unsavedPaths: readonly string[];
+  }>,
+): WorkspaceReplaceModel {
+  const { scope, accountLifetime, matcher } = input;
+  const accountId = accountLifetime?.scope.accountId ?? null;
+  const key =
+    scope && accountLifetime && matcher && matcher.query.length > 0
+      ? JSON.stringify([
+          scope.serverId,
+          scope.machineId,
+          scope.rootPath,
+          accountId,
+          matcher.query,
+          matcher.replacement,
+          matcher.matchCase,
+          matcher.regex,
+        ])
+      : null;
+  const [preview, setPreview] = React.useState<Preview | null>(null);
+  const [loadedKey, setLoadedKey] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<{
+    key: string;
+    code: WorkspaceReplaceErrorCode;
+  } | null>(null);
+  const [retryVersion, setRetryVersion] = React.useState(0);
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const [excluded, setExcluded] =
+    React.useState<WorkspaceReplaceExclusions>(NO_EXCLUSIONS);
+  const [results, setResults] = React.useState<
+    readonly WorkspaceReplaceFileResult[] | null
+  >(null);
+  const [applying, setApplying] = React.useState(false);
+  const [undoing, setUndoing] = React.useState(false);
+  const [applyError, setApplyError] =
+    React.useState<WorkspaceReplaceErrorCode | null>(null);
+  const applyController = React.useRef<AbortController | null>(null);
+  const options = React.useMemo(
+    () => (scope && accountId ? { serverId: scope.serverId, accountId } : null),
+    [scope?.serverId, accountId],
+  );
+
+  React.useEffect(() => {
+    if (!key || !scope || !matcher || !options) {
+      setPreview(null);
+      setLoadedKey(null);
+      setError(null);
+      setResults(null);
+      setApplyError(null);
+      return;
+    }
+    const controller = new AbortController();
+    let current = true;
+    // A new review drops the previous result; the review it came from is gone.
+    setResults(null);
+    setApplyError(null);
+    void machineWorkspaceFileReplacePreview(
+      scope.machineId,
+      {
+        rootPath: scope.rootPath,
+        query: matcher.query,
+        replacement: matcher.replacement,
+        matchCase: matcher.matchCase,
+        regex: matcher.regex,
+        contextLines: 2,
+      },
+      { ...options, signal: controller.signal },
+    ).then(
+      (response) => {
+        if (!current) return;
+        setLoadedKey(key);
+        const code = previewError(response);
+        if (code || !response.ok) {
+          setError({ key, code: code ?? 'failed' });
+          return;
+        }
+        setError(null);
+        setPreview({
+          key,
+          matcher,
+          files: response.files,
+          notText: response.skipped.notText,
+          hasMore: response.hasMore,
+          ...(response.cursor ? { cursor: response.cursor } : {}),
+          coverage: response.coverage,
+        });
+      },
+      () => {
+        if (current && !controller.signal.aborted) {
+          setLoadedKey(key);
+          setError({ key, code: 'unavailable' });
+        }
+      },
+    );
+    return () => {
+      current = false;
+      controller.abort();
+    };
+    // `matcher` and `scope` are captured through `key`, which names every field the request reads.
+  }, [key, retryVersion, options]);
+
+  const loadMore = React.useCallback(() => {
+    if (!preview?.cursor || !scope || !options || loadingMore) return;
+    const { matcher: reviewed, cursor, key: previewKey } = preview;
+    setLoadingMore(true);
+    void machineWorkspaceFileReplacePreview(
+      scope.machineId,
+      {
+        rootPath: scope.rootPath,
+        query: reviewed.query,
+        replacement: reviewed.replacement,
+        matchCase: reviewed.matchCase,
+        regex: reviewed.regex,
+        contextLines: 2,
+        cursor,
+      },
+      options,
+    )
+      .then((response) => {
+        if (!response.ok) return;
+        setPreview((previous) =>
+          previous && previous.key === previewKey
+            ? {
+                ...previous,
+                files: [...previous.files, ...response.files],
+                notText: previous.notText + response.skipped.notText,
+                hasMore: response.hasMore,
+                cursor: response.cursor,
+                coverage: response.coverage,
+              }
+            : previous,
+        );
+      })
+      .finally(() => setLoadingMore(false));
+  }, [loadingMore, options, preview, scope]);
+
+  const unsavedSet = React.useMemo(
+    () => new Set(input.unsavedPaths),
+    [input.unsavedPaths],
+  );
+  const allFiles = preview?.files ?? NO_FILES;
+  const unsavedFiles = React.useMemo(
+    () => allFiles.filter((file) => isUnsaved(file.path, unsavedSet)),
+    [allFiles, unsavedSet],
+  );
+  const files = React.useMemo(
+    () =>
+      unsavedFiles.length
+        ? allFiles.filter((file) => !isUnsaved(file.path, unsavedSet))
+        : allFiles,
+    [allFiles, unsavedFiles.length, unsavedSet],
+  );
+  const totals = React.useMemo(() => {
+    let selectedMatches = 0;
+    let totalMatches = 0;
+    let selectedFiles = 0;
+    for (const file of files) {
+      const selection = replaceFileSelection(file, excluded);
+      selectedMatches += selection.selected;
+      totalMatches += selection.total;
+      if (selection.selected > 0) selectedFiles += 1;
+    }
+    return {
+      selectedMatches,
+      totalMatches,
+      selectedFiles,
+      totalFiles: files.length,
+    };
+  }, [excluded, files]);
+  const stale = preview !== null && preview.key !== key;
+  const loading = key !== null && loadedKey !== key;
+  const currentError = error && error.key === key ? error.code : null;
+
+  const toggleFile = React.useCallback(
+    (path: string) => {
+      const file = allFiles.find((entry) => entry.path === path);
+      if (!file) return;
+      setExcluded((previous) => {
+        const next = new Map(previous);
+        if (replaceFileSelection(file, previous).state === 'all')
+          next.set(path, new Set(file.matches.map(replaceMatchKey)));
+        else next.delete(path);
+        return next;
+      });
+    },
+    [allFiles],
+  );
+  const toggleMatch = React.useCallback((path: string, matchKey: string) => {
+    setExcluded((previous) => {
+      const next = new Map(previous);
+      const keys = new Set(previous.get(path));
+      if (keys.has(matchKey)) keys.delete(matchKey);
+      else keys.add(matchKey);
+      if (keys.size) next.set(path, keys);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
+
+  const canApply =
+    !stale &&
+    !loading &&
+    !applying &&
+    results === null &&
+    preview !== null &&
+    totals.selectedMatches > 0;
+  const apply = React.useCallback(async () => {
+    if (!canApply || !preview || !scope || !options) return;
+    const selection = buildReplaceApplyFiles(files, excluded, []);
+    const controller = new AbortController();
+    applyController.current = controller;
+    setApplying(true);
+    setApplyError(null);
+    try {
+      const response = await machineWorkspaceFileReplaceApply(
+        scope.machineId,
+        {
+          rootPath: scope.rootPath,
+          operation: {
+            kind: 'replace',
+            matcher: preview.matcher,
+            files: selection,
+          },
+        },
+        { ...options, signal: controller.signal },
+      );
+      if (!response.ok) {
+        // The request may have reached the Machine: never claim nothing happened, never replay.
+        setApplyError(
+          'errorCode' in response
+            ? 'outcome_unknown'
+            : response.code === 'invalid_pattern'
+              ? 'invalid_pattern'
+              : response.code === 'root_not_allowed'
+                ? 'root_not_allowed'
+                : 'failed',
+        );
+        return;
+      }
+      const cancelled = new Set(response.cancelled ?? []);
+      setResults([
+        ...response.results.map((result): WorkspaceReplaceFileResult => ({
+          ...result,
+        })),
+        ...selection
+          .filter(
+            (file) =>
+              cancelled.has(file.path) &&
+              !response.results.some((result) => result.path === file.path),
+          )
+          .map((file): WorkspaceReplaceFileResult => ({
+            path: file.path,
+            status: 'cancelled',
+          })),
+        ...unsavedFiles.map((file): WorkspaceReplaceFileResult => ({
+          path: file.path,
+          status: 'skipped',
+          reason: 'unsaved',
+        })),
+      ]);
+    } catch {
+      setApplyError('outcome_unknown');
+    } finally {
+      applyController.current = null;
+      setApplying(false);
+    }
+  }, [canApply, excluded, files, options, preview, scope, unsavedFiles]);
+  const cancelApply = React.useCallback(() => {
+    applyController.current?.abort();
+  }, []);
+
+  const undoable = React.useMemo(
+    () =>
+      (results ?? []).filter(
+        (result) =>
+          result.status === 'replaced' && result.hash && result.edits?.length,
+      ),
+    [results],
+  );
+  const canUndo = undoable.length > 0 && !undoing && !applying;
+  const undo = React.useCallback(
+    async (path?: string) => {
+      if (!canUndo || !scope || !options) return;
+      const targets = undoable.filter(
+        (result) => path === undefined || result.path === path,
+      );
+      if (!targets.length) return;
+      setUndoing(true);
+      try {
+        const response = await machineWorkspaceFileReplaceApply(
+          scope.machineId,
+          {
+            rootPath: scope.rootPath,
+            operation: {
+              kind: 'restore',
+              files: targets.map((result) => ({
+                path: result.path,
+                expectedHash: result.hash!,
+                edits: [...result.edits!],
+              })),
+            },
+          },
+          options,
+        );
+        if (!response.ok) {
+          setApplyError('errorCode' in response ? 'outcome_unknown' : 'failed');
+          return;
+        }
+        const outcome = new Map(
+          response.results.map((result) => [result.path, result]),
+        );
+        setResults(
+          (previous) =>
+            previous?.map((result) => {
+              const restored = outcome.get(result.path);
+              if (!restored) return result;
+              if (restored.status === 'restored')
+                return {
+                  path: result.path,
+                  status: 'restored',
+                  matchCount: result.matchCount,
+                };
+              if (restored.status === 'changed')
+                return {
+                  path: result.path,
+                  status: 'undoChanged',
+                  matchCount: result.matchCount,
+                };
+              return { ...result, reason: restored.reason ?? result.reason };
+            }) ?? previous,
+        );
+      } catch {
+        setApplyError('outcome_unknown');
+      } finally {
+        setUndoing(false);
+      }
+    },
+    [canUndo, options, scope, undoable],
+  );
+
+  const resetResults = React.useCallback(() => {
+    setResults(null);
+    setApplyError(null);
+    setExcluded(NO_EXCLUSIONS);
+    setRetryVersion((value) => value + 1);
+  }, []);
+  const retry = React.useCallback(
+    () => setRetryVersion((value) => value + 1),
+    [],
+  );
+
+  // One model identity per change, so the review's rows rebuild only when something they show changed.
+  return React.useMemo(
+    () => ({
+    preview,
+    unsavedFiles,
+    files,
+    excluded,
+    loading,
+    loadingMore,
+    stale,
+    error: currentError,
+    totals,
+    applying,
+    undoing,
+    results,
+    applyError,
+    canApply,
+    canUndo,
+    toggleFile,
+    toggleMatch,
+    loadMore,
+    apply,
+    cancelApply,
+    undo,
+    resetResults,
+    retry,
+  }),
+    [apply, applyError, applying, canApply, canUndo, cancelApply, currentError, excluded, files, loadMore, loading, loadingMore, preview, resetResults, results, retry, stale, toggleFile, toggleMatch, totals, undo, undoing, unsavedFiles],
+  );
+}

@@ -39,12 +39,13 @@ describe('isUniversalSearchTargetCurrent', () => {
         })).toBe(false);
     });
 
-    it.each(['workspaceFile', 'workspaceCommit'] as const)(
+    it.each(['workspaceFile', 'workspaceSymbol', 'workspaceCommit'] as const)(
         're-resolves an ordinary session before activating a %s target',
         (kind) => {
-            const target: UniversalSearchTarget = kind === 'workspaceFile'
+            const target: UniversalSearchTarget = kind !== 'workspaceCommit'
                 ? {
                     kind,
+                    anchor: { kind: 'fileLine', startLine: 12 },
                     scope: { serverId: 'server-a', machineId: 'machine-a', rootPath: 'C:\\Repo\\' },
                     path: 'C:\\Repo\\src\\index.ts',
                     workspaceRefId: null,
@@ -69,9 +70,11 @@ describe('isUniversalSearchTargetCurrent', () => {
             };
             let currentScope: WorkspaceTargetForSession | null = originalScope;
             let reachable = true;
+            let accountCurrent = true;
+            let accountId = 'account-a';
             const isCurrent = () => isUniversalSearchTargetCurrent({
                 target,
-                accountScope: { serverId: 'server-a', accountId: 'account-a', current: true },
+                accountScope: { serverId: 'server-a', accountId, current: accountCurrent },
                 workspaces: [],
                 settingsPages: new Map(),
                 resolveSessionWorkspaceTarget: () => currentScope,
@@ -94,6 +97,11 @@ describe('isUniversalSearchTargetCurrent', () => {
 
             currentScope = originalScope;
             reachable = false;
+            expect(isCurrent()).toBe(kind !== 'workspaceCommit');
+            accountCurrent = false;
+            expect(isCurrent()).toBe(false);
+            accountCurrent = true;
+            accountId = 'account-b';
             expect(isCurrent()).toBe(false);
         },
     );
@@ -184,12 +192,13 @@ describe('isUniversalSearchTargetCurrent', () => {
         expect(isCurrent({ serverId: 'server-a', accountId: 'account-a', current: true }, false)).toBe(false);
     });
 
-    it('keeps a saved workspace file current without requiring a Session', () => {
+    it.each(['workspaceFile', 'workspaceSymbol'] as const)('keeps an offline saved %s current without requiring a Session', (kind) => {
         expect(isUniversalSearchTargetCurrent({
             target: {
-                kind: 'workspaceFile',
+                kind,
                 scope: { serverId: 'server-a', machineId: 'machine-a', rootPath: '/repo' },
                 path: 'README.md',
+                anchor: { kind: 'fileLine', startLine: 12 },
                 workspaceRefId: 'workspace-a',
                 sessionId: null,
                 serverId: 'server-a',
@@ -209,7 +218,7 @@ describe('isUniversalSearchTargetCurrent', () => {
             resolveSessionWorkspaceTarget: () => {
                 throw new Error('saved workspace currentness must not require a Session');
             },
-            isWorkspaceScopeReachable: () => true,
+            isWorkspaceScopeReachable: () => false,
         })).toBe(true);
     });
 

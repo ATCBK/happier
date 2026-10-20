@@ -68,6 +68,38 @@ function staticOptionIds(
 }
 
 describe('buildUniversalSearchSections', () => {
+    it('consumes the existing unsaved symbol source and opens the committed outline row beside at its line', async () => {
+        const { createWorkspaceSymbolSearchSource } = await import('./workspaceSymbolSearchSource');
+        const { activateUniversalSearchResult } = await import('./activateUniversalSearchResult');
+        let text = 'class SavedSymbol {}';
+        const scope = { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' };
+        const symbols = createWorkspaceSymbolSearchSource({
+            target: { kind: 'workspaceFile', scope, path: 'src/a.ts', accountId: 'account-a',
+                serverId: scope.serverId, workspaceRefId: 'workspace-a', sessionId: null },
+            resolverKey: 'active-holder', language: 'typescript', isDark: false, unavailableHint: 'Unavailable',
+            accountLifetime: { scope: { serverId: scope.serverId, accountId: 'account-a' },
+                isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            isCurrent: () => true,
+            getText: () => text,
+            flushPendingChange: () => { text = '// unsaved\nclass LiveSymbol {}'; },
+        });
+        const committed: UniversalSearchResult[] = [];
+        const sections = buildUniversalSearchSections(input({ source: 'symbols', query: 'LiveSymbol', symbols,
+            onCommitResult: result => { committed.push(result); } }));
+        expect(sections.map(section => section.id)).toEqual(['symbols']);
+        const page = await dynamicSections(sections)[0]!.resolve('LiveSymbol', new AbortController().signal);
+        expect(page.options.map(option => option.label)).toEqual(['LiveSymbol']);
+        page.options[0]!.onSelect?.();
+        const result = committed[0];
+        if (!result) throw new Error('Symbol row did not commit a target');
+        const openFile = vi.fn(async () => true);
+        expect(await activateUniversalSearchResult(result.target, {
+            navigateToSession: vi.fn(), push: vi.fn(), openProject: async () => false, openFile,
+        }, { intent: 'beside' })).toEqual({ ok: true });
+        expect(openFile).toHaveBeenCalledWith({ kind: 'project', workspaceRefId: 'workspace-a',
+            ...scope, path: 'src/a.ts' }, { intent: 'beside', anchor: { kind: 'fileLine', startLine: 2 } });
+    });
+
     it('keeps Files focused and makes every file in a supplied page selectable', async () => {
         const results: UniversalSearchResult[] = Array.from({ length: 35 }, (_, i) => ({
             id: `${i}.ts`, scopeKey: 'workspace', sourceId: 'files', kind: 'workspaceFile', title: `${i}.ts`,
@@ -80,6 +112,23 @@ describe('buildUniversalSearchSections', () => {
         expect(sections.map(section => section.id)).toEqual(['files']);
         const page = await dynamicSections(sections)[0]!.resolve('file', new AbortController().signal);
         expect(page.options).toHaveLength(35);
+    });
+    it('answers a quick-open query with no file match by one way out, then Recent (lab FB2n)', async () => {
+        const recent: UniversalSearchResult = { id: 'DESIGN.md', scopeKey: 'workspace', sourceId: 'files', kind: 'workspaceFile', title: 'DESIGN.md',
+            target: { kind: 'workspaceFile', scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' },
+                path: 'DESIGN.md', workspaceRefId: 'workspace-a', sessionId: null, serverId: 'home-a', accountId: 'account-a' } };
+        const onSearchEverything = vi.fn();
+        const build = (results: UniversalSearchResult[]) => buildUniversalSearchSections(input({ query: 'settingsdrawer', source: 'files',
+            recentFiles: [recent], filesNoMatch: { scopeLabel: 'happier', onSearchEverything },
+            files: { status: 'ready', resolverKey: 'workspace', resolve: async () => results } }));
+        const empty = await dynamicSections(build([]))[0]!.resolve('settingsdrawer', new AbortController().signal);
+        expect(empty.options.map(option => option.id)).toEqual(['files:no-match', 'files:no-match:recent', expect.stringContaining('DESIGN.md')]);
+        expect(empty.options[1]!.disabled).toBe(true);
+        empty.options[0]!.onSelect?.();
+        expect(onSearchEverything).toHaveBeenCalledTimes(1);
+        // A real match never shows the no-match line or the Recent fallback.
+        const found = await dynamicSections(build([{ ...recent, id: 'drawer.ts', title: 'drawer.ts' }]))[0]!.resolve('settingsdrawer', new AbortController().signal);
+        expect(found.options.map(option => option.id).some(id => id.startsWith('files:no-match'))).toBe(false);
     });
     it.each(['cedar', 'A cedar', 'A cedar choice'])('puts content title matches ahead of settings and commands for %s', (query) => {
         const sections = buildUniversalSearchSections(input({ query,

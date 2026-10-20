@@ -66,6 +66,10 @@ import {
 } from '@/sync/domains/memory/hydrateMemorySearchSessionTargets';
 import { searchWorkspaceFiles, workspaceFileSearchCache, WorkspaceFileSearchUnavailableError } from '@/sync/domains/workspaces/files/workspaceFileSearch';
 import { searchWorkspaceFileContents } from '@/sync/domains/workspaces/files/workspaceFileContentSearch';
+import { useWorkspaceReplace, type WorkspaceReplaceMatcher } from '@/sync/domains/workspaces/files/workspaceFileReplace';
+import { unsavedWorkspaceFilePaths } from '@/components/appShell/panes/details/workspace/detailsTabChrome';
+import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
+import { buildReplaceReviewSections, REPLACE_OPTION_PREFIX, ReplaceField, ReplaceFooterAction, ReplaceResultSummary } from './replace/replaceReview';
 import { boundedReplyHints } from './searchBoundedReplyHints';
 import { parseSearchFileTarget } from '@/utils/url/sessionFileDeepLink';
 import { isAbsoluteLocalPath, resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
@@ -136,6 +140,8 @@ import { resolveOpenDetailsFilePath } from '@/components/workspaces/files/resolv
 import { createWorkspaceFileSearchIndex, normalizeFileSearchText, rankFileSearchResults, matchWorkspaceFileNames } from '@/sync/domains/workspaces/files/workspaceFileSearchMatcher';
 import { selectRecentWorkspaceFiles, workspacePathToFileSearchItem } from '@/sync/domains/workspaces/files/recentWorkspaceFiles';
 import { resolveWorkspaceFileQueryLimit, resolveWorkspaceFileSearchPageAvailability, type WorkspaceFileQueryPaging } from '@/sync/domains/workspaces/files/workspaceFileSearchPaging';
+import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
+import { createWorkspaceSymbolSearchSource, type WorkspaceSymbolSearchInput } from './workspaceSymbolSearchSource';
 import { useOpenProject } from '@/components/projects/useOpenProject';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import {
@@ -234,8 +240,12 @@ export type UniversalSearchControllerProps = Readonly<{
     commands: readonly Command[];
     /** An imperative modal receives the opener captured by its retained Workspace owner. */
     openWorkspaceFile?: ReturnType<typeof useWorkspaceFileOpener>['open'];
+    /** P7/PAGE supplies the existing active document holder; Search never loads a second document. */
+    symbols?: WorkspaceSymbolSearchInput;
     initialQuery?: string;
     initialSource?: UniversalSearchSourceFocus;
+    /** Open Text in files with the Replace field shown (⌘⇧H). */
+    initialReplace?: boolean;
     activeSessionId?: string | null;
     initialScope?: UniversalSearchScopeSeed;
     /** Open in the Terminals scope of this session pane (Jump to a terminal, terminal lab B4). */
@@ -282,6 +292,10 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     }, [props.onRequestClose]);
     const [matchCase, setMatchCase] = React.useState(false);
     const [regex, setRegex] = React.useState(false);
+    // Replace across files (lab RP1): the field's visibility is view state; the review starts once it has text.
+    const [replaceOpen, setReplaceOpen] = React.useState(() => props.initialReplace === true && props.initialSource === 'fileContent');
+    const [replacement, setReplacement] = React.useState('');
+    const replaceToggledOpen = React.useRef(false);
     const [selectedOptionId, setSelectedOptionId] = React.useState<string | null>(null);
     const [sessionInventoryStatus, setSessionInventoryStatus] = React.useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
     const [externalConversationSearch, setExternalConversationSearch] = React.useState<Pick<ExternalConversationSearchResultsProps, 'target' | 'query' | 'machineLabel' | 'accountLifetime'> | null>(null);
@@ -600,7 +614,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     React.useEffect(() => {
         activationGeneration.current += 1;
         return () => { activationGeneration.current += 1; };
-    }, [query, source, workspaceResolverKey]);
+    }, [props.symbols, query, source, workspaceResolverKey]);
     const [filePaging, setFilePaging] = React.useState<WorkspaceFileQueryPaging | null>(null);
     const fileLimit = resolveWorkspaceFileQueryLimit({ scope: workspaceScope, query,
         pageSize: UNIVERSAL_SEARCH_PAGE_SIZE, paging: filePaging })!;
@@ -611,12 +625,33 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         [workspaceRefs, workspaceScope],
     );
     const workspaceActivationAvailable = Boolean(activeSession || workspaceRef);
-    const activeFilePath = React.useMemo(() => {
+    const readSymbolsInput = React.useCallback(() => {
+        const input = props.symbols;
+        if (!input || !workspaceScope || !selectedCredentialBinding?.isCurrent()
+            || selectedCredentialBinding.accountId !== scope.accountId || input.target.accountId !== scope.accountId
+            || !input.isCurrent() || !input.accountLifetime.isCurrent()
+            || input.accountLifetime.scope.accountId !== input.target.accountId
+            || !areServerProfileIdentifiersEquivalent(input.accountLifetime.scope.serverId, workspaceScope.serverId)) return null;
+        const workspaceKey = tryBuildWorkspaceCacheKey(workspaceScope);
+        if (!workspaceKey || workspaceKey !== tryBuildWorkspaceCacheKey(input.target.scope)) return null;
+        const addressed = input.target.workspaceRefId
+            ? input.target.workspaceRefId === workspaceRef?.id
+            : input.target.sessionId !== null && input.target.sessionId === activeSession?.id;
+        return addressed ? input : null;
+    }, [activeSession?.id, props.symbols, scope.accountId, selectedCredentialBinding, workspaceRef?.id, workspaceScope]);
+    const symbolsInput = readSymbolsInput();
+    const paneDetails = React.useMemo(() => {
         const scopeId = activeSession ? createSessionPaneScopeId(activeSession.id, workspaceScope?.serverId)
             : workspaceRef ? buildProjectPaneScopeId(workspaceRef.id, workspaceScope?.serverId) : null;
         const details = scopeId ? paneContext?.state.scopes[scopeId]?.details : null;
-        return resolveOpenDetailsFilePath(details ? buildDetailsWorkspaceStateView(details) : null);
+        return details ? buildDetailsWorkspaceStateView(details) : null;
     }, [activeSession, paneContext?.state.scopes, workspaceRef, workspaceScope?.serverId]);
+    const activeFilePath = React.useMemo(() => symbolsInput ? symbolsInput.target.path : resolveOpenDetailsFilePath(paneDetails), [paneDetails, symbolsInput]);
+    const symbolsSource = React.useMemo<UniversalSearchSource>(() => symbolsInput
+        ? createWorkspaceSymbolSearchSource(symbolsInput)
+        : { status: 'unavailable', resolverKey: `${workspaceResolverKey}|${activeFilePath ?? ''}`,
+            hint: activeFilePath ? t('common.unavailable') : t('universalSearch.quickOpen.symbolsNeedFile') },
+    [activeFilePath, symbolsInput, workspaceResolverKey]);
     const quickOpenSources = useQuickOpenFileSources({ scope: workspaceScope, sessionId: activeSession?.id, activeFilePath });
     const recentFileResults = React.useMemo(() => workspaceScope && scope.accountId ? buildUniversalSearchWorkspaceFileResults({
         files: quickOpenSources.recent, scope: workspaceScope, accountId: scope.accountId,
@@ -754,6 +789,16 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             },
         };
     }, [activeSession?.id, matchCase, regex, selectedCredentialBinding, source, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable, workspaceUnavailableHint, machineLabel]);
+    const replaceMatcher = React.useMemo<WorkspaceReplaceMatcher | null>(() => source === 'fileContent' && replaceOpen && replacement.length > 0
+        && query.length > 0 && !terminalJump ? { query, replacement, matchCase, regex } : null, [matchCase, query, regex, replaceOpen, replacement, source, terminalJump]);
+    // Files with an unsaved editor draft are never written by replace; they are listed and skipped.
+    const unsavedPaths = React.useMemo(() => unsavedWorkspaceFilePaths({ accountId: scope.accountId, details: paneDetails }), [paneDetails, scope.accountId]);
+    const replaceModel = useWorkspaceReplace({
+        scope: replaceMatcher && workspaceScopeReachable && selectedCredentialIsCurrent ? workspaceScope : null,
+        accountLifetime: selectedCredentialIsCurrent ? selectedCredentialBinding : null,
+        matcher: replaceMatcher, unsavedPaths,
+    });
+    const reviewActive = replaceMatcher !== null;
     const commits = React.useMemo<UniversalSearchSource>(() => {
         // An offline folder is said once, under Text in files (lab ST "Machine offline"); this group steps aside.
         if (!workspaceScope || !workspaceSearchAvailable || !selectedCredentialBinding || !workspaceScopeReachable) return { status: 'absent' };
@@ -890,9 +935,10 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         activationGeneration.current += 1;
         setSelectedOptionId(null);
         setSource(next === 'fileContent' || next === 'files' || next === 'symbols' ? next : undefined);
-        if (next !== 'fileContent') { setMatchCase(false); setRegex(false); }
+        if (next !== 'fileContent') { setMatchCase(false); setRegex(false); setReplaceOpen(false); }
     }, []);
     const showAllFileMatches = React.useCallback(() => selectSource('fileContent'), [selectSource]);
+    const searchEverything = React.useCallback(() => selectSource('everything'), [selectSource]);
     const fileContentFolderLabel = workspaceScope
         ? workspaceRef?.label?.trim() || workspaceScope.rootPath.split(/[\\/]/).filter(Boolean).pop() : undefined;
     const fileContentScopeLabel = workspaceScope ? [
@@ -913,7 +959,23 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                     ?? { accountId: project.accountId, serverId: project.serverId, machineId: project.machineId, rootPath: project.rootPath, sessionId: null });
             },
         })), [projects, scopeChoices, workspaceScope]);
-    const sections = React.useMemo(() => buildUniversalSearchSections({
+    // Opening a reviewed row (its file at the line) goes through the same activation as a Text in files hit.
+    const commitReplaceOpen = React.useCallback((path: string, line: number) => {
+        if (!workspaceScope || !selectedCredentialBinding) return;
+        const anchor = { kind: 'fileLine' as const, startLine: line };
+        committedResultRef.current = { id: `${path}:${line}`, sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.fileContent,
+            scopeKey: buildUniversalSearchScopeKey([selectedCredentialBinding.accountId, workspaceScope.serverId, workspaceScope.machineId, workspaceScope.rootPath]),
+            kind: 'workspaceFile', title: path, subtitle: `${path}:${line}`,
+            target: { kind: 'workspaceFile', scope: workspaceScope, path, anchor,
+                find: { query, options: { matchCase, regex }, target: { kind: 'file', path, anchor } },
+                workspaceRefId: workspaceRef?.id ?? null, sessionId: activeSession?.id ?? null,
+                serverId: workspaceScope.serverId, accountId: selectedCredentialBinding.accountId } };
+    }, [activeSession?.id, matchCase, query, regex, selectedCredentialBinding, workspaceRef?.id, workspaceScope]);
+    const replaceSections = React.useMemo(() => replaceMatcher ? buildReplaceReviewSections({
+        model: replaceModel, matcher: replaceMatcher, scopeLabel: fileContentFolderLabel ?? t('universalSearch.content.textInFiles'),
+        machineLabel, reachable: workspaceScopeReachable, commitOpen: commitReplaceOpen,
+    }) : null, [commitReplaceOpen, fileContentFolderLabel, machineLabel, replaceMatcher, replaceModel, workspaceScopeReachable]);
+    const searchSections = React.useMemo(() => buildUniversalSearchSections({
         query,
         commands: props.commands,
         sessions: sessionEntities,
@@ -925,8 +987,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         recentFiles: recentFileResults,
         changedFiles: changedFileResults,
         ...(workspaceScope && !workspaceScopeReachable ? { filesStatusHint: t('universalSearch.quickOpen.offline', { machine: machineLabel }) } : {}),
-        symbols: { status: 'unavailable', resolverKey: `${workspaceResolverKey}|${activeFilePath ?? ''}`,
-            hint: activeFilePath ? t('common.unavailable') : t('universalSearch.quickOpen.symbolsNeedFile') },
+        ...(source === 'files' && fileContentFolderLabel ? { filesNoMatch: { scopeLabel: fileContentFolderLabel, onSearchEverything: searchEverything } } : {}),
+        symbols: symbolsSource,
         fileContent,
         fileContentScopeLabel,
         fileContentFolders,
@@ -947,16 +1009,25 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             },
         } : {}),
         onCommitResult: (result) => { committedResultRef.current = result; },
-    }), [activeFilePath, beginExternalConversationSearch, canonicalScopeServerId, changedFileResults, commits, conversationMachineId, fileContent, fileContentFolders, fileContentScopeLabel, files, machineNameById, pluginAccount.lifetime, pluginSections, projects, props.commands, query, recentFileResults, scanAvailability.result, scope.accountId, scope.machineScope, searchSettingsPages, selectedCredentialIsCurrent, sessionEntities, sessionInventoryStatus, showAllFileMatches, source, transcript, workspaceResolverKey]);
+    }), [activeFilePath, searchEverything, fileContentFolderLabel, beginExternalConversationSearch, canonicalScopeServerId, changedFileResults, commits, conversationMachineId, fileContent, fileContentFolders, fileContentScopeLabel, files, machineNameById, pluginAccount.lifetime, pluginSections, projects, props.commands, query, recentFileResults, scanAvailability.result, scope.accountId, scope.machineScope, searchSettingsPages, selectedCredentialIsCurrent, sessionEntities, sessionInventoryStatus, showAllFileMatches, source, symbolsSource, transcript, workspaceResolverKey]);
+    const sections = replaceSections ?? searchSections;
     const rootStep = React.useMemo<SelectionListStep>(() => ({
         id: 'universal-search',
         inputPlaceholder: t('commandPalette.placeholder'),
         emptyStateLabel: t('selectionList.emptyMatch'),
         sections,
+        // The review is the Machine's answer for the typed query; the field never narrows it further.
+        ...(replaceSections ? { disableInputFilter: true } : {}),
         // Quiet key hints; SelectionList shows the footer only with a hardware keyboard.
         // In Text in files every row is a line: Return opens it there, and ⌫ on the empty field goes back
         // to everything (lab G1s). With text hits inline, the hint names the shortcut to the scope (lab G1).
-        footerHints: source === 'fileContent' ? [
+        footerHints: replaceSections ? [
+            { id: 'move', label: '↑↓', description: t('commandPalette.hints.move') },
+            ...(replaceModel.results ? [{ id: 'open', label: '↵', description: t('commandPalette.hints.open') }] : [
+                { id: 'include', label: '↵', description: t('universalSearch.replace.includeHint') },
+                { id: 'open', label: '⌘↵', description: t('commandPalette.hints.openAtLine') },
+            ]),
+        ] : source === 'fileContent' ? [
             { id: 'move', label: '↑↓', description: t('commandPalette.hints.move') },
             { id: 'open', label: '↵', description: t('commandPalette.hints.openAtLine') },
             { id: 'everything', label: '⌫', description: t('universalSearch.content.everything') },
@@ -968,7 +1039,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 ? [{ id: 'text-in-files', label: textInFilesShortcut, description: t('universalSearch.content.textInFiles') }] : []),
             { id: 'close', label: 'esc', description: t('commandPalette.hints.close') },
         ],
-    }), [query, sections, source, textInFilesShortcut, workspaceScope]);
+    }), [query, replaceModel.results, replaceSections, sections, source, textInFilesShortcut, workspaceScope]);
 
     const leaveTerminalScope = React.useCallback(() => {
         setSelectedOptionId(null);
@@ -989,6 +1060,12 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const handleTerminalJumpDetails = React.useCallback((optionId: string) => activateTerminalJump(optionId, 'details'), [activateTerminalJump]);
 
     const isBuiltInTargetCurrent = React.useCallback((target: UniversalSearchResult['target']) => {
+        if (target.kind === 'workspaceSymbol') {
+            const input = readSymbolsInput();
+            if (!input || target.path !== input.target.path || target.workspaceRefId !== input.target.workspaceRefId
+                || target.sessionId !== input.target.sessionId
+                || tryBuildWorkspaceCacheKey(target.scope) !== tryBuildWorkspaceCacheKey(input.target.scope)) return false;
+        }
         const targetServerId = 'serverId' in target ? target.serverId : null;
         const targetAccountId = 'accountId' in target ? target.accountId : null;
         const activationBindings = paneContext?.fileFindSeedAccountBindings ?? credentialBindings;
@@ -1013,7 +1090,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             resolveSessionWorkspaceTarget: resolveWorkspaceTargetForSession,
             isWorkspaceScopeReachable,
         });
-    }, [credentialBindings, paneContext, profiles, settingsById, workspaceRefs]);
+    }, [credentialBindings, paneContext, profiles, readSymbolsInput, settingsById, workspaceRefs]);
 
     const readExactSessionForActivation = React.useCallback(async (target: Readonly<{
         serverId: string;
@@ -1070,6 +1147,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             setSelectedOptionId(null);
             return;
         }
+        // A review row includes or leaves out its matches in place; only a committed open leaves the surface.
+        if (optionId.startsWith(REPLACE_OPTION_PREFIX) && !committedResultRef.current) return;
         const result = committedResultRef.current;
         const pluginActivation = committedPluginActivationRef.current;
         const command = result || pluginActivation ? null : findCommandForOptionId(props.commands, optionId);
@@ -1122,7 +1201,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                         },
                         push: (path) => { router.push(path as never); },
                         openProject,
-                        openFile: (target, options) => openFile(target, { ...options, intent }),
+                        openFile,
                         isTargetCurrent: isBuiltInTargetCurrent,
                     }, { intent });
                     return outcome.ok;
@@ -1142,8 +1221,19 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     }, [credentialBindings, isBuiltInTargetCurrent, navigateToSession, openFile, openProject, paneContext, pluginScopeIsCurrent, props.commands, props.onRequestClose, readExactSessionForActivation, router]);
 
     const handleCommandSelect = React.useCallback((optionId: string, option: SelectionListOption) => {
+        // ⌘↵ on a reviewed match opens its file at the line, beside, like a Text in files hit.
+        const match = /^replace:match:(.*):(\d+):\d+$/u.exec(optionId);
+        if (match) commitReplaceOpen(match[1]!, Number(match[2]));
+        else if (optionId.startsWith(REPLACE_OPTION_PREFIX)) return;
         handleSelect(optionId, option, 'beside');
-    }, [handleSelect]);
+    }, [commitReplaceOpen, handleSelect]);
+    useKeyboardShortcutHandlers(React.useMemo(() => ({
+        'search.replace.apply': () => {
+            if (!reviewActive || !replaceModel.canApply) return 'pass';
+            void replaceModel.apply();
+            return 'handled';
+        },
+    }), [replaceModel, reviewActive]));
 
     const activeRootStep = terminalJump?.step ?? rootStep;
     // Find lab G1s: Text in files is a scope token that × (or ⌫ on an empty field) removes; Search over
@@ -1178,7 +1268,16 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const inputSuffix = source === 'fileContent' && !terminalJump ? <View style={{ flexDirection: 'row', gap: theme.space.s4 }}>
         <IconButton testID="universal-search:match-case" variant="plain" icon={optionGlyph('Aa', matchCase)} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.matchCase')} tooltip={t('universalSearch.content.matchCase')} checked={matchCase} onPress={() => setMatchCase((value) => !value)} />
         <IconButton testID="universal-search:regex" variant="plain" icon={optionGlyph('.*', regex)} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.regex')} tooltip={t('universalSearch.content.regex')} checked={regex} onPress={() => setRegex((value) => !value)} />
+        {replaceOpen ? null : <IconButton testID="universal-search:replace-toggle" variant="plain" icon={<Icon name="arrows-left-right" size={14} color={theme.colors.text.secondary} />} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityLabel={t('universalSearch.replace.show')} tooltip={t('universalSearch.replace.show')} onPress={() => { replaceToggledOpen.current = true; setReplaceOpen(true); }} />}
     </View> : null;
+    const replaceField = source === 'fileContent' && replaceOpen && !terminalJump
+        // Return in the field never applies (a danger write); ⌥⌘↵ or the button does, after the review.
+        ? <ReplaceField value={replacement} onChangeText={setReplacement} onHide={() => setReplaceOpen(false)} autoFocus={replaceToggledOpen.current} />
+        : null;
+    const replaceFooter = reviewActive
+        ? <ReplaceFooterAction model={replaceModel} compact={deviceType === 'phone'} onDone={requestClose} />
+        : null;
+    const replaceSummary = reviewActive ? <ReplaceResultSummary model={replaceModel} machineLabel={machineLabel} /> : null;
     // Full-screen on a phone-width browser (the command surface's phone presentation): the band ends with
     // its way out, as the native Search plane's close does (lab G1sp "Cancel").
     const phoneCancel = Platform.OS === 'web' && props.presentation === 'modal' && deviceType === 'phone'
@@ -1187,7 +1286,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         : null;
     const bandSuffix = inputSuffix || phoneCancel ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>{inputSuffix}{phoneCancel}</View> : null;
     // Text in files and the conversation results show a detail column; everything else is the compact palette.
-    const surfaceLayout: CommandSurfaceLayout = !terminalJump && (source === 'fileContent' || externalConversationSearch !== null) ? 'detail' : 'compact';
+    // Quick open previews the selected file beside the list as well (lab FB2).
+    const surfaceLayout: CommandSurfaceLayout = !terminalJump && (source === 'fileContent' || source === 'files' || externalConversationSearch !== null) ? 'detail' : 'compact';
     const onSurfaceLayoutChange = props.onSurfaceLayoutChange;
     React.useEffect(() => { onSurfaceLayoutChange?.(surfaceLayout); }, [onSurfaceLayoutChange, surfaceLayout]);
     const activeSelect = terminalJump ? handleTerminalJumpSelect : handleSelect;
@@ -1213,9 +1313,9 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     }
     return (
         <View style={styles.root} testID="universal-search-host">
-            <SelectionList rootStep={activeRootStep} selectionMark="enter" optionPresentation="menu" inputValue={query} onChangeInputValue={changeQuery} onSelect={activeSelect} onCommandSelect={terminalJump ? handleTerminalJumpDetails : handleCommandSelect} onRequestClose={requestClose} selectedOptionId={selectedOptionId} listAccessibilityLabel={listAccessibilityLabel} filters={activeFilters} inputSuffix={bandSuffix} inputBehavior={terminalJump ? terminalScopeChrome.inputBehavior : sourceInputBehavior} autoFocusInputOnWeb fillAvailableSpace dynamicSectionCache={dynamicSectionCache}
+            <SelectionList rootStep={activeRootStep} selectionMark="enter" optionPresentation="menu" inputValue={query} onChangeInputValue={changeQuery} onSelect={activeSelect} onCommandSelect={terminalJump ? handleTerminalJumpDetails : handleCommandSelect} onRequestClose={requestClose} selectedOptionId={selectedOptionId} listAccessibilityLabel={listAccessibilityLabel} filters={activeFilters} inputSuffix={bandSuffix} inputAccessoryRow={replaceField} bodyHeader={replaceSummary} footerAction={replaceFooter} inputBehavior={terminalJump ? terminalScopeChrome.inputBehavior : sourceInputBehavior} autoFocusInputOnWeb fillAvailableSpace dynamicSectionCache={dynamicSectionCache}
                 // Lab G1s: the code preview column belongs to the Text in files scope; inline hits open their context in the row (G1).
-                {...(source === 'fileContent' && !terminalJump ? { detailPane: COMMAND_SURFACE_DETAIL_PANE } : {})} />
+                {...((source === 'fileContent' || source === 'files') && !terminalJump ? { detailPane: COMMAND_SURFACE_DETAIL_PANE } : {})} />
         </View>
     );
 }

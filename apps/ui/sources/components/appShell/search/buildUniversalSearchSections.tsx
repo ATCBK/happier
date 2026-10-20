@@ -16,8 +16,8 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { ConversationHitSummary, resolveConversationHitSnippet } from '@/components/sessions/external/browse/ConversationHitSummary';
 import { stripMarkdown } from '@/utils/sessions/messageUtils';
-import { KeyHint } from '@/components/ui/keyboard/KeyHint';
-import { splitKeybindingLabel, useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
+import { KeyboardCommandHint, KeyHint } from '@/components/ui/keyboard/KeyHint';
+import { QuickOpenFilePreview } from './QuickOpenFilePreview';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { SelectionListOptionStateContext } from '@/components/ui/selectionList/SelectionListOptionStateContext';
@@ -200,6 +200,11 @@ export type BuildUniversalSearchSectionsInput = Readonly<{
     recentFiles?: readonly UniversalSearchResult[];
     changedFiles?: readonly UniversalSearchResult[];
     filesStatusHint?: string;
+    /**
+     * Quick open typed with no file matching (lab FB2n): one quiet line with the way out, then Recent so the
+     * card keeps its size and the eye has somewhere to go.
+     */
+    filesNoMatch?: Readonly<{ scopeLabel: string; onSearchEverything: () => void }>;
     commits: UniversalSearchSource;
     /** Already-built plugin provider sections; this module adds no plugin policy. */
     pluginSections: readonly SelectionListDynamicSection[];
@@ -377,6 +382,16 @@ function FileContentGroupHeader({ path, matches }: Readonly<{ path: string; matc
     </View>;
 }
 
+/** Recent rows kept under a no-match line (lab FB2n shows three): enough to land somewhere, not a second list. */
+const NO_MATCH_RECENT_ROWS = 3;
+
+/** A group title inside one dynamic section, in the list's own section-title type (lab FB2n "Recent"). */
+function QuickOpenGroupHeading({ title }: Readonly<{ title: string }>) {
+    const { theme } = useUnistyles();
+    return <Text style={[Typography.variant('meta', 'semiBold'), { color: theme.colors.text.secondary,
+        paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx, paddingTop: theme.space.s12, paddingBottom: theme.space.s4 }]}>{title}</Text>;
+}
+
 function AllMatchesLabel({ label }: Readonly<{ label: string }>) {
     const { theme } = useUnistyles();
     return <Text numberOfLines={1} style={[Typography.variant('meta'), { color: theme.colors.text.secondary }]}>{label}</Text>;
@@ -426,10 +441,7 @@ function groupFileContentLines(results: readonly UniversalSearchResult[]): Array
 }
 
 function TextInFilesShortcut() {
-    const shortcut = useKeyboardShortcutLabel('search.textInFiles');
-    return shortcut ? <View style={{ flexDirection: 'row', gap: 3 }}>
-        {splitKeybindingLabel(shortcut).map((label, index) => <KeyHint key={index} label={label} />)}
-    </View> : null;
+    return <KeyboardCommandHint commandId="search.textInFiles" />;
 }
 
 /** The Agent's own mark for a conversation from its history; identity marks stand alone. */
@@ -470,6 +482,12 @@ function toOption(
             detailContent: () => <FileContentDetail match={fileLine ?? { ...result.fileContent!, columns: [result.fileContent!] }}
                 scope={result.target.kind === 'workspaceFile' ? result.target.scope : null} />,
         } : {}),
+        ...(result.kind === 'workspaceFile' && !result.fileContent && result.target.kind === 'workspaceFile' ? (() => {
+            const target = result.target;
+            const line = target.anchor ? 'startLine' in target.anchor ? target.anchor.startLine : 'line' in target.anchor ? target.anchor.line : null : null;
+            // Quick open's preview column (lab FB2): the file itself, at the line the query carries.
+            return { detailContent: () => <QuickOpenFilePreview scope={target.scope} path={target.path} line={line} /> };
+        })() : {}),
         ...(result.conversation ? {
             contentAlign: 'start' as const,
             labelHighlightQuery: result.conversation.query.trim() || undefined,
@@ -507,6 +525,8 @@ function buildDynamicSection(
         onShowAll?: () => void;
         /** The Text in files scope: every line, grouped under its file (lab G1s). */
         groupByFile?: boolean;
+        /** Quick open: what an empty typed result shows instead of nothing (lab FB2n). */
+        noMatch?: Readonly<{ scopeLabel: string; onSearchEverything: () => void; recent: readonly UniversalSearchResult[] }>;
         onCommit: (result: UniversalSearchResult) => void;
     }>,
 ): SelectionListDynamicSection[] {
@@ -612,6 +632,29 @@ function buildDynamicSection(
                         onSelect: input.onShowAll,
                     });
                 }
+                const noMatch = input.noMatch;
+                if (noMatch && options.length === 0 && seed.trim() && page.emptyHint === undefined) {
+                    const label = t('universalSearch.quickOpen.noMatch', { query: seed.trim(), scope: noMatch.scopeLabel });
+                    options.push({
+                        id: `${UNIVERSAL_SEARCH_SOURCE_IDS.files}:no-match`,
+                        testID: 'universal-search:files-no-match',
+                        label,
+                        accessibilityLabel: `${label}. ${t('universalSearch.quickOpen.searchEverything')}`,
+                        labelContent: () => <AllMatchesLabel label={label} />,
+                        rightAccessory: () => <AllMatchesLabel label={t('universalSearch.quickOpen.searchEverything')} />,
+                        icon: icon('magnifying-glass'),
+                        onSelect: noMatch.onSearchEverything,
+                    });
+                    if (noMatch.recent.length > 0) {
+                        options.push({
+                            id: `${UNIVERSAL_SEARCH_SOURCE_IDS.files}:no-match:recent`,
+                            label: t('universalSearch.quickOpen.recent'),
+                            // A heading, not a choice: the keyboard passes over it.
+                            disabled: true,
+                            content: <QuickOpenGroupHeading title={t('universalSearch.quickOpen.recent')} />,
+                        }, ...noMatch.recent.slice(0, NO_MATCH_RECENT_ROWS).map(result => toOption(result, 'file', input.onCommit)));
+                    }
+                }
                 if (input.sourceId === UNIVERSAL_SEARCH_SOURCE_IDS.files && page.hasMore && source.loadMore) {
                     options.push({ id: MORE_FILES_OPTION_ID, label: t('universalSearch.quickOpen.showMore'), onSelect: source.loadMore });
                 }
@@ -683,7 +726,9 @@ export function buildUniversalSearchSections(
             return groups;
         }
         return buildDynamicSection({ sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.files, title: t('universalSearch.sections.files'),
-            source: input.files, iconName: 'file', onCommit }).map(section => ({ kind: 'dynamic' as const, ...section }));
+            source: input.files, iconName: 'file', onCommit,
+            ...(input.filesNoMatch ? { noMatch: { ...input.filesNoMatch, recent: input.recentFiles ?? [] } } : {}),
+        }).map(section => ({ kind: 'dynamic' as const, ...section }));
     }
     const folders = input.fileContentFolders ?? [];
     const contentSections = (input.fileContent ?? { status: 'absent' }).status === 'absent' && folders.length > 0 && !scopedToContent

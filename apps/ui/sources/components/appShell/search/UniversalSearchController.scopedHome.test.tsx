@@ -1072,14 +1072,147 @@ describe('UniversalSearchController exact Home scope', () => {
             initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/repo/happier' }}
             presentation="modal" onRequestClose={vi.fn()} />);
         expect(selectionListProps()?.filters?.find(filter => filter.id === 'source')?.valueLabel).toContain('happier');
+        await act(async () => { selectionListProps()?.onChangeInputValue?.('hello'); });
+        expect(selectionListProps()?.rootStep.sections.map(section => section.id)).toEqual(['files']);
         await act(async () => { selectionListProps()?.onChangeInputValue?.('@hello'); });
         expect(selectionListProps()?.inputValue).toBe('hello');
-        expect(selectionListProps()?.rootStep.sections.every(section => section.id === 'symbols')).toBe(true);
+        expect(selectionListProps()?.rootStep.sections.map(section => section.id)).toEqual(['symbols']);
         await act(async () => { selectionListProps()?.onChangeInputValue?.(''); });
         await act(async () => { selectionListProps()?.inputBehavior?.onBackspaceAtEnd?.(''); });
         expect(selectionListProps()?.filters?.find(filter => filter.id === 'source')?.valueLabel).toContain('happier');
         await act(async () => { selectionListProps()?.inputBehavior?.onBackspaceAtEnd?.(''); });
         expect(selectionListProps()?.filters?.some(filter => filter.id === 'source')).toBe(false);
+    });
+
+    it.each(['current', 'workspace', 'account', 'retired', 'retired-after-query'] as const)('consumes a supplied unsaved symbol holder only for its current scope and Account (%s)', async (state) => {
+        fixture.singleHome = true;
+        const scope = { accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-offline', rootPath: '/symbol-holder' };
+        fixture.workspaceRefs = [{ id: 'ws-symbol-holder', ...scope, label: 'Symbols project', createdAtMs: 1 }];
+        let text = 'class SavedSymbol {}';
+        let reads = 0;
+        let accountCurrent = state !== 'retired';
+        const accountId = state === 'account' ? 'old-account' : scope.accountId;
+        const symbols = {
+            target: { kind: 'workspaceFile' as const, scope: { ...scope, rootPath: state === 'workspace' ? '/another-project' : scope.rootPath },
+                path: 'src/a.ts', accountId, serverId: scope.serverId, workspaceRefId: 'ws-symbol-holder', sessionId: null },
+            resolverKey: 'active-symbol-holder', language: 'typescript', isDark: false, unavailableHint: t('common.unavailable'),
+            accountLifetime: { scope: { serverId: scope.serverId, accountId }, isCurrent: () => accountCurrent, onRetire: () => ({ dispose() {} }) },
+            isCurrent: () => true,
+            getText: () => { reads += 1; return text; },
+            flushPendingChange: () => { text = '// unsaved\nclass LiveSymbol {}'; },
+        };
+        const { UniversalSearchModal } = await import('./UniversalSearchModal');
+        const openWorkspaceFile = vi.fn(async () => true);
+        await renderScreen(<UniversalSearchModal commands={[]} symbols={symbols} initialSource="files" initialQuery="@LiveSymbol"
+            initialScope={scope} openWorkspaceFile={openWorkspaceFile} onClose={vi.fn()} />);
+        const section = selectionListProps()?.rootStep.sections.find(item => item.id === 'symbols');
+        if (!section || section.kind !== 'dynamic') throw new Error('Missing Symbols section');
+        let page!: Awaited<ReturnType<typeof section.resolve>>;
+        await act(async () => { page = await section.resolve('LiveSymbol', new AbortController().signal); });
+        if (state !== 'current' && state !== 'retired-after-query') {
+            expect(page.options).toEqual([]);
+            expect(reads).toBe(0);
+            return;
+        }
+        expect(page.options.map(option => option.label)).toEqual(['LiveSymbol']);
+        expect(selectionListProps()?.filters?.find(filter => filter.id === 'source')?.valueLabel).toContain('a.ts');
+        const option = page.options[0]!;
+        if (state === 'retired-after-query') accountCurrent = false;
+        await act(async () => {
+            option.onSelect?.();
+            selectionListProps()?.onCommandSelect?.(option.id, option);
+        });
+        if (state === 'retired-after-query') {
+            await vi.waitFor(() => expect(harness.modalAlert).toHaveBeenCalled());
+            expect(openWorkspaceFile).not.toHaveBeenCalled();
+            return;
+        }
+        await vi.waitFor(() => expect(openWorkspaceFile).toHaveBeenCalledWith({ kind: 'project', workspaceRefId: 'ws-symbol-holder',
+            serverId: scope.serverId, machineId: scope.machineId, rootPath: scope.rootPath, path: 'src/a.ts' },
+            { intent: 'beside', anchor: { kind: 'fileLine', startLine: 2 } }));
+    });
+
+    it.each(['preview', 'beside'] as const)('keeps offline Recent and Changed searchable and opens a remembered file with %s intent without requesting files', async (intent) => {
+        fixture.singleHome = true;
+        const scope = { accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-offline', rootPath: '/offline-quick-open' };
+        fixture.workspaceRefs = [{ id: 'ws-offline-quick-open', ...scope, label: 'Offline project', createdAtMs: 1 }];
+        const { buildWorkspaceCacheKey } = await import('@/sync/domains/workspaces/workspaceScope');
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        const openWorkspaceFile = vi.fn(async () => true);
+        await renderScreen(<UniversalSearchController commands={[]} initialSource="files" initialScope={scope}
+            openWorkspaceFile={openWorkspaceFile} activeSessionId={null} presentation="modal" onRequestClose={vi.fn()} />);
+        await act(async () => {
+            storage.getState().applyLocalSettings({ recentWorkspaceFilesV1: {
+                [buildWorkspaceCacheKey(scope)]: ['src/settingsRecent.ts', 'settings/unrelated.ts'],
+            } });
+            storage.getState().updateWorkspaceScmSnapshot(scope, {
+                projectKey: buildWorkspaceCacheKey(scope), fetchedAt: 1,
+                repo: { isRepo: true, rootPath: scope.rootPath },
+                branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+                hasConflicts: false,
+                entries: [{ path: 'src/settingsChanged.ts', previousPath: null, kind: 'modified',
+                    includeStatus: '', pendingStatus: 'M', hasIncludedDelta: false, hasPendingDelta: true,
+                    stats: { includedAdded: 0, includedRemoved: 0, pendingAdded: 1, pendingRemoved: 0, isBinary: false } }],
+                totals: { includedFiles: 0, pendingFiles: 1, untrackedFiles: 0,
+                    includedAdded: 0, includedRemoved: 0, pendingAdded: 1, pendingRemoved: 0 },
+            });
+        });
+        const sections = selectionListProps()?.rootStep.sections ?? [];
+        expect(sections.map(section => section.id)).toEqual(['files:recent', 'files:changed']);
+        const recent = sections[0];
+        if (!recent || recent.kind !== 'static') throw new Error('Missing offline Recent source');
+        expect(recent.resultHint).toBe(t('universalSearch.quickOpen.offline', { machine: t('universalSearch.thisMachine') }));
+        await act(async () => { selectionListProps()?.onChangeInputValue?.('settings'); });
+        const files = selectionListProps()?.rootStep.sections.find(section => section.id === 'files');
+        if (!files || files.kind !== 'dynamic') throw new Error('Missing offline Files source');
+        const reply = await files.resolve('settings', new AbortController().signal);
+        expect(reply.options.map(option => option.label)).toEqual(['settingsRecent.ts', 'settingsChanged.ts', 'unrelated.ts']);
+        expect(reply.resultHint).toBeDefined();
+        expect(fixture.daemonRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_WORKSPACE_FILES_LIST)).toBe(false);
+        const option = reply.options[0]!;
+        await act(async () => {
+            option.onSelect?.();
+            const select = intent === 'beside' ? selectionListProps()?.onCommandSelect : selectionListProps()?.onSelect;
+            if (!select) throw new Error('Missing Files activation callback');
+            select(option.id, option);
+        });
+        await vi.waitFor(() => expect(openWorkspaceFile).toHaveBeenCalledWith({ kind: 'project',
+            workspaceRefId: 'ws-offline-quick-open', serverId: HOME_B, machineId: scope.machineId,
+            rootPath: scope.rootPath, path: 'src/settingsRecent.ts' }, { intent }));
+    });
+
+    it('keeps positioned file matches selectable and prefers a literal colon filename in the Files scope', async () => {
+        fixture.singleHome = true;
+        const scope = { accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-offline', rootPath: '/quick-open-grammar' };
+        fixture.workspaceRefs = [{ id: 'ws-quick-open-grammar', ...scope, label: 'Grammar project', createdAtMs: 1 }];
+        const { buildWorkspaceCacheKey } = await import('@/sync/domains/workspaces/workspaceScope');
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        const openWorkspaceFile = vi.fn(async () => true);
+        await renderScreen(<UniversalSearchController commands={[]} initialSource="files" initialScope={scope}
+            openWorkspaceFile={openWorkspaceFile} activeSessionId={null} presentation="modal" onRequestClose={vi.fn()} />);
+        await act(async () => {
+            storage.getState().applyLocalSettings({ recentWorkspaceFilesV1: {
+                [buildWorkspaceCacheKey(scope)]: ['src/settings.ts', 'src/settings.ts:23', 'src/SettingsModal.tsx'],
+            } });
+            selectionListProps()?.onChangeInputValue?.('src/settings.ts:23');
+        });
+        const files = selectionListProps()?.rootStep.sections.find(section => section.id === 'files');
+        if (!files || files.kind !== 'dynamic') throw new Error('Missing Files source');
+        const literal = await files.resolve('src/settings.ts:23', new AbortController().signal);
+        expect(literal.options[0]?.label).toBe('settings.ts:23');
+        await act(async () => { selectionListProps()?.onChangeInputValue?.('settingsmodal:23'); });
+        const positionedFiles = selectionListProps()?.rootStep.sections.find(section => section.id === 'files');
+        if (!positionedFiles || positionedFiles.kind !== 'dynamic') throw new Error('Missing positioned Files source');
+        const positioned = await positionedFiles.resolve('settingsmodal:23', new AbortController().signal);
+        const option = positioned.options[0];
+        if (!option) throw new Error('Positioned filename match is not selectable');
+        await act(async () => {
+            option.onSelect?.();
+            selectionListProps()?.onSelect?.(option.id, option);
+        });
+        await vi.waitFor(() => expect(openWorkspaceFile).toHaveBeenCalledWith({ kind: 'project',
+            workspaceRefId: 'ws-quick-open-grammar', serverId: scope.serverId, machineId: scope.machineId,
+            rootPath: scope.rootPath, path: 'src/SettingsModal.tsx' }, { intent: 'preview', anchor: { kind: 'fileLine', startLine: 23 } }));
     });
 
     it('preserves a missing folder outcome in both file search sections', async () => {
