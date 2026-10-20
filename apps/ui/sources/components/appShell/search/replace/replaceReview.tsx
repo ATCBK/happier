@@ -10,9 +10,10 @@ import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { KeyboardCommandHint } from '@/components/ui/keyboard/KeyHint';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { FileIcon } from '@/components/ui/media/FileIcon';
-import type {
-  SelectionListOption,
-  SelectionListSectionDescriptor,
+import {
+  SelectionListDetailPaneContext,
+  type SelectionListOption,
+  type SelectionListSectionDescriptor,
 } from '@/components/ui/selectionList';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -150,11 +151,13 @@ function MatchLine({
   const ink = included
     ? theme.colors.text.primary
     : theme.colors.text.secondary;
+  // Without the diff column beside the list (a phone), the line wraps so the change itself stays in view (lab RP1 Rp).
+  const wrap = !React.useContext(SelectionListDetailPaneContext);
   return (
     <View
       style={{
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: wrap ? 'flex-start' : 'center',
         gap: theme.space.s8,
         minWidth: 0,
       }}
@@ -173,7 +176,7 @@ function MatchLine({
       </Text>
       <Text
         useDefaultTypography={false}
-        numberOfLines={1}
+        numberOfLines={wrap ? undefined : 1}
         style={[style, { flex: 1, color: ink }]}
       >
         {text.slice(0, start)}

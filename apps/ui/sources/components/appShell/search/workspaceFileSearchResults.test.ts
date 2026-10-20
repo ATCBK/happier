@@ -42,4 +42,23 @@ describe('buildUniversalSearchWorkspaceFileResults', () => {
             sessionId: null,
         });
     });
+
+    it('names every row\'s folder (the root by its name, no trailing slash) and carries a changed file\'s lines', () => {
+        const results = buildUniversalSearchWorkspaceFileResults({
+            files: [
+                { fileName: 'README.md', filePath: '', fullPath: 'README.md', fileType: 'file' },
+                { fileName: 'retry.ts', filePath: 'src/', fullPath: 'src/retry.ts', fileType: 'file' },
+            ],
+            accountId: 'account-a',
+            scope: { serverId: 'server-a', machineId: 'machine-a', rootPath: '/home/me/happier' },
+            workspaceRefId: null,
+            sessionId: null,
+            changes: new Map([['src/retry.ts', { added: 4, removed: 2 }]]),
+        });
+
+        expect(results.map(result => [result.subtitle, result.fileChange ?? null])).toEqual([
+            ['happier', null],
+            ['src', { added: 4, removed: 2 }],
+        ]);
+    });
 });

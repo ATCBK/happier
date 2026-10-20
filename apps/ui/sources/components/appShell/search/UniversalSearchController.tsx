@@ -657,10 +657,15 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         files: quickOpenSources.recent, scope: workspaceScope, accountId: scope.accountId,
         workspaceRefId: workspaceRef?.id ?? null, sessionId: activeSession?.id ?? null,
     }) : [], [activeSession?.id, quickOpenSources.recent, scope.accountId, workspaceRef?.id, workspaceScope]);
+    // Changed files keep their +/− wherever they list: Changed in this session and typed results (lab FB2, FB2t).
+    const changedFileLines = React.useMemo(() => new Map(quickOpenSources.changed.flatMap(file => file.isComplete !== false
+        && typeof file.linesAdded === 'number' && typeof file.linesRemoved === 'number'
+        ? [[file.fullPath, { added: file.linesAdded, removed: file.linesRemoved }] as const] : [])), [quickOpenSources.changed]);
     const changedFileResults = React.useMemo(() => workspaceScope && scope.accountId ? buildUniversalSearchWorkspaceFileResults({
         files: quickOpenSources.changed.map(file => workspacePathToFileSearchItem(file.fullPath)),
         scope: workspaceScope, accountId: scope.accountId, workspaceRefId: workspaceRef?.id ?? null, sessionId: activeSession?.id ?? null,
-    }) : [], [activeSession?.id, quickOpenSources.changed, scope.accountId, workspaceRef?.id, workspaceScope]);
+        changes: changedFileLines,
+    }) : [], [activeSession?.id, changedFileLines, quickOpenSources.changed, scope.accountId, workspaceRef?.id, workspaceScope]);
     const emptyFileSelection = React.useRef('');
     React.useEffect(() => {
         const basis = `${workspaceResolverKey}|${source ?? ''}|${query}`;
@@ -678,6 +683,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     // state as a non-activatable section hint instead of issuing a doomed RPC.
     const workspaceMachinePresence = useMachinePresenceSummary(workspaceScope?.serverId, workspaceScope?.machineId);
     const workspaceScopeReachable = workspaceMachinePresence.reachability === 'reachable';
+    // Quick open says "isn't answering" only for a machine known to be unreachable; one still loading searches normally.
+    const workspaceScopeUnreachable = workspaceMachinePresence.reachability === 'unreachable';
     const workspaceSearchAvailable = workspaceActivationAvailable && selectedCredentialIsCurrent;
     // Names the machine, as the History browser does (lab ST: "MacBook Pro is offline").
     const offlineMachineName = workspaceScope ? machineNameById.get(workspaceScope.machineId) : undefined;
@@ -703,16 +710,18 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 const parsedPath = absolute ? resolvePathRelativeToRoot({ path, root: workspaceScope.rootPath }) : parsedTarget ? path.replace(/\\/g, '/') : null;
                 if ((parsedTarget || absolute) && parsedPath === null) return { results: [], emptyHint: t('universalSearch.content.unavailable') };
                 const searchQuery = parsedPath ?? value;
-                if (!workspaceScopeReachable) {
+                if (workspaceScopeUnreachable) {
                     const candidates = [...new Map([...quickOpenSources.recent, ...quickOpenSources.changed.map(file => workspacePathToFileSearchItem(file.fullPath))]
                         .map(file => [file.fullPath, file])).values()];
+                    // Nothing recent or changed to fall back on: the line says only that the machine isn't answering.
+                    if (candidates.length === 0) return { results: [], emptyHint: workspaceUnavailableHint };
                     const literalFile = candidates.find(file => file.fullPath === value);
                     const matches = rankFileSearchResults(createWorkspaceFileSearchIndex(candidates).search(normalizeFileSearchText(searchQuery)).map(result => result.item), searchQuery);
                     const matchingRecent = new Set(matchWorkspaceFileNames(quickOpenSources.recent, searchQuery).map(file => file.fullPath));
                     const recent = quickOpenSources.recent.filter(file => matchingRecent.has(file.fullPath));
                     const ordered = [...recent, ...matches.filter(file => !matchingRecent.has(file.fullPath))];
                     const items = literalFile ? [literalFile, ...ordered.filter(file => file.fullPath !== literalFile.fullPath)] : ordered;
-                    return { results: buildUniversalSearchWorkspaceFileResults({ files: items,
+                    return { results: buildUniversalSearchWorkspaceFileResults({ files: items, changes: changedFileLines,
                         accountId: selectedCredentialBinding.accountId, scope: workspaceScope,
                         workspaceRefId: workspaceRef?.id ?? null, sessionId: activeSession?.id ?? null,
                     }).map(result => !literalFile && parsedTarget?.anchor && result.target.kind === 'workspaceFile'
@@ -746,6 +755,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 const fileItems = [...recentPaths.map(workspacePathToFileSearchItem), ...pageItems.filter(file => !recentSet.has(file.fullPath))];
                 const fileResults = buildUniversalSearchWorkspaceFileResults({
                     files: fileItems,
+                    changes: changedFileLines,
                     accountId: selectedCredentialBinding.accountId,
                     scope: workspaceScope,
                     workspaceRefId: workspaceRef?.id ?? null,
@@ -765,7 +775,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 };
             },
         };
-    }, [activeSession?.id, fileLimit, loadMoreFiles, machineLabel, quickOpenSources.changed, quickOpenSources.recent, quickOpenSources.recentPaths, selectedCredentialBinding, source, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable]);
+    }, [activeSession?.id, changedFileLines, fileLimit, loadMoreFiles, machineLabel, workspaceScopeUnreachable, workspaceUnavailableHint, quickOpenSources.changed, quickOpenSources.recent, quickOpenSources.recentPaths, selectedCredentialBinding, source, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable]);
     const fileContent = React.useMemo<UniversalSearchSource>(() => {
         if (!workspaceScope || !workspaceSearchAvailable || !selectedCredentialBinding) return source === 'fileContent' ? { status: 'unavailable', resolverKey: `${workspaceResolverKey}|missing`, hint: t('universalSearch.content.unavailable') } : { status: 'absent' };
         if (!workspaceScopeReachable) return { status: 'unavailable', resolverKey: `${workspaceResolverKey}|offline`, hint: workspaceUnavailableHint };
@@ -986,7 +996,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         files,
         recentFiles: recentFileResults,
         changedFiles: changedFileResults,
-        ...(workspaceScope && !workspaceScopeReachable ? { filesStatusHint: t('universalSearch.quickOpen.offline', { machine: machineLabel }) } : {}),
+        ...(workspaceScope && workspaceScopeUnreachable ? { filesStatusHint: t('universalSearch.quickOpen.offline', { machine: machineLabel }) } : {}),
         ...(source === 'files' && fileContentFolderLabel ? { filesNoMatch: { scopeLabel: fileContentFolderLabel, onSearchEverything: searchEverything } } : {}),
         symbols: symbolsSource,
         fileContent,
@@ -1013,7 +1023,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const sections = replaceSections ?? searchSections;
     const rootStep = React.useMemo<SelectionListStep>(() => ({
         id: 'universal-search',
-        inputPlaceholder: t('commandPalette.placeholder'),
+        // Quick open names its one job (lab FB2 "Go to file").
+        inputPlaceholder: source === 'files' ? t('projects.code.goToFile') : t('commandPalette.placeholder'),
         emptyStateLabel: t('selectionList.emptyMatch'),
         sections,
         // The review is the Machine's answer for the typed query; the field never narrows it further.
@@ -1027,6 +1038,13 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                 { id: 'include', label: '↵', description: t('universalSearch.replace.includeHint') },
                 { id: 'open', label: '⌘↵', description: t('commandPalette.hints.openAtLine') },
             ]),
+        ] : source === 'files' ? [
+            // Lab FB2: ⌘↵ opens the file beside, ⌫ on the empty field leaves the scope.
+            { id: 'move', label: '↑↓', description: t('commandPalette.hints.move') },
+            { id: 'open', label: '↵', description: t('commandPalette.hints.open') },
+            { id: 'beside', label: '⌘↵', description: t('files.pane.menu.openBeside') },
+            { id: 'everything', label: '⌫', description: t('universalSearch.quickOpen.searchEverything') },
+            { id: 'close', label: 'esc', description: t('commandPalette.hints.close') },
         ] : source === 'fileContent' ? [
             { id: 'move', label: '↑↓', description: t('commandPalette.hints.move') },
             { id: 'open', label: '↵', description: t('commandPalette.hints.openAtLine') },
@@ -1247,7 +1265,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             : fileContentScopeLabel ? t('universalSearch.content.textInScope', { scope: fileContentScopeLabel }) : t('universalSearch.content.textInFiles'),
         // The chip row beneath the field on a phone names the folder alone (lab G1sp "Text in happier"); the machine stays in the name.
         ...(source === 'fileContent' && fileContentFolderLabel ? { rowValueLabel: t('universalSearch.content.textInScope', { scope: fileContentFolderLabel }) } : {}),
-        icon: <Icon name="text-aa" size={12} color={theme.colors.text.secondary} />,
+        // The token carries what it searches: a file for quick open (lab FB2), code for symbols, Aa for text.
+        icon: <Icon name={source === 'files' ? 'file' : source === 'symbols' ? 'code' : 'text-aa'} size={12} color={theme.colors.text.secondary} />,
         active: true,
         onClear: () => selectSource(source === 'symbols' ? 'files' : 'everything'),
         clearAccessibilityLabel: t('universalSearch.content.everything'),

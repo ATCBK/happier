@@ -15,6 +15,7 @@ import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { ConversationHitSummary, resolveConversationHitSnippet } from '@/components/sessions/external/browse/ConversationHitSummary';
+import { DiffStat } from '@/components/workspaces/scm/DiffStat';
 import { stripMarkdown } from '@/utils/sessions/messageUtils';
 import { KeyboardCommandHint, KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { QuickOpenFilePreview } from './QuickOpenFilePreview';
@@ -504,6 +505,7 @@ function toOption(
         ...((result.kind === 'project' || result.kind === 'workspaceFile') && result.subtitle
             ? { subtitleEllipsizeMode: 'head' as const }
             : {}),
+        ...(result.fileChange ? { rightAccessory: () => <DiffStat added={result.fileChange!.added} removed={result.fileChange!.removed} /> } : {}),
         icon: result.conversation?.agentId ? agentIcon(result.conversation.agentId)
             : result.fileContent ? fileIcon(result.fileContent.path)
             : result.kind === 'workspaceFile' && result.target.kind === 'workspaceFile' ? fileIcon(result.target.path)
@@ -723,6 +725,10 @@ export function buildUniversalSearchSections(
                 title: t('universalSearch.sections.files'), source: { status: 'unavailable',
                     resolverKey: input.files.status === 'absent' ? input.filesStatusHint : input.files.resolverKey, hint: input.filesStatusHint },
                 iconName: 'file', minQueryLength: 0, onCommit }).map(section => ({ kind: 'dynamic' as const, ...section }));
+            // Nothing recent and nothing changed yet: the folder's own files, never "No matches" for an empty query (lab FB2).
+            if (groups.length === 0) return buildDynamicSection({ sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.files,
+                title: t('universalSearch.sections.files'), source: input.files, iconName: 'file', minQueryLength: 0, onCommit,
+            }).map(section => ({ kind: 'dynamic' as const, ...section }));
             return groups;
         }
         return buildDynamicSection({ sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.files, title: t('universalSearch.sections.files'),

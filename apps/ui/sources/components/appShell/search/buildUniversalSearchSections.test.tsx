@@ -130,6 +130,24 @@ describe('buildUniversalSearchSections', () => {
         const found = await dynamicSections(build([{ ...recent, id: 'drawer.ts', title: 'drawer.ts' }]))[0]!.resolve('settingsdrawer', new AbortController().signal);
         expect(found.options.map(option => option.id).some(id => id.startsWith('files:no-match'))).toBe(false);
     });
+    it('opens an empty quick open on the folder\'s own files when nothing is recent or changed, and shows a changed file\'s lines (lab FB2)', async () => {
+        const file = (path: string, fileChange?: Readonly<{ added: number; removed: number }>): UniversalSearchResult => ({
+            id: path, scopeKey: 'workspace', sourceId: 'files', kind: 'workspaceFile', title: path, ...(fileChange ? { fileChange } : {}),
+            target: { kind: 'workspaceFile', scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' },
+                path, workspaceRefId: 'workspace-a', sessionId: null, serverId: 'home-a', accountId: 'account-a' } });
+        const resolve = vi.fn(async () => [file('README.md'), file('src/retry.ts', { added: 4, removed: 2 })]);
+        const fresh = buildUniversalSearchSections(input({ query: '', source: 'files', recentFiles: [], changedFiles: [],
+            files: { status: 'ready', resolverKey: 'workspace', resolve } }));
+        expect(fresh.map(section => section.id)).toEqual(['files']);
+        const page = await dynamicSections(fresh)[0]!.resolve('', new AbortController().signal);
+        expect(page.options.map(option => option.label)).toEqual(['README.md', 'src/retry.ts']);
+        expect(page.options[0]!.rightAccessory).toBeUndefined();
+        expect(page.options[1]!.rightAccessory).toBeDefined();
+        // Once something is recent, the empty query lists Recent and never asks the folder.
+        const withRecent = buildUniversalSearchSections(input({ query: '', source: 'files', recentFiles: [file('DESIGN.md')], changedFiles: [],
+            files: { status: 'ready', resolverKey: 'workspace', resolve } }));
+        expect(withRecent.map(section => section.id)).toEqual(['files:recent']);
+    });
     it.each(['cedar', 'A cedar', 'A cedar choice'])('puts content title matches ahead of settings and commands for %s', (query) => {
         const sections = buildUniversalSearchSections(input({ query,
             sessions: [{ ...sessionEntity('cedar', 1), title: 'A cedar choice' }],
