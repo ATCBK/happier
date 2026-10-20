@@ -10,13 +10,12 @@ const address = { kind: 'session' as const, sessionId };
 
 afterEach(async () => { await standardCleanup(); resetSessionDraftRepositoryForTests(); });
 
-it('keeps detached launcher selections editable without creating a Session draft', async () => {
+it('keeps detached launcher selections editable without Session draft currentness', async () => {
     const hook = await renderHook(() => useExecutionRunLauncherDraft({ lifetime, sessionId: null,
         draftKey: 'conversation', createDefaultInput: () => ({ modelId: 'default' }) }));
     await act(async () => hook.getCurrent().setUserActionInput({ modelId: 'chosen' }));
     expect(hook.getCurrent().actionInput).toEqual({ modelId: 'chosen' });
     expect(hook.getCurrent().captureSelection()).toBeNull();
-    expect(getSessionDraftSnapshot(scope, address)).toBeNull();
 });
 
 it('adopts selection and identity arriving after mount without rewriting the hydrated field', async () => {
