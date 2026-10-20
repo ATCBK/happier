@@ -5,7 +5,8 @@
  * does exactly three things, and deliberately nothing else:
  *
  *  1. it asks THAT source for the accounts and scopes it can reach, through the
- *     source's own `listInstances` Action;
+ *     source's own `listInstances` Action, and selectable units through its
+ *     optional `listScopeUnits` Action;
  *  2. it asks the TARGET which of them that source has already configured,
  *     through the public `happier.triage/sources/read-configured-v1` Action;
  *  3. it asks the TARGET to create, update, remove or restore the one the user
@@ -98,6 +99,8 @@ import {
   type TriageSourceSettingsRowLifecycleV1,
   type TriageSourceSettingsRowV1,
 } from './model.js';
+import { TriageSourceScopeSelectionEditor } from './scopeSelectionEditor.js';
+import type { TriageSourceSettingsScopeSelectionV1, TriageSourceSettingsDraftFieldsPropsV1 } from './scopeSelection.js';
 
 /**
  * Everything one source contributes to its own settings page.
@@ -126,6 +129,10 @@ export type TriageSourceSettingsSurfaceIdentityV1 = Readonly<{
    * committed configuration with the discovered or qualified retained draft's other fields.
    */
   DraftEditor?: React.ComponentType<TriageSourceSettingsDraftEditorPropsV1>;
+  /** Source-native token translation for the one shared All / Selected editor. */
+  scopeSelection?: TriageSourceSettingsScopeSelectionV1;
+  /** Source-specific non-selection fields, under the shared Save and Cancel. */
+  DraftFields?: React.ComponentType<TriageSourceSettingsDraftFieldsPropsV1>;
   /** Source-owned stability of retained instance keys, enabling edits without fresh discovery. */
   configuredInstanceKeyStability?: TriageSourceInstanceDraftV1['keyStability'];
 }>;
@@ -177,7 +184,10 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
   discoveryDeadlineMs?: number,
 ): RenderSurface {
   const { sourceDisplayName } = identity;
-  const DraftEditor = identity.DraftEditor;
+  const scopeSelection = identity.scopeSelection;
+  const DraftEditor = scopeSelection === undefined ? identity.DraftEditor
+    : (props: TriageSourceSettingsDraftEditorPropsV1) => <TriageSourceScopeSelectionEditor {...props}
+      pluginId={identity.pluginId} adapter={scopeSelection} {...(identity.DraftFields === undefined ? {} : { Fields: identity.DraftFields })} />;
   const listInstances = Object.freeze({
     pluginId: identity.pluginId,
     localId: identity.listInstancesLocalActionId,

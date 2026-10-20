@@ -3,6 +3,7 @@ export {
   type TriageSourceSettingsDraftEditorPropsV1,
   type TriageSourceSettingsSurfaceIdentityV1,
 } from './settings/surface.js';
+export type { TriageSourceSettingsScopeSelectionV1, TriageSourceSettingsDraftFieldsPropsV1 } from './settings/scopeSelection.js';
 export {
   TriageEvidenceDisclosureProvider,
   useTriageEvidenceDisclosure,

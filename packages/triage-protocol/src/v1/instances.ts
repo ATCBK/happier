@@ -148,13 +148,25 @@ export const TriageSourceInstanceKeyStabilityV1ProtocolSchema = defineProtocolUn
  * purpose or account ref, because the exact binding is already a separate
  * member of the target's matching tuple (`CONTRACT.md` §3.1).
  */
-export const TriageSourceInstanceDraftV1Schema = defineProtocolObject({
+const triageSourceInstanceDraftFieldsV1 = {
     v: defineProtocolLiteral(1),
-    binding: TriageSourceAccountBindingV1Schema,
     localInstanceKey: TriageLocalInstanceKeyV1ProtocolSchema,
     keyStability: TriageSourceInstanceKeyStabilityV1ProtocolSchema,
     configuration: TriageSourceInstanceConfigurationV1Schema,
     locator: TriageSourceInstanceLocatorV1Schema,
+};
+export const TriageSourceInstanceDraftV1Schema = defineProtocolObject({
+    ...triageSourceInstanceDraftFieldsV1,
+    binding: TriageSourceAccountBindingV1Schema,
+}, { policy: 'closed' });
+/** Credential specializations for the source's read-only scope listing Action. */
+export const TriageSourceConnectedAccountInstanceDraftV1Schema = defineProtocolObject({
+    ...triageSourceInstanceDraftFieldsV1,
+    binding: TriageSourceConnectedAccountBindingV1Schema,
+}, { policy: 'closed' });
+export const TriageSourceCredentialInstanceDraftV1Schema = defineProtocolObject({
+    ...triageSourceInstanceDraftFieldsV1,
+    binding: TriageSourceCredentialBindingV1Schema,
 }, { policy: 'closed' });
 export type TriageSourceInstanceDraftV1 = ReturnType<
     typeof TriageSourceInstanceDraftV1Schema.parse
