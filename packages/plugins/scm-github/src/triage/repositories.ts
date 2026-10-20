@@ -4,7 +4,8 @@ import {
 } from '../observations/githubApiClient.js';
 
 import { classifyGithubResponseFailure, classifyGithubTransportFailure, isGithubSuccessStatus } from './errors.js';
-import { buildGithubApiUrl, type GithubRepositoryRouteV1 } from './locator.js';
+import { buildGithubApiUrl, buildGithubRepositoryKey, parseGithubRoutingToken, type GithubRepositoryRouteV1 } from './locator.js';
+import { buildGithubCollisionScope, readGithubRepositoryIdFromCollisionScope } from './identity.js';
 import type { GithubTriageFailureV1 } from './types.js';
 
 /**
@@ -40,6 +41,7 @@ export type GithubRepositoryReadV1 =
   | Readonly<{
     kind: 'readable';
     repositoryId: string;
+    repositoryKey: string | null;
     mergeSettings: GithubRepositoryMergeSettingsV1;
     archived: boolean | null;
     hasIssues: boolean | null;
@@ -48,6 +50,7 @@ export type GithubRepositoryReadV1 =
 
 export type GithubRepositoryReaderV1 = Readonly<{
   read(route: GithubRepositoryRouteV1): Promise<GithubRepositoryReadV1>;
+  readById(repositoryId: string): Promise<GithubRepositoryReadV1>;
 }>;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -67,13 +70,17 @@ function readMergeSettings(body: unknown): GithubRepositoryMergeSettingsV1 {
   });
 }
 
-function readPositiveDecimal(value: unknown): string | null {
-  if (typeof value === 'number') {
-    return Number.isSafeInteger(value) && value >= 1 ? String(value) : null;
-  }
-  if (typeof value !== 'string') return null;
-  const candidate = value.trim();
-  return /^[1-9][0-9]*$/u.test(candidate) ? candidate : null;
+/** One repository DTO decoder shared by exact reads and the selectable directory. */
+export function decodeGithubRepositoryMetadata(body: unknown): Extract<GithubRepositoryReadV1, { kind: 'readable' }> | null {
+  const repositoryId = isRecord(body) ? readGithubRepositoryIdFromCollisionScope(buildGithubCollisionScope(body.id)) : null;
+  if (repositoryId === null) return null;
+  const route = isRecord(body) ? parseGithubRoutingToken(body.full_name) : null;
+  return {
+    kind: 'readable', repositoryId, repositoryKey: route === null ? null : buildGithubRepositoryKey(route),
+    mergeSettings: readMergeSettings(body),
+    archived: isRecord(body) ? readDeclaredBoolean(body.archived) : null,
+    hasIssues: isRecord(body) ? readDeclaredBoolean(body.has_issues) : null,
+  };
 }
 
 export function createGithubRepositoryReader(input: Readonly<{
@@ -82,11 +89,11 @@ export function createGithubRepositoryReader(input: Readonly<{
 }>): GithubRepositoryReaderV1 {
   const cache = new Map<string, Promise<GithubRepositoryReadV1>>();
 
-  const readOnce = async (route: GithubRepositoryRouteV1): Promise<GithubRepositoryReadV1> => {
+  const readOnce = async (url: string, expectedId?: string): Promise<GithubRepositoryReadV1> => {
     let response;
     try {
       response = await input.client.request({
-        url: buildGithubApiUrl(['repos', route.owner, route.name]),
+        url,
       });
     } catch (error) {
       return Object.freeze({ kind: 'unreadable', failure: classifyGithubTransportFailure(error) });
@@ -103,8 +110,8 @@ export function createGithubRepositoryReader(input: Readonly<{
     } catch (error) {
       return Object.freeze({ kind: 'unreadable', failure: classifyGithubTransportFailure(error) });
     }
-    const repositoryId = isRecord(body) ? readPositiveDecimal(body.id) : null;
-    if (repositoryId === null) {
+    const metadata = decodeGithubRepositoryMetadata(body);
+    if (metadata === null || (expectedId !== undefined && metadata.repositoryId !== expectedId)) {
       return Object.freeze({
         kind: 'unreadable',
         failure: Object.freeze({
@@ -113,23 +120,30 @@ export function createGithubRepositoryReader(input: Readonly<{
         }),
       });
     }
-    return Object.freeze({
-      kind: 'readable',
-      repositoryId,
-      mergeSettings: readMergeSettings(body),
-      archived: isRecord(body) ? readDeclaredBoolean(body.archived) : null,
-      hasIssues: isRecord(body) ? readDeclaredBoolean(body.has_issues) : null,
+    return Object.freeze(metadata);
+  };
+
+  const readCached = (key: string, url: string, expectedId?: string): Promise<GithubRepositoryReadV1> => {
+    const existing = cache.get(key);
+    if (existing !== undefined) return existing;
+    const pending = readOnce(url, expectedId).then((result) => {
+      if (result.kind === 'readable') {
+        cache.set(`id:${result.repositoryId}`, Promise.resolve(result));
+        if (result.repositoryKey !== null) cache.set(result.repositoryKey, Promise.resolve(result));
+      }
+      return result;
     });
+    cache.set(key, pending);
+    return pending;
   };
 
   return Object.freeze({
     read(route: GithubRepositoryRouteV1): Promise<GithubRepositoryReadV1> {
       const key = `${route.owner.toLowerCase()}/${route.name.toLowerCase()}`;
-      const existing = cache.get(key);
-      if (existing !== undefined) return existing;
-      const pending = readOnce(route);
-      cache.set(key, pending);
-      return pending;
+      return readCached(key, buildGithubApiUrl(['repos', route.owner, route.name]));
+    },
+    readById(repositoryId: string): Promise<GithubRepositoryReadV1> {
+      return readCached(`id:${repositoryId}`, buildGithubApiUrl(['repositories', repositoryId]), repositoryId);
     },
   });
 }
