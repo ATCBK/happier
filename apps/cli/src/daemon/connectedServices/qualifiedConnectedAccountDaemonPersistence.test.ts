@@ -103,6 +103,42 @@ const ReleasedCredentialRecordSchema = z.discriminatedUnion('kind', [
 ]);
 
 describe('createQualifiedConnectedAccountDaemonPersistence', () => {
+  it('keeps independent live attempt configurations and OAuth transactions beyond 64 until their owner closes them', async () => {
+    const persistence = createQualifiedConnectedAccountDaemonPersistence({
+      credentials: { token: 'token-1', encryption: { type: 'dataKey', publicKey: new Uint8Array(32), machineKey: new Uint8Array(32) } },
+      getAccountEncryptionMode: async () => 'plain',
+      readCredential: async () => null,
+      readConfiguration: async () => null,
+      secrets: { admit: async () => undefined, has: async () => false, read: async () => null },
+    });
+    const transactions = [];
+    for (let index = 0; index < 80; index += 1) {
+      const attemptId = `attempt-${index}`;
+      const target = { kind: 'attempt' as const, attemptId, service, modeId: 'oauth' };
+      const configured = await persistence.configuration.replace({ target, expectedRevision: null,
+        replacement: { values: { tenant: 'acme' }, secretRefs: {} }, ...runtimeIdentity() });
+      expect(configured.status).toBe('committed');
+      if (configured.status !== 'committed') throw new Error('Expected attempt configuration');
+      const transaction = await persistence.attempts.oauth.create({ attemptId, service,
+        callbackUrl: 'https://accounts.example/oauth/callback', snapshot: {
+          attemptId, createdAtMs: 1_000, intent: 'connect', service, modeId: 'oauth',
+          sourceCustody: managedCustody(), phase: 'starting', stagedCredentials: {},
+          expectedCredentialRevision: null, expectedCredentialConfigurationRevision: null,
+          expectedConfigurationRevision: configured.record.revision,
+          stagedAccountConfigurationContent: { values: { tenant: 'acme' }, secretRefs: {} },
+        } });
+      transactions.push(transaction);
+    }
+    for (const transaction of transactions) {
+      const attemptId = transaction.snapshot.attemptId;
+      expect(await persistence.attempts.oauth.read?.(attemptId)).not.toBeNull();
+      await transaction.close();
+      await persistence.configuration.destroyAttempt(attemptId);
+      expect(await persistence.attempts.oauth.read?.(attemptId)).toBeNull();
+      expect(await persistence.configuration.read({ kind: 'attempt', attemptId, service, modeId: 'oauth' })).toBeNull();
+    }
+  });
+
   it('resolves shared Saved Secret references through the active Account catalog', async () => {
     resetActiveAccountSettingsSnapshotForTests();
     const resourceId = 'shared-resource-1';

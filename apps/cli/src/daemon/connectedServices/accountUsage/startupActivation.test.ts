@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ConnectedServiceCurrentSourceHydrationConflictError } from './currentSourceHydration';
+import { ConnectedServiceCurrentSourceHydrationConflictError, hydrateProviderAccountUsageStoreFromConnectedServiceInventory } from './currentSourceHydration';
+import { createProviderAccountUsageStore } from './store';
 import { activateConnectedServiceQuotaAutomationAfterProviderAccountUsageHydration } from './startupActivation';
 
 describe('provider-account usage startup activation', () => {
@@ -60,25 +61,55 @@ describe('provider-account usage startup activation', () => {
     expect(createCoordinator).toHaveBeenCalledTimes(1);
   });
 
-  it('fails closed after the bounded transient-conflict attempts are exhausted', async () => {
+  it('stops transient-conflict hydration when its daemon lifecycle retires', async () => {
     const error = new ConnectedServiceCurrentSourceHydrationConflictError('source keeps changing');
-    const hydrate = vi.fn().mockRejectedValue(error);
+    let current = true;
+    const hydrate = async () => { current = false; throw error; };
     const createCoordinator = vi.fn(() => ({ scheduleCurrentSourceRefresh: vi.fn() }));
     const onActivationError = vi.fn();
 
     await expect(activateConnectedServiceQuotaAutomationAfterProviderAccountUsageHydration({
       enabled: true,
+      isCurrent: () => current,
       quotaFetchers: [{ serviceId: 'openai-codex' }],
       awaitReadiness: async () => {},
       hydrate,
       createCoordinator,
       startLoop: () => ({ stop: vi.fn() }),
       onActivationError,
-    })).resolves.toEqual({ status: 'quota_policy_disabled', error });
+    })).resolves.toMatchObject({ status: 'quota_policy_disabled', error: { code: 'daemon_shutting_down' } });
 
-    expect(hydrate).toHaveBeenCalledTimes(3);
     expect(createCoordinator).not.toHaveBeenCalled();
-    expect(onActivationError).toHaveBeenCalledWith(error);
+    expect(onActivationError).toHaveBeenCalledWith(expect.objectContaining({ code: 'daemon_shutting_down' }));
+  });
+
+  it('activates after repeated real inventory conflicts settle beyond the previous retry cutoff', async () => {
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    let inventories = 0;
+    const result = await activateConnectedServiceQuotaAutomationAfterProviderAccountUsageHydration({
+      enabled: true,
+      quotaFetchers: [{ serviceId: 'openai-codex' }],
+      awaitReadiness: async () => {},
+      hydrate: async ({ serviceIds }) => (await hydrateProviderAccountUsageStoreFromConnectedServiceInventory({
+        serviceIds, credentials: { token: 'token' }, store: createProviderAccountUsageStore(), nowMs: 1_000,
+        api: {
+          getAccountEncryptionMode: async () => 'plain',
+          listAccounts: async () => ({ service, accounts: ++inventories <= 12 && inventories % 2 === 1 ? [{
+            ref: { service, accountId: 'work' }, status: 'connected', authenticationModeId: 'oauth',
+            revisionSemantics: 'revisioned', credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+            configurationReady: true, configurationRevision: 'cfg-current', kind: 'oauth', expiresAt: null,
+            providerIdentity: { accountId: 'acct-work' }, displayName: 'Work', scopes: [],
+          }] : [] }),
+          listGroups: async () => ({ groups: [] }),
+          resolveSource: async () => null,
+          readProviderAccountUsageRecord: async () => null,
+        },
+      })).hydration,
+      createCoordinator: () => ({ scheduleCurrentSourceRefresh: () => {} }),
+      startLoop: () => ({ stop: () => {} }),
+      onActivationError: () => {},
+    });
+    expect(result.status).toBe('active');
   });
 
   it('does not retry non-conflict hydration failures', async () => {

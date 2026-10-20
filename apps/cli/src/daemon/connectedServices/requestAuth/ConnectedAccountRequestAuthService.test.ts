@@ -123,6 +123,35 @@ function pendingUntilAborted(signal: AbortSignal | undefined): Promise<never> {
 }
 
 describe('ConnectedAccountRequestAuthService', () => {
+    it('waits for a stable current binding across repeated live credential changes and remains cancellable', async () => {
+        let reads = 0;
+        const controller = new AbortController();
+        const owner = createConnectedAccountRequestAuthService({
+            resolveCurrentBinding: () => resolved({
+                accountId: 'one', revision: revision1, generation: Math.min(++reads, 21),
+            }),
+            materializeBearer: async () => ({ accessToken: 'current-token' }),
+            refreshAfterAuthFailure: async () => ({ status: 'current_unchanged' }),
+            reportQuotaFailure: async () => ({ status: 'current_unchanged' }),
+        });
+        await expect(owner.lookupRequestAuth({ subject: subject(groupBinding()), purpose, signal: controller.signal }))
+            .resolves.toMatchObject({ accessToken: 'current-token', credentialContext: { group: { generation: 21 } } });
+
+        reads = 0;
+        const retiringOwner = createConnectedAccountRequestAuthService({
+            resolveCurrentBinding: () => {
+                if (++reads === 25) controller.abort();
+                return resolved({ accountId: 'one', revision: revision1, generation: reads });
+            },
+            materializeBearer: async () => ({ accessToken: 'must-not-escape' }),
+            refreshAfterAuthFailure: async () => ({ status: 'current_unchanged' }),
+            reportQuotaFailure: async () => ({ status: 'current_unchanged' }),
+        });
+        await expect(retiringOwner.lookupRequestAuth({ subject: subject(groupBinding()), purpose, signal: controller.signal }))
+            .rejects.toMatchObject({ code: 'request_auth_credential_unavailable' });
+        expect(controller.signal.aborted).toBe(true);
+    });
+
     it('uses the longer owner deadline only for authentication recovery', async () => {
         vi.useFakeTimers();
         onTestFinished(() => { vi.useRealTimers(); });
@@ -708,7 +737,7 @@ describe('ConnectedAccountRequestAuthService', () => {
         expect(materializations).toBe(2);
     });
 
-    it('bounds cached bearer leases and evicts the least-recently-used account', async () => {
+    it('retains current bearer leases across more than 64 active accounts', async () => {
         let currentAccountId = 'account-0';
         const materializationsByAccount = new Map<string, number>();
         const owner = createConnectedAccountRequestAuthService({
@@ -747,11 +776,11 @@ describe('ConnectedAccountRequestAuthService', () => {
         currentAccountId = 'account-0';
         const rematerialized = await owner.lookupRequestAuth({ subject: capability, purpose });
 
-        expect(rematerialized.accessToken).toBe('token-account-0-2');
-        expect(materializationsByAccount.get('account-0')).toBe(2);
+        expect(rematerialized.accessToken).toBe('token-account-0-1');
+        expect(materializationsByAccount.get('account-0')).toBe(1);
     });
 
-    it('prunes expired leases before evicting a still-valid least-recently-used lease', async () => {
+    it('prunes expired leases while retaining other current accounts', async () => {
         let currentAccountId = 'account-0';
         let now = 0;
         const materializationsByAccount = new Map<string, number>();
