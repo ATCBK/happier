@@ -3972,7 +3972,8 @@ export function createCliActionDeps(params: Readonly<{
       return entries;
     } },
     ...(roleArtifactStore && homeAccountId ? { appShellAction: createCliInboxReadAction({
-      store: { list: options => withProjectHome(() => roleArtifactStore.list(options)) },
+      store: { list: options => withProjectHome(() => roleArtifactStore.list(options)),
+        readBodies: (items, signal) => withProjectHome(() => roleArtifactStore.readBodies(items, signal)) },
       accountId: homeAccountId, serverId: todoHomeServerId,
       isCurrent: async () => !await projectHomeAdmission() && (!params.isCredentialCurrent || await params.isCredentialCurrent()),
     }) } : {}),

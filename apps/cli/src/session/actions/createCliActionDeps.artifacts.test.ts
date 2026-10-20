@@ -99,7 +99,8 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       if (address.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (address.pathname === '/v1/artifacts') {
         if (retireOnList) credentialCurrent = false;
-        const headers = [row, ordinary].map(({ body: _body, ...entry }) => entry);
+        // The real header inventory omits exact-read exposure facts.
+        const headers = [row, ordinary].map(({ body: _body, publicAudience: _audience, ...entry }) => entry);
         return { status: 200, data: address.searchParams.has('kind') ? { items: headers, hasUnclassified: false } : headers };
       }
       if (address.pathname === `/v1/artifacts/${artifactId}`) return { status: 200, data: row };
@@ -123,6 +124,12 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     ], coverage: { sources: expect.arrayContaining([{ source: 'action_operations', status: 'unavailable', reason: 'device_local' }]) } } });
     if (!result.ok) throw new Error('Expected Inbox result');
     expect(AppShellActionOutputSchemas['inbox.get'].safeParse(result.result).success).toBe(true);
+    expect(result.result).toMatchObject({ coverage: { sources: expect.arrayContaining([{ source: 'notices', status: 'complete' }]) } });
+    // The selected body read, not a header's claimed privacy, admits the item.
+    row.publicAudience = 'retained';
+    expect(await executor.execute('inbox.get', {}, context)).toMatchObject({ ok: true, result: { items: [],
+      coverage: { sources: expect.arrayContaining([{ source: 'notices', status: 'partial', reason: 'content_unavailable' }]) } } });
+    row.publicAudience = 'none';
     expect(await executor.execute('artifact.list', { kind: 'account_notice.v1' }, context)).toMatchObject({ ok: true, result: { items: [] } });
     expect(await executor.execute('artifact.get', { artifactId }, context)).toMatchObject({ ok: true, result: { artifact: { artifactId, header } } });
     expect(await executor.execute('inbox.get', {}, { ...context, expectedAccountId: 'foreign' }))

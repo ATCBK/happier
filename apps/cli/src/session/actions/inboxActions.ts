@@ -34,10 +34,11 @@ export function createCliInboxReadAction(params: Readonly<{
       const selected = page.items.filter(artifact => {
         if (artifact.header.kind !== 'account_notice.v1' && artifact.header.kind !== 'usage_notice.v1'
           || artifact.ownerAccountId !== params.accountId || artifact.access !== 'owner') return false;
-        if (artifact.publicAudience !== 'none') { noticeCoverage = 'partial'; return false; }
         return true;
       });
-      // Open only admitted notice bodies through the canonical selected-read batch.
+      // Header inventories do not carry exact-read exposure facts. Select owned
+      // notice candidates here; readOwnedNoticeArtifactV1 admits only the batch's
+      // authenticated private content, never a header's missing/claimed audience.
       const opened = await params.store.readBodies(selected, context.signal);
       if (!await current()) return { ok: false, errorCode: 'credential_scope_retired', error: 'credential_scope_retired' };
       for (const artifact of opened) {
