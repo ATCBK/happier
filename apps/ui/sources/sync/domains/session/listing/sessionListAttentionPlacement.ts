@@ -276,7 +276,10 @@ function resolveAttentionReason(
     if (runtimePresentation.working) return null;
     const projected = viewer.viewer.attention;
     if (projected.needsAttention) {
-        return presentCanonicalAttentionReason(projected.primary);
+        const reason = presentCanonicalAttentionReason(projected.primary);
+        return reason === 'standing' && runtimePresentation.runtime === 'background_active'
+            ? null
+            : reason;
     }
     if (runtimePresentation.runtime === 'background_active') return null;
     // The Account default is presentation-only and may apply only after the

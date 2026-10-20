@@ -256,9 +256,10 @@ export function projectSessionAwarenessRuntimeV1(
     && !unservable
     && runtime.active === true
     && runtime.presence !== 'offline';
-  // Pending counts are durable: runtime settlement or an agent transition clears them. Their
-  // observed-at instant is the request's creation time and is never refreshed while it waits,
-  // so its age cannot expire a request the live runtime is still blocked on.
+  // Keep an outstanding request visible until its count clears or its owning runtime is no
+  // longer live. The request timestamp need not advance while it waits, so age is not settlement
+  // evidence. Updated CLIs retain and retry settlement intents; older producers can leave an
+  // unresolved count after a failed cancellation write.
   const freshActionRequired = waitingForAction || (pending.hasPendingUserActionRequests === true
     && potentiallyLive);
   const freshPermissionRequired = pending.hasPendingPermissionRequests === true

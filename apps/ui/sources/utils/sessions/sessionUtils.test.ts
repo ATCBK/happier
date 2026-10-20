@@ -1819,7 +1819,7 @@ describe('useSessionStatus', () => {
         }
     });
 
-    it('expires stale permission presentation without erasing the unresolved request', async () => {
+    it('keeps a live permission visible across the former request-age expiry', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_000_000);
         try {
@@ -1840,7 +1840,7 @@ describe('useSessionStatus', () => {
 
             await flushHookEffects({ cycles: 1, turns: 0, advanceTimersMs: 5 });
 
-            expect(hook.getCurrent().state).toBe('waiting');
+            expect(hook.getCurrent().state).toBe('permission_required');
             expect(listPendingPermissionRequests(session)).toEqual([
                 expect.objectContaining({ id: 'req1', tool: 'Bash', createdAt }),
             ]);
