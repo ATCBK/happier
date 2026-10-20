@@ -156,6 +156,7 @@ let accountSettingsVersion = 1;
 let accountSettings: Record<string, unknown> = {};
 let targetMachineUnavailable = false;
 let catalogReadGate: ReturnType<typeof createDeferred<void>> | null = null;
+let holdCatalogReadsAfterWrite = false;
 let testResponseGate: ReturnType<typeof createDeferred<void>> | null = null;
 let runtimeMissing = false;
 let registryOAuth = false;
@@ -225,6 +226,7 @@ describe('MCP servers collection and tools', () => {
         targetMachineUnavailable = false;
         runtimeMissing = false;
         registryOAuth = false;
+        holdCatalogReadsAfterWrite = false;
         accountSettings = { mcpServersStrictMode: false, actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
             'mcp.found.list': ['ui'], 'mcp.servers.create': ['ui'], 'settings.set': ['ui'],
         } } };
@@ -346,6 +348,7 @@ describe('MCP servers collection and tools', () => {
                     catalogWrites.push(mutation);
                     settingsState.value = { ...mutation.content.v, strictMode: false };
                     catalogRevision += 1;
+                    if (holdCatalogReadsAfterWrite) catalogReadGate ??= createDeferred<void>();
                     return Response.json({ status: 'updated', revision: catalogRevision, cursor: catalogRevision });
                 }
                 await catalogReadGate?.promise;
@@ -425,6 +428,7 @@ describe('MCP servers collection and tools', () => {
 
     it.each([false, true])('carries the acknowledged Registry Add to the saved-page follow-up (OAuth=%s)', async oauth => {
         registryOAuth = oauth;
+        holdCatalogReadsAfterWrite = true;
         const itemId = oauth ? 'example.test/oauth-docs' : 'example.test/stdio-docs';
         const query = oauth ? 'oauth' : 'stdio';
         const onAdded = vi.fn();
@@ -440,8 +444,15 @@ describe('MCP servers collection and tools', () => {
         // Keep the exact pre-await shell callback: creation updates modal state
         // before the shell closes, so this also catches stale callback captures.
         const before = config();
-        let receipt!: Awaited<ReturnType<ReturnType<typeof before.detailFooter>['primary']['onPress']>>;
-        await act(async () => { receipt = await before.detailFooter(row).primary.onPress(); });
+        let receipt: Awaited<ReturnType<ReturnType<typeof before.detailFooter>['primary']['onPress']>> | undefined;
+        let failure: unknown;
+        // A later inventory read may still be pending after the row's durable ACK.
+        // Navigation must use that ACK rather than wait for another network read.
+        await act(async () => {
+            void before.detailFooter(row).primary.onPress().then(value => { receipt = value; }, error => { failure = error; });
+            await vi.waitFor(() => expect(catalogWrites).toHaveLength(1));
+            await vi.waitFor(() => expect(receipt, String(failure)).toEqual({ itemId: 'uuid' }));
+        });
         if (!receipt) throw new Error('Expected an acknowledged create');
         before.onAdded?.(receipt);
         expect(onAdded).toHaveBeenCalledWith('uuid', { afterRegistryAdd: true });

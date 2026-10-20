@@ -182,14 +182,13 @@ export function McpAddModal(
         const serverId = parsed.data.serverId;
         createdServerId.current = serverId;
         setAdd(key, { status: 'added', serverId });
-        await reload().catch(() => undefined);
         return serverId;
       } catch (error) {
         setAdd(key, { status: 'failed', error: error instanceof Error ? error.message : t('capabilities.add.addFailed') });
         throw error;
       }
     },
-    [execute, reload, setAdd, snapshot.revision],
+    [execute, setAdd, snapshot.revision],
   );
 
   const items = catalog.items;

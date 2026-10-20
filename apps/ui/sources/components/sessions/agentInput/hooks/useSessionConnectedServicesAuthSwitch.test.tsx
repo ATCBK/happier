@@ -1,6 +1,7 @@
 import { renderHook as renderBaseHook, standardCleanup } from '@/dev/testkit';
 import * as React from 'react';
-import { t } from '@/text';
+import { t, type TranslationKey } from '@/text';
+import type { SessionConnectedServiceAuthSwitchErrorCode } from '@/sync/ops/connectedServices/sessionAuthSwitch';
 import type { RenderHookOptions } from '@/dev/testkit/hooks/renderHook';
 import { storage } from '@/sync/domains/state/storageStore';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
@@ -371,6 +372,7 @@ type PopoverTeamResourceBinding = {
 };
 type PopoverBinding = PopoverConnectedBinding | PopoverTeamResourceBinding | { source: 'native' };
 type PopoverContentProps = {
+    bindingsByServiceId: Readonly<Record<string, PopoverBinding | undefined>>;
     /** Exactly the services the current Agent declaration lets the picker offer. */
     supportedServiceIds: ReadonlyArray<string>;
     resolveOptionAvailability: (params: {
@@ -1161,8 +1163,8 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
     it.each([
         ['group_generation_conflict', 'connectedServices.authSwitch.errors.groupGenerationConflict'],
-        ['restart_disallowed_by_execution_policy', 'connectedServices.authSwitch.errors.restartDisallowedByExecutionPolicy'],
-    ])('explains a rejected authentication switch (%s) and retains the current selection', async (errorCode, messageKey) => {
+        ['restart_failed', 'connectedServices.authSwitch.errors.restartFailed'],
+    ] satisfies ReadonlyArray<readonly [SessionConnectedServiceAuthSwitchErrorCode, TranslationKey]>)('explains a rejected authentication switch (%s) and retains the current selection', async (errorCode, messageKey) => {
         setSessionConnectedServiceAuthBindingMock.mockResolvedValueOnce({
             ok: false,
             errorCode,

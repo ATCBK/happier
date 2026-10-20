@@ -3100,7 +3100,8 @@ describe('usage query captured Resource adapter', () => {
     } finally { release(); }
   });
 
-  it.each(['accounting', 'sessions'] as const)('keeps Account Coach membership on a failed %s refresh and isolates a Session-scoped sibling', async failureSource => {
+  it.each(['accounting', 'sessions', 'turns'] as const)('keeps Account Coach membership on a failed %s refresh and isolates a Session-scoped sibling', async failureSource => {
+    vi.spyOn(Date, 'now').mockReturnValue(900);
     const ids = ['first', 'second', 'third'];
     let membership = ids;
     let failing = false;
@@ -3120,7 +3121,10 @@ describe('usage query captured Resource adapter', () => {
           approval: { tool: 'Bash', arguments: {}, turnId: 'turn', createdAt: 100, completedAt: 200, status: 'approved' },
         } }) } });
       const turns = /^\/v1\/sessions\/(first|second|third)\/turns$/.exec(request.path);
-      if (turns) return Response.json({ v: 1, sessionId: turns[1]!, updatedAt: 900, turns: [] });
+      if (failing && failureSource === 'turns' && turns?.[1] === 'third') return Response.json({ error: 'unavailable' }, { status: 503 });
+      if (turns) return Response.json({ v: 1, sessionId: turns[1]!, updatedAt: 900, turns: turns[1] === 'first' ? [
+        { turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 },
+      ] : [] });
       if (request.path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
       return undefined;
     });
@@ -3139,44 +3143,56 @@ describe('usage query captured Resource adapter', () => {
     expect(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
     const finding = coach(broad).findings.find(row => row.detectorId === 'approval_friction')!;
     expect(finding.measurements.find(row => row.metric === 'permission_requests')?.value).toBe(3);
+    const observations: ReturnType<typeof decodeUsageQueryResource>['results'][number][] = [];
+    const release = broad.subscribe(() => {
+      if (broad.getSnapshot().value) observations.push(decodeUsageQueryResource(broad.getSnapshot().value!).results[0]!);
+    }, false);
     // Failed A retains the same displayed accounting; private evidence must use that same population.
     // Alternate success/failure and a scoped sibling as periodic background reads do.
-    for (let pass = 0; pass < 2; pass++) {
-      await pinned.refresh();
-      failing = true;
-      if (failureSource === 'sessions') publishHomeAccountChange(serverId);
-      await broad.refresh();
-      expect.soft(coach(pinned).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
-      expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
-      expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
-      const failed = decodeUsageQueryResource(broad.getSnapshot().value!);
-      if (failureSource === 'accounting') expect(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'accounting', status: 'error' }));
-      else {
-        expect.soft(failed.results[0]!.pending, 'failed evidence has settled, rather than reading forever').toBe(false);
-        expect.soft(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'how_you_work', status: 'stale', errorCode: 'usage_session_evidence_read_failed' }));
-      }
-      expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
-      if (failureSource === 'sessions') {
+    try {
+      for (let pass = 0; pass < 2; pass++) {
+        await pinned.refresh();
+        failing = true;
+        if (failureSource !== 'accounting') publishHomeAccountChange(serverId);
         await broad.refresh();
-        expect.soft(coach(broad).sessionCoverage, 'a repeated failed replacement keeps the same admitted evidence').toEqual({ selected: 3, admitted: 3 });
+        expect.soft(coach(pinned).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
+        expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
         expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
-        const rebatched = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
-          queries: [query, normalizeUsageQuery({ ...query, agents: ['codex'] })],
-        }) });
-        await rebatched.refresh();
-        const moved = decodeUsageQueryResource(rebatched.getSnapshot().value!).results.find(slice => slice.key === getUsageQueryKey(query))!;
-        expect.soft(moved.coach?.sessionCoverage, 'batch membership does not retire this exact query admission').toEqual({ selected: 3, admitted: 3 });
-        expect.soft(moved.coach?.findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
-        expect.soft(moved.pending).toBe(false);
-        expect(UsageQueryBatchResultSchema.safeParse(decodeUsageQueryResource(rebatched.getSnapshot().value!)).success).toBe(true);
+        const failed = decodeUsageQueryResource(broad.getSnapshot().value!);
+        if (failureSource === 'accounting') expect(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'accounting', status: 'error' }));
+        else {
+          expect.soft(failed.results[0]!.pending, 'failed evidence has settled, rather than reading forever').toBe(false);
+          expect.soft(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'how_you_work', status: 'stale', errorCode: 'usage_session_evidence_read_failed' }));
+        }
+        expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+        if (failureSource !== 'accounting') {
+          await broad.refresh();
+          expect.soft(coach(broad).sessionCoverage, 'a repeated failed replacement keeps the same admitted evidence').toEqual({ selected: 3, admitted: 3 });
+          expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+          const rebatched = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+            queries: [query, normalizeUsageQuery({ ...query, agents: ['codex'] })],
+          }) });
+          await rebatched.refresh();
+          const moved = decodeUsageQueryResource(rebatched.getSnapshot().value!).results.find(slice => slice.key === getUsageQueryKey(query))!;
+          expect.soft(moved.coach?.sessionCoverage, 'batch membership does not retire this exact query admission').toEqual({ selected: 3, admitted: 3 });
+          expect.soft(moved.coach?.findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+          expect.soft(moved.pending).toBe(false);
+          expect(UsageQueryBatchResultSchema.safeParse(decodeUsageQueryResource(rebatched.getSnapshot().value!)).success).toBe(true);
+        }
+        failing = false;
+        await broad.refresh();
+        expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+        expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
       }
-      failing = false;
-      await broad.refresh();
-      expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
-    }
+    } finally { release(); }
+    expect(observations.every(slice => slice.coach?.sessionCoverage?.admitted === 3)).toBe(true);
+    expect(observations.map(slice => slice.coach?.findings.find(row => row.detectorId === 'approval_friction'))
+      .filter(row => row?.evidenceKey !== finding.evidenceKey)).toEqual([]);
+    expect(observations.every(slice => slice.howYouWork?.todayInParallel?.agentTimeMs === 200)).toBe(true);
     membership = ['first'];
     await broad.refresh();
     expect(coach(broad).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
+    expect(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).not.toBe(finding.evidenceKey);
   });
 
   it('reuses a list-only Session marker and refreshes it when that row advances', async () => {

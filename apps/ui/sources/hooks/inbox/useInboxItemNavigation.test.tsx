@@ -59,6 +59,31 @@ describe('Inbox selection through the shared keyboard runtime', () => {
     });
     afterEach(() => { standardCleanup(); vi.unstubAllGlobals(); storage.setState({ settings: initialSettings }); });
 
+    it('keeps local navigation available with general shortcuts off and respects the letter-key preference', async () => {
+        storage.setState({ settings: { ...initialSettings, keyboardShortcutsV2Enabled: false, keyboardSingleKeyShortcutsEnabled: false } });
+        await renderScreen(<KeyboardShortcutProvider handlers={{}}><Probe /></KeyboardShortcutProvider>);
+        await act(async () => key('ArrowDown'));
+        expect(state?.focus?.id).toBe('first');
+        await act(async () => key('j'));
+        expect(state?.focus?.id).toBe('first');
+        await act(async () => key('Enter'));
+        expect(opened).toEqual(['/session/first?serverId=home-a']);
+        await act(async () => {
+            storage.setState({ settings: { ...storage.getState().settings,
+                keyboardShortcutDisabledCommandIdsV1: ['inbox.item.next'] } });
+        });
+        await act(async () => key('ArrowDown'));
+        expect(state?.focus?.id).toBe('first');
+        await act(async () => {
+            storage.setState({ settings: { ...storage.getState().settings, keyboardSingleKeyShortcutsEnabled: true,
+                keyboardShortcutDisabledCommandIdsV1: [] } });
+        });
+        await act(async () => key('j'));
+        expect(state?.focus?.id).toBe('next');
+        await act(async () => key('Escape'));
+        expect(state?.focus).toBeNull();
+    });
+
     it('moves selection, opens the full page and closes without reading Needs you or stealing an editor/modal key', async () => {
         await renderScreen(<KeyboardShortcutProvider handlers={{}}><Probe /></KeyboardShortcutProvider>);
         await act(async () => key('ArrowDown'));

@@ -103,7 +103,7 @@ describe('pluginEventAutomationEditSeed', () => {
         const definition = eventDefinition();
         if (definition.detail.kind !== 'available') throw new Error('Expected private detail');
         // apiSocket's prepared request is the network boundary; API parsing, currentness and opening stay real.
-        const transport = vi.spyOn(apiSocket, 'createRequestForPreparedTarget').mockReturnValue(async (path) => {
+        const transport = vi.spyOn(apiSocket, 'createRequestForPreparedTarget').mockReturnValue(async (path: string) => {
             return new Response(JSON.stringify(path === '/v1/account/encryption/currentness'
                 ? { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }
                 : definition.detail.kind === 'available' ? definition.detail.value : null), { status: 200 });

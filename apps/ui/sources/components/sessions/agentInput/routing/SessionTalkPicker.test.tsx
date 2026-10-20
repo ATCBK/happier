@@ -6,6 +6,10 @@ import { findTestInstanceByTypeContainingText, renderScreen, standardCleanup } f
 import { createPlainSessionByIdResponseFixture, createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture, createSessionOwnerViewerFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
@@ -25,6 +29,9 @@ installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
 const { getStorage } = await import('@/sync/domains/state/storage');
 const { SessionTalkPicker } = await import('./SessionTalkPicker');
+const { SessionTalkMatchingStep } = await import('./SessionTalkMatchingStep');
+const { useSessionTalkTargets } = await import('./sessionTalkTargets');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const { resolveSessionTalkChipLabel } =
   await import('../definitions/createRecipientActionChip');
 type Intent = React.ComponentProps<typeof SessionTalkPicker>['intent'];
@@ -102,6 +109,67 @@ async function renderPicker(initial: Intent = null) {
 }
 
 describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
+  it('settles Matching across equal filter renders and overlapping Account wakes without restarting its live read', async () => {
+    seedRelations();
+    homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
+    // Real Account/currentness admission; fresh response objects must not become new preview inputs.
+    homes.answer(serverId, '/v1/account/encryption/currentness', {
+      select: () => ({ body: createPlainAccountEncryptionCurrentnessFixture() }),
+    });
+    const held = createDeferred<void>();
+    const matchingReads: Array<AbortSignal | null | undefined> = [];
+    const sessions = ['lead', 'api', 'ui'].map(id => ({
+      ...createPlainSessionCurrentProjectionRecordFixture({ id, metadata: getStorage().getState().sessions[id]!.metadata }),
+      viewer: createSessionViewerFixture(),
+    }));
+    homes.answer(serverId, '/v2/sessions/query', { select: (input, request) => {
+      const query = SessionListQueryV1Schema.parse(input);
+      const matching = query.scope === 'all_accessible' && query.underSessionId === undefined;
+      if (matching) matchingReads.push(request.signal);
+      // A wake changes membership while the old response is held. Ignoring
+      // refresh altogether must not look like successful coalescing.
+      const rows = matching ? [sessions[matchingReads.length === 1 ? 0 : 2]!] : sessions;
+      return { body: { sessions: rows, hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null },
+        ...(matching && matchingReads.length === 1 ? { respondAfter: held.promise } : {}) };
+    } });
+    const filter = normalizeSessionListFilterV1({ show: 'sessions', homeServerIds: [serverId],
+      scope: 'all_accessible', startedBy: ['you', 'agents', 'triggers'] });
+    const previewReads = () => homes.requests.filter(request => request.path === '/v2/sessions/query'
+      || request.path === '/v2/account/session-follow-rules' || request.path === '/v1/account/encryption/currentness');
+    function Matching({ filter }: { filter: SessionListFilterV1 }) {
+      const preview = useSessionTalkTargets('api', serverId, { matchingFilter: filter }).matching;
+      return <SessionTalkMatchingStep serverId={serverId} filter={filter} onFilterChange={() => {}}
+        summary={preview.loading ? 'loading' : `${preview.coverage}:${preview.addresses.map(address => address.sessionId).join(',')}`}
+        canUse={!preview.loading && preview.coverage === 'complete'}
+        onUse={() => {}} onBack={() => {}} />;
+    }
+    const screen = await renderScreen(<Matching filter={filter} />);
+    try {
+      await vi.waitFor(() => expect(matchingReads).toHaveLength(1));
+      const before = previewReads().length;
+      await screen.update(<Matching filter={normalizeSessionListFilterV1({ ...filter })} />);
+      expect(previewReads()).toHaveLength(before);
+      for (let i = 0; i < 3; i++) {
+        await act(async () => publishHomeAccountChange(serverId, ['api'], {
+          changeKinds: ['session'], sessionListQueryAffects: true,
+        }));
+      }
+      expect(matchingReads[0]?.aborted).toBe(false);
+      expect(matchingReads).toHaveLength(1);
+    } finally { await act(async () => held.resolve()); }
+    await vi.waitFor(() => {
+      const done = screen.findByTestId('session-list-filter-done');
+      expect(done).not.toBeNull();
+      expect(done?.props.disabled).toBe(false);
+      expect(screen.getTextContent()).toContain('complete:ui');
+    });
+    // One original read and at most one trailing refresh for the coalesced wakes.
+    expect(matchingReads.length).toBeLessThanOrEqual(2);
+    const settled = previewReads().length;
+    await screen.update(<Matching filter={normalizeSessionListFilterV1({ ...filter })} />);
+    expect(previewReads()).toHaveLength(settled);
+  });
+
   it('writes an Ask that returns here when the person picks Siblings, and closes', async () => {
     seedRelations();
     const { screen, writes, closes } = await renderPicker();

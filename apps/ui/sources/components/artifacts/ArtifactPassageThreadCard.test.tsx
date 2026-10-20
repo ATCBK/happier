@@ -26,7 +26,7 @@ const firstPassage: DocPassageRefV1 = { ref, revision: { headerVersion: 1, bodyV
 const laterPassage: DocPassageRefV1 = { ref, revision: { headerVersion: 1, bodyVersion: 5 }, range: { start: 4, end: 20 }, quote: 'Up to 3 attempts' };
 const root: DiscussionOpenedMessageV1 = {
   id: 'm1', discussionId: 'thread-1', seq: 1, authorAccountId: 'ben', accountActor: null, createdAt: 1,
-  localId: null, mentionedAccountIds: [],
+  localId: null, mentionedAccountIds: [], producerV1: null,
   messageRef: { kind: 'discussion', discussion: { serverId: 'home', discussionId: 'thread-1' }, messageId: 'm1' },
   replyTarget: { kind: 'doc_passage', doc: { ref, revision: firstPassage.revision } },
   content: { kind: 'doc_passage_comment', passage: firstPassage, content: { v: 1, parts: [{ t: 'text', text: 'Still right?' }] } },
