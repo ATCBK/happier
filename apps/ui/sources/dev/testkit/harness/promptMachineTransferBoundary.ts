@@ -87,7 +87,8 @@ export function createPromptRegistrySkillFixture(input: Readonly<{ sourceId: str
         } } });
     const payload = RegistrySkillFilesPayloadV1Schema.parse(files.map(file => ({ path: file.path, unixMode: file.unixMode,
         contentBase64: Buffer.from(file.bytes).toString('base64') })));
-    return { item, files: payload };
+    if (item.payload.kind !== 'skill' || item.payload.skill.ref.kind !== 'gitTree') throw new Error('Expected Git skill fixture');
+    return { item: { ...item, payload: { ...item.payload, skill: { ...item.payload.skill, ref: item.payload.skill.ref } } }, files: payload };
 }
 
 /** Home/daemon HTTP and Socket boundaries shared by the real prompt screen owners. */
