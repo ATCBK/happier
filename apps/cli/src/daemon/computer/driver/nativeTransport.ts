@@ -1,3 +1,4 @@
+import { COMPUTER_CUA_DRIVER_VERSION } from '@happier-dev/protocol/installables';
 import { z } from 'zod/mini';
 
 export class ComputerDriverError extends Error {
@@ -85,7 +86,7 @@ export async function openNativeComputerTransport(executablePath: string, displa
     await transport.start();
     const initialized = z.object({ protocolVersion: z.string(), serverInfo: z.object({ name: z.string(), version: z.string() }) }).safeParse(
       await request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'happier-native-computer', version: '1.0.0' } }));
-    if (!initialized.success || initialized.data.serverInfo.version !== '0.31.0') throw new ComputerDriverError('driver_version_mismatch');
+    if (!initialized.success || initialized.data.serverInfo.version !== COMPUTER_CUA_DRIVER_VERSION) throw new ComputerDriverError('driver_version_mismatch');
     await transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
   } catch (error) {
     await close();

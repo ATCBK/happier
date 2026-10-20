@@ -133,6 +133,43 @@ function deferred<T>() {
 }
 
 describe('browser diagnostics interaction transport (DIAG-INTERACTION)', () => {
+  it('keeps scalar values and all expanded properties, and marks partial previews', async () => {
+    const longValue = 'x'.repeat(70_000);
+    const responses = {
+      'Runtime.evaluate': { result: { type: 'string', value: longValue } },
+      'Runtime.getProperties': { result: Array.from({ length: 101 }, (_, i) => ({
+        name: `property_${i}`, enumerable: true, value: { type: 'string', value: longValue },
+      })) },
+    };
+    const harness = createHarness({ responses });
+    const transport = createBrowserDiagnosticsInteractionTransport({ contextCapture: harness.contextCapture });
+    harness.bindView();
+    try {
+      const scalar = BrowserDiagnosticsEvalResultV1Schema.parse(await transport.dispatch('browser.diagnostics.eval', evalRequest()));
+      expect(scalar).toMatchObject({ status: 'completed', result: { type: 'string', value: longValue } });
+      const expanded = BrowserDiagnosticsGetPropertiesResultV1Schema.parse(await transport.dispatch('browser.diagnostics.getProperties', {
+        v: 1, propertyRequestId: 'properties', viewId: VIEW_ID, navigationGeneration: 0, tier: 'cdp',
+        objectId: 'object', objectGroupId: 'group_1', diagnosticsInteractionEnabled: true,
+      }));
+      expect(expanded.properties).toHaveLength(101);
+      expect(expanded.properties[100]?.value.value).toBe(longValue);
+    } finally { await transport.dispose(); }
+  });
+
+  it('does not report clipped or CDP-overflow previews as complete', async () => {
+    const harness = createHarness({ responses: { 'Runtime.evaluate': { result: {
+      type: 'object', objectId: 'object', preview: { overflow: true,
+        properties: Array.from({ length: 12 }, (_, i) => ({ name: `property_${i}`, value: 'x'.repeat(1_500) })) },
+    } } } });
+    const transport = createBrowserDiagnosticsInteractionTransport({ contextCapture: harness.contextCapture });
+    harness.bindView();
+    try {
+      const result = BrowserDiagnosticsEvalResultV1Schema.parse(await transport.dispatch('browser.diagnostics.eval', evalRequest()));
+      expect(result.result).toMatchObject({ previewTruncated: true });
+      expect(result.result?.preview.every(property => property.truncated)).toBe(true);
+    } finally { await transport.dispose(); }
+  });
+
   it('refuses injected-page eval at the CDP-only engine without executing a Machine effect', async () => {
     const harness = createHarness({ responses: {
       'Runtime.evaluate': { result: { type: 'number', value: 2 } },
