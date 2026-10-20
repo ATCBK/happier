@@ -12,8 +12,8 @@ import { computeCanonicalDomainSeparatedHexDigest } from '../../crypto/canonical
 import type { JsonValue as StrictJsonValue } from '../../json/strictJsonValue.js';
 import { z } from 'zod/mini';
 import { isPluginError } from '../errors.js';
-import {
-  type PluginContributionIdentityV1,
+import type {
+  PluginContributionIdentityV1,
 } from '../contributionIdentity.js';
 import { formatQualifiedPluginActionId } from './qualifiedActionId.js';
 export { formatQualifiedPluginActionId, parseQualifiedPluginActionId, type QualifiedPluginActionId } from './qualifiedActionId.js';

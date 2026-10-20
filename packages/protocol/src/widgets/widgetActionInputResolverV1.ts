@@ -1,4 +1,4 @@
-import { type InputFieldHint, type InputOptionValue } from '../inputs/inputFields.js';
+import type { InputFieldHint, InputOptionValue } from '../inputs/inputFields.js';
 import { resolveEffectiveInputFields } from '../inputs/inputFieldRuntime.js';
 import { readInputPath } from '../inputs/inputPredicates.js';
 import type { JsonValue } from '../json/strictJsonValue.js';

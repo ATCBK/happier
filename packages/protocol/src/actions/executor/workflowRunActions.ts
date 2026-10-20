@@ -11,9 +11,9 @@ import { WorkflowActionOutputSchemasV1, WorkflowRunWaitSnapshotV1Schema, Workflo
 import { materializeWorkflowAcceptedSnapshotV1, readWorkflowAcceptedAgentStartLeavesV1, readWorkflowRunLeafStartRequestV1 } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, openWorkflowCheckpointStoredEnvelopeV1, openWorkflowFinalResultStoredEnvelopeV1, openWorkflowProgressStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
 import { validateWorkflowDefinition, matchesWorkflowAcceptedDefinitionV1 } from '../../workflows/workflowValidationV1.js';
-import { type WorkflowActionIdV1 } from '../actionIds.js';
+import type { WorkflowActionIdV1 } from '../actionIds.js';
 import { workflowInputToFieldHint, type WorkflowBlock, type WorkflowDefinitionV1, type WorkflowIngressContextV1 } from '../../workflows/workflowV1.js';
-import { type WorkflowWorkspaceProgressV1 } from '../../workflows/workflowWorkspaceV1.js';
+import type { WorkflowWorkspaceProgressV1 } from '../../workflows/workflowWorkspaceV1.js';
 import { formatWorkflowDefinitionRefV1 } from '../../workflows/workflowDefinitionRefV1.js';
 import { resolveWorkflowDefinitionRefV1 } from '../../workflows/workflowDefinitionResolverV1.js';
 import { WorkflowRunRecipientCensusResponseV1Schema, WorkflowRunRecipientKeyEnvelopeCommitResponseV1Schema, type WorkflowRunRecipientCensusResponseV1 } from '../../workflows/workflowRunKeyV1.js';
@@ -27,8 +27,8 @@ import { SessionInputCausalPermissionAuthorityV1Schema } from '../../sessions/me
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '../externalActionLimits.js';
 import { assertNonEscalatingPermissionMode, resolveEffectivePermissionMode } from '../permissionPrivilege.js';
 import { StrictJsonValueSchema, sameStrictJsonValue } from '../../json/strictJsonValue.js';
-import {
-  type AvailableAutomationAccountEncryptionV1,
+import type {
+  AvailableAutomationAccountEncryptionV1,
 } from '../../automations/automationAccountCurrentnessV1.js';
 import type { ActionExecutorDeps, WorkflowActionExecuteArgs } from './types.js';
 import type { WorkflowRunActionOwner } from './workflowAccountActions.js';

@@ -12,7 +12,7 @@ import {
   BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS,
   BROWSER_RUNTIME_ACTION_SPEC_FAMILY,
 } from './browser.js';
-import { type RuntimeActionSpecFamily, type RuntimeActionSpecTextMap } from './common.js';
+import type { RuntimeActionSpecFamily, RuntimeActionSpecTextMap } from './common.js';
 import {
   COMPUTER_RUNTIME_ACTION_INPUT_SCHEMAS,
   COMPUTER_RUNTIME_ACTION_OUTPUT_SCHEMAS,

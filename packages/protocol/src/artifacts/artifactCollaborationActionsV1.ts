@@ -11,7 +11,7 @@ import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest
 import { DISCUSSION_ACTION_INPUT_SCHEMAS_V1, DiscussionPostResultV1Schema,
   type DiscussionCreateInputV1, type DiscussionPostInputV1 } from '../discussions/actions.js';
 import { DocEditProposalDispositionV1Schema } from '../discussions/models.js';
-import { type DiscussionOpenedMessageV1 } from '../discussions/actions.js';
+import type { DiscussionOpenedMessageV1 } from '../discussions/actions.js';
 import { prepareDocEditBodyV1 } from './artifactPassageV1.js';
 import { artifactSupportsProseCollaborationV1 } from './artifactSharingV1.js';
 import { areServerProfileIdentifiersEquivalent } from '../features/payload/capabilities/serverIdentityCapabilities.js';

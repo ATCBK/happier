@@ -4,7 +4,7 @@ import { defineProtocolLiteral, defineProtocolObject, defineProtocolString } fro
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 
 import { SessionMessageRoleSchema, type SessionMessageRole } from './sessionMessageRole.js';
-import { type SessionMessageProvenanceV1 } from './sessionInputAdmission.js';
+import type { SessionMessageProvenanceV1 } from './sessionInputAdmission.js';
 
 const textEncoder = new TextEncoder();
 
