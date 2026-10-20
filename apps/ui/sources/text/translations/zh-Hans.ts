@@ -11478,7 +11478,7 @@ settingsSession: {
 	        backgroundWorkAttentionModeTitle: "后台工作期间的未读回复",
 	        backgroundWorkAttentionModeSubtitle: "选择后台工作继续进行时未读回复的显示位置。需要你处理的请求仍会标记为需要注意。",
 	        backgroundWorkAttentionKeepWorkingTitle: "保留工作状态",
-	        backgroundWorkAttentionKeepWorkingSubtitle: "后台工作继续进行时，保留工作状态并单独显示未读标记",
+	        backgroundWorkAttentionKeepWorkingSubtitle: "保持工作状态，并在有未读回复时显示蓝色中心圆点",
 	        backgroundWorkAttentionKeepWorkingUnreadTitle: "在“正在工作”中显示未读状态",
 	        backgroundWorkAttentionKeepWorkingUnreadSubtitle: "将会话保留在“正在工作”，在你阅读回复前显示未读状态",
 	        backgroundWorkAttentionShowUnreadTitle: "将未读会话移至“需要注意”",

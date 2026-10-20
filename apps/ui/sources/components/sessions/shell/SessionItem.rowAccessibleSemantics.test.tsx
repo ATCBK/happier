@@ -214,7 +214,7 @@ describe('SessionItem outer row accessible semantics', () => {
             const suffix = density === 'minimal' ? 'trailing' : 'secondary';
             if (mode === 'keepWorking') {
                 expect(screen.findByTestId(`session-row-attention-indicator-spinner-${id}-${suffix}`)).toBeTruthy();
-                expect(screen.findByTestId(`session-row-unread-indicator-${id}-${suffix}`)).toBeTruthy();
+                expect(screen.findByTestId(`session-row-unread-indicator-${id}-${suffix}`)).toBeNull();
             } else {
                 expect(screen.findByTestId(`session-row-attention-indicator-dot-${id}-${suffix}`)).toBeTruthy();
             }
@@ -243,7 +243,7 @@ describe('SessionItem outer row accessible semantics', () => {
         expect(readOuterRow(screen, id).props.accessibilityLabel).toMatch(/background/i);
         expect(readOuterRow(screen, id).props.accessibilityLabel).not.toMatch(/ready for review/i);
         if (mode === 'keepWorking') {
-            expect(screen.findByTestId(`session-row-unread-indicator-${id}-trailing`)).toBeTruthy();
+            expect(screen.findByTestId(`session-row-unread-indicator-${id}-trailing`)).toBeNull();
             expect(screen.findByTestId(`session-row-attention-indicator-spinner-${id}-trailing`)).toBeTruthy();
         } else {
             expect(screen.findByTestId(`session-row-attention-indicator-dot-${id}-trailing`)).toBeTruthy();

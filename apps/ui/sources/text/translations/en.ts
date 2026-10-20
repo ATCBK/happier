@@ -14100,7 +14100,7 @@ const enSettingsSession = {
     backgroundWorkAttentionModeTitle: "Unread replies during background work",
     backgroundWorkAttentionModeSubtitle: "Choose where unread replies appear while background work continues. Requests for you still need attention.",
     backgroundWorkAttentionKeepWorkingTitle: "Keep working status",
-    backgroundWorkAttentionKeepWorkingSubtitle: "Keep the working status and a separate unread mark while background work continues",
+    backgroundWorkAttentionKeepWorkingSubtitle: "Keep the working status and show a blue center dot for unread replies",
     backgroundWorkAttentionKeepWorkingUnreadTitle: "Show unread status in Working",
     backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Keep sessions in Working and show unread status until you read the reply",
     backgroundWorkAttentionShowUnreadTitle: "Move unread sessions to Needs attention",

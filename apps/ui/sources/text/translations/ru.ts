@@ -11699,7 +11699,7 @@ settingsSession: {
 	        backgroundWorkAttentionModeTitle: "Непрочитанные ответы во время фоновой работы",
 	        backgroundWorkAttentionModeSubtitle: "Выберите, где показывать непрочитанные ответы, пока продолжается фоновая работа. Запросы к вам по-прежнему требуют внимания.",
 	        backgroundWorkAttentionKeepWorkingTitle: "Сохранять статус работы",
-	        backgroundWorkAttentionKeepWorkingSubtitle: "Сохранять статус работы и отдельную отметку непрочитанного ответа, пока продолжается фоновая работа",
+	        backgroundWorkAttentionKeepWorkingSubtitle: "Сохранять статус работы и показывать синюю точку в центре для непрочитанных ответов",
 	        backgroundWorkAttentionKeepWorkingUnreadTitle: "Показывать статус непрочитанного в «В работе»",
 	        backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Оставлять сессии в «В работе» и показывать статус непрочитанного, пока вы не прочитаете ответ",
 	        backgroundWorkAttentionShowUnreadTitle: "Перемещать непрочитанные сессии в «Требует внимания»",

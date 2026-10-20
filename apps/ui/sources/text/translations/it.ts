@@ -12072,7 +12072,7 @@ settingsSession: {
 	          backgroundWorkAttentionModeTitle: "Risposte non lette durante il lavoro in background",
 	          backgroundWorkAttentionModeSubtitle: "Scegli dove mostrare le risposte non lette mentre il lavoro in background continua. Le richieste rivolte a te richiedono comunque attenzione.",
 	          backgroundWorkAttentionKeepWorkingTitle: "Mantieni lo stato di lavorazione",
-	          backgroundWorkAttentionKeepWorkingSubtitle: "Mantieni lo stato di lavorazione e un indicatore separato di risposta non letta mentre il lavoro in background continua",
+	          backgroundWorkAttentionKeepWorkingSubtitle: "Mantieni lo stato di lavorazione e mostra un punto centrale blu per le risposte non lette",
 	          backgroundWorkAttentionKeepWorkingUnreadTitle: "Mostra lo stato non letto in In lavorazione",
 	          backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Mantieni le sessioni in “In lavorazione” e mostra lo stato non letto finché non leggi la risposta",
 	          backgroundWorkAttentionShowUnreadTitle: "Sposta le sessioni non lette in Richiede attenzione",

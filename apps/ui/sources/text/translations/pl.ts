@@ -11678,7 +11678,7 @@ settingsSession: {
 	          backgroundWorkAttentionModeTitle: "Nieprzeczytane odpowiedzi podczas pracy w tle",
 	          backgroundWorkAttentionModeSubtitle: "Wybierz, gdzie pojawiają się nieprzeczytane odpowiedzi, gdy praca w tle trwa nadal. Prośby skierowane do ciebie nadal wymagają uwagi.",
 	          backgroundWorkAttentionKeepWorkingTitle: "Zachowaj status pracy",
-	          backgroundWorkAttentionKeepWorkingSubtitle: "Zachowaj status pracy i osobny znacznik nieprzeczytanej odpowiedzi, gdy praca w tle trwa nadal",
+	          backgroundWorkAttentionKeepWorkingSubtitle: "Zachowaj status pracy i pokaż niebieską kropkę na środku dla nieprzeczytanych odpowiedzi",
 	          backgroundWorkAttentionKeepWorkingUnreadTitle: "Pokaż status nieprzeczytanej odpowiedzi w sekcji Pracuje",
 	          backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Pozostaw sesje w sekcji „Pracuje” i pokazuj status nieprzeczytanej odpowiedzi, dopóki jej nie przeczytasz",
 	          backgroundWorkAttentionShowUnreadTitle: "Przenieś sesje z nieprzeczytanymi odpowiedziami do sekcji Wymaga uwagi",

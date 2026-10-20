@@ -9844,7 +9844,7 @@ settingsSession: {
 	              backgroundWorkAttentionModeTitle: "背景工作期間的未讀回覆",
 	              backgroundWorkAttentionModeSubtitle: "選擇背景工作持續進行時未讀回覆的顯示位置。需要你處理的請求仍會標記為需要注意。",
 	              backgroundWorkAttentionKeepWorkingTitle: "保留工作狀態",
-	              backgroundWorkAttentionKeepWorkingSubtitle: "背景工作持續進行時，保留工作狀態並另外顯示未讀標記",
+	              backgroundWorkAttentionKeepWorkingSubtitle: "保留工作狀態，並在有未讀回覆時顯示藍色中心圓點",
 	              backgroundWorkAttentionKeepWorkingUnreadTitle: "在「正在工作」中顯示未讀狀態",
 	              backgroundWorkAttentionKeepWorkingUnreadSubtitle: "將工作階段保留在「正在工作」，在你閱讀回覆前顯示未讀狀態",
 	              backgroundWorkAttentionShowUnreadTitle: "將未讀工作階段移至「需要注意」",

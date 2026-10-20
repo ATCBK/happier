@@ -11044,7 +11044,7 @@ settingsSession: {
 	                backgroundWorkAttentionModeTitle: "Respostes no llegides durant el treball en segon pla",
 	                backgroundWorkAttentionModeSubtitle: "Tria on es mostren les respostes no llegides mentre continua el treball en segon pla. Les sol·licituds adreçades a tu continuen requerint atenció.",
 	                backgroundWorkAttentionKeepWorkingTitle: "Mantén l’estat de treball",
-	                backgroundWorkAttentionKeepWorkingSubtitle: "Mantén l’estat de treball i una marca independent de no llegit mentre continua el treball en segon pla",
+	                backgroundWorkAttentionKeepWorkingSubtitle: "Mantén l’estat de treball i mostra un punt central blau per a les respostes no llegides",
 	                backgroundWorkAttentionKeepWorkingUnreadTitle: "Mostra l’estat no llegit a Treballant",
 	                backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Mantén les sessions a Treballant i mostra l’estat no llegit fins que llegeixis la resposta",
 	                backgroundWorkAttentionShowUnreadTitle: "Mou les sessions no llegides a Requereix atenció",

@@ -12145,7 +12145,7 @@ settingsSession: {
 	        backgroundWorkAttentionModeTitle: "バックグラウンド処理中の未読返信",
 	        backgroundWorkAttentionModeSubtitle: "バックグラウンド処理が続いている間の未読返信の表示先を選びます。あなたへのリクエストは引き続き確認が必要です。",
 	        backgroundWorkAttentionKeepWorkingTitle: "処理中のステータスを維持",
-	        backgroundWorkAttentionKeepWorkingSubtitle: "バックグラウンド処理中は処理中のステータスを維持し、未読マークを別に表示します",
+	        backgroundWorkAttentionKeepWorkingSubtitle: "処理中のステータスを維持し、未読返信があるときは中央に青い点を表示します",
 	        backgroundWorkAttentionKeepWorkingUnreadTitle: "「処理中」で未読ステータスを表示",
 	        backgroundWorkAttentionKeepWorkingUnreadSubtitle: "セッションを「処理中」に残し、返信を読むまで未読ステータスを表示します",
 	        backgroundWorkAttentionShowUnreadTitle: "未読セッションを「確認が必要」に移動",

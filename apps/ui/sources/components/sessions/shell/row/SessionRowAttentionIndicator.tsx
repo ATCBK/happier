@@ -14,6 +14,7 @@ import type {
 
 /** Fills the indicator's 16 px slot, so the working mark reads at the scale of the row's agent icons. */
 const WORKING_SPINNER_SIZE = 16;
+const UNREAD_CENTER_SIZE = 3;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -22,10 +23,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    unreadMarker: {
+    unreadCenter: {
         position: 'absolute',
-        top: -theme.space.s2,
-        right: -theme.space.s2,
+        left: (WORKING_SPINNER_SIZE - UNREAD_CENTER_SIZE) / 2,
+        top: (WORKING_SPINNER_SIZE - UNREAD_CENTER_SIZE) / 2,
+        width: UNREAD_CENTER_SIZE,
+        height: UNREAD_CENTER_SIZE,
+        borderRadius: UNREAD_CENTER_SIZE / 2,
+        backgroundColor: theme.colors.text.link,
     },
     stateContainer: {
         width: 16,
@@ -38,7 +43,8 @@ const stylesheet = StyleSheet.create((theme) => ({
 /**
  * Each marker in the shared status vocabulary: needs-you (an attention ask, a permission, an action)
  * is the attention amber, a failure is rose, and everything else — working (a moving mark), ready,
- * unread, pending, kept in attention — is the quiet ink. Blue stays reserved for focus and links.
+ * unread, pending, kept in attention — is the quiet ink. Unread working sessions add
+ * a blue dot at the center of the working marker until read.
  */
 const INDICATOR_TONE: Readonly<Record<Exclude<SessionRowAttentionIndicatorKind, 'none'>, WorkStatusTone>> = Object.freeze({
     working: 'neutral',
@@ -105,18 +111,15 @@ export const SessionRowAttentionIndicator = React.memo(function SessionRowAttent
                         animationEnabled={props.animationEnabled !== false}
                     />
                 )}
-            </View>
-            {props.indicator === 'working' && props.hasUnreadMessages === true ? (
-                <View style={stylesheet.unreadMarker}>
-                    <StatusDot
-                        testID={`session-row-unread-indicator-${props.sessionId}`}
-                        color={workStatusGlyphColor(theme.colors, INDICATOR_TONE.unread)}
-                        size={6}
-                        isPulsing={false}
-                        animationEnabled={false}
+                {props.indicator === 'working' && props.hasUnreadMessages && (
+                    <View
+                        testID={`session-row-unread-center-${props.sessionId}`}
+                        pointerEvents="none"
+                        accessible={false}
+                        style={stylesheet.unreadCenter}
                     />
-                </View>
-            ) : null}
+                )}
+            </View>
         </View>
     );
 });

@@ -41,12 +41,19 @@ describe('SessionRowAttentionIndicator', () => {
         expect(screen.findByTestId('session-row-attention-indicator-spinner-sess_working')).toBeTruthy();
     });
 
-    it('keeps unread visible beside the working marker without a second accessible element', async () => {
-        const screen = await renderScreen(<SessionRowAttentionIndicator indicator="working" attentionState="working"
-            sessionId="background-unread" hasUnreadMessages animationEnabled={false} />);
-        expect(screen.findByTestId('session-row-attention-indicator-spinner-background-unread')).toBeTruthy();
-        expect(screen.findByTestId('session-row-unread-indicator-background-unread')).toBeTruthy();
+    it.each(['spinner', 'pulse'] as const)('keeps the %s working mark and shows unread only at its center until read', async (workingMode) => {
+        const element = (hasUnreadMessages: boolean) => <SessionRowAttentionIndicator indicator="working" attentionState="working"
+            sessionId="background-unread" hasUnreadMessages={hasUnreadMessages} workingMode={workingMode} animationEnabled={false} />;
+        const screen = await renderScreen(element(true));
+        const markColor = () => screen.tree.root.findAll(node =>
+            typeof node.props.color === 'string' && /^session-row-attention-indicator-(spinner|dot)-/.test(node.props.testID ?? ''))[0]?.props.color;
+        expect(markColor()).toBe(lightTheme.colors.text.secondary);
+        expect(screen.findByTestId('session-row-unread-center-background-unread')).toBeTruthy();
+        expect(screen.findByTestId('session-row-unread-indicator-background-unread')).toBeNull();
         expect(screen.findByTestId('session-row-attention-indicator-background-unread')?.props.accessible).toBe(false);
+        await screen.update(element(false));
+        expect(markColor()).toBe(lightTheme.colors.text.secondary);
+        expect(screen.findByTestId('session-row-unread-center-background-unread')).toBeNull();
     });
 
     it('draws the working spinner at 16 px so it reads beside the row\'s agent icons', async () => {

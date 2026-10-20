@@ -11687,7 +11687,7 @@ settingsSession: {
 	          backgroundWorkAttentionModeTitle: "Réponses non lues pendant le travail en arrière-plan",
 	          backgroundWorkAttentionModeSubtitle: "Choisis où afficher les réponses non lues pendant que le travail continue en arrière-plan. Les demandes qui te sont adressées nécessitent toujours ton attention.",
 	          backgroundWorkAttentionKeepWorkingTitle: "Garder le statut En cours",
-	          backgroundWorkAttentionKeepWorkingSubtitle: "Garder le statut En cours et un repère de non-lecture séparé pendant que le travail continue en arrière-plan",
+	          backgroundWorkAttentionKeepWorkingSubtitle: "Garder le statut En cours et afficher un point central bleu pour les réponses non lues",
 	          backgroundWorkAttentionKeepWorkingUnreadTitle: "Afficher le statut non lu dans En cours",
 	          backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Garder les sessions dans En cours et afficher le statut non lu jusqu’à ce que tu lises la réponse",
 	          backgroundWorkAttentionShowUnreadTitle: "Déplacer les sessions non lues vers Nécessite ton attention",

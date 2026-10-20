@@ -11851,7 +11851,7 @@ settingsSession: {
 	          backgroundWorkAttentionModeTitle: "Respuestas sin leer durante el trabajo en segundo plano",
 	          backgroundWorkAttentionModeSubtitle: "Elige dónde aparecen las respuestas sin leer mientras continúa el trabajo en segundo plano. Las solicitudes dirigidas a ti siguen requiriendo atención.",
 	          backgroundWorkAttentionKeepWorkingTitle: "Mantener el estado de trabajo",
-	          backgroundWorkAttentionKeepWorkingSubtitle: "Mantener el estado de trabajo y una marca independiente de no leído mientras continúa el trabajo en segundo plano",
+	          backgroundWorkAttentionKeepWorkingSubtitle: "Mantener el estado de trabajo y mostrar un punto central azul para las respuestas sin leer",
 	          backgroundWorkAttentionKeepWorkingUnreadTitle: "Mostrar el estado sin leer en Trabajando",
 	          backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Mantener las sesiones en Trabajando y mostrar el estado sin leer hasta que leas la respuesta",
 	          backgroundWorkAttentionShowUnreadTitle: "Mover sesiones sin leer a Requiere atención",

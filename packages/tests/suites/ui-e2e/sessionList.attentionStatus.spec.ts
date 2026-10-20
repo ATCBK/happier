@@ -308,7 +308,9 @@ test.describe('ui e2e: session list attention status', () => {
         const spinner = page.getByTestId(`session-row-attention-indicator-spinner-${session.id}-secondary`);
         if (mode === 'keepWorking') {
           await expect(spinner).toHaveCount(1);
-          await expect(page.getByTestId(`session-row-unread-indicator-${session.id}-secondary`)).toHaveCount(1);
+          await expect(page.getByTestId(`session-row-unread-indicator-${session.id}-secondary`)).toHaveCount(0);
+          await expect(page.getByTestId(`session-row-unread-center-${session.id}-secondary`)).toHaveCount(1);
+          await sessionRow(page, session.id).screenshot({ path: test.info().outputPath('working-unread.png') });
         } else {
           await expect(spinner).toHaveCount(0);
           await expect(page.getByTestId(`session-list-attention-indicator-${session.id}-secondary-unread`)).toHaveCount(1);
@@ -317,6 +319,8 @@ test.describe('ui e2e: session list attention status', () => {
         await expectRowInSection({ page, headerTestId: sessionListAttentionTestIds.workingHeader, sessionId: session.id });
         await expect(spinner).toHaveCount(1);
         await expect(page.getByTestId(`session-row-unread-indicator-${session.id}-secondary`)).toHaveCount(0);
+        await expect(page.getByTestId(`session-row-unread-center-${session.id}-secondary`)).toHaveCount(0);
+        if (mode === 'keepWorking') await sessionRow(page, session.id).screenshot({ path: test.info().outputPath('working-read.png') });
       }
       // A new unread completed reply becomes ready only after reported work settles.
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);

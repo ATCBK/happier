@@ -11971,7 +11971,7 @@ settingsSession: {
 	          backgroundWorkAttentionModeTitle: "Respostas não lidas durante o trabalho em segundo plano",
 	          backgroundWorkAttentionModeSubtitle: "Escolha onde mostrar as respostas não lidas enquanto o trabalho continua em segundo plano. As solicitações dirigidas a você continuam precisando de atenção.",
 	          backgroundWorkAttentionKeepWorkingTitle: "Manter o status de trabalho",
-	          backgroundWorkAttentionKeepWorkingSubtitle: "Manter o status de trabalho e uma marca separada de não lido enquanto o trabalho continua em segundo plano",
+	          backgroundWorkAttentionKeepWorkingSubtitle: "Manter o status de trabalho e mostrar um ponto central azul para respostas não lidas",
 	          backgroundWorkAttentionKeepWorkingUnreadTitle: "Mostrar o status não lido em Trabalhando",
 	          backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Manter as sessões em Trabalhando e mostrar o status não lido até você ler a resposta",
 	          backgroundWorkAttentionShowUnreadTitle: "Mover sessões não lidas para Precisa de atenção",

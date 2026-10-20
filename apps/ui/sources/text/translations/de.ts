@@ -11748,7 +11748,7 @@ settingsSession: {
 	              backgroundWorkAttentionModeTitle: "Ungelesene Antworten bei Hintergrundarbeit",
 	              backgroundWorkAttentionModeSubtitle: "Wähle, wo ungelesene Antworten erscheinen, während die Hintergrundarbeit weiterläuft. Anfragen an dich brauchen weiterhin Aufmerksamkeit.",
 	              backgroundWorkAttentionKeepWorkingTitle: "Arbeitsstatus beibehalten",
-	              backgroundWorkAttentionKeepWorkingSubtitle: "Den Arbeitsstatus und eine separate Ungelesen-Markierung beibehalten, während die Hintergrundarbeit weiterläuft",
+	              backgroundWorkAttentionKeepWorkingSubtitle: "Den Arbeitsstatus beibehalten und ungelesene Antworten mit einem blauen Punkt in der Mitte anzeigen",
 	              backgroundWorkAttentionKeepWorkingUnreadTitle: "Ungelesen-Status in Arbeitet anzeigen",
 	              backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Sessions in „Arbeitet“ behalten und den Ungelesen-Status anzeigen, bis du die Antwort liest",
 	              backgroundWorkAttentionShowUnreadTitle: "Ungelesene Sessions nach Braucht Aufmerksamkeit verschieben",

@@ -343,7 +343,7 @@ describe('unread attention placement', () => {
     it('does not infer readiness from a disconnected runtime with reported background work', () => {
         const source = createSource(['disconnected-background']);
         const row = createRow({
-            id: 'disconnected-background', active: false, presence: 'offline',
+            id: 'disconnected-background', active: false, presence: 0,
             latestTurnStatus: 'completed', latestTurnStatusObservedAt: nowMs - 10_000,
             meaningfulActivityAt: nowMs - 10_500, seq: 9, lastViewedSessionSeq: 4,
             runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
