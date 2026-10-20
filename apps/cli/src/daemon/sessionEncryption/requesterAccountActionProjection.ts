@@ -33,7 +33,7 @@ import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { decodeBase64 } from '@/api/encryption';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
-import { refuseExternalActionPhase, runTracedExternalActionStage } from '../externalActions/externalActionPhase';
+import { refuseExternalActionPhase, runTracedExternalActionStage, readSessionInputAdmissionDiagnostic } from '../externalActions/externalActionPhase';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 export type RequesterAccountActionAuthorizationInput = Readonly<{
@@ -79,18 +79,22 @@ async function projectAdmittedAccountCustody(
   const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
   const { bootstrap } = input;
   const stamp = bootstrap.attribution;
-  const refused = (phase: string) => { refuseExternalActionPhase(phase, stamp.machineId); return null; };
+  const refused = (phase: string) => { refuseExternalActionPhase(phase, stamp.machineId, undefined, parsed.success ? {
+    ...readSessionInputAdmissionDiagnostic(parsed.data.binding), refusalBranch: phase,
+  } : undefined); return null; };
   if (!parsed.success) return refused('requester_projection_root');
   let phase = 'requester_projection_currentness';
   try {
-    if (!await bootstrap.isCurrent() || input.signal?.aborted) return refused('requester_projection_custody');
+    if (!await bootstrap.isCurrent()) return refused('requester_projection_custody');
+    if (input.signal?.aborted) return refused('requester_projection_cancelled');
     const currentness = await readRequesterAccountEncryptionCurrentness({ accountId: stamp.accountId, token: bootstrap.credentials.token,
       serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
     const encryption = bootstrap.credentials.encryption;
     if (parsed.data.binding.accountEncryptionMode !== undefined
-      && parsed.data.binding.accountEncryptionMode !== currentness.mode
-      || currentness.mode === 'e2ee' && !encryption
-      || !await bootstrap.isCurrent() || input.signal?.aborted) return refused('requester_projection_mode');
+      && parsed.data.binding.accountEncryptionMode !== currentness.mode) return refused('requester_projection_mode');
+    if (currentness.mode === 'e2ee' && !encryption) return refused('requester_projection_material');
+    if (!await bootstrap.isCurrent()) return refused('requester_projection_custody');
+    if (input.signal?.aborted) return refused('requester_projection_cancelled');
     const material: AccountScopedCryptoMaterial | null = currentness.mode === 'plain' ? null : encryption?.type === 'legacy'
         ? { type: 'legacy', secret: new Uint8Array(encryption.secret) }
         : encryption ? { type: 'dataKey', machineKey: new Uint8Array(encryption.machineKey) } : null;
@@ -99,21 +103,30 @@ async function projectAdmittedAccountCustody(
       material,
       randomBytes: length => new Uint8Array(randomBytes(length)) });
     const isCurrent = async (): Promise<boolean> => {
+      const diagnose = (phase: string) => { if (parsed.data.binding.actionId === 'session.message.send') refused(phase); };
       try {
-        if (input.signal?.aborted || !isCustodyLive()
-          || !isRequesterAccountEncryptionCurrentnessObserved({ accountId: stamp.accountId,
-            token: bootstrap.credentials.token, serverBaseUrl: bootstrap.serverHttpBaseUrl }, currentness)) return false;
+        if (input.signal?.aborted) { diagnose('requester_projection_cancelled'); return false; }
+        if (!isCustodyLive()) { diagnose('requester_projection_custody'); return false; }
+        if (!isRequesterAccountEncryptionCurrentnessObserved({ accountId: stamp.accountId,
+          token: bootstrap.credentials.token, serverBaseUrl: bootstrap.serverHttpBaseUrl }, currentness)) {
+          diagnose('requester_projection_observation'); return false;
+        }
         const next = await readRequesterAccountEncryptionCurrentness({ accountId: stamp.accountId, token: bootstrap.credentials.token,
           serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
         // Account seq also advances for unrelated activity; encryption custody follows its own mode/key transition.
-        return sameRequesterAccountEncryptionCurrentness(next, currentness)
-          // Check the distinct bootstrap/Machine fact once, after the encryption
-          // read; local retirement remains observable across either await.
-          && !input.signal?.aborted && await bootstrap.isCurrent()
-          && !input.signal?.aborted && isCustodyLive()
-          && isRequesterAccountEncryptionCurrentnessObserved({ accountId: stamp.accountId,
-            token: bootstrap.credentials.token, serverBaseUrl: bootstrap.serverHttpBaseUrl }, currentness);
-      } catch (error) { refuseExternalActionPhase('requester_projection_currentness', stamp.machineId, error); rethrowRequesterHomeReadFailure(error); return false; }
+        if (!sameRequesterAccountEncryptionCurrentness(next, currentness)) { diagnose('requester_projection_encryption_currentness'); return false; }
+        // Preserve the existing short-circuit order and one bootstrap read.
+        if (input.signal?.aborted) { diagnose('requester_projection_cancelled'); return false; }
+        if (!await bootstrap.isCurrent()) { diagnose('requester_projection_custody'); return false; }
+        if (input.signal?.aborted) { diagnose('requester_projection_cancelled'); return false; }
+        if (!isCustodyLive()) { diagnose('requester_projection_custody'); return false; }
+        const observed = isRequesterAccountEncryptionCurrentnessObserved({ accountId: stamp.accountId,
+          token: bootstrap.credentials.token, serverBaseUrl: bootstrap.serverHttpBaseUrl }, currentness);
+        if (!observed) diagnose('requester_projection_observation');
+        return observed;
+      } catch (error) { refuseExternalActionPhase('requester_projection_currentness', stamp.machineId, error, {
+        ...readSessionInputAdmissionDiagnostic(parsed.data.binding), refusalBranch: 'exception',
+      }); rethrowRequesterHomeReadFailure(error); return false; }
     };
     // Loaded only when a real admitted invocation asks for private Account ports.
     phase = 'requester_projection_ports';
@@ -179,7 +192,9 @@ async function projectAdmittedAccountCustody(
     // logs, or RPC forwarding. Strict wire parsing also drops this local facet.
     Object.defineProperty(carrier, 'requesterAccountProjection', { value: projection, enumerable: false });
     return Object.freeze(carrier);
-  } catch (error) { refuseExternalActionPhase(phase, stamp.machineId, error); rethrowRequesterHomeReadFailure(error); return null; }
+  } catch (error) { refuseExternalActionPhase(phase, stamp.machineId, error, {
+    ...readSessionInputAdmissionDiagnostic(input.authorization.binding), refusalBranch: 'exception',
+  }); rethrowRequesterHomeReadFailure(error); return null; }
 }
 
 /** Consumes already-admitted ports at the exact installed receiver; never opens installed credentials. */
@@ -242,8 +257,15 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   signal?: AbortSignal;
 }>): Promise<RequesterAccountActionContext | null> {
   const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
-  if (!parsed.success || parsed.data.binding.serverIdentityId !== input.serverIdentityId
-    || input.signal?.aborted || !await input.isCurrent()) return null;
+  const refuseAdmission = (phase: string, refusalBranch: string, error?: unknown, observedAccountEncryptionMode?: 'plain' | 'e2ee') => {
+    refuseExternalActionPhase(phase, parsed.success ? parsed.data.binding.machineId : 'unavailable', error, parsed.success ? {
+      ...readSessionInputAdmissionDiagnostic(parsed.data.binding), observedAccountEncryptionMode, refusalBranch,
+    } : undefined); return null;
+  };
+  if (!parsed.success) return refuseAdmission('requester_admission', 'schema');
+  if (parsed.data.binding.serverIdentityId !== input.serverIdentityId) return refuseAdmission('requester_admission', 'home');
+  if (input.signal?.aborted) return refuseAdmission('requester_admission', 'cancelled');
+  if (!await input.isCurrent()) return refuseAdmission('requester_admission', 'currentness');
   let observation: ReturnType<typeof acquireRequesterAccountEncryptionCurrentness> | undefined;
   let admitted = false;
   let live = true;
@@ -263,21 +285,22 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   const isCurrent = async () => live && !input.signal?.aborted
     && await (input.isCustodyCurrent ?? input.isCurrent)() && live && !input.signal?.aborted;
   let phase = 'requester_profile';
-  const refused = () => { refuseExternalActionPhase(phase, parsed.data.binding.machineId); return null; };
+  const refused = (branch = phase, observedMode?: 'plain' | 'e2ee') => refuseAdmission(phase, branch, undefined, observedMode);
   try {
     const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
       parsed.data.binding.actionId, parsed.data.binding.requestId, stage, operation);
     const profile = await trace('requester.profile', () => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () =>
       fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) })));
-    if (profile.id !== parsed.data.binding.accountId || input.signal?.aborted) return refused();
+    if (profile.id !== parsed.data.binding.accountId) return refused('profile_identity');
+    if (input.signal?.aborted) return refused('cancelled');
     phase = 'requester_encryption_currentness';
     observation = acquireRequesterAccountEncryptionCurrentness({ accountId: profile.id,
       token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl });
     const currentness = await trace('requester.encryption_currentness', () => observation!.read(input.signal));
     phase = 'requester_account_mode';
-    if (parsed.data.binding.accountEncryptionMode !== currentness.mode
-      || (currentness.mode === 'plain' ? input.credentials.encryption !== null : input.credentials.encryption === null)
-      || !await isCurrent()) return refused();
+    if (parsed.data.binding.accountEncryptionMode !== currentness.mode) return refused('mode', currentness.mode);
+    if (currentness.mode === 'plain' ? input.credentials.encryption !== null : input.credentials.encryption === null) return refused('mode_material', currentness.mode);
+    if (!await isCurrent()) return refused('custody', currentness.mode);
     phase = 'requester_content_key';
     if (currentness.mode === 'e2ee' && currentness.contentKeyFingerprint && input.credentials.encryption) {
       const encryption = input.credentials.encryption;
@@ -291,7 +314,8 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
       expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false,
       minSettingsVersion: currentness.settingsVersion, shouldCommit: () => live && !input.signal?.aborted,
     })));
-    if (accountSettingsContext.source !== 'network' || !await isCurrent()) return refused();
+    if (accountSettingsContext.source !== 'network') return refused('settings_source');
+    if (!await isCurrent()) return refused('custody');
     const { requesterAccountContext: _sealed, managedFiniteWake, ...root } = parsed.data;
     const wakeFacts = managedFiniteWake ? (() => {
       const { requesterAccountContext: _controllerSealed, ...facts } = managedFiniteWake;
@@ -306,7 +330,8 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
       attribution: { serverId: input.serverId, accountId: profile.id, machineId: wire.binding.machineId,
         installationId: wire.binding.installationId },
     }, ...(input.signal ? { signal: input.signal } : {}) }, () => live));
-    if (!authorization || !await isCurrent()) return refused();
+    if (!authorization) return refused('null_projection');
+    if (!await isCurrent()) return refused('custody');
     phase = 'requester_saved_secret_context';
     const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials: input.credentials,
       snapshot: accountSettingsContext, serverHttpBaseUrl: input.serverHttpBaseUrl,
@@ -346,7 +371,7 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     admitted = true;
     return context;
   } catch (error) {
-    refuseExternalActionPhase(phase, parsed.data.binding.machineId, error);
+    refuseAdmission(phase, 'exception', error);
     rethrowRequesterHomeReadFailure(error);
     return null;
   }
@@ -401,7 +426,9 @@ export async function prepareInstalledRequesterAccountActionContext(input: Reado
   if (!installation || !origin || origin.machineId !== input.machineId) {
     const phase = !installation ? 'requester_installation_missing'
       : !origin ? 'requester_origin_unavailable' : 'requester_origin_machine_mismatch';
-    refuseExternalActionPhase(phase, input.machineId);
+    refuseExternalActionPhase(phase, input.machineId, undefined, {
+      ...readSessionInputAdmissionDiagnostic(input.authorization.binding), refusalBranch: phase,
+    });
     return null;
   }
   const binding = input.authorization.binding;
@@ -409,7 +436,10 @@ export async function prepareInstalledRequesterAccountActionContext(input: Reado
     && !input.authorization.requesterAccountContext && isOriginalSessionInputAccountActionCustody(binding);
   if (reusesSessionCustody && (binding.serverIdentityId !== origin.serverIdentityId
     || binding.machineId !== input.machineId || binding.installationId !== installation.installationId)) {
-    refuseExternalActionPhase('requester_session_custody', input.machineId);
+    refuseExternalActionPhase('requester_session_custody', input.machineId, undefined, {
+      ...readSessionInputAdmissionDiagnostic(binding),
+      refusalBranch: 'session_custody',
+    });
     return null;
   }
   const installationPrivateKey = decodeBase64(installation.privateKey, 'base64url');
@@ -417,11 +447,19 @@ export async function prepareInstalledRequesterAccountActionContext(input: Reado
     ? await input.resolveRequesterSessionBootstrap?.(binding.target.sessionId, { serverId: input.serverId,
       accountId: binding.accountId, machineId: input.machineId, installationId: installation.installationId }) ?? null : null;
   const isCustodyCurrent = async () => {
+    const refused = (refusalBranch: string) => {
+      if (binding.actionId === 'session.message.send') refuseExternalActionPhase('requester_installed_custody', input.machineId, undefined, {
+        ...readSessionInputAdmissionDiagnostic(binding), refusalBranch,
+      }); return false;
+    };
     const before = readInstallationIdentityIfExistsSync();
-    if (input.signal?.aborted || before?.installationId !== installation.installationId || before.privateKey !== installation.privateKey
-      || requesterSessionBootstrap && !await requesterSessionBootstrap.isCurrent()) return false;
+    if (input.signal?.aborted) return refused('cancelled');
+    if (before?.installationId !== installation.installationId || before.privateKey !== installation.privateKey) return refused('installation');
+    if (requesterSessionBootstrap && !await requesterSessionBootstrap.isCurrent()) return refused('session_currentness');
     const after = readInstallationIdentityIfExistsSync();
-    return !input.signal?.aborted && after?.installationId === installation.installationId && after.privateKey === installation.privateKey;
+    if (input.signal?.aborted) return refused('cancelled');
+    if (after?.installationId !== installation.installationId || after.privateKey !== installation.privateKey) return refused('installation');
+    return true;
   };
   return await prepareRequesterAccountActionContext({ ...input, installationId: installation.installationId,
     ...(requesterSessionBootstrap ? { requesterSessionBootstrap } : {}),
@@ -475,10 +513,12 @@ export async function prepareRequesterAccountActionContext(input: Readonly<{
   const sessionCustody = input.requesterSessionBootstrap;
   let custodyTransferred = false;
   try {
-    const refused = (phase: string, error?: unknown) => { refuseExternalActionPhase(phase, input.machineId, error); return null; };
+    const root = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
+    const refused = (phase: string, error?: unknown) => { refuseExternalActionPhase(phase, input.machineId, error, root.success ? {
+      ...readSessionInputAdmissionDiagnostic(root.data.binding), refusalBranch: phase,
+    } : undefined); return null; };
     // Reject a different root/Session before consulting retained private custody.
     // admitRequesterAccountActionContext owns the fresh Home admission below.
-    const root = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
     if (!root.success || root.data.binding.serverIdentityId !== input.serverIdentityId) return refused('requester_preparation_root');
     const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
       root.data.binding.actionId, root.data.binding.requestId, stage, operation);
@@ -505,8 +545,10 @@ export async function prepareRequesterAccountActionContext(input: Readonly<{
       || sessionCustody.attribution.machineId !== input.machineId
       || sessionCustody.attribution.installationId !== input.installationId
       || normalizeServerHttpBaseUrl(sessionCustody.serverHttpBaseUrl) !== normalizeServerHttpBaseUrl(input.serverHttpBaseUrl))) return refused('requester_session_custody');
-    if (input.signal?.aborted || !await (input.isCustodyCurrent ?? input.isCurrent)()
-      || sessionCustody && !await sessionCustody.isCurrent()) return refused('requester_preparation_currentness');
+    if (input.signal?.aborted) return refused('requester_preparation_cancelled');
+    if (!await (input.isCustodyCurrent ?? input.isCurrent)()) return refused(input.isCustodyCurrent
+      ? 'requester_preparation_custody' : 'requester_preparation_currentness');
+    if (sessionCustody && !await sessionCustody.isCurrent()) return refused('requester_session_currentness');
     const hasBox = finiteWake ? Boolean(finiteWake.requesterAccountContext) : Boolean(root.data.requesterAccountContext);
     const encoded = hasBox ? openExternalActionRequesterAccountContextV1({ ...input, includeInvocation: true }) : null;
     const retainedCredentials = sessionCustody?.credentials ?? (regularOwnAccount ? input.ownCredentials : undefined);

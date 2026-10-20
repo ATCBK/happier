@@ -21,10 +21,11 @@ import { resolvePluginActionCaller } from '@/plugins/runtime/invocation/services
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { isOriginalOwnAccountActionCustody, isOriginalSessionInputAccountActionCustody } from "../sessionEncryption/requesterAccountActionProjection";
 import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
-import { createExternalActionStartDiagnosticRecorder, refuseExternalActionPhase, runExternalActionPhase, traceExternalActionStage } from './externalActionPhase';
+import { createExternalActionStartDiagnosticRecorder, refuseExternalActionPhase, runExternalActionPhase, traceExternalActionStage, readSessionInputAdmissionDiagnostic } from './externalActionPhase';
 import { timeWebLatencyPhase, withWebLatencyTrace } from './webLatencyTrace';
 import { AccountSettingsContentInvalidError } from '@/settings/accountSettings/accountSettingsRefreshError';
 import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { logger } from '@/ui/logger';
 
 type PublicOutputValidationResult =
   | Readonly<{ success: true; data: unknown }>
@@ -254,7 +255,12 @@ export async function executeExternalAction(input: Readonly<{
         envelope.data.target ?? { kind: 'machine', machineId: input.currentMachineId },
       ) ? 'authorization_target' : null;
   if (refusedAuthorizationPhase) {
-    refuseExternalActionPhase(refusedAuthorizationPhase, input.currentMachineId);
+    refuseExternalActionPhase(refusedAuthorizationPhase, input.currentMachineId, undefined, {
+      ...readSessionInputAdmissionDiagnostic({ actionId: actionId.data, requestId: envelope.data.requestId,
+        accountEncryptionMode: executionAuthorization?.success ? executionAuthorization.data.binding.accountEncryptionMode : undefined }),
+      envelopeVersion: envelope.data.v,
+      refusalBranch: refusedAuthorizationPhase,
+    });
     return {
       kind: 'invalid_request',
       errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
@@ -264,11 +270,22 @@ export async function executeExternalAction(input: Readonly<{
 
   let requesterContext: Awaited<ReturnType<PrepareExternalActionRequesterAccountContext>> = null;
   let pluginRuntimeLease: PluginRuntimeRegistryLease | null = null;
+  // Diagnose the ordinary input corridor without serializing its carrier or
+  // amplifying unrelated background Action traffic. Logs never affect admission.
+  const diagnoseSessionInput = (stage: string, branch: string) => {
+    const diagnostic = readSessionInputAdmissionDiagnostic({ actionId: actionId.data, requestId: envelope.data.requestId,
+      accountEncryptionMode: executionAuthorization?.success ? executionAuthorization.data.binding.accountEncryptionMode : undefined });
+    if (!diagnostic) return;
+    try { logger.infoFile('[SessionInputAdmission]', {
+      ...diagnostic, stage, branch, envelopeVersion: envelope.data.v,
+    }); } catch { /* File diagnostics cannot change custody. */ }
+  };
   const prepareOwnAccount = executionAuthorization?.success && input.prepareRequesterAccountContext !== undefined
     && (isOriginalOwnAccountActionCustody(executionAuthorization.data.binding)
       || isOriginalSessionInputAccountActionCustody(executionAuthorization.data.binding));
   if (executionAuthorization?.success && (executionAuthorization.data.requesterAccountContext || prepareOwnAccount)) {
     const authorization = executionAuthorization.data;
+    diagnoseSessionInput('requester_prepare', 'started');
     if (input.signal?.aborted || !input.prepareRequesterAccountContext) return { kind: 'invalid_request',
       errorCode: envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
       ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
@@ -286,6 +303,7 @@ export async function executeExternalAction(input: Readonly<{
     trace('requester_prepare.end');
     requesterContext = preparedRequester.ok ? preparedRequester.value : null;
     if (!requesterContext) {
+      diagnoseSessionInput('requester_prepare', requesterHomeUnavailable ? 'home_unavailable' : 'refused');
       if (requesterHomeUnavailable) refuseExternalActionPhase('requester_prepare', input.currentMachineId, undefined, {
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
         refusalBranch: 'requester_home_unavailable',
@@ -295,6 +313,7 @@ export async function executeExternalAction(input: Readonly<{
           : envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
     }
+    diagnoseSessionInput('requester_prepare', 'prepared');
   }
   try {
   let decodedInput: unknown;
@@ -315,10 +334,12 @@ export async function executeExternalAction(input: Readonly<{
     ));
     trace('encryption_resolution.end');
     const encryption = encryptionPhase.ok ? encryptionPhase.value : null;
+    diagnoseSessionInput('encryption_resolution', encryption ? 'resolved' : 'unavailable');
     if (!encryption) return {
       kind: 'invalid_request', errorCode: 'encrypted_action_unsupported', requestId: request.requestId,
     };
     if (!apiTokenPrincipal && !accountPrincipal) {
+      diagnoseSessionInput('strict_envelope_open', 'principal_refused');
       refuseExternalActionPhase('encryption_principal', input.currentMachineId);
       return { kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope', requestId: request.requestId };
     }
@@ -338,11 +359,18 @@ export async function executeExternalAction(input: Readonly<{
       ? request.target.machineId !== input.currentMachineId
       : input.currentSessionId !== undefined && request.target.sessionId !== input.currentSessionId;
     if (foreignTarget) {
+      diagnoseSessionInput('strict_envelope_open', 'receiver_refused');
       refuseExternalActionPhase('encryption_receiver', input.currentMachineId);
       return { kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope', requestId: request.requestId };
     }
     const opened = openExternalActionRequestV2({ envelope: request, binding, material: encryption.material,
-      onFailure: failure => { refuseExternalActionPhase(failure.phase, input.currentMachineId, failure.error); } });
+      onFailure: failure => { refuseExternalActionPhase(failure.phase, input.currentMachineId, failure.error, {
+        ...readSessionInputAdmissionDiagnostic({ actionId: actionId.data, requestId: request.requestId,
+          accountEncryptionMode: executionAuthorization?.success ? executionAuthorization.data.binding.accountEncryptionMode : undefined }),
+        envelopeVersion: request.v,
+        refusalBranch: 'strict_open',
+      }); } });
+    diagnoseSessionInput('strict_envelope_open', opened ? 'opened' : 'refused');
     if (!opened) {
       return { kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope', requestId: request.requestId };
     }
@@ -353,6 +381,7 @@ export async function executeExternalAction(input: Readonly<{
       return { kind: 'response', response: prepared.response, prepared };
     };
   } else {
+    diagnoseSessionInput('strict_envelope_open', 'plain_v1');
     decodedInput = envelope.data.input;
   }
 

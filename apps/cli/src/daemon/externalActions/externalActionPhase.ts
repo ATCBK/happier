@@ -39,6 +39,18 @@ export async function runTracedExternalActionInnerStage<T>(stage: string, operat
   finally { traceExternalActionInnerStage(`${stage}.end`, { ...diagnostic, elapsedMs: performance.now() - started }); }
 }
 
+function isUuidDiagnosticRequestId(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value);
+}
+
+/** Ordinary CLI input uses an opaque UUID. Authored request ids can contain private text. */
+export function readSessionInputAdmissionDiagnostic(input: Readonly<{
+  actionId: unknown; requestId: unknown; accountEncryptionMode?: 'plain' | 'e2ee';
+}>) {
+  if (input.actionId !== 'session.message.send' || !isUuidDiagnosticRequestId(input.requestId)) return undefined;
+  return { requestId: input.requestId, actionId: 'session.message.send', accountEncryptionMode: input.accountEncryptionMode };
+}
+
 function isTracedRequest(actionId: unknown, rootRequestId: unknown): boolean {
   const validRequestId = ExternalActionRequestIdV1Schema.safeParse(rootRequestId).success;
   return validRequestId && (actionId === 'session.spawn_new'
@@ -48,8 +60,7 @@ function isTracedRequest(actionId: unknown, rootRequestId: unknown): boolean {
         && (actionId === 'approval.request.decide' || actionId === 'projects.script.run' || actionId === 'projects.compute.exec'
           || actionId === 'projects.worker.status' || actionId === 'projects.service.relocate'
           || actionId === 'machines.provisioners.list' || actionId === 'machines.provisioners.check' || actionId === 'machines.provisioners.options'))
-      && typeof rootRequestId === 'string'
-      && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(rootRequestId));
+      && isUuidDiagnosticRequestId(rootRequestId));
 }
 
 /** Same UUID-qualified, content-free trace for host and contributed Action work. */
@@ -74,7 +85,7 @@ export function traceExternalActionStage(actionId: unknown, rootRequestId: unkno
     logger.warnLocalFile('[external-action-stage]', { actionId, rootRequestId, stage,
       ...(diagnostic ? { phase: diagnostic.phase,
         ...(diagnostic.elapsedMs !== undefined ? { elapsedMs: diagnostic.elapsedMs } : {}) } : {}),
-      ...(transportRequestId && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(transportRequestId)
+      ...(isUuidDiagnosticRequestId(transportRequestId)
         ? { transportRequestId } : {}) });
   } catch { /* Diagnostics cannot change the Action outcome. */ }
 }
@@ -101,7 +112,8 @@ export type ExternalActionPhaseFailure = Readonly<{
 
 /** Private diagnostics must not serialize a thrown value, even a Zod or HTTP Error. */
 export function refuseExternalActionPhase(phase: string, machineId: string, error?: unknown,
-  witness?: Readonly<{ requestId?: string; actionId?: string; refusalBranch?: string }>): ExternalActionPhaseFailure {
+  witness?: Readonly<{ requestId?: string; actionId?: string; refusalBranch?: string;
+    accountEncryptionMode?: 'plain' | 'e2ee'; observedAccountEncryptionMode?: 'plain' | 'e2ee'; envelopeVersion?: 1 | 2 }>): ExternalActionPhaseFailure {
   const diagnostic = error === undefined ? undefined : readUnexpectedActionErrorDiagnosticV1(error);
   const errorClass = diagnostic?.errorClass ?? 'PhaseRefused';
   let message = error === undefined ? 'External Action phase refused' : 'External Action phase threw (details redacted)';
@@ -123,6 +135,9 @@ export function refuseExternalActionPhase(phase: string, machineId: string, erro
     ...diagnostic,
     ...(witness?.actionId ? { actionId: witness.actionId } : {}),
     ...(witness?.requestId ? { requestId: witness.requestId } : {}),
+    ...(witness?.accountEncryptionMode ? { accountEncryptionMode: witness.accountEncryptionMode } : {}),
+    ...(witness?.observedAccountEncryptionMode ? { observedAccountEncryptionMode: witness.observedAccountEncryptionMode } : {}),
+    ...(witness?.envelopeVersion ? { envelopeVersion: witness.envelopeVersion } : {}),
     ...(witness?.refusalBranch ? { refusalBranch: witness.refusalBranch } : {}) }); } catch { /* Best effort. */ }
   return failure;
 }

@@ -2,11 +2,27 @@ import { expect, it, vi } from 'vitest';
 
 import { logger } from '@/ui/logger';
 
-import { refuseExternalActionPhase, runTracedExternalActionStage, runTracedExternalActionInnerStage, traceExternalActionStage } from './externalActionPhase';
+import { refuseExternalActionPhase, runTracedExternalActionStage, runTracedExternalActionInnerStage, traceExternalActionStage, readSessionInputAdmissionDiagnostic } from './externalActionPhase';
 import { executeExternalAction } from './executeExternalAction';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createDaemonExternalActionTargetResolver } from './daemonExternalActionTargetResolver';
 import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
+
+it('correlates only opaque Session input ids and drops all private admission carrier fields', () => {
+  const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+  const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+  const carrier = { actionId: 'session.message.send', requestId, accountEncryptionMode: 'e2ee' as const,
+    accountId: 'PRIVATE_ACCOUNT', token: 'PRIVATE_CREDENTIAL', input: { message: 'PRIVATE_PROMPT' } };
+  try {
+    const diagnostic = readSessionInputAdmissionDiagnostic(carrier);
+    refuseExternalActionPhase('requester_prepare', 'machine', undefined, { ...diagnostic, refusalBranch: 'custody' });
+    expect(log.mock.calls).toEqual([[expect.any(String), expect.objectContaining({ requestId,
+      actionId: 'session.message.send', accountEncryptionMode: 'e2ee', refusalBranch: 'custody' })]]);
+    expect(JSON.stringify(log.mock.calls)).not.toContain('PRIVATE_');
+    expect(readSessionInputAdmissionDiagnostic({ ...carrier, requestId: 'PRIVATE_AUTHORED_INPUT' })).toBeUndefined();
+    expect(readSessionInputAdmissionDiagnostic({ ...carrier, actionId: 'browser.diagnostics.snapshot' })).toBeUndefined();
+  } finally { log.mockRestore(); }
+});
 
 it.each(['session_detail_invalid_response', 'session_detail_projection_unavailable', 'not_authenticated', 'client-upgrade-required'])(
   'keeps the known Session diagnostic %s without private exception content', code => {
