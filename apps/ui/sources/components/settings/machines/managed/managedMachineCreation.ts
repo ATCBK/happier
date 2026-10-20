@@ -21,6 +21,7 @@ import { awaitActionApprovalResult, createActionApprovalContinuation, type Actio
 import type { ActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationStore';
 import { managedCreationSetup } from '@/components/settings/machines/managed/managedCreationPresentation';
 import { buildReviewedManagedMachineDeleteInput, qualifyManagedMachineDeleteReview } from '@/components/settings/machines/managed/managedMachineDeleteReview';
+import { supportedMachineRetentionEffectsV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 
 export type ManagedMachineCreationProgress =
     | Readonly<{ kind: 'idle' }>
@@ -87,7 +88,7 @@ export async function runManagedMachineCreation(input: Readonly<{
     const current = () => input.isCurrent() && !input.signal.aborted;
     if (!current()) return fail('continuation_retired');
     if (!sameStrictJsonValue(acquisition.selection, input.draft.selection)) return fail('request_conflict');
-    if (input.draft.archiveEffect && input.draft.archiveEffect !== 'keep' && !input.draft.receipt.retentionCapabilities.supportedIntents.includes(input.draft.archiveEffect)) {
+    if (input.draft.archiveEffect && input.draft.archiveEffect !== 'keep' && !supportedMachineRetentionEffectsV1(input.draft.receipt.retentionCapabilities.supportedIntents).includes(input.draft.archiveEffect)) {
         return fail('native_intent_unsupported');
     }
     if (!acquisition.managedId && (input.draft.receipt.optionStatus !== 'current'

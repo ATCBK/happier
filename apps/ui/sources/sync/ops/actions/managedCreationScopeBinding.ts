@@ -25,6 +25,7 @@ import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
 import { homeDomainFailureCode } from '@/sync/api/home/homeDomainActions';
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import { resolveManagedMachineArchiveChoiceAvailability, type ManagedMachineArchiveChoiceAvailability } from '@/components/sessions/new/components/machineSelection/managedMachineSelection';
+import { resolveMachineRetentionNativeIntentV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 
 export type ManagedCreationScopeSource = Readonly<{ kind: 'session'; sessionId: string }>
     | Readonly<{ kind: 'run'; source: AutomationRunLifecycleSource }>;
@@ -202,7 +203,7 @@ export async function bindNewManagedMachineCreationScope(input: Readonly<{
         const definition = WorkflowDefinitionV1Schema.parse({ version: 1, defaults: {}, inputs: [], blocks: [{
             kind: 'action', id: 'managed-scope-end', actionId: effect === 'stop' ? 'machines.managed.power.set' : 'machines.managed.delete',
             input: { homeId: { kind: 'literal', value: machine.homeId }, managedId: { kind: 'literal', value: machine.id },
-                when: { kind: 'literal', value: 'after-idle' }, intent: { kind: 'literal', value: effect },
+                when: { kind: 'literal', value: 'after-idle' }, intent: { kind: 'literal', value: effect === 'stop' ? resolveMachineRetentionNativeIntentV1('stop', input.draft.receipt.retentionCapabilities.supportedIntents) ?? 'stop' : effect },
                 ...(afterMs === undefined ? {} : { afterMs: { kind: 'literal', value: afterMs } }),
                 ...(effect === 'delete' ? { reviewedDependencies: { kind: 'literal', value: true } } : {}) },
         }] });

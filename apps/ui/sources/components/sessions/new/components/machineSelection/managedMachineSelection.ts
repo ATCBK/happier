@@ -6,6 +6,7 @@ import type { ManagedMachineSelectionDraft } from '@/sync/domains/state/newSessi
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { resolveMachineDestinationPurposeEligibility } from './buildMachineDestinationModel';
+import { supportedMachineRetentionEffectsV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 
 export {
     createManagedMachineSelectionDraft,
@@ -62,7 +63,7 @@ export function resolveManagedMachineArchiveChoiceAvailability(input: Readonly<{
     const eligibility = controller || input.controllerOwnership
         ? resolveMachineDestinationPurposeEligibility('trigger', input.controllerOwnership ? { ownership: input.controllerOwnership } : undefined, controller, null)
         : { eligible: false as const, reason: 'access_unavailable' as const };
-    const nativeEffects = (['stop', 'delete'] as const).filter(effect => input.draft.receipt.retentionCapabilities.supportedIntents.includes(effect));
+    const nativeEffects = supportedMachineRetentionEffectsV1(input.draft.receipt.retentionCapabilities.supportedIntents);
     return {
         controllerMachineId,
         ...(controller ? { controllerName: getMachineDisplayName(controller) } : {}),

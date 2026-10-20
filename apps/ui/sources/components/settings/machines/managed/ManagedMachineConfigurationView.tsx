@@ -11,7 +11,7 @@ import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef }
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { readInputPath } from '@happier-dev/protocol/inputs';
-import { isMachineRetainedWakeEligibleV1, resolveMachineRetentionPolicyV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
+import { isMachineRetainedWakeEligibleV1, resolveMachineRetentionPolicyV1, supportedMachineRetentionEffectsV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -473,7 +473,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
             } } : {}),
             ...(nativeExpiry ? { nativeExpiry: t('managedRetention.nativeExpiry', { provider: title,
                 time: nativeExpiry.kind === 'deadline' ? formatAsOfTime(nativeExpiry.at) : formatRetentionDuration(nativeExpiry.afterMs) }) } : {}),
-            effects: retentionCapabilities?.supportedIntents.filter((intent): intent is 'stop' | 'delete' => intent === 'stop' || intent === 'delete'),
+            effects: retentionCapabilities && supportedMachineRetentionEffectsV1(retentionCapabilities.supportedIntents),
             canWake: retentionCapabilities !== undefined && isMachineRetainedWakeEligibleV1(keepPolicy.retention, retentionCapabilities),
             consequence: retention => describeRetentionConsequence(retention, { ...(provisioner?.descriptor.billing ?? { location: 'unknown', stoppedBilling: 'unknown' }), provider: title }),
             onChange: policy => setDraft(current => current ? { ...current, override: policy } : current),

@@ -5,7 +5,7 @@ import { StoredMachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol
 import type { DevcontainerEffectReviewV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { ManagedMachineActionOutputSchemasV1, type ManagedMachineActionIdV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { MachineRetentionPolicyV1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
-import { isMachineRetainedWakeEligibleV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
+import { isMachineRetainedWakeEligibleV1, isRedundantManagedWakeIntentV1, supportedMachineRetentionEffectsV1 } from '@happier-dev/protocol/machines/managed/resolveMachineRetentionPolicyV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { readInputPath } from '@happier-dev/protocol/inputs';
@@ -465,7 +465,8 @@ export function ManagedMachineSections(props: SectionProps) {
     const receiptActions: NonNullable<ManagedReceiptModel['secondary']> = bound && machine.creationState === 'active' && machine.archivedAt === undefined ? [
         // Stop also retracts a retained Start that has not reached native power.
         ...powerIntents.filter(intent => !(intent === 'stop' ? observedPower === 'stopped' && machine.desired === 'stop' : intent === 'suspend'
-            ? observedPower === 'suspended' : observedPower === 'running')).map(intent => {
+            ? observedPower === 'suspended' : observedPower === 'running')
+            && !((intent === 'start' || intent === 'resume') && isRedundantManagedWakeIntentV1(intent, observedPower, supportedIntents))).map(intent => {
             return { label: t(`managedMachines.actions.${intent}`), testID: `managed-machine.${intent}`, tone: 'bordered' as const,
                 ...(intent === 'stop' ? { icon: <Icon name="stop" size={14} color={theme.colors.text.primary} /> } : {}),
                 disabled: !canMutate || resourceGone, loading: pending === 'machines.managed.power.set',
@@ -522,7 +523,7 @@ export function ManagedMachineSections(props: SectionProps) {
             : parentReadFailed ? t('managedRetention.waitsForProvider', { provider: providerName ?? t('common.machine') })
                 : providerName ? t('managedMachines.options.loading', { provider: providerName }) : undefined,
         nativeExpiry: nativeExpiryDescription,
-        effects: supportedIntents.filter((intent): intent is 'stop' | 'delete' => intent === 'stop' || intent === 'delete'),
+        effects: supportedMachineRetentionEffectsV1(supportedIntents),
         canWake: isMachineRetainedWakeEligibleV1(policy.retention, { supportedIntents }),
         // A live machine is where an explicit, reviewed deadline is set (plan 52); the Action still asks first.
         deadline: true,

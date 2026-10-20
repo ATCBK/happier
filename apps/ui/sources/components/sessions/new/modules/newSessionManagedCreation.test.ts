@@ -357,6 +357,21 @@ describe('ordinary managed creation continuation', () => {
         }
     });
 
+    it('ends a suspend-only provider with its native Suspend instead of refusing or deleting', async () => {
+        const boundary = bindingTransport();
+        const selected = { ...draft, archiveEffect: 'stop' as const, receipt: { ...draft.receipt,
+            retentionCapabilities: { supportedIntents: ['start', 'suspend', 'resume', 'delete'] as ('start' | 'suspend' | 'resume' | 'delete')[] },
+            retention: { kind: 'unused' as const, afterMs: 12345, effect: 'stop' as const } } };
+        const result = await bindNewManagedMachineCreationScope({ draft: selected, machine: boundary.machine,
+            source: { kind: 'session', sessionId: 'created-session' }, scope: { serverId: 'server', accountId: 'account' },
+            signal: new AbortController().signal, isCurrent: () => true, executeAction: boundary.executeAction });
+        expect(result, JSON.stringify(result)).toMatchObject({ kind: 'bound' });
+        const row = [...boundary.rows.values()][0]!;
+        const context = row.executionRecipe?.v === 2 && row.executionRecipe.workflow.t === 'plain' ? row.executionRecipe.workflow.v : null;
+        expect(context).toMatchObject({ inlineDefinition: { blocks: [{ actionId: 'machines.managed.power.set',
+            input: { intent: { kind: 'literal', value: 'suspend' }, when: { kind: 'literal', value: 'after-idle' } } }] } });
+    });
+
     it('Keep writes no rule, and a retired creation cannot write a selected rule', async () => {
         const boundary = bindingTransport();
         const input = { draft, machine: boundary.machine, source: { kind: 'session' as const, sessionId: 'created-session' },
