@@ -12,6 +12,7 @@ function host(name: string) {
 export const Svg = host('Svg');
 export default Svg;
 export const SvgXml = host('SvgXml');
+export const SvgAst = host('SvgAst');
 export const Circle = host('Circle');
 export const Line = host('Line');
 export const Path = host('Path');
@@ -35,3 +36,13 @@ export const Image = host('SvgImage');
 export const Symbol = host('SvgSymbol');
 export const Marker = host('Marker');
 export const ForeignObject = host('ForeignObject');
+
+// XML parsing and middleware stay real; only the native drawing tags are substituted.
+export const tags = {
+    svg: Svg, circle: Circle, line: Line, path: Path, text: Text, textPath: TextPath,
+    defs: Defs, g: G, rect: Rect, ellipse: Ellipse, stop: Stop,
+    radialGradient: RadialGradient, linearGradient: LinearGradient, clipPath: ClipPath,
+    mask: Mask, pattern: Pattern, polyline: Polyline, polygon: Polygon,
+    tspan: TSpan, use: Use, image: Image, symbol: Symbol, marker: Marker,
+    foreignObject: ForeignObject, filter: host('Filter'), feImage: host('FeImage'),
+};
