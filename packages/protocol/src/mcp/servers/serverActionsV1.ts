@@ -7,6 +7,7 @@ import { ConnectedAccountDaemonControlResponseSchema, type ConnectedAccountDaemo
 import { CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 as connectedOutputs } from '../../connect/configurationActionsV1.js';
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 as signInService } from '../../connect/qualifiedConnectedAccountPersistence.js';
 import { canonicalMcpOAuthResourceUrlV1 } from '../oauth/mcpOAuthResourceV1.js';
+import { MCP_OAUTH_CLIENT_METADATA_URL_V1, McpOAuthClientRegistrationV1Schema } from '../oauth/mcpOAuthClientIdentityV1.js';
 import { McpServerRuleV1Schema, McpServerCatalogEntryV1Schema, McpServerConfigOverrideV1Schema,
   McpServerToolPolicyV1Schema, McpServerToolSettingsPatchV1Schema, McpServerToolsSnapshotV1Schema, McpToolSettingV1Schema, McpToolSettingsV1Schema,
   McpPluginItemMetadataV1Schema, type McpPluginItemMetadataV1 } from './settingsV1.js';
@@ -110,7 +111,8 @@ export const MCP_SERVER_ACTION_INPUT_SCHEMAS_V1 = {
   'mcp.found.adopt': lazyZodSchema(() => z.strictObject({ expectedRevision: z.optional(catalogRevision), machineId: identity,
     items: z.array(DetectedMcpServerV1Schema), where: z.optional(ReachRulesChangeV1Schema),
     values: z.optional(z.union([McpImportValuesV1Schema, z.record(z.string(), z.record(z.string(), McpImportValueChoiceV1Schema))])) })),
-  'mcp.servers.signIn.start': lazyZodSchema(() => z.strictObject({ serverId: identity, stepUp: z.optional(z.boolean()) })),
+  'mcp.servers.signIn.start': lazyZodSchema(() => z.strictObject({ serverId: identity, stepUp: z.optional(z.boolean()),
+    client: z.optional(McpOAuthClientRegistrationV1Schema) })),
 } as const;
 export const MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 = {
   'mcp.servers.list': listSnapshot,
@@ -119,7 +121,10 @@ export const MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 = {
   'mcp.servers.tools.set': lazyZodSchema(() => z.strictObject({ revision,
     previous: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(McpServerToolSettingsPatchV1Schema, { tools: McpServerToolSettingsPatchV1Schema.shape.tools._zod.def.innerType })),
   })),
-  'mcp.servers.create': McpServerCatalogRowMutationResponseV1Schema,
+  'mcp.servers.create': lazyZodSchema(() => z.union([
+    z.strictObject({ status: z.literal('updated'), revision, cursor: revision, serverId: identity }),
+    z.strictObject({ status: z.literal('updated'), revision, cursor: revision, serverIds: z.array(identity) }),
+  ])),
   'mcp.servers.update': McpServerCatalogRowMutationResponseV1Schema,
   'mcp.servers.duplicate': lazyZodSchema(() => z.strictObject({ serverId: identity })),
   'mcp.servers.delete': lazyZodSchema(() => z.union([McpServerCatalogRowMutationResponseV1Schema,
@@ -134,7 +139,8 @@ export const MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 = {
   'mcp.servers.import': lazyZodSchema(() => z.union([McpImportPreviewV1Schema, McpImportCommitV1Schema])),
   'mcp.found.adopt': McpImportCommitV1Schema,
   'mcp.servers.signIn.start': lazyZodSchema(() => z.strictObject({ attemptId: identity, authorizationUrl: z.url(),
-    expiresAtMs: z.number().check(z.int(), z.nonnegative()), machineId: identity })),
+    expiresAtMs: z.number().check(z.int(), z.nonnegative()), machineId: identity,
+    clientRegistration: z.optional(z.literal('not_needed')) })),
 } as const;
 export type McpServerActionRequestV1 = Readonly<{ actionId: McpServerActionIdV1 | 'mcp.rules.set'; input: unknown; context: ActionExecutorContext }>;
 export type McpServerToolAgentFactV1 = Readonly<{ agentId: string }>
@@ -166,7 +172,7 @@ const catalogFailureCodes = new Set<string>([
   'invalid-mutation', 'reference-conflict', 'outcome_unknown', 'server_scope_mismatch',
   'not_authenticated', 'permission_denied', 'admission_unavailable', 'invalid_action_output',
   'machine_unreachable', 'mcp_catalog_unavailable', 'database_transaction_conflict_exhausted',
-  'no_machine_online', 'mcp_server_not_found', 'mcp_sign_in_not_supported', 'client_refused', 'mcp_oauth_resource_requires_https', 'mcp_oauth_endpoints_require_https',
+  'no_machine_online', 'mcp_server_not_found', 'mcp_sign_in_not_supported', 'client_refused', 'invalid_client', 'mcp_oauth_resource_requires_https', 'mcp_oauth_endpoints_require_https',
   'connected_account_configuration_target_unavailable',
   'mcp_catalog_conflict',
   'registry_unavailable', 'unsupported_entry', 'invalid_registry_input',
@@ -355,15 +361,24 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
       }
       case 'mcp.servers.create': {
         const { expectedRevision, ...change } = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
+        let mutation: McpServerCatalogMutationV1;
         if ('from' in change) {
           const mapped = await registryEntry(change.from.registry, change.inputs, undefined, change.name, change.remote?.auth.kind === 'oauth');
           if (!mapped.ok) return { ok: false, errorCode: 'missing_values', error: 'missing_values', details: { missingValues: mapped.missingValues } };
-          result = await ports.mutate({ kind: 'server-create', entry: change.title ? { ...mapped.entry, title: change.title } : mapped.entry,
-            rules: createRules(mapped.entry.id, change.where) }, expectedRevision, context); break;
+          mutation = { kind: 'server-create', entry: change.title ? { ...mapped.entry, title: change.title } : mapped.entry,
+            rules: createRules(mapped.entry.id, change.where) };
+        } else {
+          mutation = 'entries' in change
+            ? { kind: 'server-create-batch', entries: change.entries.map(item => ({ entry: item.entry, rules: createRules(item.entry.id, item.where) })) }
+            : { kind: 'server-create', entry: change.entry, rules: createRules(change.entry.id, change.where) };
         }
-        result = await ports.mutate('entries' in change
-          ? { kind: 'server-create-batch', entries: change.entries.map(item => ({ entry: item.entry, rules: createRules(item.entry.id, item.where) })) }
-          : { kind: 'server-create', entry: change.entry, rules: createRules(change.entry.id, change.where) }, expectedRevision, context);
+        const receipt = await ports.mutate(mutation, expectedRevision, context);
+        if (receipt.status !== 'updated') return projectMcpServerActionFailureV1({
+          code: receipt.status === 'conflict' || receipt.status === 'settings-conflict' ? 'mcp_catalog_conflict' : receipt.status,
+        });
+        result = { status: receipt.status, revision: receipt.revision, cursor: receipt.cursor,
+          ...(mutation.kind === 'server-create' ? { serverId: mutation.entry.id }
+            : { serverIds: mutation.entries.map(item => item.entry.id) }) };
         break;
       }
       case 'mcp.servers.update': {
@@ -483,7 +498,12 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
         break;
       }
       case 'mcp.servers.signIn.start': {
-        const { serverId, stepUp } = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
+        const { serverId, stepUp, client } = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
+        // Only the existing secret configuration channel carries this one-shot
+        // input. Discovery binds it to the actual issuer and stages registrations.
+        const secretValues = client === undefined ? {} : { clientRegistration: JSON.stringify(client),
+          ...(client === null ? { clientSecrets: '{}' } : {}) };
+        const registrationValues = client === null ? { registrations: {} } : {};
         const snapshot = await ports.readCatalog(context);
         if (snapshot.status !== 'ready' || snapshot.authority !== 'active') {
           return { ok: false, errorCode: 'mcp_catalog_unavailable', error: 'mcp_catalog_unavailable' };
@@ -503,8 +523,8 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
           const target = { kind: 'account' as const, account: account.ref };
           const previous = await connected('connectedServices.configuration.get', { machineId, target });
           const replacement = await connected('connectedServices.configuration.replace', { machineId, target,
-            expectedRevision: previous.configuration.revision, values: { ...previous.configuration.values,
-              serverId, resource: canonicalMcpOAuthResourceUrlV1(server.remote.url), stepUp: stepUp === true, grantedScopes: account.scopes }, secretValues: {} });
+            expectedRevision: previous.configuration.revision, values: { ...previous.configuration.values, ...registrationValues,
+              serverId, resource: canonicalMcpOAuthResourceUrlV1(server.remote.url), stepUp: stepUp === true, grantedScopes: account.scopes }, secretValues });
           attempt = await connected('connectedServices.authentication.beginReconnect', { machineId, account: account.ref,
             expectedConfigurationRevision: replacement.revision });
         } else {
@@ -513,8 +533,8 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
             const target = { kind: 'attempt' as const, attemptId: attempt.attemptId };
             const previous = await connected('connectedServices.configuration.get', { machineId, target });
             const replacement = await connected('connectedServices.configuration.replace', { machineId, target,
-              expectedRevision: previous.configuration.revision, values: { ...previous.configuration.values,
-                serverId, resource: canonicalMcpOAuthResourceUrlV1(server.remote.url), stepUp: stepUp === true }, secretValues: {} });
+              expectedRevision: previous.configuration.revision, values: { ...previous.configuration.values, ...registrationValues,
+                serverId, resource: canonicalMcpOAuthResourceUrlV1(server.remote.url), stepUp: stepUp === true }, secretValues });
             attempt = await connected('connectedServices.authentication.continueConnect', { machineId, attemptId: attempt.attemptId,
               expectedConfigurationRevision: replacement.revision });
           }
@@ -535,12 +555,15 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
           }
         }
         if (attempt.status !== 'awaitingOAuth' || !attempt.authorizationUrl || attempt.expiresAtMs === undefined) {
-          const code = 'code' in attempt && (attempt.code === 'client_refused' || attempt.code === 'mcp_oauth_resource_requires_https'
+          const code = 'code' in attempt && (attempt.code === 'client_refused' || attempt.code === 'invalid_client' || attempt.code === 'mcp_oauth_resource_requires_https'
             || attempt.code === 'mcp_oauth_endpoints_require_https')
             ? attempt.code : 'mcp_sign_in_not_supported';
           return { ok: false, errorCode: code, error: code };
         }
-        result = { attemptId: attempt.attemptId, authorizationUrl: attempt.authorizationUrl, expiresAtMs: attempt.expiresAtMs, machineId };
+        result = { attemptId: attempt.attemptId, authorizationUrl: attempt.authorizationUrl, expiresAtMs: attempt.expiresAtMs, machineId,
+          ...(client && client.clientId !== MCP_OAUTH_CLIENT_METADATA_URL_V1
+            && new URL(attempt.authorizationUrl).searchParams.get('client_id') === MCP_OAUTH_CLIENT_METADATA_URL_V1
+            ? { clientRegistration: 'not_needed' as const } : {}) };
         break;
       }
       case 'mcp.servers.test': case 'mcp.found.list': {

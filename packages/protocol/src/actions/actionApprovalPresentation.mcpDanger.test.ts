@@ -40,6 +40,23 @@ const cases: readonly (readonly [McpServerActionIdV1, unknown, readonly string[]
 ];
 
 describe('MCP danger approval review', () => {
+  it('keeps a supplied OAuth app secret out of durable approval, review and observation', async () => {
+    const clientSecret = crypto.randomUUID();
+    const raw = { serverId: 'mcp-a', client: { clientId: 'person-app', clientSecret } };
+    const spec = getActionSpec('mcp.servers.signIn.start');
+    let stored: unknown;
+    const executor = createActionExecutor({ isActionApprovalRequired: () => true,
+      approvalsCreate: async ({ request }) => { stored = request; return { artifactId: 'oauth-review' }; },
+      approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request: { ...request, status: 'rejected' } }),
+    });
+    await executor.execute(spec.id, raw, { surface: 'cli', authority: 'account_automation', serverId: 'home',
+      actionCaller: { kind: 'host' }, actionRequestId: 'live-oauth-review' });
+    expect(stored !== undefined).toBe(true);
+    expect(JSON.stringify(stored).includes(clientSecret)).toBe(false);
+    expect(JSON.stringify(spec.projectObservationInput!(raw)).includes(clientSecret)).toBe(false);
+    expect(JSON.stringify(spec.approvalPresentation?.projectInput?.(raw)).includes(clientSecret)).toBe(false);
+    expect(spec.inputHints?.fields.find(field => field.path === 'client.clientSecret')?.widget).toBe('secret');
+  });
   it('the actual live-only approval producer stores safe review but never raw import replay arguments', async () => {
     const spec = getActionSpec('mcp.servers.import');
     const raw = cases.find(([id]) => id === spec.id)![1];

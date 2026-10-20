@@ -12,6 +12,7 @@ const mode = { id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https:
 const custody = { occurrenceId: 'host-occurrence', sourceCustody: { kind: 'host' } } as const;
 
 function harness(options: { online?: boolean; revokeFails?: boolean; conflict?: boolean; reconnect?: boolean;
+  clientMetadata?: boolean;
   waitingSignal?: AbortSignal; onRead?: () => void;
   httpsRefusal?: 'mcp_oauth_resource_requires_https' | 'mcp_oauth_endpoints_require_https' } = {}) {
   let catalog: McpServerCatalogV1 = { v: 1, bindings: [], servers: [{ id: 'server', name: 'linear', transport: 'http',
@@ -42,7 +43,7 @@ function harness(options: { online?: boolean; revokeFails?: boolean; conflict?: 
       if (command.operation === 'read' && options.httpsRefusal) return { status: 'rejected', attemptId: 'attempt',
         code: options.httpsRefusal, diagnostic: { code: options.httpsRefusal, severity: 'error' } };
       if (command.operation === 'read' && command.waitForProviderStart === true) return { status: 'awaitingOAuth', attemptId: 'attempt',
-        authorizationUrl: 'https://issuer.example.test/authorize?state=attempt.nonce', callbackUrl: mode.callbackUrl, expiresAtMs: 5000 };
+        authorizationUrl: `https://issuer.example.test/authorize?state=attempt.nonce${options.clientMetadata ? '&client_id=https%3A%2F%2Fapp.happier.dev%2Foauth%2Fmcp%2Fclient-metadata.json' : ''}`, callbackUrl: mode.callbackUrl, expiresAtMs: 5000 };
       throw new Error('Unexpected authentication command');
     },
     async controlCommand(machineId, command) {
@@ -89,6 +90,32 @@ function harness(options: { online?: boolean; revokeFails?: boolean; conflict?: 
 }
 
 describe('MCP sign-in through canonical Connected Services', () => {
+  it.each([false, true])('carries a supplied app only in secret configuration through the real Action composition (reconnect=%s)', async reconnect => {
+    const owner = harness({ reconnect });
+    const client = { clientId: 'person-app', clientSecret: crypto.randomUUID() };
+    const result = await owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server', client }, context });
+    expect(result.ok).toBe(true);
+    const replacement = owner.commands.find(item => (item as { command: { operation: string } }).command.operation === 'replaceConfiguration') as
+      { command: { values: unknown; secretValues: Record<string, string> } } | undefined;
+    expect(replacement !== undefined).toBe(true);
+    expect(JSON.stringify(replacement?.command.values).includes(client.clientSecret)).toBe(false);
+    expect(replacement?.command.secretValues.clientRegistration === JSON.stringify(client)).toBe(true);
+    expect(JSON.stringify(result).includes(client.clientSecret)).toBe(false);
+  });
+  it('removes the server’s saved apps through configuration CAS before retrying automatic sign-in', async () => {
+    const owner = harness({ reconnect: true });
+    const result = await owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server', client: null }, context });
+    expect(result.ok).toBe(true);
+    expect(owner.read().values.registrations).toEqual({});
+    expect(owner.read().values.stepUpScopes).toEqual(['tasks:write']);
+    expect(owner.commands).toContainEqual(expect.objectContaining({ command: expect.objectContaining({ operation: 'replaceConfiguration',
+      expectedRevision: 'config-before', secretValues: { clientSecrets: '{}', clientRegistration: 'null' } }) }));
+  });
+  it('tells the caller a supplied app is not needed when the host chose client metadata', async () => {
+    const owner = harness({ clientMetadata: true });
+    expect(await owner.execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server', client: { clientId: 'unused-app' } }, context }))
+      .toMatchObject({ ok: true, result: { clientRegistration: 'not_needed' } });
+  });
   it('admits the OAuth marker in the canonical Account catalog', async () => {
     const owner = harness();
     expect(await owner.execute({ actionId: 'mcp.servers.read', input: { serverId: 'server' }, context }))

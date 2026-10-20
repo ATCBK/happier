@@ -4,6 +4,7 @@ import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import {
   MCP_OAUTH_CALLBACK_URL_V1,
+  type McpOAuthClientRegistrationV1,
 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1';
 import type { ConnectedAccountRevokedResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/connect/configurationActionsV1';
@@ -43,7 +44,7 @@ export type McpServerSignIn = Readonly<{
   view: McpSignInView | null;
   /** The same state in the status owner's vocabulary (banner, rail chip). */
   fact: McpServerSignInFact;
-  start: (options?: Readonly<{ stepUp?: boolean }>) => Promise<void>;
+  start: (options?: Readonly<{ stepUp?: boolean; client?: McpOAuthClientRegistrationV1 }>) => Promise<void>;
   cancel: () => Promise<void>;
   complete: (completion: McpSignInCompletion) => Promise<boolean>;
   signOut: () => Promise<boolean>;
@@ -55,6 +56,7 @@ type Attempt = Readonly<{
   machineId: string;
   authorizationUrl: string;
   expiresAtMs: number;
+  clientRegistration?: 'not_needed';
 }>;
 type Local =
   | Readonly<{ kind: 'idle' }>
@@ -63,7 +65,7 @@ type Local =
   | Readonly<{ kind: 'finishing'; attempt: Attempt; baseline: string | null }>
   | Readonly<{
       kind: 'failed';
-      state: 'did_not_finish' | 'no_machine_online' | 'client_refused';
+      state: 'did_not_finish' | 'no_machine_online' | 'client_refused' | 'invalid_client';
       baseline: string | null;
     }>;
 
@@ -71,9 +73,10 @@ const IDLE: Local = { kind: 'idle' };
 
 function failureState(
   code: string | undefined,
-): 'did_not_finish' | 'no_machine_online' | 'client_refused' {
+): 'did_not_finish' | 'no_machine_online' | 'client_refused' | 'invalid_client' {
   if (code === 'no_machine_online') return 'no_machine_online';
   if (code === 'client_refused') return 'client_refused';
+  if (code === 'invalid_client') return 'invalid_client';
   return 'did_not_finish';
 }
 
@@ -167,8 +170,8 @@ export function useMcpServerSignIn(
       if (completion.state.slice(0, completion.state.lastIndexOf('.')) !== attempt.attemptId) return false;
       const finishing: Local = { kind: 'finishing', attempt, baseline };
       setLocal(finishing);
-      const fail = () => setLocal(current => current === finishing
-        ? { kind: 'failed', state: 'did_not_finish', baseline } : current);
+      const fail = (code?: string) => setLocal(current => current === finishing
+        ? { kind: 'failed', state: failureState(code), baseline } : current);
       try {
         const response = await runConnectedAccountAuthenticationAction({
           serverId: scope.serverId,
@@ -187,10 +190,10 @@ export function useMcpServerSignIn(
           },
         });
         if (response.status === 'connected') return true;
-        fail();
+        fail('code' in response ? response.code : undefined);
         return false;
-      } catch {
-        fail();
+      } catch (cause) {
+        fail(cause && typeof cause === 'object' && 'code' in cause && typeof cause.code === 'string' ? cause.code : undefined);
         return false;
       }
     },
@@ -218,13 +221,14 @@ export function useMcpServerSignIn(
   }, [listening]);
 
   const start = React.useCallback(
-    async (startOptions?: Readonly<{ stepUp?: boolean }>) => {
+    async (startOptions?: Readonly<{ stepUp?: boolean; client?: McpOAuthClientRegistrationV1 }>) => {
       if (!server || !scope || currentLocal.current.target !== target) return;
       const starting: Local = { kind: 'starting', baseline: fingerprint };
       setLocal(starting);
       const result = await execute('mcp.servers.signIn.start', {
         serverId: server.id,
         ...(startOptions?.stepUp ? { stepUp: true } : {}),
+        ...(startOptions?.client !== undefined ? { client: startOptions.client } : {}),
       });
       if (!isLocalCurrent(starting) || !execution.isCurrent()) return;
       if (!result.ok) {
@@ -307,6 +311,7 @@ export function useMcpServerSignIn(
           state: 'signing',
           authorizationUrl: local.attempt.authorizationUrl,
           expiresAtMs: local.attempt.expiresAtMs,
+          ...(local.attempt.clientRegistration ? { clientRegistration: local.attempt.clientRegistration } : {}),
         };
       case 'finishing':
         return {

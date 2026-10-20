@@ -124,6 +124,36 @@ async function prepareToolFactsHome(includeMachine = true, installedAgentIds = O
 }
 
 describe('UI MCP per-Agent tool facts', () => {
+    it.each([false, true])('reads plugin declarations from the MCP Administration target (explicit=%s)', async explicit => {
+        const home = await prepareToolFactsHome();
+        const selected = createMachineFixture({ id: 'mcp-machine', active: true, activeAt: Date.now() });
+        const state = getStorage().getState();
+        const machines = [...Object.values(state.machines), selected];
+        getStorage().setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+            machineListByServerId: { [home.id]: machines }, settings: { ...state.settings,
+                machineAdministrationTargetsLocalV1: { 'mcpServers.settings': {
+                    serverIdentityId: home.serverIdentityId!, machineId: explicit ? 'facts-machine' : selected.id,
+                } } } });
+        const projection = PluginProjectionV2Schema.parse({ ...toolFactsProjection,
+            familiesById: { ...toolFactsProjection.familiesById, mcp: { family: 'mcp', entriesById: {
+                'server:acme.mcp-facts/fixture': { id: 'server:acme.mcp-facts/fixture', pluginId: 'acme.mcp-facts',
+                    localId: 'fixture', contributionKind: 'server', title: 'Fixture tools', kind: 'dynamic' },
+            } } } });
+        projectionRpc.mockImplementation(async request => ({ protocolVersion: 1,
+            projection: request.machineId === selected.id ? projection : toolFactsProjection }));
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { createUiMcpServerActionExecuteV1 } = await import('./mcpServerActionDeps');
+        const account = await captureLazyActionAccountContext(home.id);
+        try {
+            const result = await createUiMcpServerActionExecuteV1(account)({ actionId: 'mcp.servers.list', input: {},
+                context: { serverId: home.id, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                    ...(explicit ? { externalActionTarget: { kind: 'machine', machineId: selected.id } } : {}) } });
+            expect(result).toMatchObject({ ok: true, result: { catalog: { servers: [expect.anything(), { source: {
+                kind: 'plugin', pluginId: 'acme.mcp-facts',
+            } }], pluginItemsStatus: 'ready' } } });
+        } finally { account.dispose(); }
+    });
+
     it.each([false, true])('keeps sign-in on the MCP target used by Test (explicit=%s)', async explicit => {
         const home = await prepareToolFactsHome(true, [], undefined, undefined, { catalog: () => ({ v: 1, bindings: [],
             servers: [{ id: 'server', name: 'server', transport: 'http', remote: { url: 'https://mcp.fixture.test/mcp',

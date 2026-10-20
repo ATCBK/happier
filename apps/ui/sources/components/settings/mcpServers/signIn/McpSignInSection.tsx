@@ -8,6 +8,8 @@ import type { CapabilityStatus } from '@/components/capabilities/status/capabili
 import { QRCode } from '@/components/qr';
 import { ConnectedAccountOAuthForm } from '@/components/settings/connectedServices/account/ConnectedAccountOAuthForm';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { FieldItem } from '@/components/ui/forms/FieldItem';
+import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -273,6 +275,7 @@ function Link(
     label: string;
     onPress: () => void;
     quiet?: boolean;
+    disabled?: boolean;
   }>,
 ) {
   const styles = stylesheet;
@@ -280,6 +283,8 @@ function Link(
     <Pressable
       testID={props.testID}
       accessibilityRole="link"
+      accessibilityState={{ disabled: props.disabled === true }}
+      disabled={props.disabled}
       onPress={props.onPress}
       hitSlop={8}
       style={props.quiet ? styles.quietLinkBox : undefined}
@@ -310,6 +315,16 @@ export function McpSignInSection(props: Props) {
   const { theme } = useUnistyles();
   const styles = stylesheet;
   const { name, signIn } = props;
+  const [editingApp, setEditingApp] = React.useState(false);
+  const [clientId, setClientId] = React.useState('');
+  const [clientSecret, setClientSecret] = React.useState('');
+  const [callbackCopied, setCallbackCopied] = React.useState(false);
+  React.useEffect(() => {
+    if (view.state === 'signing' || view.state === 'connected') {
+      setClientSecret('');
+      setEditingApp(false);
+    }
+  }, [view.state]);
   const signOut = React.useCallback(async () => {
     if (!(await signIn.signOut()))
       Modal.alert(
@@ -485,27 +500,61 @@ export function McpSignInSection(props: Props) {
       );
       break;
     case 'client_refused':
+    case 'invalid_client':
       body = (
         <Resting
           testID={`${testID}:client-refused`}
-          title={t('capabilities.mcpSignIn.clientRefusedTitle', { name })}
-          body={t('capabilities.mcpSignIn.clientRefusedBody')}
-          action={
-            props.onUseApiKey
-              ? {
-                  label: t('capabilities.mcpSignIn.useApiKey'),
-                  display: 'default',
-                  onPress: props.onUseApiKey,
-                }
-              : undefined
-          }
+          title={view.state === 'invalid_client' ? t('capabilities.mcpSignIn.invalidClientTitle') : t('capabilities.mcpSignIn.clientRefusedTitle', { name })}
+          body={t(view.state === 'invalid_client' ? 'capabilities.mcpSignIn.invalidClientBody' : 'capabilities.mcpSignIn.clientRefusedBody')}
+          footer={<View style={styles.links}>
+            <Link testID={`${testID}:own-app`} label={t(view.state === 'invalid_client' ? 'capabilities.mcpSignIn.editOwnApp' : 'capabilities.mcpSignIn.useOwnApp')}
+              onPress={() => setEditingApp(true)} />
+            {props.onUseApiKey ? <Link testID={`${testID}:client-refused:action`} label={t('capabilities.mcpSignIn.useApiKey')} onPress={props.onUseApiKey} /> : null}
+          </View>}
         />
       );
       break;
   }
+  if (editingApp && view.state !== 'signing' && view.state !== 'finishing') {
+    body = <SectionContentRow testID={`${testID}:own-app-form`}>
+      <View style={styles.stack}>
+        <Text variant="label" emphasis="semiBold" style={styles.title}>{t('capabilities.mcpSignIn.useOwnApp')}</Text>
+        <Text variant="body" style={styles.body}>{t(view.state === 'invalid_client' ? 'capabilities.mcpSignIn.invalidClientBody' : 'capabilities.mcpSignIn.ownAppBody')}</Text>
+        {view.state === 'no_machine_online' ? <Text variant="body" style={styles.body}>{t('capabilities.mcpSignIn.noMachineBody')}</Text> : null}
+        <FieldItem label={t('capabilities.mcpSignIn.callbackUrl')}>
+          <Text variant="body" selectable style={styles.body}>{MCP_OAUTH_CALLBACK_URL_V1}</Text>
+          <Link testID={`${testID}:copy-callback`} label={t(callbackCopied ? 'common.copied' : 'common.copy')}
+            onPress={() => void setClipboardStringSafe(MCP_OAUTH_CALLBACK_URL_V1).then(setCallbackCopied)} />
+        </FieldItem>
+        <FieldItem label={t('capabilities.mcpSignIn.clientId')} labelNativeID={`${testID}:client-id-label`}>
+          <FieldTextInput testID={`${testID}:client-id`} value={clientId} onChangeText={setClientId}
+            accessibilityLabel={t('capabilities.mcpSignIn.clientId')} accessibilityLabelledBy={`${testID}:client-id-label`} editable={!signIn.busy} />
+        </FieldItem>
+        <FieldItem label={t('capabilities.mcpSignIn.clientSecret')} labelNativeID={`${testID}:client-secret-label`}>
+          <FieldTextInput testID={`${testID}:client-secret`} value={clientSecret} onChangeText={setClientSecret} secureTextEntry
+            accessibilityLabel={t('capabilities.mcpSignIn.clientSecret')} accessibilityLabelledBy={`${testID}:client-secret-label`} editable={!signIn.busy} />
+        </FieldItem>
+        <RoundButton testID={`${testID}:own-app-sign-in`} size="small" title={t('capabilities.mcpSignIn.signIn')}
+          loading={signIn.busy} disabled={signIn.busy || !clientId.trim() || view.state === 'no_machine_online'}
+          onPress={() => void signIn.start({ client: { clientId: clientId.trim(), ...(clientSecret ? { clientSecret } : {}) } })} />
+        <View style={styles.links}>
+          <Link testID={`${testID}:own-app-cancel`} label={t('common.cancel')} disabled={signIn.busy} onPress={() => { setEditingApp(false); setClientSecret(''); }} />
+          {view.state === 'connected' || view.state === 'expired' || view.state === 'invalid_client' ?
+            <Link testID={`${testID}:remove-own-app`} label={t('capabilities.mcpSignIn.removeOwnApp')} disabled={signIn.busy}
+              onPress={() => { setEditingApp(false); setClientSecret(''); void signIn.start({ client: null }); }} /> : null}
+        </View>
+      </View>
+    </SectionContentRow>;
+  }
   return (
     <ItemGroup testID={testID} title={t('capabilities.mcpSignIn.title')}>
       {body}
+      {view.state === 'signing' && view.clientRegistration === 'not_needed' ? <SectionContentRow>
+        <Text variant="body" style={styles.body}>{t('capabilities.mcpSignIn.ownAppNotNeeded')}</Text>
+      </SectionContentRow> : null}
+      {!editingApp && (view.state === 'connected' || view.state === 'expired' || view.state === 'did_not_finish') ? <SectionContentRow>
+        <Link testID={`${testID}:edit-own-app`} label={t('capabilities.mcpSignIn.editOwnApp')} onPress={() => setEditingApp(true)} />
+      </SectionContentRow> : null}
     </ItemGroup>
   );
 }

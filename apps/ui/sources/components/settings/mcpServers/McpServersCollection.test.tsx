@@ -342,7 +342,7 @@ describe('MCP servers collection and tools', () => {
                 if (init?.method === 'POST') {
                     const mutation = McpServerCatalogRowMutationV1Schema.parse(JSON.parse(String(init.body)));
                     if (mutation.content?.t !== 'plain') throw new Error('Expected a plain MCP catalog write');
-                    expect(mutation.expectedRevision).toBe(catalogRevision);
+                    if (mutation.expectedRevision !== catalogRevision) return Response.json({ status: 'conflict', revision: catalogRevision });
                     catalogWrites.push(mutation);
                     settingsState.value = { ...mutation.content.v, strictMode: false };
                     catalogRevision += 1;
@@ -459,6 +459,31 @@ describe('MCP servers collection and tools', () => {
         reopenedConfig().onAdded?.(open);
         expect(openAdded).toHaveBeenCalledWith('uuid', undefined);
         expect(catalogWrites).toHaveLength(1);
+    });
+
+    it('keeps a rejected Registry Add in the modal with its draft and no saved-page follow-up', async () => {
+        const onAdded = vi.fn();
+        const onClose = vi.fn();
+        const screen = await renderSettingsView(<McpAddModal params={{ query: 'stdio', onAdded, onCustom() {} }} onClose={onClose} />);
+        const config = () => screen.tree.root.findByType(CapabilityAddModalBody).props.config as CapabilityAddModalConfig<RegistryItemSummaryV1>;
+        await vi.waitFor(() => expect(config().catalog.items.some(row => row.itemId === 'example.test/stdio-docs')).toBe(true));
+        const row = config().catalog.items.find(row => row.itemId === 'example.test/stdio-docs')!;
+        const details = await renderSettingsView(<>{config().renderDetail(row, { pushed: false, added: false })}</>);
+        await vi.waitFor(() => expect(config().detailFooter(row).primary.disabledReason).toBeUndefined());
+        const before = config();
+        // Another writer advances the real HTTP CAS after this form captured its revision.
+        catalogRevision += 1;
+        await act(async () => {
+            await expect(before.detailFooter(row).primary.onPress()).rejects.toThrow();
+        });
+        const failedDetail = config().renderDetail(row, { pushed: false, added: false });
+        if (!React.isValidElement<{ state: unknown }>(failedDetail)) throw new Error('Expected the retained Registry detail');
+        expect(failedDetail.props.state).toMatchObject({ status: 'failed', error: 'mcp_catalog_conflict' });
+        expect(onAdded).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(settingsState.value.servers.map(server => server.id)).toEqual(['server-1']);
+        expect(rpcRequests.filter(request => request.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_TEST))).toEqual([]);
+        await details.unmount();
     });
 
     it.each([true, false])('runs one administrative Test only for the Registry Add navigation intent (%s)', async afterRegistryAdd => {

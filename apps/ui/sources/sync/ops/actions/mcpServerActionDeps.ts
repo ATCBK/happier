@@ -38,9 +38,26 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
         let releaseCatalog: (() => void) | undefined;
         try {
             assertCurrent();
+            const resolveAdministrationMachine = async () => {
+                assertCurrent();
+                // Preserve the Action's admitted exact target, just as Test
+                // does. Presence guides automatic selection, not rerouting.
+                if (context.externalActionTarget?.kind === 'machine') {
+                    return context.externalActionTarget.machineId.trim() || null;
+                }
+                const [{ resolveFreshMachineAdministrationExecutionTarget }, { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 }] = await Promise.all([
+                    import('@/sync/domains/machines/administration/useTargetSelection'),
+                    import('@/sync/domains/machines/administration/selectionPreferences'),
+                ]);
+                assertCurrent();
+                const selected = storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers] ?? null;
+                const target = resolveFreshMachineAdministrationExecutionTarget(selected, { accountScope: account.accountLifetime.scope });
+                return target && areServerProfileIdentifiersEquivalent(target.profile.id, account.serverId)
+                    ? target.machine.id : resolveUiAccountActionFallbackMachineId(account);
+            };
             const readPluginItems = async () => {
                 assertCurrent();
-                const machineId = resolveUiAccountActionFallbackMachineId(account);
+                const machineId = await resolveAdministrationMachine();
                 if (!machineId) return null;
                 const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
                 const inputs = await loadDaemonMergedProjectionInputs({ machineId, serverId: account.serverId, accountLifetime: account.accountLifetime, signal: cancellation.signal });
@@ -63,23 +80,7 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                 },
                 readPluginItems,
                 connectedServiceAction,
-                resolveAdministrationMachine: async () => {
-                    assertCurrent();
-                    // Preserve the Action's admitted exact target, just as Test
-                    // does. Presence guides automatic selection, not rerouting.
-                    if (context.externalActionTarget?.kind === 'machine') {
-                        return context.externalActionTarget.machineId.trim() || null;
-                    }
-                    const [{ resolveFreshMachineAdministrationExecutionTarget }, { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 }] = await Promise.all([
-                        import('@/sync/domains/machines/administration/useTargetSelection'),
-                        import('@/sync/domains/machines/administration/selectionPreferences'),
-                    ]);
-                    assertCurrent();
-                    const selected = storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers] ?? null;
-                    const target = resolveFreshMachineAdministrationExecutionTarget(selected, { accountScope: account.accountLifetime.scope });
-                    return target && areServerProfileIdentifiersEquivalent(target.profile.id, account.serverId)
-                        ? target.machine.id : resolveUiAccountActionFallbackMachineId(account);
-                },
+                resolveAdministrationMachine,
                 describeConnectedService: (machineId, command) => machineRpcWithServerScope({ machineId, serverId: account.serverId,
                     accountId: account.accountId, preferScoped: true, requestId: context.actionRequestId ?? undefined,
                     method: CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD,
@@ -90,7 +91,7 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                 ruleWriteContext: () => ({ nowMs: Date.now(), newId: randomUUID }),
                 readToolAgentFacts: async () => {
                     assertCurrent();
-                    const machineId = resolveUiAccountActionFallbackMachineId(account);
+                    const machineId = await resolveAdministrationMachine();
                     if (!machineId) return null;
                     const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
                     assertCurrent();

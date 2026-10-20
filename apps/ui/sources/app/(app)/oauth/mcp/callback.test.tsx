@@ -157,7 +157,7 @@ describe('/oauth/mcp/callback', () => {
     );
   });
 
-  it('signed in, completes on the machine holding the attempt with the issuer, then returns to the server page', async () => {
+  it.each([false, true])('signed in, completes with the issuer and retains an editable app refusal (invalidClient=%s)', async invalidClient => {
     install();
     boundary.signedIn = true;
     getStorage().setState({
@@ -224,20 +224,22 @@ describe('/oauth/mcp/callback', () => {
           });
           return {
             ok: true,
-            result: { status: 'connected', attemptId: 'attempt-1', account },
+            result: invalidClient ? { status: 'rejected', attemptId: 'attempt-1', code: 'invalid_client',
+              diagnostic: { code: 'invalid_client', severity: 'error' } } : { status: 'connected', attemptId: 'attempt-1', account },
           };
         }
         throw new Error(`unexpected ${actionId}`);
       },
     );
     const screen = await renderScreen(<McpOAuthCallbackRoute />);
-    await settle(screen, 'mcp-oauth-callback:connected');
+    await settle(screen, invalidClient ? 'mcp-oauth-callback:invalid-client' : 'mcp-oauth-callback:connected');
     expect(replaced).toEqual(['/oauth/mcp/callback']);
     expect(boundary.execute).toHaveBeenCalledWith(
       'connectedServices.authentication.completeOAuth',
       expect.anything(),
       expect.anything(),
     );
-    expect(boundary.replace).toHaveBeenCalledWith('/settings/mcp/server-1');
+    if (invalidClient) expect(boundary.replace).not.toHaveBeenCalled();
+    else expect(boundary.replace).toHaveBeenCalledWith('/settings/mcp/server-1');
   });
 });

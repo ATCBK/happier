@@ -13,7 +13,8 @@ export type McpSignInView =
   | Readonly<{ state: 'did_not_finish' }>
   | Readonly<{ state: 'no_machine_online' }>
   | Readonly<{ state: 'client_refused' }>
-  | Readonly<{ state: 'signing'; authorizationUrl: string; expiresAtMs: number }>
+  | Readonly<{ state: 'invalid_client' }>
+  | Readonly<{ state: 'signing'; authorizationUrl: string; expiresAtMs: number; clientRegistration?: 'not_needed' }>
   | Readonly<{ state: 'finishing'; machineName: string }>
   | Readonly<{ state: 'connected'; identity: string | null; scopes: readonly string[]; lastUsedAt: number | null }>
   | Readonly<{ state: 'needs_more_access'; tool?: string; scope?: string }>

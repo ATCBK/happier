@@ -224,13 +224,14 @@ export function McpOAuthCallbackPage() {
         />
       );
       break;
-    case 'unfinished':
+    case 'unfinished': {
+      const invalidClient = view.response.status === 'rejected' && view.response.code === 'invalid_client';
       content = (
         <SurfaceStateCard
-          testID="mcp-oauth-callback:unfinished"
+          testID={invalidClient ? 'mcp-oauth-callback:invalid-client' : 'mcp-oauth-callback:unfinished'}
           kind="warning"
-          title={t('capabilities.mcpSignIn.callback.unfinishedTitle')}
-          reason={t('capabilities.mcpSignIn.callback.unfinishedBody')}
+          title={t(invalidClient ? 'capabilities.mcpSignIn.invalidClientTitle' : 'capabilities.mcpSignIn.callback.unfinishedTitle')}
+          reason={t(invalidClient ? 'capabilities.mcpSignIn.invalidClientBody' : 'capabilities.mcpSignIn.callback.unfinishedBody')}
           action={{
             label: t('capabilities.mcpSignIn.callback.openServers'),
             onPress: openServers,
@@ -238,6 +239,7 @@ export function McpOAuthCallbackPage() {
         />
       );
       break;
+    }
   }
   return <View style={styles.page}>{content}</View>;
 }

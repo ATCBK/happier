@@ -11,7 +11,7 @@ import { describeCapabilityNoticeReason, readCapabilityNoticeReason } from '@/co
  * server does not sign in (no OAuth), so sign-in never speaks.
  */
 export type McpServerSignInFact =
-    | Readonly<{ state: 'not_connected' | 'did_not_finish' | 'no_machine_online' | 'client_refused' }>
+    | Readonly<{ state: 'not_connected' | 'did_not_finish' | 'no_machine_online' | 'client_refused' | 'invalid_client' }>
     | Readonly<{ state: 'signing' }>
     | Readonly<{ state: 'connected' }>
     | Readonly<{ state: 'needs_more_access' }>
@@ -79,6 +79,7 @@ export function mcpServerStatus(input: McpServerStatusInput): readonly Capabilit
             case 'did_not_finish':
             case 'no_machine_online':
             case 'client_refused':
+            case 'invalid_client':
                 statuses.push({ kind: 'signin', fix: { kind: 'sign_in', onPress: fixes.signIn } });
                 break;
             case 'signing':

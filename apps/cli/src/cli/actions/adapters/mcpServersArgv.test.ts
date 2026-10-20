@@ -322,6 +322,7 @@ describe('MCP compiled CLI Test', () => {
 });
 
 describe('MCP compiled CLI sign-in journey', () => {
+  const suppliedSecret = crypto.randomUUID();
   it.each([
     { name: 'positional server name', argv: ['mcp', 'servers', 'sign-in', 'linear', '--no-open'], switched: false },
     { name: 'flags before the positional name', argv: ['mcp', 'servers', 'sign-in', '--step-up', 'linear', '--no-open'], switched: false },
@@ -329,6 +330,7 @@ describe('MCP compiled CLI sign-in journey', () => {
     { name: 'sign-out through existing revoke', argv: ['mcp', 'servers', 'sign-out', 'linear'], switched: false },
     { name: 'sign-out on an explicitly selected Machine with stale presence', argv: ['mcp', 'servers', 'sign-out', 'linear', '--machine-id', 'selected-machine'], switched: false },
     { name: 'an exact id cannot be shadowed by another display name', argv: ['mcp', 'servers', 'sign-in', 'server-id', '--no-open'], switched: false },
+    { name: 'a supplied app through the compiled Action', argv: ['mcp', 'servers', 'sign-in', 'linear', '--client-id', 'person-app', '--client-secret', suppliedSecret, '--no-open'], switched: false },
   ])('resolves through the catalog Action and preserves the captured Account: $name', async ({ argv, switched }) => {
     const commands: unknown[] = [];
     const signOut = argv[2] === 'sign-out';
@@ -338,6 +340,7 @@ describe('MCP compiled CLI sign-in journey', () => {
     const mode = descriptor.authentication.modes.find(mode => mode.id === 'oauth');
     if (!mode || mode.kind !== 'oauthAuthorizationCode') throw new Error('Expected host MCP OAuth mode');
     let configurationValues: Record<string, unknown> = {};
+    let suppliedAppAdmitted = false;
     const described = { status: 'described', service, descriptor, occurrenceId: 'host-generation', sourceCustody: { kind: 'host' },
       accounts: signOut ? [{ ref: { service, accountId: 'server-id' }, status: 'connected', authenticationModeId: 'oauth',
         configurationReady: true, configurationRevision: 'config-1', scopes: [], revisionSemantics: 'revisioned',
@@ -358,7 +361,10 @@ describe('MCP compiled CLI sign-in journey', () => {
       },
       async controlCommand(machineId, command) {
         if (command.operation === 'readConfiguration' || command.operation === 'replaceConfiguration') {
-          if (command.operation === 'replaceConfiguration') configurationValues = { ...command.values };
+          if (command.operation === 'replaceConfiguration') {
+            configurationValues = { ...command.values };
+            suppliedAppAdmitted = command.secretValues.clientRegistration === JSON.stringify({ clientId: 'person-app', clientSecret: suppliedSecret });
+          }
           return { status: command.operation === 'readConfiguration' ? 'configuration' : 'configurationCommitted',
             target: { kind: 'attempt', attemptId: 'attempt', service, modeId: 'oauth' }, mode,
             occurrenceId: described.occurrenceId, sourceCustody: described.sourceCustody,
@@ -412,6 +418,11 @@ describe('MCP compiled CLI sign-in journey', () => {
     expect(commands).toContainEqual({ machineId: 'machine', command: { operation: 'completeOAuth', attemptId: 'attempt',
       completion: { code: 'returned-code', state: 'attempt.nonce', callbackUrl: mode.callbackUrl, iss: 'https://issuer.example.test' } } });
     expect(configurationValues).toMatchObject({ serverId: 'server-id', resource: 'https://resource.example.test/mcp', stepUp: argv.includes('--step-up') });
+    if (argv.includes('--client-id')) {
+      expect(suppliedAppAdmitted).toBe(true);
+      expect(JSON.stringify(configurationValues).includes(suppliedSecret)).toBe(false);
+      expect(JSON.stringify(log.mock.calls).includes(suppliedSecret)).toBe(false);
+    }
     expect(commands).toContainEqual({ machineId: 'machine', command: { operation: 'read', attemptId: 'attempt', waitForProviderStart: true } });
     expect(commands).toContainEqual({ machineId: 'machine', command: { operation: 'cancel', attemptId: 'attempt' } });
     expect(log.mock.calls.some(args => args.some(value => typeof value === 'string' && value.includes('https://issuer.example.test/authorize')))).toBe(true);

@@ -1,6 +1,7 @@
 import { z } from 'zod/mini';
 import type { AuthorizationServerMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { InvalidClientError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
 import { PluginConnectedAccountDescriptorContributionV2Schema } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
 import { ConnectedAccountRequestAuthMaterializationV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
@@ -8,6 +9,7 @@ import {
     MCP_OAUTH_CALLBACK_URL_V1,
     MCP_OAUTH_CLIENT_METADATA_URL_V1,
     MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1,
+    McpOAuthClientRegistrationV1Schema,
 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type { HostConnectedAccountAuthenticationContext, HostConnectedAccountReadContext, HostConnectedAccountRuntime } from '@/plugins/runtime/connectedAccounts/hostRuntime';
@@ -43,6 +45,9 @@ export const MCP_SIGN_IN_CONNECTED_ACCOUNT_DESCRIPTOR = PluginConnectedAccountDe
                     properties: registrationProperties, required: ['clientId', 'authorizationEndpoint', 'tokenEndpoint', 'tokenEndpointAuthMethods'] },
             } },
             { id: 'clientSecrets', title: 'Client secrets', secret: true, schema: { type: 'string', minLength: 1 } },
+            // One-shot author input stays inside the incumbent opaque configuration.
+            // Successful discovery replaces it with issuer-keyed registrations.
+            { id: 'clientRegistration', title: 'OAuth app replacement', secret: true, schema: { type: 'string', minLength: 1 } },
         ] },
     }] },
 });
@@ -160,7 +165,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
             async begin(input, context) {
                 const network = transport(context.signal);
                 try {
-                    const { discoverAuthorizationServerMetadata, discoverOAuthProtectedResourceMetadata, extractWWWAuthenticateParams, registerClient } = await import('@modelcontextprotocol/sdk/client/auth.js');
+                    const { discoverAuthorizationServerMetadata, discoverOAuthProtectedResourceMetadata, extractWWWAuthenticateParams, registerClient, selectClientAuthMethod } = await import('@modelcontextprotocol/sdk/client/auth.js');
                     const configuration = ConfigurationSchema.parse(context.configuration.values);
                     const resource = resourceUrl(configuration.resource);
                     // A successful grant must be usable through the incumbent
@@ -188,7 +193,10 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                     if (input.callbackUrl !== MCP_OAUTH_CALLBACK_URL_V1) return { status: 'rejected', diagnostic: diagnostic('mcp_oauth_callback_invalid') };
                     const authorization = requireHttpsEndpoint(discovered.authorization_endpoint);
                     const clientSecrets = await secrets(context);
+                    const suppliedRaw = await context.configuration.getSecret('clientRegistration');
+                    const supplied = suppliedRaw === null ? undefined : McpOAuthClientRegistrationV1Schema.parse(JSON.parse(suppliedRaw));
                     let registration = configuration.registrations[issuer];
+                    if (supplied === null) { registration = undefined; delete clientSecrets[issuer]; }
                     const flags = network.flags();
                     let clientId: string;
                     let clientAuthMethod = registration?.clientAuthMethod;
@@ -196,6 +204,16 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                         clientId = MCP_OAUTH_CLIENT_METADATA_URL_V1;
                         clientAuthMethod = 'none';
                         delete clientSecrets[issuer];
+                    } else if (supplied) {
+                        clientId = supplied.clientId;
+                        if (supplied.clientSecret) clientSecrets[issuer] = supplied.clientSecret;
+                        else delete clientSecrets[issuer];
+                        clientAuthMethod = selectClientAuthMethod({ client_id: clientId,
+                            ...(supplied.clientSecret ? { client_secret: supplied.clientSecret } : {}),
+                            ...(registration?.clientId === clientId && registration.clientAuthMethod
+                                && (registration.clientAuthMethod === 'none') === !supplied.clientSecret
+                                ? { token_endpoint_auth_method: registration.clientAuthMethod } : {}) },
+                        discovered.token_endpoint_auth_methods_supported ?? ['client_secret_basic']);
                     } else if (registration) {
                         clientId = registration.clientId;
                     } else if (discovered.registration_endpoint) {
@@ -234,7 +252,7 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                 } catch (cause) {
                     context.signal.throwIfAborted();
                     return { status: 'rejected', diagnostic: diagnostic(cause instanceof McpOAuthEndpointRequiresHttpsError
-                        ? 'mcp_oauth_endpoints_require_https' : 'mcp_oauth_discovery_failed') };
+                        ? 'mcp_oauth_endpoints_require_https' : cause instanceof InvalidClientError ? 'invalid_client' : 'mcp_oauth_discovery_failed') };
                 }
             },
             async complete(input, context) {
@@ -254,7 +272,9 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                     return { status: 'connected', accountId: sealed.serverId, displayName: sealed.serverId, scopes };
                 } catch (cause) {
                     context.signal.throwIfAborted();
-                    return cause instanceof McpOAuthEndpointRequiresHttpsError
+                    return cause instanceof InvalidClientError
+                        ? { status: 'rejected', diagnostic: diagnostic('invalid_client') }
+                        : cause instanceof McpOAuthEndpointRequiresHttpsError
                         ? { status: 'rejected', diagnostic: diagnostic('mcp_oauth_endpoints_require_https') }
                         : failure(context.signal, network.status(), 'mcp_oauth_exchange_failed');
                 }

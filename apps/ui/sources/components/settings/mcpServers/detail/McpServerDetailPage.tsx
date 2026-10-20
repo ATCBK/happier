@@ -179,7 +179,7 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
       ) : null}
       <McpServerBanner detail={detail} name={name} toolCount={toolCount} />
       {detail.signIn.view ? (
-        <McpSignInSection name={name} signIn={{ ...detail.signIn, view: detail.signIn.view }} onUseApiKey={recovery.useApiKey} />
+        <McpSignInSection key={JSON.stringify([props.scope?.serverId, props.scope?.accountId, server.id])} name={name} signIn={{ ...detail.signIn, view: detail.signIn.view }} onUseApiKey={recovery.useApiKey} />
       ) : null}
       <McpServerWhereAndTools detail={detail} />
       <McpServerConfigurationSection

@@ -102,6 +102,18 @@ afterEach(async () => {
 });
 
 describe('useMcpServerSignIn', () => {
+  it('passes the supplied app through the same Action and retains a typed editable client failure', async () => {
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: started });
+    const client = { clientId: 'person-app', clientSecret: crypto.randomUUID() };
+    const hook = await renderHook(() => useMcpServerSignIn(server, online));
+    await act(async () => { await hook.getCurrent().start({ client }); });
+    expect(boundary.execute.mock.calls[0]?.[0]).toBe('mcp.servers.signIn.start');
+    expect(JSON.stringify(boundary.execute.mock.calls[0]?.[1]) === JSON.stringify({ serverId: server.id, client })).toBe(true);
+    boundary.execute.mockResolvedValueOnce({ ok: true, result: { status: 'rejected', attemptId: started.attemptId,
+      code: 'invalid_client', diagnostic: { code: 'invalid_client', severity: 'error' } } });
+    await act(async () => { await hook.getCurrent().complete({ code: 'code', state: 'attempt-1.n' }); });
+    expect(hook.getCurrent().view).toEqual({ state: 'invalid_client' });
+  });
   it('retains the originating Session through the existing external-connect return owner', async () => {
     const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
     const home = await upsertServerProfile({ name: 'Sign-in Home', serverUrl: 'https://mcp-signin-return.test' });

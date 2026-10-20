@@ -184,9 +184,23 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
   { ...mcpSpec('mcp.servers.signIn.start', 'Sign in to MCP server',
     'Sign in once to use this remote server from your machines.', { danger: true, direct: true }),
     approvalResultCustody: 'live_only' as const,
-    cli: { acceptsServerId: true, inputSchema: z.strictObject({ itemId: z.string().check(z.minLength(1)), stepUp: z.optional(z.boolean()) }),
+    approvalInputCustody: 'live_only' as const,
+    inputHints: { fields: [{ path: 'serverId', title: 'MCP server', widget: 'text' as const },
+      { path: 'client.clientId', title: 'Client ID', widget: 'text' as const },
+      { path: 'client.clientSecret', title: 'Client secret', widget: 'secret' as const }] },
+    cli: { acceptsServerId: true, inputSchema: z.strictObject({ itemId: z.string().check(z.minLength(1)), stepUp: z.optional(z.boolean()),
+      clientId: z.optional(z.string().check(z.trim(), z.minLength(1))), clientSecret: z.optional(z.string().check(z.minLength(1))),
+      removeClient: z.optional(z.boolean()) }).check(z.superRefine((value, context) => {
+        if (value.clientSecret !== undefined && value.clientId === undefined || value.removeClient && (value.clientId !== undefined || value.clientSecret !== undefined)) {
+          context.addIssue({ code: 'custom', message: 'Supply a Client ID with an optional secret, or remove the saved app.' });
+        }
+      })),
+      inputHints: { fields: [{ path: 'clientId', title: 'Client ID', widget: 'text' as const },
+        { path: 'clientSecret', title: 'Client secret', widget: 'secret' as const }] },
       bindInput: (value: unknown) => { const input = readRecord(value); return { serverId: input.itemId,
-        ...(input.stepUp === undefined ? {} : { stepUp: input.stepUp }) }; },
+        ...(input.stepUp === undefined ? {} : { stepUp: input.stepUp }),
+        ...(input.removeClient ? { client: null } : input.clientId !== undefined ? { client: { clientId: input.clientId,
+          ...(input.clientSecret === undefined ? {} : { clientSecret: input.clientSecret }) } } : {}) }; },
       commands: [{ path: ['mcp', 'servers', 'sign-in'], positionals: ['itemId'], visibility: 'canonical' as const }] } },
   mcpSpec('mcp.servers.list', 'List MCP servers',
     'See the MCP servers saved in your account.', { read: true }),

@@ -5,6 +5,7 @@ import {
   HAPPIER_PICKS_SOURCE_ID,
   type RegistryItemSummaryV1,
 } from '@happier-dev/protocol/registries';
+import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import {
@@ -17,7 +18,6 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import type { CustomModalInjectedProps } from '@/modal/types';
-import { getMcpServerCatalogSnapshot } from '@/sync/store/settings/mcpServerCatalogSnapshot';
 import { useRegistryItems } from '@/registries/useRegistryItems';
 import { useRegistrySources } from '@/registries/useRegistrySources';
 import { useRegistrySourcesSlot } from '@/registries/useRegistrySourcesSlot';
@@ -164,33 +164,32 @@ export function McpAddModal(
       if (!version || draft.model?.supported !== true)
         throw new Error(t('capabilities.add.addFailed'));
       setAdd(key, { status: 'adding' });
-      const result = await execute('mcp.servers.create', {
-        expectedRevision: snapshot.revision,
-        from: {
-          registry: { sourceId: row.sourceId, itemId: row.itemId, version },
-        },
-        inputs: mcpAddCreateInputs(draft.values),
-        ...(draft.model.signIn
-          ? { remote: { auth: { kind: 'oauth' as const } } }
-          : {}),
-        ...(draft.where ? { where: draft.where } : {}),
-      });
-      if (!result.ok) {
-        setAdd(key, {
-          status: 'failed',
-          error: result.errorCode ?? result.error,
+      try {
+        const result = await execute('mcp.servers.create', {
+          expectedRevision: snapshot.revision,
+          from: {
+            registry: { sourceId: row.sourceId, itemId: row.itemId, version },
+          },
+          inputs: mcpAddCreateInputs(draft.values),
+          ...(draft.model.signIn
+            ? { remote: { auth: { kind: 'oauth' as const } } }
+            : {}),
+          ...(draft.where ? { where: draft.where } : {}),
         });
-        throw new Error(t('capabilities.add.addFailed'));
+        if (!result.ok) throw new Error(result.errorCode ?? result.error);
+        const parsed = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.create'].safeParse(result.result);
+        if (!parsed.success || !('serverId' in parsed.data)) throw new Error('invalid_action_output');
+        const serverId = parsed.data.serverId;
+        createdServerId.current = serverId;
+        setAdd(key, { status: 'added', serverId });
+        await reload().catch(() => undefined);
+        return serverId;
+      } catch (error) {
+        setAdd(key, { status: 'failed', error: error instanceof Error ? error.message : t('capabilities.add.addFailed') });
+        throw error;
       }
-      await reload().catch(() => undefined);
-      // The receipt names no id: the new server is the catalog entry that now carries this registry item's provenance.
-      const fresh = getMcpServerCatalogSnapshot(scope);
-      const serverId = findAddedMcpServer(fresh.value?.servers ?? [], row)?.id ?? null;
-      createdServerId.current = serverId;
-      setAdd(key, { status: 'added', serverId });
-      return serverId ?? '';
     },
-    [execute, reload, scope, setAdd, snapshot.revision],
+    [execute, reload, setAdd, snapshot.revision],
   );
 
   const items = catalog.items;

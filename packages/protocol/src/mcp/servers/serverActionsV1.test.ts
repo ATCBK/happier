@@ -174,8 +174,15 @@ describe('canonical MCP Action owner', () => {
     const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
     expect(await execute({ actionId: 'mcp.servers.create', input, context })).toMatchObject({ ok: false, errorCode: 'missing_values' });
     expect(catalog.servers).toEqual([]);
-    expect(await execute({ actionId: 'mcp.servers.create', input: { ...input, inputs: { Authorization: { t: 'template', template: 'Bearer {api_key}',
-      vars: { api_key: { t: 'savedSecret', secretId: 'chosen-personal-ref' } } } } }, context })).toMatchObject({ ok: true, result: { status: 'updated' } });
+    const createInput = { ...input, inputs: { Authorization: { t: 'template' as const, template: 'Bearer {api_key}',
+      vars: { api_key: { t: 'savedSecret' as const, secretId: 'chosen-personal-ref' } } } } };
+    const created = await execute({ actionId: 'mcp.servers.create', input: createInput, context });
+    expect(created).toMatchObject({ ok: true, result: { status: 'updated', serverId: catalog.servers[0]!.id } });
+    expect(MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.create'].parse(created.ok ? created.result : null))
+      .toMatchObject({ serverId: catalog.servers[0]!.id });
+    expect(await execute({ actionId: 'mcp.servers.create', input: createInput, context }))
+      .toMatchObject({ ok: false, errorCode: 'mcp_catalog_conflict' });
+    expect(catalog.servers).toHaveLength(1);
     expect(catalog.servers[0]).toMatchObject({ transport: 'http', origin: { kind: 'registry', provenance: { itemId: input.from.registry.itemId,
       ref: { kind: 'version', version: '1.0.0' } } }, remote: { headers: { Authorization: { t: 'template' } } } });
     expect(catalog.bindings).toMatchObject([{ enabled: true, target: { t: 'allMachines' } }]);
@@ -465,7 +472,7 @@ describe('canonical MCP Action owner', () => {
     });
     const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
     expect(await execute({ actionId: 'mcp.servers.create', input: { expectedRevision: 9, entries }, context }))
-      .toEqual({ ok: true, result: { status: 'updated', revision: 10, cursor: 10 } });
+      .toEqual({ ok: true, result: { status: 'updated', revision: 10, cursor: 10, serverIds: ['alpha', 'beta'] } });
     expect(MCP_SERVER_ACTION_SPECS_V1.find(spec => spec.id === 'mcp.servers.create')?.projectObservationInput?.({
       expectedRevision: 9, entries,
     })).toEqual({ expectedRevision: 9, serverIds: ['alpha', 'beta'] });

@@ -65,11 +65,19 @@ The stable client metadata URL is
 `https://app.happier.dev/oauth/mcp/client-metadata.json`, and its callback is
 `https://app.happier.dev/oauth/mcp/callback`. The callback page returns the result to the initiating app flow where supported. Self-hosted web openers use the paste fallback. Publishing these endpoints and verifying installed-app return on devices are release checks; their development source does not imply they are deployed.
 
-Sign-in requires HTTPS for the resource and its authorization discovery, registration, browser and token endpoints, including localhost. Happier requires PKCE S256 and tries client metadata registration, then dynamic client registration. If the authorization service supports neither, sign-in is refused; use the API-key option if offered. Pasting a callback completes an existing attempt, rather than bypassing registration.
+Sign-in requires HTTPS for the resource and its authorization discovery, registration, browser and token endpoints, including localhost. Happier requires PKCE S256 and uses client metadata when the service supports it, otherwise a saved app registration or dynamic registration. Pasting a callback completes an existing attempt, rather than bypassing registration.
 
 The grant belongs to your Account's Connected Accounts, not a separate machine token store. Storage follows the [Account encryption mode](/security/encryption). A scope challenge shows **Needs more access**; reconnect explicitly to approve the combined scopes. Signing out asks for confirmation. Another origin cannot complete the attempt, and an issuer mismatch is refused before token exchange.
 
 For SSE, an advertised message endpoint may use another path on the initial server's origin. An endpoint on another origin is refused; the token remains bound to the original resource.
+
+### Use your own OAuth app
+
+If automatic registration is refused, choose **Use your own OAuth app** in the sign-in section. Create an OAuth app in the service's console and register the callback URL shown in Happier: `https://app.happier.dev/oauth/mcp/callback`. Enter its **Client ID** and, for a confidential app, its optional **Client secret**, then choose **Sign in**.
+
+The app registration stays with this server's Account-held sign-in configuration and follows the [Account encryption mode](/security/encryption). Your other machines reuse it. A service that accepts Happier's client metadata identity continues to use that identity; the sign-in section explains that your app is not needed. If the app is rejected, check its details and registered callback URL, then edit it and retry. **Edit your OAuth app** also lets you replace it or remove the server's saved registrations and retry automatic sign-in. The API-key alternative remains available where offered.
+
+Agents use the same `mcp.servers.signIn.start` Action with `client: { clientId, clientSecret? }`; `client: null` removes the saved registrations for that server. The CLI accepts `--client-id` and optional `--client-secret` on `happier mcp servers sign-in <name>`, or `--remove-client` to retry automatic sign-in. Keep client secrets out of shared command output and shell history.
 
 ### API keys and other values
 

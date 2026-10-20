@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { ConnectedAccountRequestAuthMaterializationV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import type { HostConnectedAccountAuthenticationContext } from '@/plugins/runtime/connectedAccounts/hostRuntime';
+import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { createConnectedAccountConfigurationOwner, type ConnectedAccountConfigurationRecord } from '@/plugins/runtime/connectedAccounts/configurationOwner';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
@@ -24,6 +26,7 @@ async function authorizationServer(options: Readonly<{
     oauthMissing?: boolean;
     oidcPath?: string;
     tokenStatus?: number;
+    tokenError?: string;
     tokenOverrides?: Readonly<Record<string, unknown>>;
     tokenRedirect?: string;
     headerPrmStatus?: number;
@@ -71,7 +74,7 @@ async function authorizationServer(options: Readonly<{
         } else if (path === '/token') {
             if (options.tokenHold) return;
             if (options.tokenRedirect) { response.writeHead(307, { location: options.tokenRedirect }); response.end('{}'); return; }
-            if (tokenStatus) { response.writeHead(tokenStatus); response.end(JSON.stringify({ error: 'invalid_grant', error_description: 'private authorization-code registration-secret' })); return; }
+            if (tokenStatus) { response.writeHead(tokenStatus); response.end(JSON.stringify({ error: options.tokenError ?? 'invalid_grant', error_description: 'private authorization-code registration-secret' })); return; }
             tokenCount += 1;
             response.end(JSON.stringify({ access_token: `access-${tokenCount}`, refresh_token: `refresh-${tokenCount}`, token_type: 'Bearer', expires_in: 3600, scope: 'read', ...tokenOverrides }));
         } else if (path === '/revoke') {
@@ -122,15 +125,15 @@ async function registeredRuntime() {
 }
 
 describe('MCP server sign-in runtime', () => {
-    async function begin(options: Parameters<typeof authorizationServer>[0] = {}, values: Readonly<Record<string, string | boolean | string[]>> = {}, controller = new AbortController()) {
-        const fixture = await authorizationServer(options);
+    async function begin(options: Parameters<typeof authorizationServer>[0] = {}, values: Readonly<Record<string, JsonValue>> = {}, controller = new AbortController(), secretValues: Readonly<Record<string, string>> = {}, existingFixture?: Awaited<ReturnType<typeof authorizationServer>>) {
+        const fixture = existingFixture ?? await authorizationServer(options);
         const lease = await registeredRuntime();
         const mode = lease.runtime.authentication.modes.oauth;
         if (mode.kind !== 'oauthAuthorizationCode') throw new Error('Missing OAuth implementation');
         const entries = new Map<string, string>();
         const descriptor = lease.descriptor.authentication.modes.find(candidate => candidate.id === 'oauth');
         if (!descriptor) throw new Error('Missing OAuth descriptor');
-        const record = { revision: 'r1', values: { serverId: 'server-a', resource: `${fixture.resource}${options?.resourceSuffix ?? ''}`, ...values }, secretRefs: {} };
+        const record = { revision: 'r1', values: { serverId: 'server-a', resource: `${fixture.resource}${options?.resourceSuffix ?? ''}`, ...values }, secretRefs: {}, secretValues };
         const configurationOwner = createConnectedAccountConfigurationOwner({
             read: async () => record,
             replace: async () => { throw new Error('Staging must not write before settlement'); },
@@ -164,6 +167,70 @@ describe('MCP server sign-in runtime', () => {
         expect(staged.content?.values).toMatchObject({ stepUp: false, stepUpScopes: [] });
         await expect(mode.complete({ code: 'code', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback', state: 'attempt-failure.state', pkceVerifier: 'verifier' }, context))
             .resolves.toMatchObject({ status: 'connected', scopes: ['read', 'existing', 'write'] });
+    });
+
+    it.each(['none', 'client_secret_basic', 'client_secret_post'] as const)('accepts a supplied app without CIMD or DCR using %s', async method => {
+        const confidential = method !== 'none';
+        const clientSecret = confidential ? randomBytes(24).toString('base64url') : undefined;
+        const supplied = { clientId: 'person-app', ...(clientSecret ? { clientSecret } : {}) };
+        const options = { metadata: {
+            registration_endpoint: undefined, token_endpoint_auth_methods_supported: [method],
+        } };
+        const refused = await begin(options);
+        expect(refused.result).toMatchObject({ status: 'rejected', diagnostic: { code: 'client_refused' } });
+        const { fixture, mode, context, result, staged } = await begin(options, {}, new AbortController(),
+            { clientRegistration: JSON.stringify(supplied) }, refused.fixture);
+        expect(result.status).toBe('awaitingOAuthRedirect');
+        if (result.status !== 'awaitingOAuthRedirect') return;
+        expect(new URL(result.authorizationUrl).searchParams.get('client_id')).toBe(supplied.clientId);
+        expect(fixture.requests.some(request => request.path === '/register')).toBe(false);
+        expect(staged.content?.values.registrations).toMatchObject({ [fixture.base + '/issuer']: {
+            clientId: supplied.clientId, clientAuthMethod: method,
+        } });
+        expect('clientRegistration' in (staged.content?.secretValues ?? {})).toBe(false);
+        expect(JSON.parse(staged.content?.secretValues?.clientSecrets ?? '{}')[fixture.base + '/issuer'] === clientSecret).toBe(true);
+        const completion = await mode.complete({ code: 'code', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback',
+            state: 'attempt-failure.state', pkceVerifier: 'verifier' }, context);
+        expect(completion.status).toBe('connected');
+        const request = fixture.requests.find(candidate => candidate.path === '/token');
+        expect(request !== undefined).toBe(true);
+        const body = new URLSearchParams(request?.body);
+        expect(method === 'client_secret_basic'
+            ? request?.authorization === `Basic ${Buffer.from(`${supplied.clientId}:${clientSecret}`).toString('base64')}`
+            : body.get('client_id') === supplied.clientId && body.get('client_secret') === (clientSecret ?? null)).toBe(true);
+    });
+
+    it('uses CIMD instead of a supplied confidential app', async () => {
+        const clientSecret = randomBytes(24).toString('base64url');
+        const { result, staged } = await begin({ metadata: { client_id_metadata_document_supported: true } }, {},
+            new AbortController(), { clientRegistration: JSON.stringify({ clientId: 'unused-app', clientSecret }) });
+        expect(result.status).toBe('awaitingOAuthRedirect');
+        if (result.status !== 'awaitingOAuthRedirect') return;
+        expect(new URL(result.authorizationUrl).searchParams.get('client_id')).toBe('https://app.happier.dev/oauth/mcp/client-metadata.json');
+        expect(JSON.stringify(staged.content).includes(clientSecret)).toBe(false);
+    });
+
+    it.each([false, true])('replaces a saved app without retaining its previous authentication kind (confidential=%s)', async confidential => {
+        const options = { metadata: { registration_endpoint: undefined, token_endpoint_auth_methods_supported: ['client_secret_basic', 'none'] } };
+        const initial = { clientId: 'person-app', ...(!confidential ? { clientSecret: randomBytes(24).toString('base64url') } : {}) };
+        const first = await begin(options, {}, new AbortController(), { clientRegistration: JSON.stringify(initial) });
+        if (!first.staged.content) throw new Error('No staged app configuration');
+        const replacement = { clientId: initial.clientId, ...(confidential ? { clientSecret: randomBytes(24).toString('base64url') } : {}) };
+        const next = await begin(options, first.staged.content.values, new AbortController(),
+            { ...first.staged.content.secretValues, clientRegistration: JSON.stringify(replacement) }, first.fixture);
+        expect(next.result.status).toBe('awaitingOAuthRedirect');
+        expect(next.staged.content?.values.registrations).toMatchObject({ [first.fixture.base + '/issuer']: {
+            clientAuthMethod: confidential ? 'client_secret_basic' : 'none',
+        } });
+        const savedSecrets = JSON.parse(next.staged.content?.secretValues?.clientSecrets ?? '{}');
+        expect(savedSecrets[first.fixture.base + '/issuer'] === replacement.clientSecret).toBe(true);
+    });
+
+    it('reports invalid_client without exposing the authorization-server error', async () => {
+        const { mode, context } = await begin({ tokenStatus: 401, tokenError: 'invalid_client' });
+        const result = await mode.complete({ code: 'code', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback',
+            state: 'attempt-failure.state', pkceVerifier: 'verifier' }, context);
+        expect(result).toEqual({ status: 'rejected', diagnostic: { code: 'invalid_client', severity: 'error' } });
     });
 
     it('refuses an unusable HTTP OAuth resource before probing, registering or staging', async () => {

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { McpServerCatalogEntryV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -24,6 +25,8 @@ const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { McpServerDetailPage } = await import('./McpServerDetailPage');
 const { ValueRefEditorModal } = await import('@/components/ui/forms/valueRefs/ValueRefEditorModal');
 const { McpServerWhereAndTools } = await import('./McpServerDetailBody');
+const { McpSignInSection } = await import('../signIn/McpSignInSection');
+const { FieldTextInput } = await import('@/components/ui/forms/FieldTextInput');
 
 const base = McpServerCatalogEntryV1Schema.parse({ id: 'linear', name: 'linear', transport: 'http', env: {}, createdAt: 1, updatedAt: 1,
   remote: { url: 'https://mcp.linear.app/mcp', headers: {} } });
@@ -66,6 +69,24 @@ beforeEach(async () => {
 afterEach(async () => { await standardCleanup(); disposeActionLoader?.(); disposeActionLoader = undefined; });
 
 describe('saved MCP detail recovery wiring', () => {
+  it('offers an inline own-app form with a masked optional secret and submits through sign-in', async () => {
+    const start = vi.fn(async () => {});
+    const clientSecret = crypto.randomUUID();
+    const tree = await renderScreen(<McpSignInSection name="Docs" signIn={{ view: { state: 'client_refused' },
+      start, busy: false, cancel: async () => {}, complete: async () => false, signOut: async () => false }} />);
+    await tree.pressByTestIdAsync('mcp.server.signin:own-app');
+    const clientId = tree.findAllByType(FieldTextInput).find(field => field.props.testID === 'mcp.server.signin:client-id');
+    const secret = tree.findAllByType(FieldTextInput).find(field => field.props.testID === 'mcp.server.signin:client-secret');
+    expect(secret?.props.secureTextEntry).toBe(true);
+    await act(async () => { clientId?.props.onChangeText('person-app'); secret?.props.onChangeText(clientSecret); });
+    await tree.pressByTestIdAsync('mcp.server.signin:own-app-sign-in');
+    expect(start.mock.calls.length).toBe(1);
+    expect(JSON.stringify(start.mock.calls[0]) === JSON.stringify([{ client: { clientId: 'person-app', clientSecret } }])).toBe(true);
+    await tree.update(<McpSignInSection name="Docs" signIn={{ view: { state: 'connected', identity: null, scopes: [], lastUsedAt: null },
+      start, busy: false, cancel: async () => {}, complete: async () => false, signOut: async () => false }} />);
+    expect(tree.findAllByTestId('mcp.server.signin:own-app-form')).toHaveLength(0);
+    expect(tree.findAllByTestId('mcp.server.signin:connected')).not.toHaveLength(0);
+  });
   it('the real missing-key banner opens the ValueRef editor and saves the repaired reference', async () => {
     const server = McpServerCatalogEntryV1Schema.parse({ ...base, env: { TOKEN: { t: 'savedSecret', secretId: 'missing' } } });
     const current = await page(server);

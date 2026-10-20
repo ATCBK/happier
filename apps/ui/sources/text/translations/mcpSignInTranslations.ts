@@ -55,6 +55,16 @@ export type McpSignInTranslation = Readonly<{
   clientRefusedTitle: (params: Named) => string;
   clientRefusedBody: string;
   useApiKey: string;
+  useOwnApp: string;
+  ownAppBody: string;
+  callbackUrl: string;
+  clientId: string;
+  clientSecret: string;
+  editOwnApp: string;
+  removeOwnApp: string;
+  invalidClientTitle: string;
+  invalidClientBody: string;
+  ownAppNotNeeded: string;
   callback: Readonly<{
     finishing: string;
     closeTitle: string;
@@ -124,7 +134,7 @@ const en: McpSignInTranslation = {
     `The access was removed in ${name}’s settings. Your setup is kept.`,
   signInAgain: 'Sign in again',
   didNotFinishTitle: ({ name }) => `${name} didn’t finish the sign-in`,
-  didNotFinishBody: 'You declined, or the page was closed. Nothing was saved.',
+  didNotFinishBody: 'Sign-in is not complete. Try again when you’re ready.',
   tryAgain: 'Try again',
   noMachineTitle: 'Sign-in needs a machine online',
   noMachineBody:
@@ -133,6 +143,16 @@ const en: McpSignInTranslation = {
   clientRefusedBody:
     'It doesn’t let apps register for sign-in. Use an API key if it offers one.',
   useApiKey: 'Use an API key',
+  useOwnApp: 'Use your own OAuth app',
+  ownAppBody: 'Create an OAuth app in the service’s console with this callback URL, then enter its details. Happier saves it with your Account sign-in.',
+  callbackUrl: 'Callback URL',
+  clientId: 'Client ID',
+  clientSecret: 'Client secret (optional)',
+  editOwnApp: 'Edit your OAuth app',
+  removeOwnApp: 'Remove app and retry automatic sign-in',
+  invalidClientTitle: 'The OAuth app was rejected',
+  invalidClientBody: 'Check the Client ID, secret and registered callback URL, then sign in again.',
+  ownAppNotNeeded: 'This service accepts Happier’s app identity. Your own OAuth app is not needed.',
   callback: {
     finishing: 'Finishing sign-in…',
     closeTitle: 'Signed in',
@@ -147,7 +167,7 @@ const en: McpSignInTranslation = {
     invalidTitle: 'This sign-in link isn’t complete',
     invalidBody: 'Start the sign-in again from the server page.',
     unfinishedTitle: 'The sign-in didn’t finish',
-    unfinishedBody: 'Nothing was saved. Start it again from the server page.',
+    unfinishedBody: 'Return to the server page and try signing in again.',
     openServers: 'Open MCP servers',
   },
 };
@@ -207,7 +227,7 @@ const ca: McpSignInTranslation = {
   signInAgain: 'Torna a iniciar la sessió',
   didNotFinishTitle: ({ name }) => `${name} no ha acabat l’inici de sessió`,
   didNotFinishBody:
-    'Has rebutjat o s’ha tancat la pàgina. No s’ha desat res.',
+    'L’inici de sessió no s’ha completat. Torna-ho a provar quan vulguis.',
   tryAgain: 'Torna-ho a provar',
   noMachineTitle: 'L’inici de sessió necessita una màquina en línia',
   noMachineBody:
@@ -217,6 +237,16 @@ const ca: McpSignInTranslation = {
   clientRefusedBody:
     'No permet que les aplicacions es registrin per iniciar sessió. Fes servir una clau d’API si n’ofereix.',
   useApiKey: 'Fes servir una clau d’API',
+  useOwnApp: 'Fes servir la teva aplicació OAuth',
+  ownAppBody: 'Crea una aplicació OAuth a la consola del servei amb aquest URL de retorn i introdueix-ne les dades. Happier les desa amb la sessió del teu compte.',
+  callbackUrl: 'URL de retorn',
+  clientId: 'ID del client',
+  clientSecret: 'Secret del client (opcional)',
+  editOwnApp: 'Edita la teva aplicació OAuth',
+  removeOwnApp: 'Elimina l’aplicació i torna a provar l’inici automàtic',
+  invalidClientTitle: 'S’ha rebutjat l’aplicació OAuth',
+  invalidClientBody: 'Comprova l’ID del client, el secret i l’URL de retorn registrat, i torna a iniciar sessió.',
+  ownAppNotNeeded: 'Aquest servei accepta la identitat de Happier. No cal la teva aplicació OAuth.',
   callback: {
     finishing: 'Acabant l’inici de sessió…',
     closeTitle: 'Sessió iniciada',
@@ -231,7 +261,7 @@ const ca: McpSignInTranslation = {
     invalidTitle: 'Aquest enllaç d’inici de sessió no és complet',
     invalidBody: 'Torna a començar l’inici de sessió des de la pàgina del servidor.',
     unfinishedTitle: 'L’inici de sessió no s’ha acabat',
-    unfinishedBody: 'No s’ha desat res. Torna a començar des de la pàgina del servidor.',
+    unfinishedBody: 'Torna a la pàgina del servidor i prova d’iniciar sessió de nou.',
     openServers: 'Obre els servidors MCP',
   },
 };
@@ -294,7 +324,7 @@ const de: McpSignInTranslation = {
   didNotFinishTitle: ({ name }) =>
     `${name} hat die Anmeldung nicht abgeschlossen`,
   didNotFinishBody:
-    'Du hast abgelehnt oder die Seite wurde geschlossen. Es wurde nichts gespeichert.',
+    'Die Anmeldung ist nicht abgeschlossen. Versuche es erneut, wenn du bereit bist.',
   tryAgain: 'Erneut versuchen',
   noMachineTitle: 'Für die Anmeldung muss eine Maschine online sein',
   noMachineBody:
@@ -303,6 +333,16 @@ const de: McpSignInTranslation = {
   clientRefusedBody:
     'Apps dürfen sich dort nicht für die Anmeldung registrieren. Nutze einen API-Schlüssel, falls angeboten.',
   useApiKey: 'API-Schlüssel verwenden',
+  useOwnApp: 'Eigene OAuth-App verwenden',
+  ownAppBody: 'Erstelle in der Konsole des Dienstes eine OAuth-App mit dieser Rückruf-URL und gib ihre Daten ein. Happier speichert sie mit deiner Kontoanmeldung.',
+  callbackUrl: 'Rückruf-URL',
+  clientId: 'Client-ID',
+  clientSecret: 'Client-Geheimnis (optional)',
+  editOwnApp: 'OAuth-App bearbeiten',
+  removeOwnApp: 'App entfernen und automatische Anmeldung erneut versuchen',
+  invalidClientTitle: 'Die OAuth-App wurde abgelehnt',
+  invalidClientBody: 'Prüfe Client-ID, Geheimnis und registrierte Rückruf-URL und melde dich erneut an.',
+  ownAppNotNeeded: 'Dieser Dienst akzeptiert Happiers App-Identität. Deine eigene OAuth-App wird nicht benötigt.',
   callback: {
     finishing: 'Anmeldung wird abgeschlossen…',
     closeTitle: 'Angemeldet',
@@ -318,7 +358,7 @@ const de: McpSignInTranslation = {
     invalidBody: 'Starte die Anmeldung erneut von der Serverseite aus.',
     unfinishedTitle: 'Die Anmeldung wurde nicht abgeschlossen',
     unfinishedBody:
-      'Es wurde nichts gespeichert. Starte sie erneut von der Serverseite aus.',
+      'Kehre zur Serverseite zurück und versuche die Anmeldung erneut.',
     openServers: 'MCP-Server öffnen',
   },
 };
@@ -378,7 +418,7 @@ const es: McpSignInTranslation = {
   signInAgain: 'Iniciar sesión de nuevo',
   didNotFinishTitle: ({ name }) => `${name} no terminó el inicio de sesión`,
   didNotFinishBody:
-    'Lo rechazaste o se cerró la página. No se guardó nada.',
+    'El inicio de sesión no se ha completado. Vuelve a intentarlo cuando quieras.',
   tryAgain: 'Reintentar',
   noMachineTitle: 'El inicio de sesión necesita una máquina en línea',
   noMachineBody:
@@ -388,6 +428,16 @@ const es: McpSignInTranslation = {
   clientRefusedBody:
     'No permite que las aplicaciones se registren para iniciar sesión. Usa una clave de API si la ofrece.',
   useApiKey: 'Usar una clave de API',
+  useOwnApp: 'Usar tu propia aplicación OAuth',
+  ownAppBody: 'Crea una aplicación OAuth en la consola del servicio con esta URL de retorno e introduce sus datos. Happier los guarda con el inicio de sesión de tu cuenta.',
+  callbackUrl: 'URL de retorno',
+  clientId: 'ID de cliente',
+  clientSecret: 'Secreto de cliente (opcional)',
+  editOwnApp: 'Editar tu aplicación OAuth',
+  removeOwnApp: 'Eliminar aplicación y reintentar el acceso automático',
+  invalidClientTitle: 'Se ha rechazado la aplicación OAuth',
+  invalidClientBody: 'Comprueba el ID, el secreto y la URL de retorno registrada, y vuelve a iniciar sesión.',
+  ownAppNotNeeded: 'Este servicio acepta la identidad de Happier. No necesitas tu propia aplicación OAuth.',
   callback: {
     finishing: 'Terminando el inicio de sesión…',
     closeTitle: 'Sesión iniciada',
@@ -402,7 +452,7 @@ const es: McpSignInTranslation = {
     invalidTitle: 'Este enlace de inicio de sesión no está completo',
     invalidBody: 'Vuelve a empezar el inicio de sesión desde la página del servidor.',
     unfinishedTitle: 'El inicio de sesión no terminó',
-    unfinishedBody: 'No se guardó nada. Vuelve a empezar desde la página del servidor.',
+    unfinishedBody: 'Vuelve a la página del servidor e intenta iniciar sesión de nuevo.',
     openServers: 'Abrir servidores MCP',
   },
 };
@@ -463,7 +513,7 @@ const fr: McpSignInTranslation = {
   signInAgain: 'Se connecter à nouveau',
   didNotFinishTitle: ({ name }) => `${name} n’a pas terminé la connexion`,
   didNotFinishBody:
-    'Vous avez refusé ou la page a été fermée. Rien n’a été enregistré.',
+    'La connexion n’est pas terminée. Réessayez quand vous le souhaitez.',
   tryAgain: 'Réessayer',
   noMachineTitle: 'La connexion nécessite une machine en ligne',
   noMachineBody:
@@ -473,6 +523,16 @@ const fr: McpSignInTranslation = {
   clientRefusedBody:
     'Il n’autorise pas les applications à s’enregistrer pour la connexion. Utilisez une clé API s’il en propose une.',
   useApiKey: 'Utiliser une clé API',
+  useOwnApp: 'Utiliser votre application OAuth',
+  ownAppBody: 'Créez une application OAuth dans la console du service avec cette URL de retour, puis saisissez ses informations. Happier les enregistre avec la connexion de votre compte.',
+  callbackUrl: 'URL de retour',
+  clientId: 'ID client',
+  clientSecret: 'Secret client (facultatif)',
+  editOwnApp: 'Modifier votre application OAuth',
+  removeOwnApp: 'Retirer l’application et réessayer la connexion automatique',
+  invalidClientTitle: 'L’application OAuth a été refusée',
+  invalidClientBody: 'Vérifiez l’ID client, le secret et l’URL de retour enregistrée, puis reconnectez-vous.',
+  ownAppNotNeeded: 'Ce service accepte l’identité de Happier. Votre application OAuth n’est pas nécessaire.',
   callback: {
     finishing: 'Finalisation de la connexion…',
     closeTitle: 'Connecté',
@@ -487,7 +547,7 @@ const fr: McpSignInTranslation = {
     invalidTitle: 'Ce lien de connexion est incomplet',
     invalidBody: 'Relancez la connexion depuis la page du serveur.',
     unfinishedTitle: 'La connexion n’a pas abouti',
-    unfinishedBody: 'Rien n’a été enregistré. Relancez-la depuis la page du serveur.',
+    unfinishedBody: 'Revenez à la page du serveur et réessayez de vous connecter.',
     openServers: 'Ouvrir les serveurs MCP',
   },
 };
@@ -547,7 +607,7 @@ const it: McpSignInTranslation = {
   signInAgain: 'Accedi di nuovo',
   didNotFinishTitle: ({ name }) => `${name} non ha completato l’accesso`,
   didNotFinishBody:
-    'Hai rifiutato oppure la pagina è stata chiusa. Non è stato salvato nulla.',
+    'L’accesso non è completo. Riprova quando vuoi.',
   tryAgain: 'Riprova',
   noMachineTitle: 'L’accesso richiede una macchina online',
   noMachineBody:
@@ -557,6 +617,16 @@ const it: McpSignInTranslation = {
   clientRefusedBody:
     'Non consente alle app di registrarsi per l’accesso. Usa una chiave API se ne offre una.',
   useApiKey: 'Usa una chiave API',
+  useOwnApp: 'Usa la tua app OAuth',
+  ownAppBody: 'Crea un’app OAuth nella console del servizio con questo URL di ritorno, poi inserisci i dati. Happier li salva con l’accesso del tuo account.',
+  callbackUrl: 'URL di ritorno',
+  clientId: 'ID client',
+  clientSecret: 'Segreto client (facoltativo)',
+  editOwnApp: 'Modifica la tua app OAuth',
+  removeOwnApp: 'Rimuovi l’app e riprova l’accesso automatico',
+  invalidClientTitle: 'L’app OAuth è stata rifiutata',
+  invalidClientBody: 'Controlla ID client, segreto e URL di ritorno registrato, poi accedi di nuovo.',
+  ownAppNotNeeded: 'Questo servizio accetta l’identità di Happier. La tua app OAuth non è necessaria.',
   callback: {
     finishing: 'Completamento dell’accesso…',
     closeTitle: 'Accesso effettuato',
@@ -571,7 +641,7 @@ const it: McpSignInTranslation = {
     invalidTitle: 'Questo link di accesso non è completo',
     invalidBody: 'Riavvia l’accesso dalla pagina del server.',
     unfinishedTitle: 'L’accesso non è stato completato',
-    unfinishedBody: 'Non è stato salvato nulla. Riavvialo dalla pagina del server.',
+    unfinishedBody: 'Torna alla pagina del server e prova ad accedere di nuovo.',
     openServers: 'Apri i server MCP',
   },
 };
@@ -630,7 +700,7 @@ const ja: McpSignInTranslation = {
   signInAgain: '再度サインイン',
   didNotFinishTitle: ({ name }) => `${name} のサインインが完了しませんでした`,
   didNotFinishBody:
-    '拒否したか、ページが閉じられました。何も保存されていません。',
+    'サインインは完了していません。準備ができたら再試行してください。',
   tryAgain: '再試行',
   noMachineTitle: 'サインインにはオンラインのマシンが必要です',
   noMachineBody:
@@ -639,6 +709,16 @@ const ja: McpSignInTranslation = {
   clientRefusedBody:
     'アプリのサインイン登録を許可していません。API キーが提供されている場合はそちらを使ってください。',
   useApiKey: 'API キーを使う',
+  useOwnApp: '自分の OAuth アプリを使う',
+  ownAppBody: 'サービスの管理画面でこのコールバック URL を使って OAuth アプリを作成し、詳細を入力してください。Happier はアカウントのサインイン情報と一緒に保存します。',
+  callbackUrl: 'コールバック URL',
+  clientId: 'クライアント ID',
+  clientSecret: 'クライアントシークレット（任意）',
+  editOwnApp: 'OAuth アプリを編集',
+  removeOwnApp: 'アプリを削除して自動サインインを再試行',
+  invalidClientTitle: 'OAuth アプリが拒否されました',
+  invalidClientBody: 'クライアント ID、シークレット、登録したコールバック URL を確認して、再度サインインしてください。',
+  ownAppNotNeeded: 'このサービスは Happier のアプリ ID に対応しています。独自の OAuth アプリは不要です。',
   callback: {
     finishing: 'サインインを完了しています…',
     closeTitle: 'サインインしました',
@@ -653,7 +733,7 @@ const ja: McpSignInTranslation = {
     invalidTitle: 'このサインインリンクは不完全です',
     invalidBody: 'サーバーページからサインインをやり直してください。',
     unfinishedTitle: 'サインインが完了しませんでした',
-    unfinishedBody: '何も保存されていません。サーバーページからやり直してください。',
+    unfinishedBody: 'サーバーページに戻って、もう一度サインインしてください。',
     openServers: 'MCP サーバーを開く',
   },
 };
@@ -713,7 +793,7 @@ const pl: McpSignInTranslation = {
   signInAgain: 'Zaloguj się ponownie',
   didNotFinishTitle: ({ name }) => `${name} nie dokończył logowania`,
   didNotFinishBody:
-    'Odmówiono lub strona została zamknięta. Nic nie zapisano.',
+    'Logowanie nie zostało ukończone. Spróbuj ponownie, gdy będziesz gotowy.',
   tryAgain: 'Spróbuj ponownie',
   noMachineTitle: 'Logowanie wymaga maszyny online',
   noMachineBody:
@@ -722,6 +802,16 @@ const pl: McpSignInTranslation = {
   clientRefusedBody:
     'Nie pozwala aplikacjom rejestrować się do logowania. Użyj klucza API, jeśli jest dostępny.',
   useApiKey: 'Użyj klucza API',
+  useOwnApp: 'Użyj własnej aplikacji OAuth',
+  ownAppBody: 'Utwórz aplikację OAuth w konsoli usługi z tym adresem zwrotnym, a następnie podaj jej dane. Happier zapisze je z logowaniem do konta.',
+  callbackUrl: 'Adres zwrotny',
+  clientId: 'Identyfikator klienta',
+  clientSecret: 'Sekret klienta (opcjonalnie)',
+  editOwnApp: 'Edytuj aplikację OAuth',
+  removeOwnApp: 'Usuń aplikację i ponów automatyczne logowanie',
+  invalidClientTitle: 'Aplikacja OAuth została odrzucona',
+  invalidClientBody: 'Sprawdź identyfikator, sekret i zarejestrowany adres zwrotny, a następnie zaloguj się ponownie.',
+  ownAppNotNeeded: 'Ta usługa akceptuje tożsamość Happier. Własna aplikacja OAuth nie jest potrzebna.',
   callback: {
     finishing: 'Kończenie logowania…',
     closeTitle: 'Zalogowano',
@@ -736,7 +826,7 @@ const pl: McpSignInTranslation = {
     invalidTitle: 'Ten link logowania jest niekompletny',
     invalidBody: 'Rozpocznij logowanie ponownie ze strony serwera.',
     unfinishedTitle: 'Logowanie nie zostało dokończone',
-    unfinishedBody: 'Nic nie zapisano. Rozpocznij ponownie ze strony serwera.',
+    unfinishedBody: 'Wróć do strony serwera i spróbuj zalogować się ponownie.',
     openServers: 'Otwórz serwery MCP',
   },
 };
@@ -796,7 +886,7 @@ const pt: McpSignInTranslation = {
   signInAgain: 'Entrar de novo',
   didNotFinishTitle: ({ name }) => `${name} não concluiu a entrada`,
   didNotFinishBody:
-    'Você recusou ou a página foi fechada. Nada foi salvo.',
+    'O acesso não foi concluído. Tente novamente quando quiser.',
   tryAgain: 'Tentar de novo',
   noMachineTitle: 'A entrada precisa de uma máquina online',
   noMachineBody:
@@ -806,6 +896,16 @@ const pt: McpSignInTranslation = {
   clientRefusedBody:
     'Ele não permite que apps se registrem para entrar. Use uma chave de API, se houver.',
   useApiKey: 'Usar uma chave de API',
+  useOwnApp: 'Usar seu próprio aplicativo OAuth',
+  ownAppBody: 'Crie um aplicativo OAuth no console do serviço com esta URL de retorno e insira os dados. O Happier os salva com a conexão da sua conta.',
+  callbackUrl: 'URL de retorno',
+  clientId: 'ID do cliente',
+  clientSecret: 'Segredo do cliente (opcional)',
+  editOwnApp: 'Editar seu aplicativo OAuth',
+  removeOwnApp: 'Remover aplicativo e tentar o acesso automático novamente',
+  invalidClientTitle: 'O aplicativo OAuth foi recusado',
+  invalidClientBody: 'Confira o ID, o segredo e a URL de retorno registrada e entre novamente.',
+  ownAppNotNeeded: 'Este serviço aceita a identidade do Happier. Seu aplicativo OAuth não é necessário.',
   callback: {
     finishing: 'Concluindo a entrada…',
     closeTitle: 'Entrada concluída',
@@ -820,7 +920,7 @@ const pt: McpSignInTranslation = {
     invalidTitle: 'Este link de entrada está incompleto',
     invalidBody: 'Comece a entrada de novo pela página do servidor.',
     unfinishedTitle: 'A entrada não foi concluída',
-    unfinishedBody: 'Nada foi salvo. Comece de novo pela página do servidor.',
+    unfinishedBody: 'Volte à página do servidor e tente entrar novamente.',
     openServers: 'Abrir servidores MCP',
   },
 };
@@ -879,7 +979,7 @@ const ru: McpSignInTranslation = {
   signInAgain: 'Войти снова',
   didNotFinishTitle: ({ name }) => `${name} не завершил вход`,
   didNotFinishBody:
-    'Вы отказались или страница была закрыта. Ничего не сохранено.',
+    'Вход не завершён. Повторите попытку, когда будете готовы.',
   tryAgain: 'Повторить',
   noMachineTitle: 'Для входа нужна машина в сети',
   noMachineBody:
@@ -888,6 +988,16 @@ const ru: McpSignInTranslation = {
   clientRefusedBody:
     'Он не позволяет приложениям регистрироваться для входа. Используйте API-ключ, если он есть.',
   useApiKey: 'Использовать API-ключ',
+  useOwnApp: 'Использовать своё OAuth-приложение',
+  ownAppBody: 'Создайте OAuth-приложение в консоли сервиса с этим адресом возврата и введите его данные. Happier сохранит их вместе со входом в ваш аккаунт.',
+  callbackUrl: 'Адрес возврата',
+  clientId: 'ID клиента',
+  clientSecret: 'Секрет клиента (необязательно)',
+  editOwnApp: 'Изменить OAuth-приложение',
+  removeOwnApp: 'Удалить приложение и повторить автоматический вход',
+  invalidClientTitle: 'OAuth-приложение отклонено',
+  invalidClientBody: 'Проверьте ID клиента, секрет и зарегистрированный адрес возврата, затем войдите снова.',
+  ownAppNotNeeded: 'Этот сервис принимает идентификатор Happier. Ваше OAuth-приложение не требуется.',
   callback: {
     finishing: 'Завершение входа…',
     closeTitle: 'Вход выполнен',
@@ -902,7 +1012,7 @@ const ru: McpSignInTranslation = {
     invalidTitle: 'Эта ссылка для входа неполная',
     invalidBody: 'Начните вход заново со страницы сервера.',
     unfinishedTitle: 'Вход не завершён',
-    unfinishedBody: 'Ничего не сохранено. Начните заново со страницы сервера.',
+    unfinishedBody: 'Вернитесь на страницу сервера и попробуйте войти снова.',
     openServers: 'Открыть MCP-серверы',
   },
 };
@@ -955,13 +1065,23 @@ const zhHans: McpSignInTranslation = {
   revokedBody: ({ name }) => `访问权限已在 ${name} 的设置中移除。你的设置会保留。`,
   signInAgain: '重新登录',
   didNotFinishTitle: ({ name }) => `${name} 未完成登录`,
-  didNotFinishBody: '你拒绝了，或页面已关闭。未保存任何内容。',
+  didNotFinishBody: '登录尚未完成。准备好后请重试。',
   tryAgain: '重试',
   noMachineTitle: '登录需要一台在线的机器',
   noMachineBody: '登录由机器为你完成。你的机器目前都不在线。',
   clientRefusedTitle: ({ name }) => `${name} 不允许 Happier 登录`,
   clientRefusedBody: '它不允许应用注册登录。如果提供 API 密钥，请改用 API 密钥。',
   useApiKey: '使用 API 密钥',
+  useOwnApp: '使用自己的 OAuth 应用',
+  ownAppBody: '在服务控制台中使用此回调网址创建 OAuth 应用，然后填写其信息。Happier 会将它与账户登录信息一起保存。',
+  callbackUrl: '回调网址',
+  clientId: '客户端 ID',
+  clientSecret: '客户端密钥（可选）',
+  editOwnApp: '编辑 OAuth 应用',
+  removeOwnApp: '移除应用并重试自动登录',
+  invalidClientTitle: 'OAuth 应用被拒绝',
+  invalidClientBody: '检查客户端 ID、密钥和已注册的回调网址，然后重新登录。',
+  ownAppNotNeeded: '此服务接受 Happier 的应用身份，无需使用自己的 OAuth 应用。',
   callback: {
     finishing: '正在完成登录…',
     closeTitle: '已登录',
@@ -975,7 +1095,7 @@ const zhHans: McpSignInTranslation = {
     invalidTitle: '此登录链接不完整',
     invalidBody: '请从服务器页面重新开始登录。',
     unfinishedTitle: '登录未完成',
-    unfinishedBody: '未保存任何内容。请从服务器页面重新开始。',
+    unfinishedBody: '请返回服务器页面并重新登录。',
     openServers: '打开 MCP 服务器',
   },
 };
@@ -1028,13 +1148,23 @@ const zhHant: McpSignInTranslation = {
   revokedBody: ({ name }) => `存取權限已在 ${name} 的設定中移除。你的設定會保留。`,
   signInAgain: '重新登入',
   didNotFinishTitle: ({ name }) => `${name} 未完成登入`,
-  didNotFinishBody: '你拒絕了，或頁面已關閉。未儲存任何內容。',
+  didNotFinishBody: '登入尚未完成。準備好後請重試。',
   tryAgain: '重試',
   noMachineTitle: '登入需要一台上線的機器',
   noMachineBody: '登入由機器為你完成。你的機器目前都沒有上線。',
   clientRefusedTitle: ({ name }) => `${name} 不允許 Happier 登入`,
   clientRefusedBody: '它不允許應用程式註冊登入。如果提供 API 金鑰，請改用 API 金鑰。',
   useApiKey: '使用 API 金鑰',
+  useOwnApp: '使用自己的 OAuth 應用程式',
+  ownAppBody: '在服務控制台中使用此回呼網址建立 OAuth 應用程式，然後填寫其資訊。Happier 會將它與帳戶登入資訊一起儲存。',
+  callbackUrl: '回呼網址',
+  clientId: '用戶端 ID',
+  clientSecret: '用戶端密鑰（選填）',
+  editOwnApp: '編輯 OAuth 應用程式',
+  removeOwnApp: '移除應用程式並重試自動登入',
+  invalidClientTitle: 'OAuth 應用程式遭到拒絕',
+  invalidClientBody: '檢查用戶端 ID、密鑰及已註冊的回呼網址，然後重新登入。',
+  ownAppNotNeeded: '此服務接受 Happier 的應用程式身分，無須使用自己的 OAuth 應用程式。',
   callback: {
     finishing: '正在完成登入…',
     closeTitle: '已登入',
@@ -1048,7 +1178,7 @@ const zhHant: McpSignInTranslation = {
     invalidTitle: '此登入連結不完整',
     invalidBody: '請從伺服器頁面重新開始登入。',
     unfinishedTitle: '登入未完成',
-    unfinishedBody: '未儲存任何內容。請從伺服器頁面重新開始。',
+    unfinishedBody: '請返回伺服器頁面並重新登入。',
     openServers: '開啟 MCP 伺服器',
   },
 };
