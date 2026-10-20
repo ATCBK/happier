@@ -1,6 +1,11 @@
 import * as React from 'react';
 import { Platform, Pressable, View, type ViewStyle } from 'react-native';
 import type { HappierStyleProp } from '../../portableTypes.js';
+import { useOptionalHappierUiTheme } from '../../../environment/context.js';
+
+/** The seam's ink while pointing at the handle, and while dragging it (lab ade-shell SH2/SH3). */
+const SEAM_HOVER = { widthPx: 1, opacity: 0.28 } as const;
+const SEAM_ACTIVE = { widthPx: 2, opacity: 0.46 } as const;
 
 export function resolveResizablePaneNativeTouchTargetSize(): number | null {
     if (Platform.OS === 'web') return null;
@@ -17,6 +22,12 @@ export const HappierResizeHandle = React.memo((props: Readonly<{
     showIndicator?: boolean;
     indicatorColor?: string;
     indicatorOpacity?: number;
+    /**
+     * While the size is being dragged (`useResizableSize().dragging`): the seam draws in ink at full
+     * weight. Pointing at the handle draws it lighter. The ink is the theme's text colour unless given.
+     */
+    active?: boolean;
+    inkColor?: string;
     /** Opaque web/native responder props returned by useResizableSize. */
     interactionProps?: Readonly<Record<string, unknown>>;
     accessibilityHandleProps?: Readonly<{
@@ -31,6 +42,12 @@ export const HappierResizeHandle = React.memo((props: Readonly<{
     resetRef.current = onDoubleClick;
     React.useEffect(() => {
         if (Platform.OS !== 'web') return;
+        // CSS-only interaction styles belong to the real web host, not native ViewStyle.
+        const host = handleRef.current;
+        if (typeof HTMLElement !== 'undefined' && host instanceof HTMLElement) {
+            host.style.userSelect = 'none';
+            host.style.touchAction = 'none';
+        }
         const target = handleRef.current as unknown as Partial<Pick<EventTarget, 'addEventListener' | 'removeEventListener'>> | null;
         if (!target?.addEventListener || !target.removeEventListener) return;
         const reset = () => { if (typeof resetRef.current === 'function') resetRef.current(); };
@@ -38,6 +55,11 @@ export const HappierResizeHandle = React.memo((props: Readonly<{
         return () => target.removeEventListener?.('dblclick', reset);
     }, []);
     const showIndicator = props.showIndicator !== false && typeof props.indicatorColor === 'string';
+    const theme = useOptionalHappierUiTheme();
+    const inkColor = props.inkColor ?? theme?.colors.text ?? null;
+    const [hovered, setHovered] = React.useState(false);
+    const seam = props.active ? SEAM_ACTIVE : hovered ? SEAM_HOVER : null;
+    const seamAlign = props.edge === 'start' ? 'flex-start' : props.edge === 'end' ? 'flex-end' : 'center';
     const nativeTouchTargetSize = resolveResizablePaneNativeTouchTargetSize();
     const visualHandleSize = props.axis === 'x' ? 10 : 18;
     const inwardExpansion = Math.max(0, (nativeTouchTargetSize ?? visualHandleSize) - visualHandleSize);
@@ -67,21 +89,34 @@ export const HappierResizeHandle = React.memo((props: Readonly<{
             {...props.accessibilityHandleProps}
             {...resolveDividerValueProps(props.accessibilityHandleProps?.accessibilityValue, props.labels.value)}
             hitSlop={nativeHitSlop}
+            onHoverIn={() => setHovered(true)}
+            onHoverOut={() => setHovered(false)}
             style={[
                 {
                     alignItems: 'center',
                     justifyContent: 'center',
                 },
-                // RNW supports these CSS properties; keep the native ViewStyle boundary closed.
-                Platform.OS === 'web' ? ({
-                    cursor: props.axis === 'x' ? 'col-resize' : 'row-resize',
-                    userSelect: 'none',
-                    touchAction: 'none',
-                } as object) : null,
+                // Use the shared RN/RNW cursor vocabulary; resize gestures still own the axis.
+                Platform.OS === 'web' ? {
+                    cursor: 'pointer',
+                } : null,
                 props.style,
                 centeredNativeTargetStyle,
             ]}
         >
+            {seam && inkColor && !showIndicator ? (
+                // The seam sits on the edge it resizes, over the columns' own hairline.
+                <View
+                    pointerEvents="none"
+                    style={props.axis === 'x'
+                        ? { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, alignItems: seamAlign }
+                        : { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: seamAlign }}
+                >
+                    <View style={props.axis === 'x'
+                        ? { width: seam.widthPx, height: '100%', backgroundColor: inkColor, opacity: seam.opacity }
+                        : { height: seam.widthPx, width: '100%', backgroundColor: inkColor, opacity: seam.opacity }} />
+                </View>
+            ) : null}
             {showIndicator ? (
                 <View
                     style={props.axis === 'x'

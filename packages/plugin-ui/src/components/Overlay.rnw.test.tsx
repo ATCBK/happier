@@ -240,6 +240,30 @@ describe('controlled overlay presentation', () => {
     mount.unmount();
   });
 
+  it('draws a task status trigger as the status glyph: alone as an icon button, or leading a labelled control', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <Menu open={false} onOpenChange={() => undefined} trigger="In Review" triggerTaskStatus="started"
+          triggerAccessibilityLabel="Change status, In Review" testID="row" items={[{ id: 'done', label: 'Done' }]} onSelect={() => undefined} />
+        <Menu open={false} onOpenChange={() => undefined} trigger="In Review" triggerTaskStatus="started" triggerAppearance="control"
+          triggerAccessibilityLabel="Change status, In Review" testID="detail" items={[{ id: 'done', label: 'Done' }]} onSelect={() => undefined} />
+      </PluginUiProvider>,
+    );
+    const row = mount.container.querySelector<HTMLElement>('[data-testid="row"]')!;
+    // The row's control is the glyph alone; its name says the operation and the current status.
+    expect(row.getAttribute('aria-label')).toBe('Change status, In Review');
+    expect(row.querySelector('svg')).not.toBeNull();
+    expect(row.textContent).toBe('');
+    const detail = mount.container.querySelector<HTMLElement>('[data-testid="detail"]')!;
+    const glyph = detail.querySelector('svg')!;
+    expect(glyph).not.toBeNull();
+    expect(detail.textContent).toBe('In Review');
+    const label = Array.from(detail.querySelectorAll<HTMLElement>('*')).find((node) => node.textContent === 'In Review' && node.children.length === 0)!;
+    expect(glyph.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    mount.unmount();
+  });
+
   it('draws a control trigger as the small secondary button on the desktop control row', () => {
     const context = createSurfaceContext();
     const host: PluginUiPresentationHost = {

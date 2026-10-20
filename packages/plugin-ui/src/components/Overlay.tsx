@@ -37,6 +37,7 @@ import { resolveHappierTextStepStyle } from '../presentation/layout/pageText.js'
 import { resolveHappierIconSize } from '../presentation/content/Icon.js';
 import { useButtonFace } from './Button.js';
 import { Icon, PluginUiIconGlyph, type IconName } from './Icon.js';
+import { TaskStatusGlyph, type TaskStatusCategory } from './TaskStatusGlyph.js';
 import { OverlayFieldTriggerContext } from './overlayFieldTrigger.js';
 import { Surface } from './Surface.js';
 import type { HappierFloatingRole } from '../presentation/layout/Surface.js';
@@ -81,6 +82,13 @@ export type PopoverProps = Readonly<{
    * leading icon does ("+ Link a PR or issue"). `triggerAccessibilityLabel` names the control either way.
    */
   triggerIcon?: IconName;
+  /**
+   * Draws the trigger's glyph as a task's status (`TaskStatusGlyph`) instead of `triggerIcon`: alone as an icon
+   * button with the default `text` appearance (a task row's status, whose menu is the source's workflow), or
+   * leading the words of a labelled appearance (a detail's Status button: glyph + "In Review"). The glyph is
+   * decoration; `triggerAccessibilityLabel` names the control ("Change status, In Review").
+   */
+  triggerTaskStatus?: TaskStatusCategory;
   triggerAccessibilityLabel: string;
   /** Accessible name for the non-menu dialog surface; defaults to the trigger label. */
   contentAccessibilityLabel?: string;
@@ -147,6 +155,7 @@ function PopoverPresentation({
   triggerAppearance = 'text',
   triggerDisclosure = false,
   triggerIcon,
+  triggerTaskStatus,
   triggerAccessibilityLabel,
   contentAccessibilityLabel: requestedContentAccessibilityLabel,
   floatingRole,
@@ -185,7 +194,8 @@ function PopoverPresentation({
   }, [onOpenChange]);
   const contentAccessibilityLabel = requestedContentAccessibilityLabel ?? triggerAccessibilityLabel;
   // Only the plain-text and well appearances turn a glyph into an icon button; a labelled one keeps its words.
-  const iconOnly = triggerIcon !== undefined && (triggerAppearance === 'text' || triggerAppearance === 'well');
+  const hasGlyph = triggerIcon !== undefined || triggerTaskStatus !== undefined;
+  const iconOnly = hasGlyph && (triggerAppearance === 'text' || triggerAppearance === 'well');
   const well = iconOnly && triggerAppearance === 'well';
   // A labelled trigger is a Button's face, glyph and all: the view's primary, or the small secondary
   // of a toolbar's control row. Both hooks run on every render, whichever appearance draws.
@@ -299,7 +309,9 @@ function PopoverPresentation({
           );
         } : iconOnly ? (state) => (
           <View style={iconChrome(state).surface}>
-            <Icon name={triggerIcon} size="medium" tone="neutral" />
+            {triggerTaskStatus !== undefined
+              ? <TaskStatusGlyph category={triggerTaskStatus} />
+              : triggerIcon === undefined ? null : <Icon name={triggerIcon} size="medium" tone="neutral" />}
             {well && triggerCount !== undefined && triggerCount > 0 ? (
               <HappierBadge
                 shape="capsule"
@@ -317,9 +329,10 @@ function PopoverPresentation({
           </View>
         ) : buttonFace ? (state) => buttonFace.renderContent(state, {
           // The glyph in the button's own ink, at a Button's leading-icon size.
-          ...(triggerIcon === undefined ? {} : {
-            icon: <PluginUiIconGlyph name={triggerIcon} size={resolveHappierIconSize('small')} color={buttonFace.foreground} />,
-          }),
+          ...(triggerTaskStatus !== undefined ? { icon: <TaskStatusGlyph category={triggerTaskStatus} /> }
+            : triggerIcon === undefined ? {} : {
+              icon: <PluginUiIconGlyph name={triggerIcon} size={resolveHappierIconSize('small')} color={buttonFace.foreground} />,
+            }),
           children: trigger,
         }) : triggerDisclosure && !iconOnly ? (
           <View style={disclosureTriggerStyle}>

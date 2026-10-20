@@ -88,7 +88,9 @@ takes these actions back into its own bar, so choosing another machine stays usa
 a render the search and the selection control share one row in the pane. A table that scrolls with its page is a
 sheet with an edge; a Collection that is the page's body lies flat under the page header. An empty table cell
 reads "—". A dense group band ends with its one trailing fact: its action when it has one, otherwise what its rows
-share. While the first window loads a table
+share. `Collection.collapsedGroups` (caller-owned keys) draws a list or table group as its band alone: title, the
+count of the rows it holds and what they share, rows neither drawn nor focusable; the caller opens it, usually from
+the group's `groupAction` (the Tasks page's "Done 6 · This week · Show"). While the first window loads a table
 keeps its column titles and enclosure and its skeleton rows fill the rows region from the top; in every
 presentation the `empty` slot fills the rows region under the search header (`List` yields an empty scroller's
 region to the slot).

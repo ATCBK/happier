@@ -1009,6 +1009,11 @@ trigger, for a title that opens a menu (a table's column header); labelled
 appearances are buttons and ignore it. `triggerAppearance="well"` with a
 `triggerIcon` draws the glyph in a round resting fill, for buttons that are the
 object on their row (the phone toolbar's Filters and ⋯ beside the search).
+`triggerTaskStatus` draws a task's status (`TaskStatusGlyph`: backlog, to do, in
+progress, done, canceled) in the glyph's place: alone as the trigger of a task
+row's status menu, or leading the words of a detail's Status button. The glyph is
+decoration, so name the control in `triggerAccessibilityLabel` ("Change status, In
+Review").
 
 A `Popover`, `Dropdown` or `Menu` opened from anything but a field-box `Select`
 sizes to its content: the trigger's width is only its minimum, so a narrow "Views"

@@ -31,6 +31,8 @@ export type ResizableSizeInput = Readonly<{
 
 export type ResizableSizeResult = Readonly<{
     effectiveSizePx: number;
+    /** A drag is in progress (the handle draws its seam in full ink). */
+    dragging: boolean;
     canResize: boolean;
     /** Opaque platform responder props, consumed by HappierResizeHandle. */
     panHandlers: Readonly<Record<string, unknown>>;
@@ -380,6 +382,7 @@ export function useResizableSize(input: ResizableSizeInput): ResizableSizeResult
 
     return {
         effectiveSizePx,
+        dragging: dragSizePx !== null,
         canResize,
         panHandlers: { ...panResponder.panHandlers },
         webHandleProps: {

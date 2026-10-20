@@ -373,6 +373,7 @@ type HarnessOptions = Readonly<{
   groupAction?: (
     groupKey: string,
   ) => Readonly<{ label: string; onPress: () => void }> | null;
+  collapsedGroups?: ReadonlySet<string>;
   detailHeader?: (key: string) => Readonly<{
     title: string;
     subtitle?: string;
@@ -434,6 +435,9 @@ function Harness(props: HarnessProps): ReactElement {
       {...(props.groupAction === undefined
         ? {}
         : { groupAction: props.groupAction })}
+      {...(props.collapsedGroups === undefined
+        ? {}
+        : { collapsedGroups: props.collapsedGroups })}
       minListWidth={240}
       minDetailWidth={400}
       preferredListRatio={0.3}
@@ -2898,6 +2902,21 @@ describe('a page-sized collection (scroll page)', () => {
       view.unmount();
     }
     expect(pressed).toEqual(['needs', 'needs']);
+  });
+});
+
+describe('collapsed groups', () => {
+  it('draws a collapsed group as its band alone, still counting its rows, and keeps the other groups open', () => {
+    const view = mount({ collapsedGroups: new Set(['rest']) });
+    view.measure(1440);
+    expect(view.query('row:a')).not.toBeNull();
+    // The band stays, with the count of the rows it puts away; its rows are not drawn or focusable.
+    expect(view.query('row:c')).toBeNull();
+    const title = Array.from(document.querySelectorAll<HTMLElement>('*'))
+      .find((node) => node.children.length === 0 && node.textContent === 'Everything else');
+    expect(title, document.body.textContent ?? '').toBeDefined();
+    expect(title!.parentElement!.textContent).toBe('Everything else1');
+    view.unmount();
   });
 });
 

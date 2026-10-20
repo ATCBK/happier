@@ -302,6 +302,11 @@ export type ListSectionData<Item> = Readonly<{
   count?: number;
   /** What the group's rows share ("You act next"), quiet at the header's end. */
   description?: string;
+  /**
+   * The group is put away by its owner: its band stays, with `count` and its header action (the way to open it),
+   * while `data` is empty. Only a collapsed section survives having no rows.
+   */
+  collapsed?: boolean;
   data: readonly Item[];
 }>;
 
@@ -886,13 +891,20 @@ function VirtualizedList<Item>(
     );
     // The Collection model's narrowing rule (see the comment above), over each
     // section's matching rows.
-    return narrowHappierCollectionGroups(
+    const narrowed = narrowHappierCollectionGroups(
       narrowRows === undefined
         ? authorSections
         : authorSections.map((section) => ({ ...section, data: narrowRows(section.data) })),
       (section) => section.data,
       (section, data) => ({ ...section, data }),
     );
+    // A collapsed group is its band on purpose: it keeps its place, and its header action opens it.
+    if (!authorSections.some((section) => section.collapsed === true)) return narrowed;
+    const byKey = new Map(narrowed.map((section) => [section.key, section] as const));
+    return authorSections.flatMap((section) => {
+      const shown = byKey.get(section.key);
+      return shown !== undefined ? [shown] : section.collapsed === true ? [section] : [];
+    });
   }, [authorSections, narrowRows]);
   const virtualizedSections = useMemo<
     readonly VirtualizedListSectionData<Item>[]

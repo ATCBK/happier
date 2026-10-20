@@ -384,6 +384,12 @@ export type CollectionProps<Item> = HappierCollectionRailSizingProps & Readonly<
    * it focused), by group key; `null` where the group has none. Drawn on grid shelves and on list and table groups.
    */
   groupAction?: (groupKey: string) => CollectionGroupAction | null;
+  /**
+   * Groups drawn as their band alone in the list and table, by group key: the title, the count of the rows it
+   * holds and what they share ("Done 6 · This week"), with the rows put away (not drawn, not focusable). The
+   * caller owns which groups are collapsed and offers the way to open one, usually the group's `groupAction`.
+   */
+  collapsedGroups?: ReadonlySet<string>;
   /** Sortable field titles in the table (`CollectionField.sortable`); the Collection never reorders. */
   sort?: CollectionSort;
   /** Totals rows after the last group, aligned under the field columns (two columns in the list). */
@@ -1689,13 +1695,16 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   // ---- the rows each geometry draws: a nested table its open branches, the list its owners ----
   const openBranches = model.openBranches;
   const nestedTable = tree !== null && rowGeometry === 'table';
-  const drawnSections = useMemo<readonly HappierCollectionSection<Item>[]>(() => (tree === null ? model.sections
-    : model.sections.map((section) => ({
-        ...section,
-        items: section.items.filter((item) => (nestedTable
-          ? resolveHappierCollectionTreeShown(tree, openBranches, model.keyOf(item))
-          : (tree.get(model.keyOf(item))?.depth ?? 0) === 0)),
-      }))), [model.keyOf, model.sections, nestedTable, openBranches, tree]);
+  const collapsedGroups = props.collapsedGroups;
+  const drawnSections = useMemo<readonly HappierCollectionSection<Item>[]>(() => model.sections.map((section) => {
+    if (section.group !== null && collapsedGroups?.has(section.group.key) === true) return { ...section, items: [] };
+    return tree === null ? section : {
+      ...section,
+      items: section.items.filter((item) => (nestedTable
+        ? resolveHappierCollectionTreeShown(tree, openBranches, model.keyOf(item))
+        : (tree.get(model.keyOf(item))?.depth ?? 0) === 0)),
+    };
+  }), [collapsedGroups, model.keyOf, model.sections, nestedTable, openBranches, tree]);
   const canPeek = useCallback((key: string) => expandable && drawnSections.some(section =>
     section.items.some(item => model.keyOf(item) === key && anatomy.peek?.(item) != null)),
   [anatomy.peek, drawnSections, expandable, model.keyOf]);
@@ -1728,15 +1737,17 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
         title: group?.title ?? '',
         // A page section names its rows; a dense list's caption band counts them (a nested group every item
         // it holds, open or not, but not the owners shown only to place a match).
-        ...(pageSections ? {} : { count: tree === null ? section.items.length
+        // A collapsed group counts the rows it puts away.
+        ...(pageSections ? {} : { count: tree === null ? (model.sections[index]?.items.length ?? section.items.length)
           : (model.sections[index]?.items ?? []).filter((member) => tree.get(model.keyOf(member))?.context !== true).length }),
         ...(group?.description === undefined ? {} : { description: group.description }),
+        ...(group !== null && collapsedGroups?.has(group.key) === true ? { collapsed: true } : {}),
         data,
       };
     });
     previousCells.current = nextCells;
     return nextSections;
-  }, [closingPeeks, drawnSections, expandable, expanded, ghostPeeks, model.keyOf, model.sections, pageSections, tree]);
+  }, [closingPeeks, collapsedGroups, drawnSections, expandable, expanded, ghostPeeks, model.keyOf, model.sections, pageSections, tree]);
   const dividedKeys = useMemo(() => (pageSections
     ? new Set(drawnSections.flatMap((section) => section.items.slice(0, -1).map(model.keyOf)))
     : null), [drawnSections, model.keyOf, pageSections]);
@@ -2377,6 +2388,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
               interactionProps={Platform.OS === 'web' ? railResize.webHandleProps : railResize.panHandlers}
               accessibilityHandleProps={railResize.accessibilityHandleProps}
               showIndicator={false}
+              active={railResize.dragging}
               style={{ position: 'absolute', left: (size?.width ?? 0) * listRatio - 10, top: 0, bottom: 0, width: 10, zIndex: 1000 }}
             /> : null}
             <driver.AnimatedView

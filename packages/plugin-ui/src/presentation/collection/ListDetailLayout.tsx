@@ -106,6 +106,7 @@ export function HappierListDetailLayout({
             interactionProps={Platform.OS === 'web' ? resize.webHandleProps : resize.panHandlers}
             accessibilityHandleProps={resize.accessibilityHandleProps}
             showIndicator={false}
+            active={resize.dragging}
             style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 10, zIndex: 1000 }}
           /> : null}
         </View>
