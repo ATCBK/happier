@@ -1,10 +1,10 @@
-import { HAPPIER_FRESHNESS_LINE_METRICS, HappierFreshnessLine, HappierPressable, resolveHappierFreshnessText } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FRESHNESS_LINE_METRICS, HappierFreshnessClauses, HappierFreshnessLine, HappierPressable, resolveHappierFreshnessText } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { Platform } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
-import { Icon } from '@/components/ui/icons/Icon';
+import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
@@ -15,6 +15,9 @@ import { getPreferredLanguage, t } from '@/text';
 import type { SurfaceStateAction } from './SurfaceStateCard';
 
 const LINK_MIN_TARGET_PX = resolveMinimumInteractiveTargetSize(Platform.OS);
+
+/** A recovery on the line; `primary` marks the one forward step when the line offers more than one. */
+export type SurfaceFreshnessAction = SurfaceStateAction & Readonly<{ emphasis?: 'primary' }>;
 
 const SurfaceFreshnessOnSheetContext = React.createContext(false);
 
@@ -41,7 +44,16 @@ export function SurfaceFreshnessLine(props: Readonly<{
     /** `warning` tints the strip when retained work needs attention. */
     tone?: 'neutral' | 'warning';
     /** The one recovery (Retry). */
-    action?: SurfaceStateAction;
+    action?: SurfaceFreshnessAction;
+    /**
+     * A line that resolves a decision offers its few choices together (Compare · Use mine · Use theirs).
+     * Replaces `action`; each choice stays an inline link on the line, never a button row.
+     */
+    actions?: readonly SurfaceFreshnessAction[];
+    /** The part of `reason` that names what happened; drawn in the stronger weight. */
+    emphasis?: string;
+    /** The line's own mark when the cause has one (offline, back online); defaults to the retained-content glyph. */
+    glyph?: IconName;
     animationEnabled?: boolean;
     /**
      * `chip`: the same facts as one inline status at a header's or tab bar's end (resources lab `.rs-live`):
@@ -57,12 +69,15 @@ export function SurfaceFreshnessLine(props: Readonly<{
     const { theme } = useUnistyles();
     const onSheet = React.useContext(SurfaceFreshnessOnSheetContext);
     const chip = props.presentation === 'chip';
-    const text = resolveHappierFreshnessText({
+    const actions = props.actions ?? (props.action ? [props.action] : []);
+    const parts = resolveHappierFreshnessText({
         asOf: props.asOf,
         reason: props.reason,
         formatAsOf: (time) => t('surfaceState.asOf', { time }),
         locale: getPreferredLanguage(),
+        parts: true,
     });
+    const text = parts.text;
     return (
         <HappierFreshnessLine
             testID={props.testID}
@@ -90,43 +105,88 @@ export function SurfaceFreshnessLine(props: Readonly<{
                 />
             ) : (
                 <Icon
-                    name={props.tone === 'warning' ? 'warning' : chip ? 'clock' : 'arrow-clockwise'}
+                    name={props.glyph ?? (props.tone === 'warning' ? 'warning' : chip ? 'clock' : 'arrow-clockwise')}
                     size={HAPPIER_FRESHNESS_LINE_METRICS.glyphPx}
                     color={props.tone === 'warning' ? theme.colors.state.warning.foreground : theme.colors.text.tertiary}
                 />
             )}
-            action={props.action ? (
-                <>
+            action={actions.length > 0 ? (
+                <View style={stylesheet.actions}>
                 {/* A chip reads as one phrase, "As of 10:42 · Retry" (lab `.rs-live`); the strip ends with its link instead. */}
                 {chip && text ? <Text style={stylesheet.text} aria-hidden accessibilityElementsHidden importantForAccessibility="no">·</Text> : null}
-                <HappierPressable
-                    testID={props.action.testID ?? (props.testID ? `${props.testID}-action` : undefined)}
-                    accessibilityRole="button"
-                    accessibilityLabel={props.action.label}
-                    hitSlop={chip ? 8 : 6}
-                    disabled={props.action.disabled}
-                    busy={props.action.busy}
-                    onPress={props.action.onPress}
-                    style={({ focused }) => [stylesheet.link, chip ? stylesheet.chipLink : null, focusRingStyle({ focused, color: theme.colors.border.focus })]}
-                >
-                    <Text style={stylesheet.linkLabel}>{props.action.label}</Text>
-                </HappierPressable>
-                </>
+                {actions.map((action, index) => (
+                    <HappierPressable
+                        key={action.testID ?? action.label}
+                        testID={action.testID ?? (props.testID ? `${props.testID}-action${index === 0 ? '' : `-${index}`}` : undefined)}
+                        accessibilityRole="button"
+                        accessibilityLabel={action.label}
+                        hitSlop={chip ? 8 : 6}
+                        disabled={action.disabled}
+                        busy={action.busy}
+                        onPress={action.onPress}
+                        style={({ focused }) => [stylesheet.link, chip ? stylesheet.chipLink : null, focusRingStyle({ focused, color: theme.colors.border.focus })]}
+                    >
+                        <Text style={[stylesheet.linkLabel, action.emphasis === 'primary' ? stylesheet.primaryLabel : null,
+                            action.disabled ? stylesheet.disabledLabel : null]}>{action.label}</Text>
+                    </HappierPressable>
+                ))}
+                </View>
             ) : null}
         >
-            <Text testID={props.testID ? `${props.testID}-text` : undefined} style={stylesheet.text} numberOfLines={chip ? 1 : 2}>
-                {text}
-            </Text>
+            {chip || parts.asOf === null ? (
+                <Text testID={props.testID ? `${props.testID}-text` : undefined} style={stylesheet.text} numberOfLines={chip ? 1 : 2}>
+                    {renderEmphasis(text, props.emphasis)}
+                </Text>
+            ) : (
+                // One block, two clauses: on one line when they fit, the time over the reason when not (L4, FB1o).
+                <View testID={props.testID ? `${props.testID}-text` : undefined} accessible accessibilityLabel={text}>
+                    <HappierFreshnessClauses
+                        asOf={<Text style={stylesheet.text} numberOfLines={1}>{parts.asOf}</Text>}
+                        reason={parts.reason ? <Text style={stylesheet.text} numberOfLines={2}>{renderEmphasis(parts.reason, props.emphasis)}</Text> : null}
+                        separator={(hidden) => (
+                            <Text style={[stylesheet.text, hidden ? stylesheet.hiddenSeparator : null]} aria-hidden
+                                accessibilityElementsHidden importantForAccessibility="no">{' · '}</Text>
+                        )}
+                    />
+                </View>
+            )}
         </HappierFreshnessLine>
     );
 }
 
+function renderEmphasis(text: string, emphasis: string | undefined): React.ReactNode {
+    const at = emphasis ? text.indexOf(emphasis) : -1;
+    if (!emphasis || at < 0) return text;
+    return <>{text.slice(0, at)}<Text style={stylesheet.emphasis}>{emphasis}</Text>{text.slice(at + emphasis.length)}</>;
+}
+
 const stylesheet = StyleSheet.create((theme) => ({
+    actions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        columnGap: theme.space.s8,
+    },
+    emphasis: {
+        ...Typography.default('semiBold'),
+        color: theme.colors.text.primary,
+    },
+    // The forward step among several choices is the link colour; the others stay ink.
+    primaryLabel: {
+        color: theme.colors.text.link,
+    },
+    disabledLabel: {
+        color: theme.colors.text.tertiary,
+    },
     text: {
         ...Typography.default(),
         ...HAPPIER_FRESHNESS_LINE_METRICS.text,
         color: theme.colors.text.secondary,
         fontVariant: ['tabular-nums'],
+    },
+    // Hidden, not removed: the dot keeps its width so the clauses never re-flow when it goes.
+    hiddenSeparator: {
+        opacity: 0,
     },
     link: {
         minHeight: Math.min(LINK_MIN_TARGET_PX, HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx),
