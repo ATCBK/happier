@@ -9553,6 +9553,7 @@ const DISCUSSION_ACTION_SPECS_V1 = Object.freeze(defineActionSpecs([
     title: 'Reply in a discussion',
     description: 'Reply to one committed message in this Discussion through the same admitted message writer. Replying does not grant source access or start an agent turn.',
     safety: 'danger', sideEffectClass: 'danger', placements: [],
+    toolExposure: { agent: 'direct' },
     bindings: { mcpToolName: 'discussion_reply', voiceClientToolName: 'discussion_reply' },
     serverTransport: { method: 'POST', path: DISCUSSION_HTTP_PATHS_V1.messages },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
