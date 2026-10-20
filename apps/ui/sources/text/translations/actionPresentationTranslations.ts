@@ -9,6 +9,7 @@ const en = {
         reset: ({ name, kind }) => `Remove your changes to “${name}” (${kind}) and use its original settings.`,
     }),
     titles: {
+        workspace_files_link_get: 'Get workspace file link',
         code_definition_get: 'Find definition by name',
         code_references_list: 'Find text references',
         file_editor_save: 'Save open file edits',

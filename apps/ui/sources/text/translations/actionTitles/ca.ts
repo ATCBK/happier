@@ -1,6 +1,7 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ca = {
+    workspace_files_link_get: "Obtén l’enllaç del fitxer de l’espai de treball",
     code_definition_get: "Cerca la definició pel nom",
     code_references_list: "Cerca referències de text",
     file_editor_save: 'Desa els canvis del fitxer obert',

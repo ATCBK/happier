@@ -1,6 +1,7 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const it = {
+    workspace_files_link_get: "Ottieni il collegamento al file dello spazio di lavoro",
     code_definition_get: "Cerca la definizione per nome",
     code_references_list: "Cerca riferimenti testuali",
     file_editor_save: 'Salva le modifiche del file aperto',
