@@ -239,7 +239,7 @@ type BrokerPresentationChoices = Readonly<{
     eligibleTargets: readonly Readonly<{
         machineId: string;
         displayName: null;
-        availability: "offline" | "update_required";
+        availability: "not_verified" | "update_required";
     }>[];
     eligiblePools: readonly Readonly<{
         poolId: string;
@@ -272,7 +272,7 @@ async function projectTeamCredentialBrokerPresentationsInTx(tx: Tx, accountIds: 
         }),
     ]);
     const result = new Map<string, {
-        eligibleTargets: { machineId: string; displayName: null; availability: "offline" | "update_required" }[];
+        eligibleTargets: { machineId: string; displayName: null; availability: "not_verified" | "update_required" }[];
         eligiblePools: { poolId: string; displayName: string; availability: "not_verified"; availableMachineCount: null }[];
     }>();
     for (const accountId of uniqueAccountIds) {
@@ -286,7 +286,7 @@ async function projectTeamCredentialBrokerPresentationsInTx(tx: Tx, accountIds: 
             return eligibility === 'ineligible' ? null : {
                 machineId: machine.id,
                 displayName: null,
-                availability: eligibility === 'eligible' ? 'offline' as const : 'update_required' as const,
+                availability: eligibility === 'eligible' ? 'not_verified' as const : 'update_required' as const,
             };
         })();
         if (projected) presentation.eligibleTargets.push(projected);
@@ -334,14 +334,14 @@ async function resolveProjectionStatusInTx(
     if (placement.placement.kind === "machine_pool") {
         if (brokerPresentation) {
             return brokerPresentation.eligiblePools.some(pool => pool.poolId === row.brokerPoolId)
-                ? { readiness: { kind: "broker_unavailable" } as const, recoveryAction: "retry" as const }
+                ? { readiness: { kind: "broker_unavailable", reason: "projection_unavailable" } as const, recoveryAction: "retry" as const }
                 : { readiness: { kind: "broker_unavailable" } as const, recoveryAction: "select_broker" as const };
         }
         const pool = await tx.machinePool.findFirst({
             where: { id: placement.placement.poolId, accountId: row.custodianAccountId }, select: { id: true },
         });
         return pool
-            ? { readiness: { kind: "broker_unavailable" } as const, recoveryAction: "retry" as const }
+            ? { readiness: { kind: "broker_unavailable", reason: "projection_unavailable" } as const, recoveryAction: "retry" as const }
             : { readiness: { kind: "broker_unavailable" } as const, recoveryAction: "select_broker" as const };
     }
     if (!row.brokerMachineId) {
@@ -353,7 +353,7 @@ async function resolveProjectionStatusInTx(
         if (selected.availability === "update_required") {
             return { readiness: { kind: "update_required" } as const, recoveryAction: "update_required" as const };
         }
-        return { readiness: { kind: "broker_unavailable" } as const, recoveryAction: "retry" as const };
+        return { readiness: { kind: "broker_unavailable", reason: "projection_unavailable" } as const, recoveryAction: "retry" as const };
     }
     const selected = await tx.machine.findFirst({
         where: { id: row.brokerMachineId, accountId: row.custodianAccountId, revokedAt: null, replacedByMachineId: null },
@@ -369,7 +369,7 @@ async function resolveProjectionStatusInTx(
     if (classifyTeamCredentialBrokerMachineEligibility(selected) === "update_required") {
         return { readiness: { kind: "update_required" } as const, recoveryAction: "update_required" as const };
     }
-    return { readiness: { kind: "broker_unavailable" } as const, recoveryAction: "retry" as const };
+    return { readiness: { kind: "broker_unavailable", reason: "projection_unavailable" } as const, recoveryAction: "retry" as const };
 }
 
 type ResourceAdministrationAuthority = Readonly<{

@@ -855,7 +855,7 @@ function finalizePreparedBrokerOpen(
         allowedModelIds: prepared.allowedModelIds,
         source: prepared.source,
         deliveryMode: 'brokered',
-    }).find(candidate => (
+    }).models.find(candidate => (
         candidate.selection.modelId === prepared.request.modelId
         && candidate.sourceRevision === prepared.request.sourceRevision
         && pluginJsonValuesEqual(candidate.application, prepared.request.application)

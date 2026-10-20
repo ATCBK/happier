@@ -509,13 +509,13 @@ export async function resolveRunnerCredentialSelection(input: Readonly<{
         source: before.value.source,
         deliveryMode: "brokered",
     });
-    const selected = candidates.find(candidate => (
+    const selected = candidates.models.find(candidate => (
         candidate.selection.modelId === request.data.selection.modelId
         && candidate.sourceRevision === request.data.sourceRevision
         && pluginJsonValuesEqual(candidate.application, request.data.application)
     ));
     if (!selected) {
-        const sourceStillPresent = candidates.some(candidate => candidate.sourceRevision === request.data.sourceRevision);
+        const sourceStillPresent = candidates.models.some(candidate => candidate.sourceRevision === request.data.sourceRevision);
         return { v: 1, status: "unavailable", reason: sourceStillPresent ? "model_unavailable" : "source_changed" };
     }
     const after = await readCurrentSelection({ ...input, ...selectedBrokerScope, request: request.data });

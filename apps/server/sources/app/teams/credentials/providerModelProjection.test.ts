@@ -100,20 +100,45 @@ function response(fingerprint: typeof source.connectionSecurityFingerprint = sou
 }
 
 describe("projectTeamCredentialProviderModels", () => {
+    it("keeps a malformed or denied source projection distinct from a current empty catalog", () => {
+        const input = {
+            resourceId: "resource-1", teamId: "team-1", resourceRevision: 7,
+            agentTargetKey: application.agentTargetKey, application, source,
+            allowedModelIds: null, deliveryMode: "brokered",
+        } as const;
+        expect(projectTeamCredentialProviderModels({ ...input, response: {} })).toMatchObject({
+            status: "unavailable", reason: "response_invalid", models: [],
+        });
+        const denied = response();
+        Object.assign(denied.groups[0]!.authorization, {
+            authorized: false,
+            error: { v: 1, code: "provider_not_enabled_on_machine", retryable: false, action: "enable_on_machine" },
+        });
+        expect(projectTeamCredentialProviderModels({ ...input, response: denied })).toMatchObject({
+            status: "unavailable", reason: "not_granted", models: [],
+        });
+        expect(projectTeamCredentialProviderModels({ ...input, response: { ...response(), groups: [] } })).toMatchObject({
+            status: "success", models: [],
+        });
+    });
+
     it("admits only the exact source, application, compatibility, and allowed model", () => {
         const input = {
             response: response(), resourceId: "resource-1", teamId: "team-1", resourceRevision: 7,
             agentTargetKey: application.agentTargetKey, application, source,
             allowedModelIds: ["gpt-5"], deliveryMode: "brokered",
         } as const;
-        expect(projectTeamCredentialProviderModels(input)).toHaveLength(1);
+        expect(projectTeamCredentialProviderModels(input).models).toHaveLength(1);
         const changedSource = TeamCredentialSourceBindingV1Schema.parse({
             ...source,
             connectionSecurityFingerprint: `connection-security:v1:${"b".repeat(43)}`,
         });
         if (changedSource.kind !== "provider_connection") throw new Error("expected Provider Connection source fixture");
-        expect(projectTeamCredentialProviderModels({ ...input, response: response(changedSource.connectionSecurityFingerprint) })).toEqual([]);
-        expect(projectTeamCredentialProviderModels({ ...input, allowedModelIds: ["other"] })).toEqual([]);
+        expect(projectTeamCredentialProviderModels({ ...input, response: response(changedSource.connectionSecurityFingerprint) }).models).toEqual([]);
+        expect(projectTeamCredentialProviderModels({ ...input, application: { ...application, endpointTemplateId: "other" } })).toMatchObject({
+            status: "unavailable", reason: "incompatible", models: [],
+        });
+        expect(projectTeamCredentialProviderModels({ ...input, allowedModelIds: ["other"] }).models).toEqual([]);
     });
 
     it("requires one exact current recipient-material witness without projecting runtime material", () => {
@@ -125,7 +150,7 @@ describe("projectTeamCredentialProviderModels", () => {
             ...base,
             directMaterialReferences: [{ sourceMemberKey: "member-1", sourceVersion: "version-1" }],
         });
-        expect(exact[0]?.direct).toEqual({
+        expect(exact.models[0]?.direct).toEqual({
             sourceMemberKey: "member-1", sourceVersion: "version-1",
         });
         expect(projectTeamCredentialProviderModels({
@@ -134,7 +159,7 @@ describe("projectTeamCredentialProviderModels", () => {
                 { sourceMemberKey: "member-1", sourceVersion: "version-1" },
                 { sourceMemberKey: "member-2", sourceVersion: "version-2" },
             ],
-        })[0]?.direct).toBeNull();
+        }).models[0]?.direct).toBeNull();
     });
 
     it("projects independent stable brokered and direct choices for the same model", () => {
@@ -142,13 +167,13 @@ describe("projectTeamCredentialProviderModels", () => {
             response: response(), resourceId: "resource-1", teamId: "team-1", resourceRevision: 7,
             agentTargetKey: application.agentTargetKey, application, source, allowedModelIds: null, deliveryMode: "brokered",
         } as const;
-        const brokered = projectTeamCredentialProviderModels({ ...base, deliveryMode: "brokered" })[0]!;
-        const preparingDirect = projectTeamCredentialProviderModels({ ...base, deliveryMode: "direct" })[0]!;
+        const brokered = projectTeamCredentialProviderModels({ ...base, deliveryMode: "brokered" }).models[0]!;
+        const preparingDirect = projectTeamCredentialProviderModels({ ...base, deliveryMode: "direct" }).models[0]!;
         const currentDirect = projectTeamCredentialProviderModels({
             ...base,
             deliveryMode: "direct",
             directMaterialReferences: [{ sourceMemberKey: "member-1", sourceVersion: "version-1" }],
-        })[0]!;
+        }).models[0]!;
 
         expect(brokered.selection).toMatchObject({ deliveryMode: "brokered" });
         expect(brokered.availability).toBe("available");
@@ -200,7 +225,7 @@ describe("selectPoolBackedTeamCredentialProviderModels", () => {
         const model = projectTeamCredentialProviderModels({
             response: response(), resourceId: "resource-1", teamId: "team-1", resourceRevision: 7,
             agentTargetKey: application.agentTargetKey, application, source, allowedModelIds: null, deliveryMode: "brokered",
-        })[0]!;
+        }).models[0]!;
         const selected = selectPoolBackedTeamCredentialProviderModels({
             members: [
                 { machineId: "machine-a", priorityTier: 0, enabled: true },
@@ -227,7 +252,7 @@ describe("selectPoolBackedTeamCredentialProviderModels", () => {
         const model = projectTeamCredentialProviderModels({
             response: response(), resourceId: "resource-1", teamId: "team-1", resourceRevision: 7,
             agentTargetKey: application.agentTargetKey, application, source, allowedModelIds: null, deliveryMode: "brokered",
-        })[0]!;
+        }).models[0]!;
         const selected = selectPoolBackedTeamCredentialProviderModels({
             members: [
                 { machineId: "machine-a", priorityTier: 0, enabled: true },

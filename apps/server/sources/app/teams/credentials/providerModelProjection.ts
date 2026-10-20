@@ -1,7 +1,7 @@
 import { TeamCredentialRequestPolicyModelSupportV1Schema, TeamCredentialProviderModelCatalogEntryV1Schema, type TeamCredentialRequestPolicyModelSupportV1, type TeamCredentialProviderModelCatalogEntryV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { type ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
-import { DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema, type DaemonProviderModelProjectionRowV1, type DaemonProviderTeamCredentialRequestPolicySupportV1 } from '@happier-dev/protocol/rpc/providers';
+import { admitTeamCredentialSourceModelRowsV1, DaemonProviderTeamCredentialRequestPolicySupportResponseV1Schema, type TeamCredentialSourceModelProjectionFailureV1, type DaemonProviderTeamCredentialRequestPolicySupportV1 } from '@happier-dev/protocol/rpc/providers';
 import {
     selectMachinePoolCandidate,
     type MachinePoolSelectableMemberV1,
@@ -34,48 +34,9 @@ function requestPolicySupportCandidateKey(model: TeamCredentialRequestPolicyMode
     ]);
 }
 
-type CurrentProviderModelRow = Readonly<{
-    row: DaemonProviderModelProjectionRowV1 & Readonly<{
-        application: ProviderBrokerApplicationBindingV1;
-    }>;
-    sourceRevision: string;
-}>;
-
-/**
- * The single current-row admission policy used by both recipient catalog rows
- * and the value-free request-policy editor projection.
- */
-function listCurrentProviderModelRows(input: Readonly<{
-    response: unknown;
-    application: ProviderBrokerApplicationBindingV1;
-    source: TeamCredentialSourceBindingV1;
-}>): readonly CurrentProviderModelRow[] {
-    const projection = DaemonProviderModelProjectionResponseV1Schema.safeParse(input.response);
-    if (!projection.success || projection.data.status !== "success") return [];
-    return projection.data.groups.flatMap(group => {
-        if (!group.authorization.authorized || !group.sourceRevision) return [];
-        const sourceRevision = group.sourceRevision;
-        if (input.source.kind === "provider_connection" && (
-            group.connectionId !== input.source.connectionId
-            || group.sourceAuthority?.connectionSecurityFingerprint !== input.source.connectionSecurityFingerprint
-        )) return [];
-        return group.rows.flatMap(row => {
-            if (
-                row.visibility !== "visible"
-                || row.catalog.stale
-                || !row.application
-                || row.application.agentTargetKey !== input.application.agentTargetKey
-                || row.application.implementationIdentity.pluginId !== input.application.implementationIdentity.pluginId
-                || row.application.implementationIdentity.localId !== input.application.implementationIdentity.localId
-                || row.application.endpointTemplateId !== input.application.endpointTemplateId
-                || row.application.protocol !== input.application.protocol
-                || (row.compatibility.result.status === "experimental" && !row.compatibility.confirmed)
-                || row.compatibility.result.status === "incompatible"
-            ) return [];
-            return [{ row: { ...row, application: row.application }, sourceRevision }];
-        });
-    });
-}
+export type TeamCredentialProviderModelProjection =
+    | Readonly<{ status: 'success'; models: readonly TeamCredentialProviderModelCatalogEntryV1[] }>
+    | (TeamCredentialSourceModelProjectionFailureV1 & Readonly<{ models: readonly TeamCredentialProviderModelCatalogEntryV1[] }>);
 
 /**
  * Projects only daemon-owned, value-free facts. Unsupported or absent facts
@@ -195,9 +156,24 @@ export function projectTeamCredentialProviderModels(input: Readonly<{
     source: TeamCredentialSourceBindingV1;
     deliveryMode: 'brokered' | 'direct';
     directMaterialReferences?: readonly Readonly<{ sourceMemberKey: string; sourceVersion: string }>[];
-}>): readonly TeamCredentialProviderModelCatalogEntryV1[] {
+}>): TeamCredentialProviderModelProjection {
+    const admitted = admitTeamCredentialSourceModelRowsV1(input.response);
+    if (admitted.status !== 'success') return { ...admitted, models: [] };
     const allowed = input.allowedModelIds === null ? null : new Set(input.allowedModelIds);
-    return listCurrentProviderModelRows(input).flatMap(({ row, sourceRevision }) => {
+    let sourceRowCount = 0;
+    let applicationRowCount = 0;
+    const models = admitted.rows.flatMap(({ group, row, sourceRevision }) => {
+            if (input.source.kind === 'provider_connection' && (
+                group.connectionId !== input.source.connectionId
+                || group.sourceAuthority?.connectionSecurityFingerprint !== input.source.connectionSecurityFingerprint
+            )) return [];
+            sourceRowCount += 1;
+            if (row.application.agentTargetKey !== input.application.agentTargetKey
+                || row.application.implementationIdentity.pluginId !== input.application.implementationIdentity.pluginId
+                || row.application.implementationIdentity.localId !== input.application.implementationIdentity.localId
+                || row.application.endpointTemplateId !== input.application.endpointTemplateId
+                || row.application.protocol !== input.application.protocol) return [];
+            applicationRowCount += 1;
             if (row.application.agentTargetKey !== input.agentTargetKey
                 || (allowed !== null && !allowed.has(row.descriptor.id))) return [];
             const candidate = TeamCredentialProviderModelCatalogEntryV1Schema.safeParse({
@@ -225,4 +201,11 @@ export function projectTeamCredentialProviderModels(input: Readonly<{
             });
             return candidate.success ? [candidate.data] : [];
     });
+    if (admitted.rows.length > 0 && sourceRowCount === 0) {
+        return { status: 'unavailable', reason: 'response_invalid', models: [] };
+    }
+    if (sourceRowCount > 0 && applicationRowCount === 0) {
+        return { status: 'unavailable', reason: 'incompatible', models: [] };
+    }
+    return { status: 'success', models };
 }

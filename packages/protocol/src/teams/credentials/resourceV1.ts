@@ -378,8 +378,8 @@ export const TeamCredentialResourceSourcePresentationV1Schema = lazyZodSchema(()
 ]));
 
 export const TeamCredentialBrokerPresentationV1Schema = lazyZodSchema(() => z.strictObject({
-  selectedTarget: z.nullable(z.strictObject({ machineId: z.string().check(z.minLength(1)), displayName: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(120))), availability: z.enum(['available', 'offline', 'update_required']) })),
-  eligibleTargets: z.array(z.strictObject({ machineId: z.string().check(z.minLength(1)), displayName: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(120))), availability: z.enum(['available', 'offline', 'update_required']) })),
+  selectedTarget: z.nullable(z.strictObject({ machineId: z.string().check(z.minLength(1)), displayName: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(120))), availability: z.enum(['available', 'offline', 'update_required', 'not_verified']) })),
+  eligibleTargets: z.array(z.strictObject({ machineId: z.string().check(z.minLength(1)), displayName: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(120))), availability: z.enum(['available', 'offline', 'update_required', 'not_verified']) })),
   // Pool names use the canonical MachinePoolNameV1 contract and may be longer
   // than the bounded Machine-label presentation. Keep the full domain value
   // here; UI surfaces may ellipsize visually without making a valid resource

@@ -328,7 +328,7 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
                 ? 'update_required' as const
                 : onlineMachineIds.includes(target.machineId)
                     ? 'available' as const
-                    : 'offline' as const,
+                    : presence.state === 'known' ? 'offline' as const : 'not_verified' as const,
         }));
         const selectedTarget = resource.brokerPresentation.selectedTarget === null
             ? null
@@ -431,6 +431,10 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
         const brokerReady = resource.disclosureCeiling === 'direct_allowed'
             ? hasEligibleSource
             : resource.brokerPlacement !== null && hasEligibleSource;
+        const brokerObservationUnknown = presence.state !== 'known'
+            || eligibility.some(candidate => candidate.eligibility === null)
+            || selectedPool?.availability === 'not_verified'
+            || (hasEligibleSource && source.kind === 'provider_connection' && providerSourceState === 'unknown');
         const readiness = !resource.enabled
             || resource.readiness.kind === 'resource_corrupt'
             || resource.readiness.kind === 'source_unavailable'
@@ -445,7 +449,8 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
                     ? resource.readiness
                     : {
                         kind: 'broker_unavailable' as const,
-                        ...(brokerRefusalReason === null ? {} : { reason: brokerRefusalReason }),
+                        ...(brokerRefusalReason !== null ? { reason: brokerRefusalReason }
+                            : brokerObservationUnknown ? { reason: 'projection_unavailable' as const } : {}),
                     };
         const recoveryAction = !resource.enabled
             || readiness.kind === 'resource_corrupt'
@@ -1091,6 +1096,8 @@ export function registerTeamCredentialResourceRoutes(
         };
         const projectionRpcByKey = new Map<string, ReturnType<typeof app.forwardRpcForUser>>();
         const poolSnapshotByKey = new Map<string, ReturnType<typeof getMachinePoolCandidateSnapshot>>();
+        type ProjectionFailureReason = 'projection_unavailable' | 'response_invalid' | 'not_granted' | 'incompatible' | 'catalog_empty';
+        const projectionFailuresByResourceId = new Map<string, ProjectionFailureReason[]>();
         await Promise.all(result.projectionRequests.map(async projectionRequest => {
             const resource = resourcesById.get(projectionRequest.resourceId);
             if (!resource) return;
@@ -1151,22 +1158,24 @@ export function registerTeamCredentialResourceRoutes(
                     });
                     projectionRpcByKey.set(rpcKey, rpc);
                 }
-                const rpcResult = await rpc;
-                if (!rpcResult.ok) return { machineId, models: [], response: null };
+                const rpcResult = await rpc.catch(() => ({ ok: false as const, error: 'projection_unavailable' }));
+                if (!rpcResult.ok) return { machineId, models: [], response: null, failure: 'projection_unavailable' as const };
+                const projection = projectTeamCredentialProviderModels({
+                    response: rpcResult.result,
+                    resourceId: projectionRequest.resourceId,
+                    teamId: projectionRequest.teamId,
+                    resourceRevision: projectionRequest.resourceRevision,
+                    agentTargetKey: body.data.application!.agentTargetKey,
+                    application: body.data.application!,
+                    allowedModelIds: projectionRequest.allowedModelIds,
+                    source: projectionRequest.source,
+                    deliveryMode: projectionRequest.deliveryMode,
+                    directMaterialReferences: projectionRequest.directMaterialReferences,
+                });
                 return {
                     machineId,
-                    models: [...projectTeamCredentialProviderModels({
-                        response: rpcResult.result,
-                        resourceId: projectionRequest.resourceId,
-                        teamId: projectionRequest.teamId,
-                        resourceRevision: projectionRequest.resourceRevision,
-                        agentTargetKey: body.data.application!.agentTargetKey,
-                        application: body.data.application!,
-                        allowedModelIds: projectionRequest.allowedModelIds,
-                        source: projectionRequest.source,
-                        deliveryMode: projectionRequest.deliveryMode,
-                        directMaterialReferences: projectionRequest.directMaterialReferences,
-                    })],
+                    models: [...projection.models],
+                    failure: projection.status === 'unavailable' ? projection.reason : null,
                     response: rpcResult.result,
                 };
             }));
@@ -1188,9 +1197,12 @@ export function registerTeamCredentialResourceRoutes(
                 models.set(key, model);
             }
             resource.providerModels = [...models.values()];
-            if (resource.providerModels.some((model) => model.availability === 'available')) {
-                resource.readiness = { kind: 'available' };
-                resource.recoveryAction = null;
+            if (projectedModels.length === 0) {
+                const reasons: ProjectionFailureReason[] = projections.length === 0
+                    ? ['projection_unavailable']
+                    : projections.map(projection => projection.failure ?? 'catalog_empty');
+                const current = projectionFailuresByResourceId.get(resource.id) ?? [];
+                projectionFailuresByResourceId.set(resource.id, [...current, ...reasons]);
             }
             if (projectionRequest.source.kind === 'provider_connection') {
                 const providerConnectionSource = projectionRequest.source;
@@ -1211,6 +1223,26 @@ export function registerTeamCredentialResourceRoutes(
                 };
             }
         }));
+        for (const resource of resourcesById.values()) {
+            // Live catalog observations never clear a configured allowance or
+            // an independently observed structural source/entitlement refusal.
+            if (resource.readiness.kind !== 'available'
+                && resource.readiness.kind !== 'broker_unavailable'
+                && !(resource.readiness.kind === 'source_unavailable'
+                    && result.projectionRequests.some(request => request.resourceId === resource.id
+                        && request.source.kind === 'provider_connection'))) continue;
+            if (resource.providerModels.some(model => model.availability === 'available')) {
+                resource.readiness = { kind: 'available' };
+                resource.recoveryAction = null;
+            } else if (resource.providerModels.length === 0) {
+                const reasons = projectionFailuresByResourceId.get(resource.id);
+                if (!reasons?.length) continue;
+                const reason = reasons.every(candidate => candidate === reasons[0]) ? reasons[0]! : 'projection_unavailable';
+                resource.readiness = { kind: 'broker_unavailable', reason };
+                resource.recoveryAction = reason === 'not_granted' || reason === 'incompatible'
+                    ? 'source_owner_action' : 'retry';
+            }
+        }
         return reply.send(TeamCredentialResourceEntitledPageV1Schema.parse({
             resources: [...resourcesById.values()],
             nextCursor: result.page.nextCursor,
