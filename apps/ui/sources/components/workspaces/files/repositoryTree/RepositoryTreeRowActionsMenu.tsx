@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
@@ -7,6 +8,7 @@ import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import type { FilesystemBrowserRowActionsControl } from '@/components/ui/filesystemBrowser/FilesystemBrowserRow';
 import { useWorkspaceOpenActions } from '@/components/appShell/workspace/useWorkspaceOpenActions';
+import { resolveFileMenuItems, type FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
 
 export type RepositoryTreeRowActionMenuItemId =
     | 'repository-tree-menuitem-rename'
@@ -28,6 +30,7 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
     kind: 'file' | 'directory';
     disableWriteActions: boolean;
     downloadActionsEnabled: boolean;
+    fileMenuContext?: Partial<FileMenuContext>;
     onSelect: (itemId: RepositoryTreeRowActionMenuItemId) => void;
     /**
      * A folder's own creation actions (lab p-code ACTIONS): a new folder or uploaded files land inside it.
@@ -39,15 +42,32 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const workspaceOpen = useWorkspaceOpenActions(props.kind === 'file' ? props.href ?? null : null);
+    const sharedContext = React.useMemo<FileMenuContext>(() => ({
+        ...props.fileMenuContext,
+        machineReachable: props.fileMenuContext?.machineReachable ?? !props.disableWriteActions,
+        unavailableReason: props.fileMenuContext?.unavailableReason ?? t('errors.daemonUnavailableBody'),
+        hasCachedContent: props.fileMenuContext?.hasCachedContent ?? false,
+        platform: props.fileMenuContext?.platform ?? (Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web'),
+        isDirectory: props.kind === 'directory',
+        copyPath: props.fileMenuContext?.copyPath ?? (() => props.onSelect('repository-tree-menuitem-copy-path')),
+        rename: props.fileMenuContext?.rename ?? (() => props.onSelect('repository-tree-menuitem-rename')),
+        download: props.fileMenuContext?.download ?? (props.kind === 'file' && props.downloadActionsEnabled ? () => props.onSelect('repository-tree-menuitem-download') : undefined),
+        openBeside: props.fileMenuContext?.openBeside ?? (workspaceOpen.items.some(item => item.id === 'workspace.open.right')
+            ? () => { workspaceOpen.open('splitRight'); } : undefined),
+    }), [props.disableWriteActions, props.downloadActionsEnabled, props.fileMenuContext, props.kind, props.onSelect, workspaceOpen]);
+    const sharedItems = React.useMemo(() => resolveFileMenuItems(sharedContext, 'treeRow'), [sharedContext]);
+    const sharedActions = React.useMemo(() => sharedItems.map(item => ({
+        id: `repository-tree-menuitem-${item.id === 'copyPath' ? 'copy-path' : item.id}`,
+        title: item.title ?? t(item.titleKey),
+        icon: item.id === 'rename' ? 'pencil' as const : item.id === 'download' ? 'download' as const
+            : item.id === 'copyPath' || item.id === 'copyLink' ? 'copy' as const : 'file' as const,
+        disabled: item.state !== 'enabled',
+        subtitle: item.state === 'enabled' ? undefined : item.state.disabledReason,
+        destructive: item.destructive,
+        onPress: item.run,
+    } satisfies ItemAction)), [sharedItems]);
 
     const items = React.useMemo<RepositoryTreeRowActionItem[]>(() => {
-        const renameItem: RepositoryTreeRowActionItem = {
-            id: 'repository-tree-menuitem-rename',
-            title: t('common.rename'),
-            icon: 'pencil',
-            color: theme.colors.text.secondary,
-            disabled: props.disableWriteActions,
-        };
         // Delete is last and reads as destructive (lab p-code ACTIONS); it still asks first.
         const deleteItem: RepositoryTreeRowActionItem = {
             id: 'repository-tree-menuitem-delete',
@@ -57,24 +77,10 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
             disabled: props.disableWriteActions,
         };
 
-        const copyPathItem: RepositoryTreeRowActionItem = {
-            id: 'repository-tree-menuitem-copy-path',
-            title: t('files.repositoryTree.actions.copyPath'),
-            icon: 'copy',
-            color: theme.colors.text.secondary,
-        };
-
         if (props.kind === 'file') {
             return [
-                copyPathItem,
                 ...(props.downloadActionsEnabled
                     ? ([
-                        {
-                            id: 'repository-tree-menuitem-download',
-                            title: t('files.repositoryTree.actions.download'),
-                            icon: 'download',
-                            color: theme.colors.text.secondary,
-                        },
                         {
                             id: 'repository-tree-menuitem-zip',
                             title: t('files.repositoryTree.actions.downloadAsZip'),
@@ -83,13 +89,11 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
                         },
                     ] satisfies RepositoryTreeRowActionItem[])
                     : []),
-                renameItem,
                 deleteItem,
             ];
         }
 
         return [
-            copyPathItem,
             ...(props.downloadActionsEnabled
                 ? ([
                     {
@@ -100,7 +104,6 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
                     },
                 ] satisfies RepositoryTreeRowActionItem[])
                 : []),
-            renameItem,
             ...(props.folderCreation?.newFolder ? [{
                 id: 'repository-tree-menuitem-new-folder',
                 title: t('files.pane.newFolder'),
@@ -124,13 +127,13 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
     return (
         <ItemRowActions
             title={props.path.split('/').filter(Boolean).at(-1) ?? props.path}
-            actions={[...workspaceOpen.items.map(item => ({
+            actions={[...workspaceOpen.items.filter(item => item.id !== 'workspace.open.right' || !sharedItems.some(shared => shared.id === 'openBeside')).map(item => ({
                 id: item.id, title: item.title, icon: item.icon,
                 onPress: () => { workspaceOpen.select(item.id); },
-            })), ...items.map((item) => ({
+            })), ...sharedActions.filter((_, index) => sharedItems[index].group !== 'change'), ...items.map((item) => ({
                 ...item,
                 onPress: () => props.onSelect(item.id as RepositoryTreeRowActionMenuItemId),
-            }))]}
+            })), ...sharedActions.filter((_, index) => sharedItems[index].group === 'change')]}
             overflowTriggerTestID={triggerId}
             compactThreshold={Number.POSITIVE_INFINITY}
             compactActionIds={[]}

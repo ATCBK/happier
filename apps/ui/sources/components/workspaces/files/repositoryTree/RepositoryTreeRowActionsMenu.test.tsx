@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import type { RepositoryTreeRowActionMenuItemId } from './RepositoryTreeRowActionsMenu';
+import type { FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' }));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -11,14 +12,29 @@ vi.mock('@/text', async () => (await import('@/dev/testkit')).createTextModuleMo
 vi.mock('@/components/ui/popover', async importOriginal => (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 describe('canonical repository row menu', () => {
-    async function render(input: { kind: 'file' | 'directory'; downloadActionsEnabled: boolean; disableWriteActions?: boolean }) {
+    async function render(input: { kind: 'file' | 'directory'; downloadActionsEnabled: boolean; disableWriteActions?: boolean; fileMenuContext?: FileMenuContext }) {
         const { RepositoryTreeRowActionsMenu } = await import('./RepositoryTreeRowActionsMenu');
         const selected: RepositoryTreeRowActionMenuItemId[] = [];
         const screen = await renderScreen(<RepositoryTreeRowActionsMenu path="folder.ts" kind={input.kind}
             downloadActionsEnabled={input.downloadActionsEnabled} disableWriteActions={input.disableWriteActions ?? false}
+            fileMenuContext={input.fileMenuContext}
             control={{ open: true, onOpenChange: () => {}, triggerHidden: true }} onSelect={item => selected.push(item)} />);
         return { screen, selected };
     }
+
+    it('consumes shared file-menu callbacks once and preserves canonical offline admission', async () => {
+        const copyLink = vi.fn();
+        const discardAll = vi.fn();
+        const context: FileMenuContext = { machineReachable: false, unavailableReason: 'offline', hasCachedContent: false,
+            platform: 'ios', copyLink, changes: { discardAll } };
+        const { screen } = await render({ kind: 'file', downloadActionsEnabled: false, fileMenuContext: context });
+        expect(screen.findByTestId('repository-tree-menuitem-copyLink')).toBeTruthy();
+        expect(screen.findByTestId('repository-tree-menuitem-discard')).toBeTruthy();
+        expect(screen.findByTestId('repository-tree-menuitem-discard')?.props.disabled).toBe(true);
+        await screen.pressByTestIdAsync('repository-tree-menuitem-copyLink');
+        expect(copyLink).toHaveBeenCalledOnce();
+        expect(discardAll).not.toHaveBeenCalled();
+    });
 
     it('offers file and directory downloads by actual entry kind and dispatches the selected action', async () => {
         const file = await render({ kind: 'file', downloadActionsEnabled: true });

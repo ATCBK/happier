@@ -71,6 +71,7 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
     onRequestDownload?: ((params: Readonly<{ path: string; asZip: boolean }>) => Promise<{ ok: true } | { ok: false; error: string; canceled?: true }>) | null;
 }>): Readonly<{
     onSelectRowMenuItem: (node: RepositoryTreeNodeLike, itemId: RepositoryTreeRowActionMenuItemId) => Promise<void>;
+    isRenaming: boolean;
 }> {
     const {
         expandedPaths,
@@ -88,6 +89,7 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
     const scopeRef = React.useRef(workspaceScope);
     scopeRef.current = workspaceScope;
     const mounted = React.useRef(true);
+    const [isRenaming, setIsRenaming] = React.useState(false);
     React.useEffect(() => {
         mounted.current = true;
         return () => { mounted.current = false; };
@@ -97,7 +99,7 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
         return typeof error === 'string' && /destination already exists/i.test(error);
     }, []);
 
-    const onSelectRowMenuItem = React.useCallback(async (node: RepositoryTreeNodeLike, itemId: RepositoryTreeRowActionMenuItemId) => {
+    const performRowMenuAction = React.useCallback(async (node: RepositoryTreeNodeLike, itemId: RepositoryTreeRowActionMenuItemId) => {
         if (itemId === 'repository-tree-menuitem-copy-path') {
             const ok = await setClipboardStringSafe(node.path);
             Modal.alert(
@@ -238,5 +240,15 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
         writeActionsEnabled,
     ]);
 
-    return React.useMemo(() => ({ onSelectRowMenuItem }), [onSelectRowMenuItem]);
+    const onSelectRowMenuItem = React.useCallback(async (node: RepositoryTreeNodeLike, itemId: RepositoryTreeRowActionMenuItemId) => {
+        if (itemId !== 'repository-tree-menuitem-rename') return await performRowMenuAction(node, itemId);
+        setIsRenaming(true);
+        try {
+            await performRowMenuAction(node, itemId);
+        } finally {
+            if (mounted.current) setIsRenaming(false);
+        }
+    }, [performRowMenuAction]);
+
+    return React.useMemo(() => ({ onSelectRowMenuItem, isRenaming }), [onSelectRowMenuItem, isRenaming]);
 }
