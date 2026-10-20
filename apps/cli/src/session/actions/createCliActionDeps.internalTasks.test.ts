@@ -1,7 +1,12 @@
 import axios from 'axios';
+import fastify from 'fastify';
 import { afterEach, expect, it, vi } from 'vitest';
+import { z } from 'zod/mini';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { createCliActionDeps } from './createCliActionDeps';
+import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
+import { registerAccountHomeHttp } from './widgetApproval.testkit';
+import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createAccountScopedCryptoMaterialSnapshotV1, deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { encrypt, decryptResult, encodeBase64, decodeBase64 } from '@/api/encryption';
@@ -11,6 +16,46 @@ const token = `header.${Buffer.from(JSON.stringify({ sub: scope.accountId })).to
 const encode = (value: unknown) => Buffer.from(JSON.stringify({ t: 'plain', v: value })).toString('base64');
 const decode = (value: string) => JSON.parse(Buffer.from(value, 'base64').toString()).v;
 afterEach(() => vi.restoreAllMocks());
+
+it.each(['cli', 'agent'] as const)('persists personal reorder through the public %s executor without a Machine', async surface => {
+  const app = fastify();
+  const endpoint = 'http://task-reorder.test';
+  const features = registerAccountHomeHttp(app, { accountId: scope.accountId, serverId: scope.serverId });
+  const rows = new Map<string, { value: string; version: number }>([
+    ['todo.index', { value: encode({ undoneOrder: ['first', 'second'], completedOrder: [] }), version: 1 }],
+    ...['first', 'second'].map(id => [`todo.${id}`, { value: encode({ id, title: id, done: false, createdAt: 1, updatedAt: 1 }), version: 1 }] as const),
+  ]);
+  app.get('/v1/kv', async () => ({ items: [...rows].map(([key, row]) => ({ key, ...row })) }));
+  app.get('/v1/kv/:key', async (request, reply) => {
+    const { key } = z.strictObject({ key: z.string() }).parse(request.params);
+    return rows.has(key) ? { key, ...rows.get(key)! } : reply.code(404).send({ error: 'not_found' });
+  });
+  app.post('/v1/kv', async (request, reply) => {
+    const { mutations } = z.strictObject({ mutations: z.array(z.strictObject({ key: z.string(), value: z.string(), version: z.number() })) }).parse(request.body);
+    const errors = mutations.filter(row => row.version !== (rows.get(row.key)?.version ?? -1)).map(row => ({
+      key: row.key, error: 'version-mismatch', value: rows.get(row.key)?.value ?? null, version: rows.get(row.key)?.version ?? -1,
+    }));
+    if (errors.length) return reply.code(409).send({ success: false, errors });
+    const results = mutations.map(row => { const version = row.version + 1; rows.set(row.key, { value: row.value, version }); return { key: row.key, version }; });
+    return { success: true, results };
+  });
+  await app.ready();
+  const restore = installAxiosFastifyAdapter({ app, origin: endpoint });
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(features));
+  const create = () => createCliActionExecutorFromCredentials({ credentials: { token, encryption: null, credentialProvenance: 'stored_session' },
+    serverId: scope.serverId, serverIdentityId: scope.serverId, serverApiUrl: endpoint });
+  // Approval policy is tested separately with real Artifacts; this host-private
+  // waived context isolates the Account placement and raw KV/CAS contract.
+  const context = { surface, authority: 'account_automation', bypassApprovals: true, runtimeAccountId: scope.accountId,
+    serverId: scope.serverId, serverIdentityId: scope.serverId } as const;
+  try {
+    expect(await create().execute('tasks.internal.reorder', { scope, sourceId: 'second', position: { anchorId: 'first', placement: 'before' } }, context))
+      .toMatchObject({ ok: true, result: { status: 'applied' } });
+    expect(decode(rows.get('todo.index')!.value)).toMatchObject({ undoneOrder: ['second', 'first'] });
+    expect(await create().execute('tasks.internal.list', {}, context))
+      .toMatchObject({ ok: true, result: { status: 'ok', undoneOrder: ['second', 'first'] } });
+  } finally { restore(); await app.close(); }
+});
 
 it('executes public task Actions against released Account rows, rebasing atomic index changes and refusing ambiguous create replay', async () => {
   const rows = new Map<string, { value: string; version: number }>([
