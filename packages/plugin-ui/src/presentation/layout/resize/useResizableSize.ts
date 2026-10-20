@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { PanResponder, Platform } from 'react-native';
-import { resolvePointerClientPoint } from '../resolvePointerClientPoint';
+import { resolvePointerClientPoint } from './resolvePointerClientPoint.js';
 
 export type DockedPaneResizeAxis = 'x' | 'y';
 export type DockedPaneResizeEdge = 'start' | 'end';
@@ -83,7 +83,7 @@ function resolveClampedSizeState(value: number, minSizePx: number, maxSizePx: nu
     };
 }
 
-export function useResizableDockedPaneCore(input: ResizableDockedPaneCoreInput): ResizableDockedPaneCoreResult {
+export function useResizableSize(input: ResizableDockedPaneCoreInput): ResizableDockedPaneCoreResult {
     const { sizePx, minSizePx, maxSizePx, onCommitSizePx } = input;
     const onDragSizePx = input.onDragSizePx;
     const axis = input.axis;
@@ -362,3 +362,4 @@ export function useResizableDockedPaneCore(input: ResizableDockedPaneCoreInput):
         },
     };
 }
+

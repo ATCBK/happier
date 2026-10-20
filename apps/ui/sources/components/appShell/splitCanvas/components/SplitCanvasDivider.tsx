@@ -1,11 +1,8 @@
 import * as React from 'react';
+import { t } from '@/text';
 import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { useResizableDockedPaneCore, type DockedPaneResizeCommitMeta } from '@/components/ui/panels/resizable/resizableDockedPaneCore';
-import {
-    ResizablePaneDividerHandle,
-    resolveResizablePaneNativeTouchTargetSize,
-} from '@/components/ui/panels/resizable/ResizablePaneDividerHandle';
+import { useResizableSize, type DockedPaneResizeCommitMeta, HappierResizeHandle as ResizablePaneDividerHandle, resolveResizablePaneNativeTouchTargetSize } from '@happier-dev/plugin-ui/presentation';
 import type { SplitCanvasAxis } from '../model/splitCanvasTypes';
 
 function roundRatio(value: number): number {
@@ -31,7 +28,7 @@ export const SplitCanvasDivider = React.memo((props: Readonly<{
         panHandlers,
         webHandleProps,
         accessibilityHandleProps,
-    } = useResizableDockedPaneCore({
+    } = useResizableSize({
         axis: props.axis === 'row' ? 'x' : 'y',
         resizeEdge: 'end',
         sizePx: safeContainerSizePx * props.ratio,
@@ -70,6 +67,7 @@ export const SplitCanvasDivider = React.memo((props: Readonly<{
             }}
         >
             <ResizablePaneDividerHandle
+            labels={{ label: t('ui.resizableDockedPane.resizeA11y'), hint: t('ui.resizableDockedPane.resizeHint'), value: (px) => t('ui.resizableDockedPane.resizeValue', { px }) }}
                 axis={vertical ? 'x' : 'y'}
                 testID={`split-canvas-divider-handle-${props.splitId}`}
                 interactionProps={Platform.OS === 'web'

@@ -1,7 +1,7 @@
 import * as React from 'react';
+import { t } from '@/text';
 import { Platform, View } from 'react-native';
-import { useResizableDockedPaneCore, type DockedPaneResizeCommitMeta } from '@/components/ui/panels/resizable/resizableDockedPaneCore';
-import { ResizablePaneDividerHandle } from '@/components/ui/panels/resizable/ResizablePaneDividerHandle';
+import { useResizableSize, type DockedPaneResizeCommitMeta, HappierResizeHandle as ResizablePaneDividerHandle } from '@happier-dev/plugin-ui/presentation';
 
 export type ResizableDockedPaneCommitMeta = DockedPaneResizeCommitMeta;
 
@@ -24,7 +24,7 @@ export const ResizableDockedPane = React.memo((props: ResizableDockedPaneProps) 
         panHandlers,
         webHandleProps,
         accessibilityHandleProps,
-    } = useResizableDockedPaneCore({
+    } = useResizableSize({
         axis: 'x',
         resizeEdge: resizeEdge === 'left' ? 'start' : 'end',
         sizePx: props.widthPx,
@@ -39,6 +39,7 @@ export const ResizableDockedPane = React.memo((props: ResizableDockedPaneProps) 
     // before that pane's own content (the settings rail's search field).
     const handle = canResize ? (
         <ResizablePaneDividerHandle
+            labels={{ label: t('ui.resizableDockedPane.resizeA11y'), hint: t('ui.resizableDockedPane.resizeHint'), value: (px) => t('ui.resizableDockedPane.resizeValue', { px }) }}
             axis="x"
             edge={resizeEdge === 'left' ? 'start' : 'end'}
             interactionProps={Platform.OS === 'web'

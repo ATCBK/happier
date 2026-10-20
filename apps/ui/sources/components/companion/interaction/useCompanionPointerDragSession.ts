@@ -5,7 +5,7 @@ import {
     type HappierFloatingFramePointerBinding,
     type UseCompanionPointerDragSessionParams,
 } from '@happier-dev/plugin-ui/presentation';
-import { resolvePointerClientPoint } from '@/components/ui/panels/resolvePointerClientPoint';
+import { resolvePointerClientPoint } from '@happier-dev/plugin-ui/presentation';
 import { resolvePointerScreenPoint } from '@/components/ui/panels/resolvePointerScreenPoint';
 
 export type {

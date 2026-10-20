@@ -1,4 +1,4 @@
-import { resolvePointerClientPoint } from '@/components/ui/panels/resolvePointerClientPoint';
+import { resolvePointerClientPoint } from '@happier-dev/plugin-ui/presentation';
 
 import type { PopoverAnchor } from './_types';
 

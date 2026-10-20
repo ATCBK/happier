@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('react-native', async () => await import('react-native-web'));
+
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
@@ -18,15 +18,15 @@ afterEach(async () => {
     container = null;
 });
 
-describe('ResizablePaneDividerHandle', () => {
+describe('HappierResizeHandle', () => {
     it('announces the current pane size and updates the range and spoken value after resizing', async () => {
-        const { ResizablePaneDividerHandle } = await import('./ResizablePaneDividerHandle');
+        const { HappierResizeHandle } = await import('./HappierResizeHandle.js');
         container = document.createElement('div');
         document.body.appendChild(container);
         root = createRoot(container);
         const render = async (value?: { min?: number; max?: number; now: number }) => {
             await act(async () => root!.render(
-                <ResizablePaneDividerHandle axis="x" testID="handle"
+                <HappierResizeHandle labels={{ label: 'Resize', value: (px) => `${px} px` }} axis="x" testID="handle"
                     accessibilityHandleProps={value ? { accessibilityValue: value } : undefined} />,
             ));
             const handle = container!.querySelector<HTMLElement>('[data-testid="handle"]');

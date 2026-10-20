@@ -37,3 +37,4 @@ export function resolvePointerClientPoint(event: unknown): PointerClientPoint {
     const yValue = readNumber(asAny?.nativeEvent?.y) ?? readNumber(asAny?.y);
     return { x: xValue ?? null, y: yValue ?? null };
 }
+

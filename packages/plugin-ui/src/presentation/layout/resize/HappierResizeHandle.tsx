@@ -1,13 +1,13 @@
 import * as React from 'react';
 import { Platform, Pressable, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
-import { t } from '@/text';
 
 export function resolveResizablePaneNativeTouchTargetSize(): number | null {
     if (Platform.OS === 'web') return null;
     return Platform.OS === 'android' ? 48 : 44;
 }
 
-export const ResizablePaneDividerHandle = React.memo((props: Readonly<{
+export const HappierResizeHandle = React.memo((props: Readonly<{
+    labels: Readonly<{ label: string; hint?: string; value?: (px: number) => string }>;
     axis: 'x' | 'y';
     /** Omit for a centered divider whose parent already owns the full target. */
     edge?: 'start' | 'end';
@@ -45,19 +45,19 @@ export const ResizablePaneDividerHandle = React.memo((props: Readonly<{
             testID={props.testID}
             focusable={Platform.OS === 'web'}
             accessibilityRole="adjustable"
-            accessibilityLabel={t('ui.resizableDockedPane.resizeA11y')}
-            accessibilityHint={t('ui.resizableDockedPane.resizeHint')}
+            accessibilityLabel={props.labels.label}
+            accessibilityHint={props.labels.hint}
             {...props.interactionProps}
             {...props.accessibilityHandleProps}
-            {...resolveDividerValueProps(props.accessibilityHandleProps?.accessibilityValue)}
+            {...resolveDividerValueProps(props.accessibilityHandleProps?.accessibilityValue, props.labels.value)}
             hitSlop={nativeHitSlop}
             style={[
                 {
                     alignItems: 'center',
                     justifyContent: 'center',
-                    cursor: props.axis === 'x' ? ('col-resize' as any) : ('row-resize' as any),
-                    userSelect: 'none' as any,
-                    ...(Platform.OS === 'web' ? ({ touchAction: 'none' } as any) : null),
+                    cursor: props.axis === 'x' ? 'col-resize' : 'row-resize',
+                    userSelect: 'none',
+                    ...(Platform.OS === 'web' ? { touchAction: 'none' } : null),
                 },
                 props.style,
                 centeredNativeTargetStyle,
@@ -90,7 +90,7 @@ export const ResizablePaneDividerHandle = React.memo((props: Readonly<{
  * Native Web does not project `accessibilityValue` on a pressable, so the web reads the size from
  * these (min, max, now and the spoken text).
  */
-function resolveDividerValueProps(value: Readonly<{ min?: number; max?: number; now?: number }> | undefined) {
+function resolveDividerValueProps(value: Readonly<{ min?: number; max?: number; now?: number }> | undefined, valueLabel?: (px: number) => string) {
     if (Platform.OS !== 'web' || !value || typeof value.now !== 'number') return null;
     const now = Math.round(value.now);
     return {
@@ -98,6 +98,7 @@ function resolveDividerValueProps(value: Readonly<{ min?: number; max?: number; 
         'aria-valuenow': now,
         ...(typeof value.min === 'number' ? { 'aria-valuemin': Math.round(value.min) } : {}),
         ...(typeof value.max === 'number' ? { 'aria-valuemax': Math.round(value.max) } : {}),
-        'aria-valuetext': t('ui.resizableDockedPane.resizeValue', { px: now }),
+        'aria-valuetext': valueLabel?.(now) ?? String(now),
     } as Record<string, unknown>;
 }
+

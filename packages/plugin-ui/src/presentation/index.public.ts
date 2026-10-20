@@ -25,6 +25,9 @@ export {
 } from './collection/ItemAddRow.js';
 export { resolveHappierPageRowDetailLayout } from './layout/pageRowDetail.js';
 export * from './work/workVocabulary.js';
+export * from './layout/resize/useResizableSize.js';
+export * from './layout/resize/HappierResizeHandle.js';
+export * from './layout/resize/resolvePointerClientPoint.js';
 export { HappierRoleMark } from './work/RoleMark.js';
 export {
   HappierDecisionBar,

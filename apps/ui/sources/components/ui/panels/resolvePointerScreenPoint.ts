@@ -1,7 +1,7 @@
 import {
     resolvePointerClientPoint,
     type PointerClientPoint,
-} from './resolvePointerClientPoint';
+} from '@happier-dev/plugin-ui/presentation';
 
 function readRecord(value: unknown): Readonly<Record<string, unknown>> {
     return value != null && typeof value === 'object' && !Array.isArray(value)

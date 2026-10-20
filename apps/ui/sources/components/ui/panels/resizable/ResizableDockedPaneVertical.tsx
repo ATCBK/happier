@@ -1,8 +1,8 @@
 import * as React from 'react';
+import { t } from '@/text';
 import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { useResizableDockedPaneCore, type DockedPaneResizeCommitMeta } from './resizableDockedPaneCore';
-import { ResizablePaneDividerHandle } from './ResizablePaneDividerHandle';
+import { useResizableSize, type DockedPaneResizeCommitMeta, HappierResizeHandle as ResizablePaneDividerHandle } from '@happier-dev/plugin-ui/presentation';
 
 export type ResizableDockedPaneVerticalCommitMeta = DockedPaneResizeCommitMeta;
 
@@ -27,7 +27,7 @@ export const ResizableDockedPaneVertical = React.memo((props: ResizableDockedPan
         panHandlers,
         webHandleProps,
         accessibilityHandleProps,
-    } = useResizableDockedPaneCore({
+    } = useResizableSize({
         axis: 'y',
         resizeEdge: resizeEdge === 'top' ? 'start' : 'end',
         sizePx: props.heightPx,
@@ -51,6 +51,7 @@ export const ResizableDockedPaneVertical = React.memo((props: ResizableDockedPan
         >
             {canResize ? (
                 <ResizablePaneDividerHandle
+            labels={{ label: t('ui.resizableDockedPane.resizeA11y'), hint: t('ui.resizableDockedPane.resizeHint'), value: (px) => t('ui.resizableDockedPane.resizeValue', { px }) }}
                     axis="y"
                     edge={resizeEdge === 'top' ? 'start' : 'end'}
                     testID={props.resizeHandleTestID ?? (props.testID ? `${props.testID}-resize-handle` : undefined)}

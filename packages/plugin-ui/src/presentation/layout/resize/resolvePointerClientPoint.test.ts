@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolvePointerClientPoint } from './resolvePointerClientPoint';
+import { resolvePointerClientPoint } from './resolvePointerClientPoint.js';
 
 describe('resolvePointerClientPoint', () => {
     it('prefers nativeEvent.clientX/clientY when available', () => {
@@ -27,4 +27,5 @@ describe('resolvePointerClientPoint', () => {
         expect(resolvePointerClientPoint({})).toEqual({ x: null, y: null });
     });
 });
+
 
