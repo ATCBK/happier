@@ -930,6 +930,20 @@ operation without another creator; an already-aborted fresh request admits no
 startup. Run setup observations likewise retain the existing Run id rather than
 starting a separate preparation Action.
 
+In 0.3 development source, a proven failure of that original startup fails the
+step and settles its failed parent when the authored failure policy stops the
+run. Reclaim preserves the same failure; it does not leave an inputless startup
+interrupted for input reattachment. Existing authored collection policies and
+recovery of already-admitted inputs keep their own semantics. Operation discovery,
+Get, Wait and Cancel on the executing daemon use its installed exact-Machine
+transport. An operation retained on another Machine still routes to that original
+Machine through Home. Home storage remains required for durable Workflow writes;
+local operation evidence does not turn an unavailable write into settlement.
+Read-only Session directory admission precedes spawn. Recognized transport
+deadlines retain their redacted `launchError` cause in the existing creation
+result; a spawn already issued with a lost acknowledgement remains pending
+under its original creation key.
+
 In 0.3 development source, saving startup correspondence may outlast the
 Workflow claim. The original Action operation's cancellation signal owns its
 admitted launch after that handoff; claim loss ends only Workflow observation.

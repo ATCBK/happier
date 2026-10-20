@@ -58,6 +58,8 @@ CLI hosts route an explicit workspace to that exact Machine through the same
 publication Action. The receiving host proves its local Machine identity and
 uses the existing confined workspace transfer and Artifact publication owners;
 it never publishes the invoking host's ambient Session file instead.
+Required approval replays on that captured Machine; the mounted dialog consumes
+the same publication receipt rather than reserving client-only execution.
 Generated Action references own the exact input; File-page rendering and live
 validation remain program integration work.
 
