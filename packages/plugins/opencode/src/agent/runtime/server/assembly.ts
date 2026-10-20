@@ -6,6 +6,7 @@ import type {
   AgentSessionRuntime,
   AgentSessionRuntimeContext,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type {
   ManagedServiceHandle,
   ManagedServiceSnapshot,
@@ -223,6 +224,20 @@ export function createOpenCodeServerRuntimeAssembly(
 export async function createOpenCodeServerRuntimeAssembly(
   params: OpenCodeServerRuntimeAssemblyParams,
 ): Promise<OpenCodeServerRuntimeAssembly> {
+  const configuration = params.request.configuration;
+  const noTools = configuration?.unlistedTools === 'deny' && configuration.allowedTools?.length === 0;
+  if (noTools && params.endpoint.mode === 'external-attach') {
+    throw new PluginError({ code: 'opencode_no_tools_requires_managed_server',
+      message: 'A no-tools Run requires a managed OpenCode server to configure native tool availability.' });
+  }
+  // OpenCode filters the model's catalog using Agent permissions, not Session
+  // approval rules. Use one launch-local native Agent whose last rule denies all
+  // tools, including ambient MCP tools, and select it for every Run input.
+  const noToolsAgentId = 'happier-no-tools';
+  const runConfiguration = noTools && configuration
+    ? { ...configuration, mode: { ...configuration.mode, value: noToolsAgentId } }
+    : configuration;
+  const configuredMcpServers = noTools ? undefined : params.mcpServers;
   let managedService: ManagedServiceHandle | null = null;
   let managedServiceObservation: Disposable | null = null;
   let disposed = false;
@@ -247,7 +262,11 @@ export async function createOpenCodeServerRuntimeAssembly(
       endpoint: params.endpoint,
       env: params.env,
       providerConfigPart,
-      configParts: params.configParts,
+      configParts: [
+        ...(params.configParts ?? []),
+        ...(noTools ? [{ default_agent: noToolsAgentId,
+          agent: { [noToolsAgentId]: { mode: 'primary', permission: { '*': 'deny' } } } }] : []),
+      ],
       permissionMode: params.permissionMode,
       signal: params.signal,
       systemToolId,
@@ -293,9 +312,9 @@ export async function createOpenCodeServerRuntimeAssembly(
       signal: params.signal ?? params.ctx.abort.signal,
     });
     const initialProjection = buildOpenCodeSessionMcpProjection(
-      params.executionRunId ?? params.happierSessionId, params.mcpServers,
+      params.executionRunId ?? params.happierSessionId, configuredMcpServers,
     );
-    let mcpServers = params.mcpServers;
+    let mcpServers = configuredMcpServers;
     let toolAliasPrefix: string | undefined;
     // V2 has no registration route; retain its established unsupported capability path.
     if (dialectDetection.dialect !== 'v2' && params.mcpService?.resolveToolNaming) {
@@ -317,6 +336,7 @@ export async function createOpenCodeServerRuntimeAssembly(
       client,
       directory: params.directory,
       mcpProjection,
+      configuration: noTools ? configuration : undefined,
     });
     const operations = createOpenCodeServerRuntime({
       ctx: params.ctx,
@@ -354,8 +374,8 @@ export async function createOpenCodeServerRuntimeAssembly(
           : params.request.checkpointId
             ? { kind: 'fork', source: { providerSessionId: params.request.checkpointId } }
             : (() => { throw new Error('OpenCode execution-run fork requires a provider checkpoint'); })());
-    if (params.request.configuration) {
-      const projection = projectOpenCodeSessionConfiguration(params.request.configuration);
+    if (runConfiguration) {
+      const projection = projectOpenCodeSessionConfiguration(runConfiguration);
       for (const update of projection.updates) {
         await operations.updateSessionRuntimeConfig(update);
       }

@@ -30,6 +30,62 @@ afterEach(() => {
 });
 
 describe('OpenCode server managed-service assembly', () => {
+  it.each(['session', 'execution_run'] as const)('launches normalized no-tools without native or MCP tools through %s', async scope => {
+    const requests: string[] = [];
+    let prompt: Record<string, unknown> | undefined;
+    const ctx = createContextFixture({ managedServerBaseUrl: 'http://127.0.0.1:49213', managedServerRequest: async input => {
+      const path = input.pathAndQuery.split('?')[0]!;
+      requests.push(path);
+      if (path === '/event') return { ok: true, status: 200, headers: { 'content-type': 'text/event-stream' },
+        body: new ReadableStream<Uint8Array>({ start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"type":"server.connected","properties":{}}\n\n'));
+          input.signal?.addEventListener('abort', () => controller.close(), { once: true });
+        } }) };
+      if (input.body !== undefined && (path.includes('/message') || path.includes('/prompt'))) {
+        prompt = JSON.parse(new TextDecoder().decode(input.body));
+      }
+      const body = path === '/session' ? { id: 'oc-no-tools' }
+        : path === '/agent' ? [{ name: 'build', mode: 'primary' }, { name: 'happier-no-tools', mode: 'primary' }]
+          : path === '/session/oc-no-tools' ? { id: 'oc-no-tools', agent: 'build' }
+            : path.endsWith('/message') ? [{ info: { id: 'native-no-tools-input', role: 'user', sessionID: 'oc-no-tools',
+              time: { created: Date.now() } }, parts: [{ type: 'text', text: 'Answer with text' }] }]
+              : path.endsWith('/prompt_async') ? { id: 'native-no-tools-input' } : {};
+      return { ok: true, status: 200, headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(body)).body };
+    } });
+    const configuration = { mode: { value: 'plan', updatedAtMs: 1 }, model: { value: null, updatedAtMs: 0 },
+      permissionIntent: { value: 'read-only' as const, updatedAtMs: 1 }, allowedTools: [], unlistedTools: 'deny' as const, options: {} };
+    const common = { ctx, directory: '/repo', endpoint: { mode: 'managed-spawn' as const },
+      mcpServers: { docs: { command: 'docs-server' } } };
+    const assembly = scope === 'session'
+      ? await createOpenCodeServerRuntimeAssembly({ ...common, happierSessionId: 'session-no-tools',
+        request: { kind: 'create', sessionId: 'session-no-tools', cwd: '/repo', configuration } })
+      : await createOpenCodeServerRuntimeAssembly({ ...common, executionRunId: 'run-no-tools',
+        request: { kind: 'create', runId: 'run-no-tools', cwd: '/repo', input: { text: 'answer' },
+          profile: { pluginId: 'happier.agent.opencode', localId: 'opencode' }, configuration } });
+    try {
+      const spec = vi.mocked(ctx.managedServices.supervise).mock.calls[0]![0];
+      if (spec.mode.kind !== 'spawn') throw new Error('Expected managed spawn');
+      const config = JSON.parse(spec.mode.launch.env?.OPENCODE_CONFIG_CONTENT ?? '{}');
+      expect(config.agent?.['happier-no-tools']).toMatchObject({ permission: { '*': 'deny' } });
+      expect(config.default_agent).toBe('happier-no-tools');
+      expect(requests).not.toContain('/mcp');
+      await expect(assembly.runtime.send({ inputIds: ['no-tools-input'], input: { text: 'Answer with text' },
+        delivery: { kind: 'newTurn', turnId: 'no-tools-turn' } })).resolves.toEqual({ status: 'admitted' });
+      expect(prompt).toMatchObject({ agent: 'happier-no-tools' });
+    } finally { await assembly.dispose(); }
+  });
+
+  it('refuses no-tools on an external OpenCode server before native admission', async () => {
+    const ctx = createContextFixture({ managedServerBaseUrl: 'http://127.0.0.1:49213' });
+    await expect(createOpenCodeServerRuntimeAssembly({ ctx, directory: '/repo', executionRunId: 'run-external',
+      endpoint: { mode: 'external-attach', baseUrl: 'http://127.0.0.1:49213', credential: null },
+      request: { kind: 'create', runId: 'run-external', cwd: '/repo', input: { text: 'answer' },
+        profile: { pluginId: 'happier.agent.opencode', localId: 'opencode' },
+        configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+          permissionIntent: { value: 'read-only', updatedAtMs: 1 }, allowedTools: [], unlistedTools: 'deny', options: {} } } }))
+      .rejects.toMatchObject({ code: 'opencode_no_tools_requires_managed_server' });
+    expect(ctx.managedServices.supervise).not.toHaveBeenCalled();
+  });
   it.each(['session', 'execution_run'] as const)('registers scoped host naming and preserves original approvals and cleanup for %s', async (scope) => {
     const original = 'plugin_' + 'long_name_'.repeat(9);
     // The external tools/list response is the boundary fixture. Naming uses

@@ -65,6 +65,7 @@ function projectOpenCodeMcpName(runtimeIdentity: string, originalName: string): 
 export type OpenCodeMcpRegistrationResult = Readonly<{
   requiredHappier: Readonly<
     | { status: 'ready' }
+    | { status: 'not_required' } // An explicit no-tools Run has no MCP dependency.
     | { status: 'failed'; error: unknown }
     | { status: 'unsupported'; reason: string }
   >;
@@ -198,7 +199,11 @@ export async function registerOpenCodeMcpServers(params: Readonly<{
   client: OpenCodeServerClient;
   directory: string;
   mcpProjection: OpenCodeSessionMcpProjection;
+  configuration?: AgentSessionOpenRequest['configuration'];
 }>): Promise<OpenCodeMcpRegistrationResult> {
+  if (params.configuration?.unlistedTools === 'deny' && params.configuration.allowedTools?.length === 0) {
+    return { requiredHappier: { status: 'not_required' }, registeredServers: [] };
+  }
   const registrations = params.mcpProjection.registrations;
   const registeredServers: OpenCodeRegisteredMcpServer[] = [];
   let requiredHappier: OpenCodeMcpRegistrationResult['requiredHappier'] = {
@@ -271,6 +276,7 @@ export function scheduleOpenCodeMcpServerRegistration(params: Readonly<{
   client: OpenCodeServerClient;
   directory: string;
   mcpProjection: OpenCodeSessionMcpProjection;
+  configuration?: AgentSessionOpenRequest['configuration'];
 }>): Promise<OpenCodeMcpRegistrationResult> {
   return (async () => {
     return await registerOpenCodeMcpServers({
@@ -278,6 +284,7 @@ export function scheduleOpenCodeMcpServerRegistration(params: Readonly<{
       client: params.client,
       directory: params.directory,
       mcpProjection: params.mcpProjection,
+      configuration: params.configuration,
     });
   })().catch((error: unknown) => {
     params.ctx.logger.debug(
