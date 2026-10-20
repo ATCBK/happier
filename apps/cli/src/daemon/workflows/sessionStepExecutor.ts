@@ -233,7 +233,7 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
           actionId: 'discussion.invite',
           input: { discussionId: discussionParticipant.discussionId,
             participant: { kind: 'model', participantSlotId: creationKey, launch } },
-          context: { serverId: deps.serverId, surface: 'background', authority: 'account_automation' },
+          context: { serverId: deps.serverId, surface: 'api', authority: 'account_automation' },
           ...(signal ? { signal } : {}),
         });
       const reserved = DiscussionInviteResultV1Schema.safeParse(result);
@@ -253,7 +253,7 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
       if (!discussionParticipant || !discussionAction) return;
       const result = await discussionAction({ actionId: 'discussion.participants.list',
         input: { discussionId: discussionParticipant.discussionId },
-        context: { serverId: deps.serverId, surface: 'background', authority: 'account_automation' },
+        context: { serverId: deps.serverId, surface: 'api', authority: 'account_automation' },
         ...(signal ? { signal } : {}),
       });
       const roster = DiscussionParticipantsListResponseV1Schema.safeParse(result);
@@ -1210,6 +1210,7 @@ export function createProductionWorkflowConversationOwner(deps: Readonly<{
           ? { retainedStartupOperation: params.invocation.execution.awaitedOperations[0],
             retainedStartupOperationSnapshot: params.invocation.execution.output
               && typeof params.invocation.execution.output === 'object' && !Array.isArray(params.invocation.execution.output)
+              && 'operation' in params.invocation.execution.output
               ? params.invocation.execution.output.operation : undefined } : {}),
         onStartupObservation: async (operation, serverId) => {
           if (operation.actionId !== 'session.spawn_new' || operation.scope.machineId !== params.workspace.machineId) {

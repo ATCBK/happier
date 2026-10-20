@@ -80,7 +80,7 @@ export type WorkflowConversationSelectionResolution =
   | Readonly<{ kind: 'observe'; execution: NonNullable<WorkflowProgressEnvelopeV1['execution']> }>
   | Readonly<{ kind: 'retained'; execution: NonNullable<WorkflowProgressEnvelopeV1['execution']> }>
   | Readonly<{ kind: 'unavailable' }>
-  | Readonly<{ kind: 'select'; binding: WorkflowConversationBinding }>;
+  | Readonly<{ kind: 'select'; binding: Exclude<WorkflowConversationBinding, { kind: 'input' }> }>;
 
 /** Rejoin is exact-input observation; recovery intent precedes authored continuity. */
 export function resolveWorkflowConversationSelection(params: Readonly<{
@@ -100,14 +100,12 @@ export function resolveWorkflowConversationSelection(params: Readonly<{
       ? { kind: 'retained', execution: params.recoveryPreviousExecution }
       : { kind: 'unavailable' };
   }
-  return {
-    kind: 'select',
-    binding: params.conversationBinding ?? resolveWorkflowConversationBinding({
-      execution: params.execution,
-      authoredConversation: params.execution.conversation,
-      inheritedOwnerKey: params.runId,
-      rootOwnerKey: params.runId,
-      targetClass: params.executionTarget?.kind ?? 'session',
-    }),
-  };
+  const binding = params.conversationBinding ?? resolveWorkflowConversationBinding({
+    execution: params.execution,
+    authoredConversation: params.execution.conversation,
+    inheritedOwnerKey: params.runId,
+    rootOwnerKey: params.runId,
+    targetClass: params.executionTarget?.kind ?? 'session',
+  });
+  return binding.kind === 'input' ? { kind: 'unavailable' } : { kind: 'select', binding };
 }

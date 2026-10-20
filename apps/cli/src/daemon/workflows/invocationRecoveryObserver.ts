@@ -414,7 +414,7 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
             && snapshots.length === 1 && snapshots[0]!.target.machineId === params.machineId
             && ActionOperationGetV1ResponseSchema.parse(snapshots[0]!.raw).kind === 'not_found') {
             const output = execution.output;
-            const failed = readRetainedWorkflowSessionStartupFailure(output && typeof output === 'object' && !Array.isArray(output)
+            const failed = readRetainedWorkflowSessionStartupFailure(output && typeof output === 'object' && !Array.isArray(output) && 'operation' in output
               ? output.operation : undefined, snapshots[0]!.target, execution.actionRequestId);
             if (failed) return { kind: 'failed', code: failed.error?.errorCode ?? 'action_operation_failed',
               ...(failed.error?.error ? { message: failed.error.error } : {}) };
