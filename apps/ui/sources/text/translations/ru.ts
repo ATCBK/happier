@@ -11087,6 +11087,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       untrustedNotice: 'Внедренная диагностика может быть изменена страницей и имеет более низкую точность.',
       untrustedEvent: 'Недоверенное внедренное событие',
       eventsEmpty: 'Диагностика браузера еще не захвачена.',
+      unavailableReason: 'Они появятся здесь, когда страница загрузится и передаст их.',
+      familyNotReported: 'Эта страница об этом не сообщает.',
       eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'Ошибка страницы',

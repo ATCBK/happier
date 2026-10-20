@@ -11359,6 +11359,8 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       untrustedNotice: 'Diagnósticos injetados podem ser alterados pela página e têm menor fidelidade.',
       untrustedEvent: 'Evento injetado não confiável',
       eventsEmpty: 'Nenhum diagnóstico do navegador capturado ainda.',
+      unavailableReason: 'Aparecem aqui assim que a página carrega e os envia.',
+      familyNotReported: 'Não informado por esta página.',
       eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'Erro da página',

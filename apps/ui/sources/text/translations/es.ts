@@ -11239,6 +11239,8 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       untrustedNotice: 'Los diagnósticos inyectados pueden ser manipulados por la página y tienen menor fidelidad.',
       untrustedEvent: 'Evento inyectado no confiable',
       eventsEmpty: 'Aún no se capturaron diagnósticos del navegador.',
+      unavailableReason: 'Aparecen aquí cuando la página carga y los envía.',
+      familyNotReported: 'Esta página no lo informa.',
       eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'Error de página',

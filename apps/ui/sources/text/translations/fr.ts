@@ -11075,6 +11075,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       untrustedNotice: 'Les diagnostics injectés sont altérables par la page et de moindre fidélité.',
       untrustedEvent: 'Événement injecté non fiable',
       eventsEmpty: 'Aucun diagnostic de navigateur capturé pour l’instant.',
+      unavailableReason: 'Ils apparaissent ici dès que la page se charge et les transmet.',
+      familyNotReported: 'Non signalé par cette page.',
       eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'Erreur de page',

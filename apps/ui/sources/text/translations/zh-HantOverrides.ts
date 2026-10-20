@@ -9244,6 +9244,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             untrustedNotice: '注入診斷可能被頁面竄改，保真度較低。',
             untrustedEvent: '不受信任的注入事件',
             eventsEmpty: '尚未擷取瀏覽器診斷。',
+            unavailableReason: '頁面載入並回報後，會顯示在這裡。',
+            familyNotReported: '此頁面未回報。',
             eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: '頁面錯誤',

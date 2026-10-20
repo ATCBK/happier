@@ -11078,6 +11078,8 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             untrustedNotice: 'Eingespielte Diagnose lässt sich von der Seite manipulieren und ist ungenauer.',
             untrustedEvent: 'Nicht vertrauenswürdiges eingespieltes Ereignis',
             eventsEmpty: 'Es wurde noch keine Browser-Diagnose erfasst.',
+            unavailableReason: 'Sie erscheinen hier, sobald die Seite lädt und sie meldet.',
+            familyNotReported: 'Von dieser Seite nicht gemeldet.',
             eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'Seitenfehler',

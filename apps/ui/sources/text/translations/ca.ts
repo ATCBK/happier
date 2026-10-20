@@ -10377,6 +10377,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             untrustedNotice: 'Els diagnòstics injectats poden ser alterats per la pàgina i tenen menor fidelitat.',
             untrustedEvent: 'Esdeveniment injectat no fiable',
             eventsEmpty: "Encara no s'ha capturat cap diagnòstic del navegador.",
+            unavailableReason: 'Apareixen aquí quan la pàgina es carrega i els envia.',
+            familyNotReported: 'Aquesta pàgina no ho informa.',
             eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'Error de pàgina',

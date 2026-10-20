@@ -10869,6 +10869,8 @@ const zhHansValues = {
       untrustedNotice: '注入诊断可能被页面篡改，保真度较低。',
       untrustedEvent: '不受信任的注入事件',
       eventsEmpty: '尚未捕获浏览器诊断。',
+      unavailableReason: '页面加载并上报后，会显示在这里。',
+      familyNotReported: '此页面未上报。',
       eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: '页面错误',

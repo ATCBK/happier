@@ -11460,6 +11460,8 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       untrustedNotice: 'La diagnostica iniettata puo essere alterata dalla pagina e ha fedelta inferiore.',
       untrustedEvent: 'Evento iniettato non attendibile',
       eventsEmpty: 'Nessuna diagnostica browser catturata.',
+      unavailableReason: 'Compaiono qui quando la pagina si carica e li invia.',
+      familyNotReported: 'Non segnalato da questa pagina.',
       eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'Errore pagina',

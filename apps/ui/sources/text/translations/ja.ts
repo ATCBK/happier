@@ -11533,6 +11533,8 @@ localTailscale: {
       untrustedNotice: '注入された診断はページ側で改ざん可能で、低い忠実度です。',
       untrustedEvent: '信頼されない注入イベント',
       eventsEmpty: 'ブラウザー診断はまだキャプチャされていません。',
+      unavailableReason: 'ページが読み込まれて送信されると、ここに表示されます。',
+      familyNotReported: 'このページは報告していません。',
       eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'ページエラー',

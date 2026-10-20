@@ -13129,6 +13129,8 @@ const enBrowserDiagnostics = {
       'Collected inside the page, so the page can change what it reports.',
     untrustedEvent: 'Untrusted injected event',
     eventsEmpty: 'No browser diagnostics captured yet.',
+    unavailableReason: 'They show up here once the page loads and reports them.',
+    familyNotReported: 'Not reported by this page.',
     eventTitle: ({ family, kind }: { family: string; kind: string }) =>
       `${family} - ${kind}`,
     eventTitles: {

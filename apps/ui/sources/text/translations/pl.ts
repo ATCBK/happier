@@ -11066,6 +11066,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       untrustedNotice: 'Diagnostyka wstrzyknięta może zostać zmieniona przez stronę i ma niższą wierność.',
       untrustedEvent: 'Niezaufane zdarzenie wstrzyknięte',
       eventsEmpty: 'Nie przechwycono jeszcze diagnostyki przeglądarki.',
+      unavailableReason: 'Pojawią się tutaj, gdy strona się załaduje i je przekaże.',
+      familyNotReported: 'Ta strona tego nie zgłasza.',
       eventTitle: ({ family, kind }: { family: string; kind: string }) => `${family} - ${kind}`,
             eventTitles: {
                 pageError: 'Błąd strony',
