@@ -26,6 +26,7 @@ export type StreamedTranscriptSegmentRuntime = {
   lastCommittedTextVersion: number;
   lastCommittedState: StreamedTranscriptSegmentState | null;
   lastCommittedDelivered: boolean;
+  lastCommittedSequence?: number;
   lastCommitFailedAtMs: number;
   durableCommitFailure: DurableCommitFailureIncident | null;
   durableRetryNotBeforeMs: number;

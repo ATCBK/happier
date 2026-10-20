@@ -13,7 +13,6 @@ import type { ApiClient } from '@/api/api';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { RuntimeSessionTurnMutationV1 } from '@/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
-import type { TurnAssistantTextSnapshot } from '@/api/session/turns/assistantTextSnapshot';
 import type { RegisterProviderAcceptedEffect } from '@/agent/runtime/session/input/providerInputOutcome';
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { isTerminalSessionTurnMutationAction } from '@/api/session/sessionTurnStatusSnapshot';
@@ -407,7 +406,8 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     failure?: RuntimeTranscriptRequiredAdmissionError;
     userLocalIds: Set<string>;
     hasAssistantText?: true;
-    terminalAssistantSnapshot?: TurnAssistantTextSnapshot | null;
+    finalAssistantMessageSeq?: number;
+    startSeqExclusive?: number;
   }>();
   const pendingInputSettlementsByLocalId = new Map<string, Promise<void>>();
   const retireTurnTranscriptState = (turnId: string): void => {
@@ -480,29 +480,6 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             );
       }
 
-      if (transcriptAdmissionFailure && mutation.action === 'complete') {
-        const failureMutation: RuntimeSessionTurnMutationV1 = {
-          ...mutation,
-          mutationId: `${mutation.mutationId}:transcript-custody-failed`,
-          action: 'fail',
-          issue: {
-            v: 1,
-            scope: 'primary_session',
-            status: 'failed',
-            code: 'runtime_transcript_required_admission_failed',
-            source: 'stream_error',
-            occurredAt: mutation.observedAt,
-            ...(mutation.agentId ? { agentId: mutation.agentId } : {}),
-            ...(mutation.agentTurnId ? { agentTurnId: mutation.agentTurnId } : {}),
-            sanitizedPreview: 'Required transcript output could not be stored durably',
-          },
-        };
-        await enqueueTerminalMutation(failureMutation);
-        retireTurnTranscriptState(mutation.turnId);
-        return { terminalStatusOverride: 'failed' as const };
-      }
-      if (transcriptAdmissionFailure) throw transcriptAdmissionFailure;
-
       try {
         const turnState = 'turnId' in mutation ? readTurnTranscriptState(mutation.turnId) : null;
         // Join the existing Pending write before reading its acknowledged-row
@@ -518,22 +495,19 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
               .sort((left, right) => left - right)
           : [];
         const startUserMessageSeq = userMessageSeqs[0];
-        const snapshot = turnState?.terminalAssistantSnapshot;
-        const finalAssistantMessageSeq = (snapshot?.source === 'committed' || snapshot?.source === 'socket')
-          && typeof snapshot.seq === 'number' && Number.isSafeInteger(snapshot.seq) && snapshot.seq >= 0
-          ? snapshot.seq : null;
-        // Context-only turns have no user row. Their existing snapshot frontier
+        const finalAssistantMessageSeq = turnState?.finalAssistantMessageSeq ?? null;
+        // Context-only turns have no user row. Their turn-start frontier
         // still bounds the reply; a non-null final anchor requires that range.
         const startSeqInclusive = startUserMessageSeq ?? (finalAssistantMessageSeq === null
           ? undefined
-          : snapshot?.startSeqExclusive != null
-            ? snapshot.startSeqExclusive + 1
+          : turnState?.startSeqExclusive != null
+            ? turnState.startSeqExclusive + 1
             : finalAssistantMessageSeq);
         const observedSeq = params.session.getLastObservedMessageSeq?.();
         const endSeqs = [...userMessageSeqs,
           ...(typeof observedSeq === 'number' && Number.isSafeInteger(observedSeq) && observedSeq >= 0 ? [observedSeq] : []),
           ...(finalAssistantMessageSeq === null ? [] : [finalAssistantMessageSeq])];
-        if ((mutation.action === 'fail' || mutation.action === 'cancel' || mutation.action === 'wait') && startUserMessageSeq !== undefined) {
+        if ((transcriptAdmissionFailure || mutation.action === 'fail' || mutation.action === 'cancel' || mutation.action === 'wait') && startUserMessageSeq !== undefined) {
           await enqueueTerminalMutation({
             v: mutation.v, sessionId: mutation.sessionId,
             mutationId: `${mutation.mutationId}:input-anchors`, observedAt: mutation.observedAt,
@@ -543,6 +517,24 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
               startSeqInclusive: startUserMessageSeq, endSeqInclusive: Math.max(...endSeqs) },
           });
         }
+        if (transcriptAdmissionFailure && mutation.action === 'complete') {
+          const { transcriptAnchors: _uncommittedAnchors, ...base } = mutation;
+          await enqueueTerminalMutation({
+            ...base,
+            mutationId: `${mutation.mutationId}:transcript-custody-failed`,
+            action: 'fail',
+            issue: {
+              v: 1, scope: 'primary_session', status: 'failed',
+              code: 'runtime_transcript_required_admission_failed', source: 'stream_error', occurredAt: mutation.observedAt,
+              ...(mutation.agentId ? { agentId: mutation.agentId } : {}),
+              ...(mutation.agentTurnId ? { agentTurnId: mutation.agentTurnId } : {}),
+              sanitizedPreview: 'Required transcript output could not be stored durably',
+            },
+          });
+          retireTurnTranscriptState(mutation.turnId);
+          return { terminalStatusOverride: 'failed' as const };
+        }
+        if (transcriptAdmissionFailure) throw transcriptAdmissionFailure;
         const settledMutation: RuntimeSessionTurnMutationV1 =
           mutation.action === 'complete'
             ? {
@@ -690,7 +682,10 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         hostReadyCapture.turnId = parsedRuntimeEvent.data.turnId;
       }
       activeRuntimeTranscriptTurnId = parsedRuntimeEvent.data.turnId;
-      delete readTurnTranscriptState(parsedRuntimeEvent.data.turnId).failure;
+      const state = readTurnTranscriptState(parsedRuntimeEvent.data.turnId);
+      delete state.failure;
+      const startSeq = params.session.getLastObservedMessageSeq?.();
+      if (typeof startSeq === 'number' && Number.isSafeInteger(startSeq) && startSeq >= 0) state.startSeqExclusive = startSeq;
     }
     if (parsedRuntimeEvent.success && parsedRuntimeEvent.data.kind === 'input-accepted') {
       const event = parsedRuntimeEvent.data;
@@ -746,6 +741,10 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       } catch (error) {
         transcriptProjectionError = error;
       }
+      if (projectionTurnId && projectionResult?.projected && projectionResult.finalAssistantMessageSeq !== undefined) {
+        const state = readTurnTranscriptState(projectionTurnId);
+        state.finalAssistantMessageSeq = Math.max(state.finalAssistantMessageSeq ?? 0, projectionResult.finalAssistantMessageSeq);
+      }
       try {
         if (parsedRuntimeEvent.success) {
           await observeAgentStreamTokenEvent({
@@ -765,8 +764,10 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
           || parsedRuntimeEvent.data.kind === 'turn-cancelled')
       ) {
         const state = readTurnTranscriptState(projectionTurnId);
-        state.terminalAssistantSnapshot = transcriptProjectionError || !state.hasAssistantText ? null
-          : params.session.getTurnAssistantTextSnapshotStore?.()?.getCurrentTurnSnapshot() ?? null;
+        if (parsedRuntimeEvent.data.kind === 'turn-complete' && state.hasAssistantText
+          && state.finalAssistantMessageSeq === undefined) {
+          transcriptProjectionError ??= new RuntimeTranscriptRequiredAdmissionError('delivery_not_confirmed', parsedRuntimeEvent.data.kind);
+        }
       }
       if (
         readyCapture && readyCapture.context === undefined && parsedRuntimeEvent.success

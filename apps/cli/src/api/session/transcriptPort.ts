@@ -98,7 +98,7 @@ export type TranscriptSessionPort = Readonly<{
     provider: ACPProvider,
     body: ACPMessageData,
     opts: CommittedTranscriptMessageOptions,
-  ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
+  ) => Promise<Readonly<{ persisted: boolean; delivered: boolean; committedSequence?: number }>>;
   sendAgentSessionMediaCommitted?: (
     provider: ACPProvider,
     request: SendAgentSessionMediaCommittedRequest,

@@ -41,7 +41,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
     ...(params.runtimeTurnId ? { runtimeTurnId: params.runtimeTurnId } : {}),
   };
 
-  const markDurablyPersisted = (delivered: boolean) => {
+  const markDurablyPersisted = (delivered: boolean, committedSequence?: number) => {
     segment.didWriteDurable = true;
     segment.lastDurableText = commitText;
     segment.lastCheckpointAtMs = Date.now();
@@ -49,6 +49,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
     segment.lastCommittedTextVersion = commitVersion;
     segment.lastCommittedState = state;
     segment.lastCommittedDelivered = delivered;
+    segment.lastCommittedSequence = delivered ? committedSequence : undefined;
     segment.appendOnlySinceLastDurableSnapshot = true;
     segment.durableRetryNotBeforeMs = 0;
     const recovered = segment.durableCommitFailure;
@@ -79,7 +80,9 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
           },
         })
         .then((result) => {
-          if (result.persisted && (!params.admission?.requireDelivery || result.delivered)) markDurablyPersisted(result.delivered);
+          if (result.persisted && (!params.admission?.requireDelivery || result.delivered)) {
+            markDurablyPersisted(result.delivered, result.committedSequence);
+          }
         });
     } else {
       throw new Error('enqueueAgentMessageCommitted unavailable');

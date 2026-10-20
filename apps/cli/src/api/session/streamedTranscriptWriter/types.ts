@@ -32,6 +32,8 @@ export type StreamedTranscriptSegmentFlushSummary = Readonly<{
   didDurablyFlush: boolean;
   /** The final snapshot reached Home, rather than only the local durable outbox. */
   didDeliver: boolean;
+  /** Home's receipt for this exact snapshot; absent for journal-only custody. */
+  committedSequence?: number;
   lastCommittedState: StreamedTranscriptSegmentState | null;
 }>;
 

@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import type { AgentSessionRuntime, AgentSessionRuntimeContext, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
-import { AgentSessionRuntimeEventV1Schema, SessionTurnMutationV1Schema } from '@happier-dev/protocol';
+import { AgentSessionRuntimeEventV1Schema, SessionTurnMutationV1Schema,
+  sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1,
+  sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1,
+  type WorkflowDefinitionV1 } from '@happier-dev/protocol';
+import { observeWorkflowSessionInputResult, classifyWorkflowSessionInputResult, type WorkflowSessionInputObservation } from '@/daemon/workflows/stepExecution';
+import { createWorkflowRunStorageTestkit } from '@/daemon/workflows/workflowRunStorage.testkit';
+import { createWorkflowInvocationRecoveryFactWriter } from '@/daemon/workflows/recovery';
+import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createSessionProviderInputOutcomeBinding } from '@/agent/runtime/session/input/providerInputOutcome';
 
 import { withHostSessionRuntimeIdentityPublication } from '@/agent/runtime/identity/publication/withHostSession';
@@ -26,12 +36,22 @@ import { getResolvedContributionRegistry } from '@/plugins/projection/registry/c
 
 import { HOST_SESSION_RUNTIME_PLAN_KIND, runSessionLoopLifecycle, type SessionLoopLifecycleParams } from './lifecycle';
 
+vi.mock('@/api/session/sockets', async importOriginal => ({
+  ...await importOriginal<typeof import('@/api/session/sockets')>(),
+  createSessionScopedSocketConnection: () => {
+    const socket = createApiSessionSocketStub({ connected: false });
+    return { socket, transport: createSocketTransportAdapter(socket) };
+  },
+}));
+
 describe('host ready after a provider successor starts', () => {
   it.each([
-    { hostAnswer: 'HOST_ANSWER', eagerStartup: false },
-    { hostAnswer: null, eagerStartup: false },
-    { hostAnswer: 'HOST_ANSWER', eagerStartup: true },
-  ])('preserves the completed host preview and eager startup $eagerStartup/$hostAnswer', async ({ hostAnswer, eagerStartup }) => {
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: false },
+    { hostAnswer: null, eagerStartup: false, retirePreview: false, omitReceipt: false },
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: true, retirePreview: false, omitReceipt: false },
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: true, omitReceipt: false },
+    { hostAnswer: 'HOST_ANSWER', eagerStartup: false, retirePreview: false, omitReceipt: true },
+  ])('preserves host results across preview retirement=$retirePreview, receipt omission=$omitReceipt and eager startup=$eagerStartup/$hostAnswer', async ({ hostAnswer, eagerStartup, retirePreview, omitReceipt }) => {
     const accountRequests: string[] = [];
     // Account HTTP is outside the host. The real project resolver receives a
     // current empty association census; unexpected network reads still fail.
@@ -40,6 +60,24 @@ describe('host ready after a provider successor starts', () => {
       if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: {
         mode: 'plain', updatedAt: 1,
       } };
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+      } };
+      if (String(url).endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session:
+        createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', active: true, metadata: '{}' }) } };
+      if (String(url).endsWith('/reply')) return { status: 200, data: { v: 1, status: 'none' } };
+      if (String(url).includes('/messages/by-local-id/')) return { status: 200, data: { message: {
+        id: 'original-input', localId: 'host-input', seq: 1, createdAt: 1, updatedAt: 1,
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'host input' } } },
+      } } };
+      if (String(url).endsWith('/turns')) return { status: 200, data: { v: 1, sessionId, updatedAt: 100, turns:
+        terminalMutations.filter(m => m.turnId === hostTurnIds[0]).map(m => ({ turnId: m.turnId,
+          status: m.action === 'complete' ? 'completed' : 'failed', startedAt: 1, updatedAt: 100,
+          transcriptAnchors: m.action === 'complete' ? m.transcriptAnchors : inputAnchors.get(m.turnId),
+          ...(m.action === 'fail' ? { lastRuntimeIssue: m.issue } : {}),
+        })) } };
+      if (String(url).includes('/messages?')) return { status: 200, data: { messages: transcriptRows } };
       throw new Error(`Unexpected account GET: ${String(url)}`);
     });
     const accountPost = vi.spyOn(axios, 'post').mockImplementation(async url => {
@@ -53,7 +91,7 @@ describe('host ready after a provider successor starts', () => {
         contributes: getResolvedContributionRegistry(), pluginIds: [],
       }),
     });
-    const sessionId = 'ready-handoff';
+    const sessionId = 'c' + 'a'.repeat(24);
     const hostTurnIds: string[] = [];
     const readyOriginals: Array<{ localId: string; seq: number }> = [];
     const readyEvents: unknown[] = [];
@@ -62,7 +100,10 @@ describe('host ready after a provider successor starts', () => {
     let providerDispatchCount = 0;
     const secondHostAnswer = hostAnswer === null ? 'SECOND_HOST_ANSWER' : null;
     const committedMessages: unknown[] = [];
-    const terminalMutations: unknown[] = [];
+    const terminalMutations: Array<Extract<ReturnType<typeof SessionTurnMutationV1Schema.parse>, { action: 'complete' | 'fail' }>> = [];
+    const inputAnchors = new Map<string, Extract<ReturnType<typeof SessionTurnMutationV1Schema.parse>, { action: 'append_transcript_anchors' }>['transcriptAnchors']>();
+    const transcriptRows: Array<{ id: string; localId: string; seq: number; createdAt: number; updatedAt: number;
+      content: { t: 'plain'; v: ReturnType<typeof buildAcpAgentMessageEnvelope> } }> = [];
     const committedAssistantSeqs = new Map<string, number>();
     const acceptedUserSeqs = new Map<string, number>();
     const pendingReceipts = new Map<string, () => void>();
@@ -133,7 +174,8 @@ describe('host ready after a provider successor starts', () => {
       getCommittedUserMessageSeq: (localId: string) => acceptedUserSeqs.get(localId) ?? null,
       enqueueSessionTurnMutation: async (mutation: unknown) => {
         const parsed = SessionTurnMutationV1Schema.parse(mutation);
-        if (parsed.action === 'complete') terminalMutations.push(parsed);
+        if (parsed.action === 'append_transcript_anchors') inputAnchors.set(parsed.turnId, parsed.transcriptAnchors);
+        if (parsed.action === 'complete' || parsed.action === 'fail') terminalMutations.push(parsed);
       },
       enqueueAgentMessageCommitted: async (
         providerId: Parameters<NonNullable<typeof fixture.enqueueAgentMessageCommitted>>[0],
@@ -144,7 +186,10 @@ describe('host ready after a provider successor starts', () => {
         const extracted = extractAssistantTextSnapshotFromAcpMessage(providerId, body);
         if (extracted) {
           const seq = ++observedSeq;
-          snapshots.observe({ ...extracted, localId: options.localId, seq, source: 'committed' });
+          transcriptRows.push({ id: `reply-${seq}`, localId: options.localId, seq, createdAt: seq, updatedAt: seq,
+            content: { t: 'plain', v: buildAcpAgentMessageEnvelope({ provider: providerId, body, meta: options.meta }) } });
+          if (!omitReceipt) snapshots.observe({ ...extracted, localId: options.localId, seq, source: 'committed' });
+          if (retirePreview) snapshots.clearSnapshot({ reason: 'clear' });
           committedAssistantSeqs.set(extracted.text, seq);
           // The external Pending receipt can arrive after a successor's first
           // assistant row. Native acceptance itself is not this Home ACK.
@@ -153,7 +198,8 @@ describe('host ready after a provider successor starts', () => {
             pendingReceipts.clear();
           }
         }
-        return { persisted: true as const, delivered: true as const };
+        return { persisted: true as const, delivered: true as const,
+          ...(!omitReceipt && extracted ? { committedSequence: committedAssistantSeqs.get(extracted.text) } : {}) };
       },
     });
     const inputBinding = createSessionProviderInputOutcomeBinding({ getTarget: () => ({ sessionId,
@@ -214,7 +260,8 @@ describe('host ready after a provider successor starts', () => {
         runPermissionModePromptLoopFn: input => runPermissionModePromptLoop({ ...input, shouldExit: () => ready, getAbortSignal: () => controller.signal }),
         sendReadyWithPushNotificationFn: async input => {
           readyPreviews.push(input.assistantPreviewText);
-          expect(input.completedTurn).toEqual({ turnId: hostTurnIds[readyPreviews.length - 1] });
+          expect(input.completedTurn).toEqual(omitReceipt && readyPreviews.length === 1 ? undefined
+            : { turnId: hostTurnIds[readyPreviews.length - 1] });
           await sendReadyWithPushNotification(input);
           thinkingAtReady.push(runtimeState.thinking);
           if (providerDispatchCount > 0) emit({ kind: 'turn-complete', turnId: `provider-successor-${providerDispatchCount}` });
@@ -248,15 +295,35 @@ describe('host ready after a provider successor starts', () => {
       await runSessionLoopLifecycle({ ...params, runtime: runtimeForLoop });
       expect(providerDispatchCount, JSON.stringify({ committedMessages, accountRequests })).toBe(2);
       for (const [index, answer] of [hostAnswer, secondHostAnswer].entries()) {
+        if (omitReceipt && answer) {
+          expect(terminalMutations).toContainEqual(expect.objectContaining({ action: 'fail', turnId: hostTurnIds[index],
+            issue: expect.objectContaining({ code: 'runtime_transcript_required_admission_failed' }) }));
+          continue;
+        }
         expect(terminalMutations).toContainEqual(expect.objectContaining({ turnId: hostTurnIds[index],
           transcriptAnchors: expect.objectContaining({ startUserMessageSeq: index === 0 ? 1 : secondHostSeq,
             userMessageSeqs: [index === 0 ? 1 : secondHostSeq],
             finalAssistantMessageSeq: answer ? committedAssistantSeqs.get(answer) : null }) }));
       }
-      expect.soft(readyPreviews).toEqual([hostAnswer, secondHostAnswer]);
-      await vi.waitFor(() => expect(sentNotifications).toHaveLength(2));
-      expect(readyEvents).toEqual(hostTurnIds.map(completedTurnId => ({ type: 'ready', ownerActivityDelivery: 'rich_sender', completedTurnId })));
-      expect(sentNotifications.map(notification => notification[2])).toEqual(readyOriginals.map(original => ({
+      const observed = await observeWorkflowSessionInputResult({ credentials: { token: 'token', encryption: null },
+        sessionId, localId: 'host-input', deadlineMs: 0 });
+      expect(observed.ok).toBe(true);
+      if (!observed.ok) throw new Error('Missing original input observation');
+      const classified = classifyWorkflowSessionInputResult(observed.result);
+      if (omitReceipt) expect(classified).toMatchObject({ kind: 'failed', code: 'session_input_failed' });
+      else if (hostAnswer) {
+        expect(classified).toMatchObject({ kind: 'completed', result: hostAnswer });
+        if (classified.kind !== 'completed') throw new Error('Missing committed reply');
+        const stored = await persistHostReply(classified, sessionId);
+        expect(stored?.index.lifecycle).toBe('completed');
+        expect(stored?.progress.result).toBe(hostAnswer);
+      } else expect(classified).toMatchObject({ kind: 'needs_attention', code: 'session_input_result_unavailable' });
+      expect.soft(readyPreviews).toEqual(retirePreview || omitReceipt ? [null, null] : [hostAnswer, secondHostAnswer]);
+      await vi.waitFor(() => expect(sentNotifications).toHaveLength(omitReceipt ? 1 : 2));
+      expect(readyEvents).toEqual(hostTurnIds.map((completedTurnId, index) => ({ type: 'ready', ownerActivityDelivery: 'rich_sender',
+        ...(omitReceipt && index === 0 ? {} : { completedTurnId }) })));
+      const notifiedOriginals = omitReceipt ? readyOriginals.slice(1) : readyOriginals;
+      expect(sentNotifications.map(notification => notification[2])).toEqual(notifiedOriginals.map(original => ({
         sessionId, activityEventLocalId: original.localId,
         activityEvent: { type: 'ready', sequenceDomain: 'session_transcript', messageSeq: original.seq },
       })));
@@ -276,3 +343,50 @@ describe('host ready after a provider successor starts', () => {
     }
   });
 });
+
+async function persistHostReply(observation: Extract<WorkflowSessionInputObservation, { kind: 'completed' }>, sessionId: string) {
+  const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+  const rootId = '33333333-3333-4333-8333-333333333333';
+  const childId = '44444444-4444-4444-8444-444444444444';
+  const accountId = 'account-1';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'step', id: 'first',
+    document: { text: 'host input', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] };
+  const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+    binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId },
+    acceptedSnapshot: { startedBy: 'user', definition, authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {},
+      materializedLeaves: [{ sourceKey: '$root', blockId: 'first', kind: 'step', authoredWorkspace: { kind: 'inherit' },
+        selection: {}, executionTarget: { kind: 'session' } }], source: { kind: 'inline' }, inputs: {}, machineId: 'machine-1',
+      executionTarget: { kind: 'session' },
+      workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
+      origin: { kind: 'direct', originSessionId: sessionId },
+      authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
+      resultDelivery: { kind: 'originating_session', originSessionId: sessionId },
+    },
+  }));
+  // Only opaque Home storage is substituted. The result codec, fact writer,
+  // row revision, sealed producer and stored-content opener remain real.
+  const storage = createWorkflowRunStorageTestkit({ runId, machineId: 'machine-1', origin: { kind: 'direct' }, acceptedEnvelope });
+  const seal = (root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+    binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: root ? rootId : childId,
+      sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
+    progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
+      invocationPath: { blockId: root ? '$root' : 'first', scope: [] }, attempt: '0', logicalInvocationRecordId: root ? rootId : childId,
+      ...(root ? {} : { execution: { kind: 'session', sessionId, localInputId: 'host-input' } }),
+    },
+  }));
+  const checkpointEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
+    binding: { v: 1, purpose: 'checkpoint', accountId, runId },
+    checkpoint: { kind: 'happier.workflow-checkpoint.v1', rootRecordId: rootId, nextSequence: '2',
+      frontier: { nextBlockOrdinal: 1, paused: false } },
+  }));
+  await storage.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope,
+    rootInvocation: { id: rootId, contentEnvelope: seal(true) } });
+  await storage.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope,
+    invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'running', contentEnvelope: seal(false) }] });
+  const writer = createWorkflowInvocationRecoveryFactWriter({ accountId, run: storage.run(), parentAttempt: 0, storage,
+    encryption: { witness: { mode: 'plain', version: 1, contentKeyFingerprint: null }, runCrypto: { mode: 'plain' } } });
+  const invocation = await writer.readInvocation(childId);
+  if (!invocation) throw new Error('Missing stored host invocation');
+  await writer.commitObservation(invocation, observation);
+  return await writer.readInvocation(childId);
+}

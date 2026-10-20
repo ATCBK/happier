@@ -70,6 +70,8 @@ function buildFlushSummary(params: {
     sawText: segment.accumulatedText.length > 0 || segment.sourceMessageId !== undefined,
     didDurablyFlush: didSegmentDurablyFlush(segment, params.expectedState(segment)),
     didDeliver: didSegmentDurablyFlush(segment, params.expectedState(segment)) && segment.lastCommittedDelivered,
+    ...(didSegmentDurablyFlush(segment, params.expectedState(segment)) && segment.lastCommittedDelivered
+      && segment.lastCommittedSequence !== undefined ? { committedSequence: segment.lastCommittedSequence } : {}),
     lastCommittedState: segment.lastCommittedState,
   }));
 
