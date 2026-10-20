@@ -532,10 +532,15 @@ dependency copies is removed only when the surviving ancestor is reachable from 
 the two trees are recursively byte-identical without symbolic links, and direct peer resolution is
 unchanged; missing, shadowed, divergent, peer-dependent, or linked copies are retained.
 
-The PTY provider uses `node-pty` first. On POSIX Bun it skips the Homebridge native
-fallback because that package writes through a `tty.ReadStream` that is not writable
-in Bun, then uses the existing external relay when available. Node-hosted Homebridge
-and Windows backend selection are unchanged.
+In current development source, the PTY provider uses the existing Python relay on
+POSIX Bun. Both native packages use `tty.ReadStream` for a nonblocking PTY master;
+the bundled Bun 1.4.2 can return a successful spawn without working input/output
+([upstream issue](https://github.com/oven-sh/bun/issues/25822)). Module-load success
+therefore cannot establish backend usability. Re-enable native POSIX selection
+only after the bundled runtime passes interactive input/output and cleanup checks.
+The relay requires Python 3, applies the initial window size, and reports
+`terminal_resize_unavailable` for subsequent resizes. Node-hosted and Windows
+backend selection are unchanged.
 
 ## Internal dependency closure
 
