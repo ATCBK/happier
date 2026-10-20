@@ -171,7 +171,7 @@ it('keeps the real fire-time Ask and original input waiting when a competing run
         const report = await runWithServerHttpBaseUrl(serverUrl, () => activatePendingInactiveSession({
             credentials: { token: ownerToken, encryption: null }, machineId: guest.id, sessionId: session.id,
             requestId: input.localId, pendingVersion: before.pendingVersion,
-            spawnSession: async () => { throw new Error('Missing resume metadata must not spawn'); },
+            spawnSessionForInternalResume: async () => { throw new Error('Missing resume metadata must not spawn'); },
         }));
         expect(report).toEqual({ status: 'not-needed', reason: 'authorization-stale' });
         const failureRecords = serverLog.mock.calls.map(([entry]) => entry).filter(entry => entry && typeof entry === 'object'

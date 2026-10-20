@@ -82,7 +82,7 @@ describe('managed Pending rearm through Home and daemon reconnect', () => {
         const recovery = createPendingSessionActivationRecovery({ token: credentials.token,
           activate: async hint => { results.push(await activatePendingInactiveSession({ credentials,
             machineId, sessionId: hint.sessionId, requestId: hint.requestId, pendingVersion: hint.pendingVersion,
-            spawnSession: async () => { throw new Error('Foreign daemon must not spawn the guest'); } })); },
+            spawnSessionForInternalResume: async () => { throw new Error('Foreign daemon must not spawn the guest'); } })); },
           warn: (_message, _hint, error) => { throw error; },
         });
         await recovery.recoverAfterConnect();
@@ -101,7 +101,7 @@ describe('managed Pending rearm through Home and daemon reconnect', () => {
       // wake. Once compute runs, its genuine metadata refusal can settle it.
       expect(await activatePendingInactiveSession({ credentials, machineId: guest.id,
         sessionId: session.id, requestId: input.localId, pendingVersion: before.pendingVersion,
-        spawnSession: async () => { throw new Error('Missing resume metadata must not spawn'); } }))
+        spawnSessionForInternalResume: async () => { throw new Error('Missing resume metadata must not spawn'); } }))
         .toMatchObject({ status: 'not-needed', reason: 'authorization-stale' });
       expect((await census()).targets).toMatchObject([{ managedId: managed.id }]);
       await db.managedMachine.update({ where: { id: managed.id }, data: {
@@ -109,7 +109,7 @@ describe('managed Pending rearm through Home and daemon reconnect', () => {
       } });
       expect(await activatePendingInactiveSession({ credentials, machineId: guest.id,
         sessionId: session.id, requestId: input.localId, pendingVersion: before.pendingVersion,
-        spawnSession: async () => { throw new Error('Missing resume metadata must not spawn'); } }))
+        spawnSessionForInternalResume: async () => { throw new Error('Missing resume metadata must not spawn'); } }))
         .toMatchObject({ status: 'rejected', reason: 'identity-unavailable' });
       expect(await db.session.findUniqueOrThrow({ where: { id: session.id } }))
         .toMatchObject({ pendingActivationStatus: 'failed' });

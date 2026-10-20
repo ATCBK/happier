@@ -122,7 +122,7 @@ describe('requester pending reconnect through protected custody and the Home net
     const activation = { credentials, requester: bootstrap, expectedTarget: target, machineId: attribution.machineId,
       resolveCurrentMachineExecutionOriginContext,
       sessionId: target.sessionId, requestId: 'input-1', pendingVersion: 9,
-      spawnSession: async (options: SpawnSessionOptions) => { spawned.push(options); return { type: 'success' as const, sessionId: target.sessionId }; } };
+      spawnSessionForInternalResume: async (options: SpawnSessionOptions) => { spawned.push(options); return { type: 'success' as const, sessionId: target.sessionId }; } };
     expect(await activatePendingInactiveSession(activation)).toEqual({ status: 'activated' });
     expect(spawned).toHaveLength(1);
     expect(spawned[0]).toMatchObject({ existingSessionId: target.sessionId, machineId: attribution.machineId,
@@ -140,7 +140,7 @@ describe('requester pending reconnect through protected custody and the Home net
     const settle = () => activateRequesterPendingSession({ machineId: attribution.machineId, binding: { sessionId: target.sessionId, attribution },
       hint, resolveRequesterSessionRuntimeContext: resolveRuntime,
       releaseRequesterSessionRuntimeContext: async context => { await context.dispose(); },
-      resolveCurrentMachineExecutionOriginContext, spawnSession: activation.spawnSession,
+      resolveCurrentMachineExecutionOriginContext, spawnSessionForInternalResume: activation.spawnSessionForInternalResume,
       onActivationRejected: async event => { rejected.push(event); } });
     const refuseOnce = () => { sessionStatus = 403; nextSessionRead = () => { sessionStatus = 200; }; };
     refuseOnce();

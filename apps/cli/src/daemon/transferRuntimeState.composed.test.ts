@@ -83,6 +83,7 @@ describe('lazy transfer declaration through Machine publication', () => {
         startAutomationWorkerForMachine: () => null,
         startMemoryWorkerForMachine: async () => null,
         startVoiceInferenceWorkerForMachine: async () => null,
+        spawnSessionForInternalResume: async () => ({ type: 'success', sessionId: 'unused' }),
         spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
         stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => false,
         loadLocalSessionMetadataForHandoff: async () => null,

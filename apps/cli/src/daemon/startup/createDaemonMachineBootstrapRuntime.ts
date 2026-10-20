@@ -200,6 +200,7 @@ export function createDaemonMachineBootstrapRuntime(
       attachApiMachine: (connectedApiMachine: NonNullable<MachineSyncRuntime['apiMachine']>) => Promise<void>;
     }> | null;
     spawnSession: BootstrapRuntime['spawnSession'];
+    spawnSessionForInternalResume: BootstrapRuntime['spawnSessionForInternalResume'];
     onActivationRejected?: BootstrapRuntime['onActivationRejected'];
     stopSession: BootstrapRuntime['stopSession'];
     sessionRunnerStatus?: BootstrapRuntime['sessionRunnerStatus'];
@@ -712,6 +713,7 @@ export function createDaemonMachineBootstrapRuntime(
       }
     },
     spawnSession: params.spawnSession,
+    spawnSessionForInternalResume: params.spawnSessionForInternalResume,
     ...(params.onActivationRejected ? { onActivationRejected: params.onActivationRejected } : {}),
     stopSession: params.stopSession,
     ...(params.sessionRunnerStatus ? { sessionRunnerStatus: params.sessionRunnerStatus } : {}),

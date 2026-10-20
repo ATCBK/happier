@@ -310,7 +310,7 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
     }),
     // Process launch is the native boundary. The wake, custody recovery,
     // requester construction and subsequent MCP resolution stay real.
-    spawnSession: async options => {
+    spawnSessionForInternalResume: async options => {
       expect(options).toMatchObject({ existingSessionId: h.sessionId, runtimeDescriptorV1: runtimeDescriptor,
         requesterWorkAttributionV1: h.tracked.requesterWorkAttributionV1,
         executionAuthorization: { provenance: 'user_request', requestId: 'wake-input', requestedAt: 12 } });

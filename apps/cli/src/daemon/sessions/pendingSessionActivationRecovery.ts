@@ -8,8 +8,7 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { AdmittedRequesterSessionBootstrap, RequesterSessionCredentialBinding, RequesterSessionRuntimeContext,
   ResolveRequesterSessionRuntimeContext, ReleaseRequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
-import { activatePendingInactiveSession, type PendingInactiveSessionActivationRejected } from './activatePendingInactiveSession';
-import type { SpawnSessionOptions, SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { activatePendingInactiveSession, type PendingInactiveSessionActivationRejected, type PendingSessionResumePort } from './activatePendingInactiveSession';
 import { logger } from '@/utils/logger';
 
 export type PendingSessionActivationInput = Readonly<{
@@ -30,7 +29,7 @@ export async function activateRequesterPendingSession(params: Readonly<{
   releaseRequesterSessionRuntimeContext: ReleaseRequesterSessionRuntimeContext;
   resolveCurrentMachineExecutionOriginContext(): Promise<CurrentMachineExecutionOriginContext | null>;
   onActivationRejected?: (event: PendingInactiveSessionActivationRejected) => Promise<void>;
-  spawnSession(options: SpawnSessionOptions): Promise<SpawnSessionResult>;
+  spawnSessionForInternalResume: PendingSessionResumePort;
 }>): Promise<void> {
   const { binding, hint } = params;
   if (binding.attribution.machineId !== params.machineId) return;
@@ -47,8 +46,8 @@ export async function activateRequesterPendingSession(params: Readonly<{
       expectedTarget: current.target, preparationFailed: context === undefined,
       resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext,
       onActivationRejected: params.onActivationRejected,
-      spawnSession: options => params.spawnSession({ ...options, requesterSessionBootstrap: bootstrap,
-        ...(context ? { requesterSessionRuntimeContext: context } : {}) }) });
+      spawnSessionForInternalResume: (options, pendingActivation) => params.spawnSessionForInternalResume({ ...options, requesterSessionBootstrap: bootstrap,
+        ...(context ? { requesterSessionRuntimeContext: context } : {}) }, pendingActivation) });
     if (result.status === 'rejected') logger.warn('[DAEMON RUN] Requester Pending activation rejected; custody retained', {
       sessionId: current.sessionId, requestId: current.requestId, reason: result.reason, failureDetails: result.failureDetails,
     });

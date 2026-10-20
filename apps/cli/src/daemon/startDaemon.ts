@@ -2075,6 +2075,7 @@ export async function startDaemon(
       sessionLiveWorkProducer,
       dispatchSessionFollowOccurrence,
       spawnSession,
+      spawnSessionForInternalResume,
       stopSession,
       stopRequesterSessionForHandoff,
       isSessionAlreadyRunning,
@@ -3770,6 +3771,14 @@ export async function startDaemon(
         transferRuntimeStatePublisher,
         spawnSession: async options => {
           const result = await spawnSession(options);
+          if (result.type === 'success' && result.sessionId) {
+            const tracked = [...pidToTrackedSession.values()].find(item => item.happySessionId === result.sessionId);
+            if (tracked) await guardSessionRestoration?.onSessionRunnerStarted(tracked);
+          }
+          return result;
+        },
+        spawnSessionForInternalResume: async (options, pendingActivation) => {
+          const result = await spawnSessionForInternalResume(options, pendingActivation);
           if (result.type === 'success' && result.sessionId) {
             const tracked = [...pidToTrackedSession.values()].find(item => item.happySessionId === result.sessionId);
             if (tracked) await guardSessionRestoration?.onSessionRunnerStarted(tracked);

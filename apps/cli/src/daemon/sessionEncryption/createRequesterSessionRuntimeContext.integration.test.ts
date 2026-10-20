@@ -663,13 +663,15 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
         takeoverRequested: false, isShuttingDown: () => false, createConnectedApiMachine: () => transport as unknown as MachineClient,
         attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
         startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
-        spawnSession: async options => {
+        spawnSessionForInternalResume: async options => {
           expect(options.requesterSessionBootstrap).toBe(requester.bootstrap);
           expect(options.requesterSessionRuntimeContext).toBe(requester);
           expect(options.executionAuthorization).toMatchObject({ provenance: 'user_request', requestId: pendingRequestId });
           launches.push(options.existingSessionId!); running = true;
           return { type: 'success', sessionId: requesterSessionId };
-        }, stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => running,
+        },
+        spawnSession: async () => { throw new Error('Requester Pending must not use person Resume'); },
+        stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => running,
         requesterServerId: 'bob-home', resolveCurrentMachineExecutionOriginContext: resolveOrigin,
         readRequesterSessionCredentialBindings: () => listRequesterSessionCredentialBindings({ happyHomeDir: directory,
           serverId: 'bob-home', machineId: 'machine', installationId }),

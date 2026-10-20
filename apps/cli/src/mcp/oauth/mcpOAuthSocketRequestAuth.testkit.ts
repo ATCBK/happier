@@ -287,6 +287,7 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
       api: await ApiClient.create(credentials), credentials, controlPort: 0,
       runtimeId: 'oauth-fixture', publicReleaseChannel: 'dev', startupSource: 'manual', serviceLabel: undefined,
       transferRuntimeStatePublisher: null,
+      spawnSessionForInternalResume: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'unused' }),
       spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'unused' }),
       stopSession: async () => ({ status: 'not_found' }), awaitAgentSessionOpen: undefined,
       isSessionAlreadyRunning: async () => false, loadLocalSessionMetadataForHandoff: async () => null,

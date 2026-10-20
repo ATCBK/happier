@@ -3,7 +3,7 @@ import { resolveLinkedExternalSessionAuthorityV1 } from '@happier-dev/protocol/s
 import { readPendingQueueV2ActivationEligibilityFromServer } from '@/api/session/pendingQueueV2Transport';
 import { reportPendingSessionActivationFailure } from '@/api/session/pendingActivationTransport';
 import { buildInactiveSessionResumeSpawnOptions } from '@/daemon/sessions/runtimeSnapshot/buildInactiveSessionResumeSpawnOptions';
-import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
@@ -47,13 +47,18 @@ export type PendingInactiveSessionActivationRejected = Readonly<{
   failure?: SpawnFailureV1;
 }>;
 
+/** Host-private current input demand, supplied only after the Pending owner's reads. */
+export type PendingSessionResumeAdmission = Pick<PendingActivationAuthorizationV1, 'requestId' | 'requestedAt'>;
+export type PendingSessionResumePort = (options: SpawnSessionOptions,
+  pendingActivation?: PendingSessionResumeAdmission) => Promise<SpawnSessionResult>;
+
 type PendingInactiveSessionActivationParams = Readonly<{
   credentials: StoredCredentials;
   machineId: string;
   sessionId: string;
   requestId: string;
   pendingVersion: number;
-  spawnSession: (options: NonNullable<ReturnType<typeof buildInactiveSessionResumeSpawnOptions>>) => Promise<SpawnSessionResult>;
+  spawnSessionForInternalResume: PendingSessionResumePort;
   /** Supplied only by the canonical requester runtime resolver, never a pending hint. */
   requester?: Pick<AdmittedRequesterSessionBootstrap, 'attribution' | 'serverHttpBaseUrl' | 'isCurrent'>;
   expectedTarget?: SessionInputMachineTargetV1;
@@ -242,10 +247,10 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
   }
 
   if (!await isCurrent()) return { status: 'not-needed', reason: 'authorization-stale' };
-  const result = await params.spawnSession(params.requester ? { ...options,
+  const result = await params.spawnSessionForInternalResume(params.requester ? { ...options,
     requesterWorkAttributionV1: params.requester.attribution,
     verifyRequesterMachineAdmissionCurrent: isCurrent,
-  } : options);
+  } : options, { requestId: finalAuthorization.requestId, requestedAt: finalAuthorization.requestedAt });
   const failureDetail = result.type === 'error' ? SpawnFailureSpawnErrorDetailSchema.safeParse(result.errorDetail).data : undefined;
   const failure = failureDetail ? { reason: failureDetail.reason, ...(failureDetail.errno ? { errno: failureDetail.errno } : {}) } : undefined;
   if (
@@ -255,8 +260,9 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
     return { status: 'not-needed', reason: 'spawn-ambiguous' };
   }
   if (result.type === 'error'
-    && result.errorCode === SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED
-    && result.runtimeFailureReason === 'transport_unavailable') {
+    && (result.errorCode === SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE
+      || result.errorCode === SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED
+      && result.runtimeFailureReason === 'transport_unavailable')) {
     return { status: 'not-needed', reason: 'spawn-retryable' };
   }
   if (result.type === 'error' && result.errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_DIRECTORY_MISSING) {

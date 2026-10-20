@@ -301,8 +301,9 @@ describe('bootstrapMachineSyncRuntime', () => {
                 createConnectedApiMachine: () => transport as unknown as ConnectedApiMachineForBootstrap,
                 attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
                 startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
-                spawnSession: async options => { expect(options.existingSessionId).toBe(sessionId); expect(options.executionAuthorization).toBeUndefined();
+                spawnSessionForInternalResume: async options => { expect(options.existingSessionId).toBe(sessionId); expect(options.executionAuthorization).toBeUndefined();
                     effects.push('spawn'); return { type: 'success', sessionId }; },
+                spawnSession: async () => { throw new Error('Automatic Follow must not use person Resume'); },
                 stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => state === 'busy' || state === 'idle_host',
                 resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: target.homeId, machineId }),
                 getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
@@ -406,13 +407,14 @@ describe('bootstrapMachineSyncRuntime', () => {
                         createConnectedApiMachine: () => machineClient,
                         attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
                         startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
-                        spawnSession: async options => {
+                        spawnSessionForInternalResume: async options => {
                             expect(options.existingSessionId).toBe(destinationSessionId);
                             expect(options.executionAuthorization).toBeUndefined();
                             launches.push(destinationSessionId);
                             running = true;
                             return { type: 'success', sessionId: destinationSessionId };
                         },
+                        spawnSession: async () => { throw new Error('Automatic Follow must not use person Resume'); },
                         stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => running,
                         resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: target.homeId, machineId }),
                         readRequesterSessionCredentialBindings: async () => ({ status: 'ready', bindings: requesterUnavailable ? [{
@@ -578,6 +580,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine,
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -874,6 +877,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher,
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine,
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -963,6 +967,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 throw memoryFailure;
             }),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1012,6 +1017,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             startAutomationWorkerForMachine,
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1089,6 +1095,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
             startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1217,6 +1224,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => automationWorker),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1388,6 +1396,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -1664,6 +1673,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: spawnSession,
             spawnSession,
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             awaitAgentSessionOpen,
@@ -1865,6 +1875,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2047,6 +2058,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2294,6 +2306,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2582,6 +2595,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
             })),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2700,6 +2714,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2792,6 +2807,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
             isSessionAlreadyRunning: vi.fn(async () => false),
@@ -2935,6 +2951,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             attachTransferRuntimeStatePublisher: vi.fn(async () => {}),
             startAutomationWorkerForMachine: vi.fn(() => null),
             startMemoryWorkerForMachine: vi.fn(async (): Promise<MemoryWorkerHandle | null> => null),
+            spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'sess-1' })),
             stopSession: stopSessionForRemoval,
             isSessionAlreadyRunning: vi.fn(async () => false),

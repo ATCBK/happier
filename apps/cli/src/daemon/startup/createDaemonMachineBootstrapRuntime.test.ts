@@ -101,6 +101,7 @@ function createBaseRuntimeParams(overrides: Partial<Parameters<typeof createDaem
     startupSource: 'manual',
     serviceLabel: undefined,
     transferRuntimeStatePublisher: null,
+    spawnSessionForInternalResume: vi.fn(),
     spawnSession: vi.fn(),
     stopSession: vi.fn(),
     awaitAgentSessionOpen: vi.fn(),

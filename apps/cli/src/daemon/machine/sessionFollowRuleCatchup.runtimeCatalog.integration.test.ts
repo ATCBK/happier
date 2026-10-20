@@ -113,6 +113,7 @@ it('routes a source-only Account change through the installed private rule cache
         createConnectedApiMachine: () => apiMachine as NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>,
         attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
         startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
+        spawnSessionForInternalResume: async () => { throw new Error('A quiet Follow update must not spawn'); },
         spawnSession: async () => { throw new Error('A quiet Follow update must not spawn'); },
         stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => true,
         resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: serverId, machineId }),

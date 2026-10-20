@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import type { PendingSessionResumePort } from '../sessions/activatePendingInactiveSession';
 import os from 'os';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -643,7 +644,7 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   resolveRequesterSessionRuntimeContext?: ResolveRequesterSessionRuntimeContext;
   readRequesterSessionCredentialBindings?: () => Promise<RequesterSessionCredentialBindingsResult>;
   releaseRequesterSessionRuntimeContext?: (context: RequesterSessionRuntimeContext) => Promise<void>;
-  dispatchSessionFollowOccurrence?: (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch) => Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | void>;
+  dispatchSessionFollowOccurrence?: (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch) => Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | import('@/daemon/sessions/sessionActivityChangedContract').SessionActivityChangedResult | void>;
   daemonSessionMutationCustody?: DaemonSessionMutationCustody;
   orphanedDeadDaemonSessions?: ReadonlyArray<OrphanedDeadDaemonSession>;
   isPublicationQuiescing?: () => boolean;
@@ -668,6 +669,7 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   startAutomationWorkerForMachine: (machineId: string) => AutomationWorkerHandle | null | Promise<AutomationWorkerHandle | null>;
   startMemoryWorkerForMachine: (machineId: string) => Promise<MemoryWorkerHandle | null>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
+  spawnSessionForInternalResume: PendingSessionResumePort;
   onActivationRejected?: (event: PendingInactiveSessionActivationRejected) => Promise<void>;
   stopSession: (sessionId: string) => Promise<StopSessionResult>;
   sessionRunnerStatus?: MachineRpcHandlerDeps['sessionRunnerStatus'];
@@ -1773,8 +1775,8 @@ export async function bootstrapMachineSyncRuntime(
           ? createCurrentMachineExecutionOriginContextResolver({ serverUrl: home.serverUrl, resolveCurrentMachineId: () => params.machineId })
           : params.resolveCurrentMachineExecutionOriginContext;
         const spawnSession: typeof params.spawnSession = context
-          ? options => params.spawnSession({ ...options, requesterSessionBootstrap: context.bootstrap, requesterSessionRuntimeContext: context })
-          : params.spawnSession;
+          ? options => params.spawnSessionForInternalResume({ ...options, requesterSessionBootstrap: context.bootstrap, requesterSessionRuntimeContext: context })
+          : params.spawnSessionForInternalResume;
         await runWithServerHttpBaseUrl(home.serverUrl, async () => {
             const readObservations = async () => {
               const origin = await resolveOrigin?.(followLifetime.signal);
@@ -1813,7 +1815,7 @@ export async function bootstrapMachineSyncRuntime(
             // Message-backed semantics enter Pending before any host wake.
             // Retain only the old Turn semantics that have no committed
             // original of the same kind in this exact observed range.
-            const legacyObservations = dispatched ? sessionObservations.filter(observation => {
+            const legacyObservations = dispatched && 'coveredEvents' in dispatched ? sessionObservations.filter(observation => {
               const turn = observation.observed.turn;
               if (!turn || isSessionFollowFrontierEqualV1(observation.delivered, observation.observed)) return false;
               const kind = turn.status === 'completed' ? 'finished'
@@ -1875,7 +1877,7 @@ export async function bootstrapMachineSyncRuntime(
         // receiver identities from the installed Account's existing cache;
         // every destination still proves its exact Home/Machine admission.
         const rules = await params.dispatchSessionFollowOccurrence?.({ sourceSessionIdChanged: change.sessionId });
-        const receivers = [...new Set(rules?.receiverSessionIds ?? [])].filter(sessionId => sessionId !== change.sessionId);
+        const receivers = [...new Set(rules && 'coveredEvents' in rules ? rules.receiverSessionIds ?? [] : [])].filter(sessionId => sessionId !== change.sessionId);
         const results = await Promise.allSettled([reconcileFollowReceiver(change.sessionId),
           ...receivers.map(sessionId => reconcileFollowReceiver(sessionId, change.sessionId))]);
         const rejected = results.find(result => result.status === 'rejected');
@@ -1922,7 +1924,7 @@ export async function bootstrapMachineSyncRuntime(
           sessionId: hint.sessionId,
           requestId: hint.requestId,
           pendingVersion: hint.pendingVersion,
-          spawnSession: params.spawnSession,
+          spawnSessionForInternalResume: params.spawnSessionForInternalResume,
           onActivationRejected: params.onActivationRejected,
         });
         if (result.status === 'rejected') {

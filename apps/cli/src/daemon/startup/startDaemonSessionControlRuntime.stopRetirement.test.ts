@@ -18,13 +18,25 @@ import { startDaemonSessionControlRuntime } from './startDaemonSessionControlRun
 // currentness and lifecycle retirement remain real.
 afterEach(() => vi.restoreAllMocks());
 
-it('rejoins the exact planned runner restart when Pending input requests Resume', async () => {
+it.each([
+  { stopped: false, pendingDemand: true }, { stopped: true, pendingDemand: true },
+  { stopped: false, pendingDemand: false },
+])('rejoins the exact planned runner restart only for current Pending (Stop: $stopped; demand: $pendingDemand)', async ({ stopped, pendingDemand }) => {
   await withConfiguredDaemonTestHome({ prefix: 'planned-restart-input-' }, async ({ homeDir }) => {
     const credentials = { token: 'fixture-owner', encryption: null } satisfies StoredCredentials;
     const custody = createDaemonSessionMutationCustody({ credentials });
-    // Home is an external boundary; a replacement already in custody must not
-    // prepare another launch or read a second Session's launch configuration.
-    vi.spyOn(axios, 'get').mockRejectedValue(new Error('Home launch preparation must not run'));
+    // Home is external; the exact planned launcher remains in custody. Only
+    // the canonical persisted Stop owner may decide whether new input rejoins it.
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v2/sessions/planned-session') return { status: 200, data: { session: createSessionRecordFixture({
+        id: 'planned-session', encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: homeDir,
+          ...(stopped ? { sessionExplicitStopV1: { v: 1, cause: 'explicit_stop', requestId: 'person-stop', requestedAtMs: 2 } } : {}) }),
+      }) } };
+      if (path.endsWith('/encryption/currentness')) return { status: 200, data: { mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      throw new Error(`No additional launch preparation: ${path}`);
+    });
     const tracked: TrackedSession = { pid: 111, happySessionId: 'planned-session', startedBy: 'daemon',
       spawnOptions: { directory: homeDir } };
     const runtime = await startDaemonSessionControlRuntime({
@@ -41,8 +53,11 @@ it('rejoins the exact planned runner restart when Pending input requests Resume'
       beforeShutdown: async () => {}, onHappySessionWebhook: async () => {}, requestShutdown: () => {}, processEnv: {},
     });
     try {
-      await expect(runtime.spawnSession({ directory: homeDir, existingSessionId: 'planned-session' }))
-        .resolves.toEqual({ type: 'success', sessionId: 'planned-session' });
+      const result = await runtime.spawnSessionForInternalResume({ directory: homeDir, existingSessionId: 'planned-session',
+        executionAuthorization: { provenance: 'user_request', requestId: 'retained-pending', requestedAt: 1 } },
+        pendingDemand ? { requestId: 'retained-pending', requestedAt: 1 } : undefined);
+      expect(result).toMatchObject(stopped ? { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' }
+        : pendingDemand ? { type: 'success', sessionId: 'planned-session' } : { type: 'error' });
     } finally { await runtime.stopControlServer(); await custody.close(); }
   });
 });

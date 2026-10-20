@@ -1,4 +1,5 @@
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
+import type { PendingSessionResumeAdmission, PendingSessionResumePort } from '../sessions/activatePendingInactiveSession';
 import { DiscussionAgentPublisherResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 import type { DiscussionAgentPublisherPrivateRequestV1 } from '@/discussions/discussionAgentPublisher';
 import { runTracedExternalActionStage } from '../externalActions/externalActionPhase';
@@ -2711,7 +2712,7 @@ export async function startDaemonSessionControlRuntime(
     executeGuardLeftBehindAction: ReturnType<typeof createGuardLeftBehindActionExecutor>;
     guardSources: Required<Pick<import('../guard/readGuardFacts').ReadGuardFactsDependencies, 'readBrowsers' | 'readServices' | 'readServiceTargets'>>;
     sessionLiveWorkProducer: ReturnType<typeof createSessionLiveWorkProducer>;
-    dispatchSessionFollowOccurrence: (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch) => Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | void>;
+    dispatchSessionFollowOccurrence: (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch) => Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | SessionActivityChangedResult | void>;
     processOwnershipRuntime: ReturnType<typeof createProcessOwnershipRuntime>;
     processLeftBehindPass: ReturnType<typeof createLeftBehindPass>;
     ownerRemainder: ReturnType<typeof createEndOwnerRemainder>;
@@ -2723,6 +2724,7 @@ export async function startDaemonSessionControlRuntime(
     >;
     externalActionIngressOwner?: ExternalActionIngressOwner;
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
+    spawnSessionForInternalResume: PendingSessionResumePort;
     stopSession: (sessionId: string, options?: StopSessionOptions) => Promise<StopSessionResult>;
     stopRequesterSessionForHandoff: (sessionId: string, expectedSpawnNonce: string) => Promise<'stopped' | 'already_inactive' | 'failed'>;
     isSessionAlreadyRunning: (sessionId: string) => Promise<boolean>;
@@ -5214,6 +5216,7 @@ export async function startDaemonSessionControlRuntime(
     behavior: Readonly<{
       nudgeAlreadyRunningPendingQueue: boolean;
       isLaunchAdmissionCurrent: () => boolean;
+      admittedInputResumeAdmission?: ReturnType<SessionRunnerRespawnManager['prepareFreshExplicitResumeAdmission']>;
       freshExplicitResumeAdmission?: ReturnType<SessionRunnerRespawnManager['prepareFreshExplicitResumeAdmission']>;
       managerResume?: Readonly<{ recheck: () => Promise<boolean>; clear: () => Promise<void> }>;
     }>,
@@ -5269,12 +5272,18 @@ export async function startDaemonSessionControlRuntime(
       // replacement is preparing. Retain requester admission above, then
       // rejoin that launcher without probing the retiring runner's controls.
       const existingSessionId = normalizeOptionalString(options.existingSessionId);
-      if (behavior.freshExplicitResumeAdmission && existingSessionId && (
+      if ((behavior.freshExplicitResumeAdmission || behavior.admittedInputResumeAdmission) && existingSessionId && (
         sessionRunnerRespawnManager.hasPendingIntendedRestarts(existingSessionId)
         || [...params.pidToTrackedSession.values()].some(tracked =>
           tracked.happySessionId === existingSessionId
           && params.connectedServicesRestartRequestedPids.has(tracked.pid))
-      )) return { type: 'success', sessionId: existingSessionId };
+      )) {
+        if (!behavior.isLaunchAdmissionCurrent() || options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()) {
+          return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+            errorMessage: 'Session resume admission unavailable' };
+        }
+        return { type: 'success', sessionId: existingSessionId };
+      }
       const key = computeDaemonSpawnRequestKey(options);
       const run = async () =>
         await spawnRequestCoalescer.run(key, async () => {
@@ -5655,7 +5664,8 @@ export async function startDaemonSessionControlRuntime(
   };
   const spawnSessionWithAdmission = async (
     options: SpawnSessionOptions,
-    behavior: Readonly<{ freshExplicitResume: boolean; completingPlannedRestart?: boolean }>,
+    behavior: Readonly<{ freshExplicitResume: boolean; completingPlannedRestart?: boolean;
+      pendingActivation?: PendingSessionResumeAdmission }>,
   ): Promise<SpawnSessionResult> => {
     const canCompletePlannedRestart = () => behavior.completingPlannedRestart === true
       && !controlRuntimeResourcesDisposed
@@ -5672,6 +5682,13 @@ export async function startDaemonSessionControlRuntime(
       options.existingSessionId,
     );
     const internalExistingSessionResume = !behavior.freshExplicitResume && Boolean(existingSessionId);
+    const pendingActivation = behavior.pendingActivation;
+    const execution = options.executionAuthorization;
+    if (pendingActivation && (!internalExistingSessionResume || execution?.provenance !== 'user_request'
+      || execution.requestId !== pendingActivation.requestId || execution.requestedAt !== pendingActivation.requestedAt)) {
+      return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+        errorMessage: 'Pending resume admission does not match the original input' };
+    }
     // A Stop can still be persisting its hold. Capture explicit Resume intent
     // only after that same owner has completed, rather than fencing it as stale.
     if (behavior.freshExplicitResume && existingSessionId) {
@@ -5693,7 +5710,7 @@ export async function startDaemonSessionControlRuntime(
         || binding.installationId !== installation.installationId
         || binding.accountId !== (options.requesterSessionBootstrap?.attribution.accountId ?? externalActionAccountId)
         || !isDeepStrictEqual(binding.sessionActionOrigin, origin)) return refuseManager();
-      const resolveAuthorizationHeaders: NonNullable<Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders']> = request => {
+      const resolveAuthorizationHeaders = (request: Parameters<NonNullable<Parameters<typeof updateSessionMetadataWithRetry>[0]['resolveAuthorizationHeaders']>>[0]) => {
         const result = resolveExternalActionServerRequestHeaders({ context: managerContext, effectActionId: 'session.open',
           ...request, daemonToken: requester.credentials.token, serverIdentityId: binding.serverIdentityId,
           privateKey: installation.privateKey, installationId: installation.installationId });
@@ -5710,7 +5727,7 @@ export async function startDaemonSessionControlRuntime(
           fetchAccountEncryptionCurrentness({ token: requester.credentials.token,
             authorizationHeaders: resolveAuthorizationHeaders({ method: 'GET', path: '/v1/account/encryption/currentness' }) }),
         ]);
-        if (!rawSession || rawSession.id !== existingSessionId || rawSession.effectiveAccess.level !== 'owner') return null;
+        if (!rawSession || rawSession.id !== existingSessionId || rawSession.effectiveAccess?.level !== 'owner') return null;
         const metadata = tryReadSessionMetadataRecord({ rawSession, credentials: requester.credentials, accountEncryptionMode: encryption.mode });
         const owner = resolveSessionOwningMachineId({ rawSession, credentials: requester.credentials, accountEncryptionMode: encryption.mode });
         if (!metadata || !owner.ok || owner.machineId !== params.machineId
@@ -5732,7 +5749,9 @@ export async function startDaemonSessionControlRuntime(
           sessionId: existingSessionId, metadata, resolveAuthorizationHeaders, currentness: { verifyCurrent: authorityCurrent,
             ...(managerContext.signal ? { signal: managerContext.signal } : {}) } })) };
     }
-    const automaticResumeAdmission = internalExistingSessionResume
+    const admittedInputResumeAdmission = internalExistingSessionResume && pendingActivation
+      ? sessionRunnerRespawnManager.prepareFreshExplicitResumeAdmission(existingSessionId!) : undefined;
+    const automaticResumeAdmission = internalExistingSessionResume && !admittedInputResumeAdmission
       ? sessionRunnerRespawnManager.prepareAutomaticResumeAdmission(existingSessionId!)
       : undefined;
     const freshExplicitResumeAdmission =
@@ -5743,6 +5762,7 @@ export async function startDaemonSessionControlRuntime(
         : undefined;
     const isLaunchAdmissionCurrent = () => (!mayCompletePlannedRestart || canCompletePlannedRestart())
       && (automaticResumeAdmission?.() ?? true)
+      && (admittedInputResumeAdmission?.isCurrent() ?? true)
       && (freshExplicitResumeAdmission?.isCurrent() ?? true);
     const result = await runSpawnSession(
       {
@@ -5772,6 +5792,7 @@ export async function startDaemonSessionControlRuntime(
       {
         nudgeAlreadyRunningPendingQueue: true,
         isLaunchAdmissionCurrent,
+        ...(admittedInputResumeAdmission ? { admittedInputResumeAdmission } : {}),
         ...(freshExplicitResumeAdmission
           ? { freshExplicitResumeAdmission }
           : {}),
@@ -5779,6 +5800,7 @@ export async function startDaemonSessionControlRuntime(
       },
     );
     if (result.type === 'success') {
+      admittedInputResumeAdmission?.complete();
       void queueHostedWebStaticAssetSync('session_spawned');
     }
     return result;
@@ -5792,8 +5814,9 @@ export async function startDaemonSessionControlRuntime(
     });
   const spawnSessionForInternalResume = async (
     options: SpawnSessionOptions,
+    pendingActivation?: PendingSessionResumeAdmission,
   ): Promise<SpawnSessionResult> =>
-    await spawnSessionWithAdmission(options, { freshExplicitResume: false });
+    await spawnSessionWithAdmission(options, { freshExplicitResume: false, ...(pendingActivation ? { pendingActivation } : {}) });
 
   const temporaryThrottleResumeSnapshotsBySessionId = new Map<
     string,
@@ -11574,12 +11597,11 @@ export async function startDaemonSessionControlRuntime(
   // Single async server-features fetch source shared by the local-services inventory gate and
   // the browser daemon feature gate (OWNER-GATE). One fetch source, two consumers — no second
   // fetch is introduced. The gates own caching the resolved snapshot.
-  const resolveServerFeaturesSnapshot =
-    params.resolveServerFeaturesSnapshot ??
-    (async () =>
+  const resolveServerFeaturesSnapshot = async () =>
+    params.resolveServerFeaturesSnapshot ? await params.resolveServerFeaturesSnapshot() :
       fetchServerFeaturesSnapshot({
         serverUrl: resolveServerHttpBaseUrl(),
-      }));
+      });
   const projectManagedServices: Pick<
     ReturnType<typeof createManagedServicesOwner>,
     'listProjectServices' | 'resolveProjectService' | 'readProcessRoots'
@@ -16090,7 +16112,7 @@ export async function startDaemonSessionControlRuntime(
                           return { ok: false, errorCode, error: errorCode };
                         }
                         return await runWithServerHttpBaseUrl(admitted.serverHttpBaseUrl, async () => {
-                          const resolveAuthorizationHeaders: NonNullable<Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders']> = request => {
+                          const resolveAuthorizationHeaders = (request: Parameters<NonNullable<Parameters<typeof updateSessionMetadataWithRetry>[0]['resolveAuthorizationHeaders']>>[0]) => {
                               const signed = resolveExternalActionServerRequestHeaders({ context,
                                 effectActionId: admitted.authorization.binding.actionId,
                                 ...request, daemonToken: admitted.credentials.token,
@@ -16126,6 +16148,7 @@ export async function startDaemonSessionControlRuntime(
                               }
                             }
                             if (context?.signal?.aborted || !await admitted.isCurrent()) throw new Error('Native Stop requester retired');
+                            return undefined;
                           }, admitted.credentials);
                         });
                       } : undefined);
@@ -16902,6 +16925,7 @@ export async function startDaemonSessionControlRuntime(
           const result = await dispatchSessionFollowOccurrence({ occurrence, ...(sessionId ? { contextSessionId: sessionId } : {}) });
           return result && !('coveredEvents' in result) ? result : undefined;
         }
+        return undefined;
       },
       admissionDrain: params.admissionDrain,
       resolveRecoveredSpawnNonce: async (spawnNonce) =>
@@ -19980,7 +20004,7 @@ export async function startDaemonSessionControlRuntime(
           await runWithServerHttpBaseUrl(serverHttpBaseUrl, async () => {
             if (!await verifyCurrent()) throw new Error('Process Stop requester retired');
             const installation = readInstallationIdentityIfExistsSync();
-            const resolveAuthorizationHeaders: NonNullable<Parameters<typeof fetchSessionByIdCompat>[0]['resolveAuthorizationHeaders']> = request => {
+            const resolveAuthorizationHeaders = (request: Parameters<NonNullable<Parameters<typeof updateSessionMetadataWithRetry>[0]['resolveAuthorizationHeaders']>>[0]) => {
               const result = resolveExternalActionServerRequestHeaders({ context: actionContext,
                 effectActionId: actionContext?.externalActionExecutionAuthorization?.binding.actionId ?? 'machines.processes.kill',
                 ...request, daemonToken: credentials.token,
@@ -20001,7 +20025,7 @@ export async function startDaemonSessionControlRuntime(
               accountEncryptionMode: accountEncryptionCurrentness.mode });
             if (!owner.ok || owner.machineId !== params.machineId) throw new Error('Process Stop Session Machine changed');
             await recordSessionExplicitStopIntent({ credentials, sessionId, rawSession,
-              actionContext, requestId: actionContext?.actionRequestId, resolveAuthorizationHeaders, accountEncryptionCurrentness,
+              actionContext, requestId: actionContext?.actionRequestId ?? undefined, resolveAuthorizationHeaders, accountEncryptionCurrentness,
               currentness: { verifyCurrent }, ...(execution.signal ? { signal: execution.signal } : {}),
             });
           });
@@ -20019,6 +20043,9 @@ export async function startDaemonSessionControlRuntime(
     // caller intent, just like the local control server. Automatic recovery
     // keeps the Stop-fenced internal entry points above.
     spawnSession,
+    // Retained input authorization identifies its original; it is not a fresh
+    // person's Resume intent and cannot clear an explicit Stop.
+    spawnSessionForInternalResume,
     stopSession,
     stopRequesterSessionForHandoff: async (sessionId, expectedSpawnNonce) => {
       const candidates = [...params.pidToTrackedSession.values()].filter(tracked => tracked.happySessionId === sessionId);
