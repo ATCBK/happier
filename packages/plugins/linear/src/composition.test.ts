@@ -17,7 +17,7 @@ describe('public Linear source composition', () => {
     const kit = await createPluginTestkit({ manifest: LINEAR_PLUGIN.manifest, module: LINEAR_PLUGIN, services: h.context.services });
     const draft = { v: 1, binding: instance.binding, localInstanceKey: 'linear', keyStability: 'stable',
       configuration: { v: 1, token: JSON.stringify({ v: 1, involvement: 'mine', teams: { kind: 'selected', unitIds: ['team-2'] },
-        teamUnits: [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS' }] }) }, locator: { v: 1, displayLabel: 'Linear workspace' } };
+        teamUnits: [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS', collisionScope: 'untrusted-team-scope' }] }) }, locator: { v: 1, displayLabel: 'Linear workspace' } };
     try {
       const contribution = LINEAR_PLUGIN.manifest.contributes.targetedPluginContributions[0]!;
       expect(contribution.operations.listScopeUnits).toBeTypeOf('string');
