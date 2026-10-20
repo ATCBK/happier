@@ -1,6 +1,6 @@
 import type { SherpaNativeModule } from '@happier-dev/sherpa-native';
 
-import { modelPackDirUriToNativePath } from '@/voice/modelPacks/modelPackDirPath';
+import { fileUriToNativePath } from '@/voice/modelPacks/nativePath';
 
 import type { InstallerOverrides } from './types';
 
@@ -25,7 +25,7 @@ export async function releaseModelPackEngines(overrides: InstallerOverrides, dir
   const native = await getSherpaNative(overrides);
   if (!native?.release) return;
   try {
-    await native.release({ assetsDir: modelPackDirUriToNativePath(dirUri) });
+    await native.release({ assetsDir: fileUriToNativePath(dirUri) });
   } catch (error) {
     console.warn('[modelPacks] Failed to release native speech engines', error instanceof Error ? error.name : 'unknown');
   }
@@ -45,7 +45,7 @@ async function excludeFromBackup(native: InstallerSherpaNative, dirUri: string):
   if (excluded.has(dirUri)) return;
   excluded.add(dirUri);
   try {
-    await native.excludeFromBackup({ path: modelPackDirUriToNativePath(dirUri) });
+    await native.excludeFromBackup({ path: fileUriToNativePath(dirUri) });
   } catch (error) {
     excluded.delete(dirUri);
     console.warn('[modelPacks] Failed to exclude model pack from backup', error instanceof Error ? error.name : 'unknown');

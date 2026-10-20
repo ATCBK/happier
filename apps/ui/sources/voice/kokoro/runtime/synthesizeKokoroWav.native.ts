@@ -5,6 +5,7 @@ import { resolveKokoroNativeVoice } from '@/voice/kokoro/voices/resolveKokoroVoi
 import { resolveStreamingTtsChunkChars, splitSpeechSentences } from '@/voice/output/TtsChunker';
 import { ensureModelPackInstalled } from '@/voice/modelPacks/installer.native';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
+import { fileUriToNativePath } from '@/voice/modelPacks/nativePath';
 
 type KokoroNativeModuleLike = {
   initialize(params: { assetsDir: string }): Promise<void>;
@@ -50,10 +51,6 @@ function createTimeoutPromise(timeoutMs: number): Promise<never> {
   });
 }
 
-function uriToFilePath(uri: string): string {
-  if (uri.startsWith('file://')) return uri.slice('file://'.length);
-  return uri;
-}
 
 function filePathToUri(pathOrUri: string): string {
   if (pathOrUri.startsWith('file://')) return pathOrUri;
@@ -161,7 +158,7 @@ async function prepareNativeSynthesis(opts: KokoroSynthesisOpts, overrides: Nati
     },
     { fs: fs as any },
   );
-  const assetsDirPath = uriToFilePath(installed.packDirUri);
+  const assetsDirPath = fileUriToNativePath(installed.packDirUri);
 
   await Promise.race([
     native.initialize({ assetsDir: assetsDirPath }),
@@ -222,7 +219,7 @@ async function synthesizePreparedWav(
         voiceId: prepared.voiceId,
         sid: prepared.sid,
         speed: opts.speed,
-        outWavPath: uriToFilePath(outWavUri),
+        outWavPath: fileUriToNativePath(outWavUri),
       }),
       createAbortPromise(opts.signal),
       jobTimeout,
@@ -285,7 +282,7 @@ export async function prepareKokoroTts(
     { fs: fs as any },
   );
   await Promise.race([
-    native.initialize({ assetsDir: uriToFilePath(installed.packDirUri) }),
+    native.initialize({ assetsDir: fileUriToNativePath(installed.packDirUri) }),
     createAbortPromise(opts.signal),
     createTimeoutPromise(opts.timeoutMs),
   ]);

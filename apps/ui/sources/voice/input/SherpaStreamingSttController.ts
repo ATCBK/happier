@@ -12,6 +12,7 @@ import {
   resolveHandsFreeTurnEndpointPolicy,
   resolveLocalVoiceAdapterSettings,
 } from '@/voice/local/localVoiceSettings';
+import { fileUriToNativePath } from '@/voice/modelPacks/nativePath';
 
 type DeviceSttStatePatch = {
   status?: 'idle' | 'recording' | 'transcribing' | 'sending' | 'speaking' | 'error';
@@ -100,9 +101,6 @@ function getOptionalSherpaNativeModule(): SherpaNativeModuleLike | null {
   return (getOptionalHappierSherpaNativeModule() as unknown as SherpaNativeModuleLike | null) ?? null;
 }
 
-function uriToFilePath(uri: string): string {
-  return uri.startsWith('file://') ? uri.slice('file://'.length) : uri;
-}
 
 function resolvePackId(settings: unknown): string {
   const { config } = resolveLocalVoiceAdapterSettings(settings);
@@ -292,7 +290,7 @@ export function createSherpaStreamingSttController(deps: {
       // Streaming zipformer packs are single-language; the recognizer language comes from the pack.
       await sherpa.createStreamingRecognizer({
         jobId,
-        assetsDir: uriToFilePath(packDirUri),
+        assetsDir: fileUriToNativePath(packDirUri),
         sampleRate: SAMPLE_RATE,
         channels: CHANNELS,
         language: null,
