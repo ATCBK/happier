@@ -42,7 +42,7 @@ function providerName(connection: AssembleProviderConnectionCatalogInput['connec
 }
 
 function exactCatalogRecord(
-  input: AssembleProviderConnectionCatalogInput,
+  input: Pick<AssembleProviderConnectionCatalogInput, 'runtimeState' | 'connection' | 'catalogRuntimeKey'>,
 ): ProviderCatalogRuntimeStateRecordV1 | null {
   if (input.runtimeState.machineId !== input.connection.machineId) {
     throw new TypeError('Provider catalog runtime state belongs to another machine');
@@ -216,11 +216,12 @@ function bindRow(input: Readonly<{
   };
 }
 
-export function assembleProviderConnectionCatalog(
-  input: AssembleProviderConnectionCatalogInput,
-): ProviderConnectionCatalog {
+/** Source catalog observation before it is bound to a particular Agent. */
+export function readProviderConnectionCatalogPresentation(
+  input: Pick<AssembleProviderConnectionCatalogInput,
+    'modelNameCatalog' | 'connection' | 'providerSettings' | 'runtimeState' | 'catalogRuntimeKey'>,
+): ReturnType<typeof projectProviderCatalogPresentation> {
   const catalog = catalogDeclaration(input.connection);
-  const agentTargetKey = ProviderAgentTargetKeySchema.parse(input.agentTargetKey);
   const catalogRecord = exactCatalogRecord(input);
   const manualModels = readOwnRecordValue(
     input.providerSettings.manualModelsByConnectionId,
@@ -233,7 +234,7 @@ export function assembleProviderConnectionCatalog(
       staleProbeModels: catalogRecord.state.staleProbeModels,
     };
 
-  const projected = projectProviderCatalogPresentation({
+  return projectProviderCatalogPresentation({
     modelNameCatalog: input.modelNameCatalog,
     staticModels: staticModels(catalog),
     manualModels,
@@ -249,6 +250,14 @@ export function assembleProviderConnectionCatalog(
       ? 'account_unverified'
       : 'probe',
   });
+}
+
+export function assembleProviderConnectionCatalog(
+  input: AssembleProviderConnectionCatalogInput,
+): ProviderConnectionCatalog {
+  const catalog = catalogDeclaration(input.connection);
+  const agentTargetKey = ProviderAgentTargetKeySchema.parse(input.agentTargetKey);
+  const projected = readProviderConnectionCatalogPresentation(input);
   const bind = (row: ProjectedProviderCatalogPresentationRow) => bindRow({
     hostInput: input,
     agentTargetKey,

@@ -20,7 +20,8 @@ import { isSameTeamCredentialBrokerApplication } from '@/providers/broker/teamCr
 import { composeProviderBindingMaterialization } from '@/providers/spawn/compose';
 import { resolveProviderCredentialPlaintextAsync } from '@/providers/spawn/credentials';
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
-import { readProviderBrokerEndpointUrl, PROVIDER_BROKER_MODEL_ID_HEADER } from './providerBrokerPrivateProtocol';
+import { readProviderBrokerEndpointUrl, PROVIDER_BROKER_MODEL_ID_HEADER, teamCredentialBrokerLocalCredentialTransport } from './providerBrokerPrivateProtocol';
+import { assertTeamCredentialModelAdmission, type TeamCredentialModelCompatibilityInput } from './teamCredentialModelCompatibility';
 
 type BrokerTunnel = Readonly<{
   localPort: number;
@@ -46,6 +47,8 @@ export type ExactSessionTeamCredentialProviderSelection = Readonly<{
   descriptor: TeamCredentialProviderModelCatalogEntryV1['descriptor'];
   application: ProviderBrokerApplicationBindingV1;
   sourceRevision: string;
+  sourceFacts?: TeamCredentialModelCompatibilityInput['sourceFacts'];
+  confirmationSource?: TeamCredentialModelCompatibilityInput['confirmationSource'];
 }>;
 
 type SessionTeamCredentialProviderBindingOpenDependencies = Readonly<{
@@ -147,6 +150,9 @@ export async function openExactSessionTeamCredentialProviderBinding(
   input.signal.throwIfAborted();
   assertExactSelectionIsCoherent(input);
   const selection = input.selection;
+  const assertAdmission = () => assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
+    model: { ...selection, deliveryMode: 'brokered' } });
+  assertAdmission();
   const consumer = resolveProviderBrokerConsumer(input);
   const materializationScopeId = consumer.kind === 'execution_run'
     ? consumer.executionRunId
@@ -203,6 +209,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
     input.signal.throwIfAborted();
     await input.revalidateSelection?.({ signal: input.signal, brokerOpen: opened, tunnel });
     input.signal.throwIfAborted();
+    assertAdmission();
 
     const endpointUrl = await readProviderBrokerEndpointUrl({
       localOrigin: `http://127.0.0.1:${tunnel.localPort}`,
@@ -224,12 +231,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
     // local capability as its bearer. The Home-signed cross-Account authority
     // was admitted by the trusted transport owner during the machine/1
     // handshake and never enters Agent configuration, environment or requests.
-    const credentialTransport = {
-      id: 'team-provider-broker-local-capability-v1',
-      protocols: [selection.application.protocol],
-      uses: ['runtime'] as const,
-      destination: { kind: 'httpHeader' as const, name: 'authorization', format: 'bearer' as const },
-    };
+    const credentialTransport = teamCredentialBrokerLocalCredentialTransport(selection.application.protocol);
     const materialization = await materializeLeasedAgentProviderBinding({
       lease: input.lease,
       agentId: input.agentId,
@@ -365,6 +367,8 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
     && candidate.availability === 'available'
   ));
   if (!row) throw new Error('team_credential_provider_selection_not_current');
+  assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
+    model: { ...row, deliveryMode: row.selection.deliveryMode } });
 
   if (input.binding.deliveryMode === 'direct') {
     if (!row.direct) {
@@ -425,6 +429,8 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
       && isDeepStrictEqual(candidate.direct, direct)
     ));
     if (!current) throw new Error('team_credential_provider_selection_changed');
+    assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
+      model: { ...current, deliveryMode: current.selection.deliveryMode } });
 
     const bindingKey = `team_resource:${row.selection.resourceId}:revision:${row.selection.expectedResourceRevision}:route:direct`;
     const prepared = prepareLeasedAgentProviderBinding({
@@ -512,6 +518,8 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
       descriptor: row.descriptor,
       application: row.application,
       sourceRevision: row.sourceRevision,
+      sourceFacts: row.sourceFacts,
+      confirmationSource: row.confirmationSource,
     },
     lease: input.lease,
     materializationBaseDir: input.materializationBaseDir,
@@ -533,6 +541,8 @@ export async function openSessionTeamCredentialProviderBinding(input: Readonly<{
         && isSameTeamCredentialBrokerApplication(candidate.application, row.application)
       ));
       if (!current) throw new Error('team_credential_provider_selection_changed');
+      assertTeamCredentialModelAdmission({ lease: input.lease, agentId: input.agentId,
+        model: { ...current, deliveryMode: current.selection.deliveryMode } });
     },
   });
 }

@@ -89,7 +89,9 @@ import {
   resolveTeamCredentialBrokerEligibility,
   resolveTeamCredentialResourceTestCandidate,
 } from '@/providers/broker/resourceTestCandidate';
-import { projectConnectedAccountCatalog, type ResolveManagedProviderPurposeBindingIntentSelection } from './connectedAccountCatalog';
+import { projectConnectedAccountCatalog, readConnectedAccountCatalogSources, type ResolveManagedProviderPurposeBindingIntentSelection } from './connectedAccountCatalog';
+import { resolveTeamCredentialModelCompatibility } from '@/providers/broker/teamCredentialModelCompatibility';
+import { readProviderConnectionSourceCatalog, projectProviderConnectionSourceCatalog } from './providerConnectionSourceCatalog';
 
 export type ProviderModelManagementFeatureGate = Readonly<{
   isEnabled(featureId: 'providers' | 'providers.localModelManagement'): boolean;
@@ -420,8 +422,31 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           }),
         };
       }
-      const agentId = resolveAgentRoutingIdForTarget(lease.registry.contributes, target);
-      if (!agentId) {
+      if (request.sourceCatalog && request.providerConnection) {
+        const registry = resolveProviderContributionRegistryView(lease.registry.contributes,
+          lease.registry.generation, lease.registry.readPluginOccurrenceId);
+        const observation = await readProviderConnectionSourceCatalog({ machineId: request.machineId,
+          source: request.providerConnection, snapshot, registry, runtime: sharedRuntime, lifetime: operationLifetime,
+          ...(accountContext ? { accountScope: { getAccountSettingsSnapshot: accountContext.getAccountSettingsSnapshot,
+            resolveManagedPurposeBindingIntent: accountContext.resolveManagedPurposeBindingIntent } } : {}),
+          resolveAddresses: input.resolveAddresses, refreshPolicy: request.refreshPolicy, forceRefresh: request.forceRefresh });
+        if (observation.status === 'error') return observation;
+        if (!await isAccountCurrent() || accountContext && accountContext.getAccountSettingsSnapshot() !== snapshot) {
+          return { status: 'error', error: createProviderErrorV1('provider_authorization_changed') };
+        }
+        const projected = projectProviderConnectionSourceCatalog({ observation, registry, request,
+          delivery: request.includeDirectMaterialization ? 'direct' : 'brokered' });
+        if (projected.status !== 'success' || !request.includeTeamCredentialRequestPolicySupport) return projected;
+        return DaemonProviderModelProjectionResponseV1Schema.parse({ ...projected,
+          groups: projected.groups.map(group => ({ ...group, rows: group.rows.map(row => ({ ...row,
+            requestPolicySupport: row.application ? projectDaemonProviderTeamCredentialRequestPolicySupportV1({
+              application: row.application, sourceRevision: group.sourceRevision!, descriptor: row.descriptor,
+            }) ?? undefined : undefined,
+          })) })) });
+      }
+      const sourceProjection = Boolean(request.connectedAccountTarget && request.sourceCatalog);
+      const agentId = sourceProjection ? null : resolveAgentRoutingIdForTarget(lease.registry.contributes, target);
+      if (!agentId && !sourceProjection) {
         return {
           status: 'error',
           error: createProviderErrorV1('agent_unavailable', {
@@ -430,10 +455,12 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         };
       }
       try {
-        await awaitWithinProviderOperation(
-          activateAgentRuntimeContributionOnDemand(lease.registry, agentId),
-          operationLifetime,
-        );
+        if (agentId) {
+          await awaitWithinProviderOperation(
+            activateAgentRuntimeContributionOnDemand(lease.registry, agentId),
+            operationLifetime,
+          );
+        }
       } catch (error) {
         if (error instanceof ProviderOperationAbandonedError) {
           return {
@@ -445,14 +472,33 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         }
         throw error;
       }
-      const adapter = readLeasedAgentProviderBindingAdapter({ lease, agentId });
-      if (!adapter) return { status: 'success', agentTargetKey: request.agentTargetKey, groups: [] };
+      const adapter = agentId ? readLeasedAgentProviderBindingAdapter({ lease, agentId }) : null;
+      if (!adapter && !sourceProjection) return { status: 'success', agentTargetKey: request.agentTargetKey, groups: [] };
       const settingsRead = readProviderSettingsForCli(snapshot);
       const registry = resolveProviderContributionRegistryView(
         lease.registry.contributes,
         lease.registry.generation,
         lease.registry.readPluginOccurrenceId,
       );
+      if (request.teamCredentialModel && adapter) {
+        const model = request.teamCredentialModel;
+        const confirmationSource = model.confirmationSource;
+        if (!confirmationSource || model.availability !== 'available') return { status: 'error', error: createProviderErrorV1('provider_catalog_unavailable') };
+        const compatibility = resolveTeamCredentialModelCompatibility({ model: { ...model, deliveryMode: model.selection.deliveryMode },
+          lease, agentId: agentId!, providerSettings: settingsRead.settings });
+        return DaemonProviderModelProjectionResponseV1Schema.parse({ status: 'success', agentTargetKey: request.agentTargetKey,
+          groups: [{ connectionId: confirmationSource.connectionId, providerName: model.application.implementationIdentity.localId,
+            connectionName: model.selection.resourceId, connectionRole: 'named', connectionDisplayNameMode: 'custom',
+            connectionRevision: 0, sourceRevision: model.sourceRevision, modelLoadAction: 'descriptor_absent',
+            authorization: { authorized: true }, manualModelPolicy: 'catalog-only',
+            supportsFreeformModelIds: adapter.support.supportsFreeformModelIds,
+            suppressedConnectedServiceIds: adapter.support.authIsolation.suppressConnectedServiceIds,
+            rows: [{ ref: { agentTargetKey: request.agentTargetKey, providerConnectionId: confirmationSource.connectionId, modelId: model.descriptor.id },
+              descriptor: model.descriptor, application: model.application, sourceFacts: model.sourceFacts, confirmationSource,
+              sources: { manual: false, static: false, probe: false }, confidence: 'account_unverified', compatibility,
+              endpointHealth: 'not_checked', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible' }],
+          }], currentSelectionRecovery: null });
+      }
       // A Connected Account/Pool catalog belongs to its declared upstream
       // purpose, independently of any saved Gateway configuration. Taking this
       // branch before connection resolution prevents a second competing
@@ -464,7 +510,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           error: createProviderErrorV1('provider_catalog_unavailable', { machineId: request.machineId }) });
         if (!resolveSelection || request.providerConnection || request.sourceConnectionId) return unavailable();
         const projection = await awaitWithinProviderOperation(projectConnectedAccountCatalog({
-          request, registry, support: adapter.support, adapterVersion: adapter.adapter.adapterVersion,
+          request, registry, ...(adapter ? { support: adapter.support, adapterVersion: adapter.adapter.adapterVersion } : {}),
           providerSettings: settingsRead.settings, resolveSelection, signal: operationLifetime.signal,
         }), operationLifetime);
         if (projection.groups.length === 0
@@ -482,6 +528,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           currentSelectionRecovery: null,
         });
       }
+      if (!adapter) return { status: 'success', agentTargetKey: request.agentTargetKey, groups: [] };
       const modelNameCatalog = readProviderModelNameCatalog(registry);
       // Exact-source browse and launch admission must not resolve DNS, purpose
       // bindings or catalogs belonging to an unrelated connection.
@@ -1044,6 +1091,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         machineId: request.machineId,
         agentTargetKey,
         includeTeamCredentialRequestPolicySupport: true,
+        sourceCatalog: true,
         ...(request.refreshPolicy ? { refreshPolicy: request.refreshPolicy } : {}),
         ...projectTeamCredentialSourceModelFilter(request.source),
       });
@@ -1056,7 +1104,6 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           if (row.visibility !== 'visible'
             || row.catalog.stale
             || row.compatibility.result.status === 'incompatible'
-            || (row.compatibility.result.status === 'experimental' && !row.compatibility.confirmed)
             || !row.requestPolicySupport) continue;
           const support = row.requestPolicySupport;
           models.set(JSON.stringify([
@@ -1123,9 +1170,13 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     request: DaemonProviderTeamCredentialBrokerEligibilityRequestV1,
     signal?: AbortSignal,
   ): Promise<DaemonProviderTeamCredentialBrokerEligibilityResponseV1> => {
+    signal?.throwIfAborted();
+    if (!input.featureGate.isEnabled('providers') || request.machineId !== input.machineId) {
+      return { status: 'unavailable', reason: 'source_unavailable' };
+    }
     const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
     // Eligibility is a current-observation read, not an explicit catalog
-    // refresh. All Agent targets in this operation consume the same admission.
+    // refresh. The whole operation consumes one admitted Account observation.
     const observation: {
       pending?: ReturnType<typeof readAdmittedSnapshot>;
       admitted?: ActiveAccountSettingsSnapshot | null;
@@ -1135,13 +1186,35 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     const projectCurrentModels = (projectionRequest: DaemonProviderModelProjectionRequestV1) => (
       projectModels({ ...projectionRequest, refreshPolicy: 'current_only' }, undefined, signal, observeSnapshot)
     );
+    const sourceSelection = input.resolveManagedPurposeBindingIntentSelection;
     const result = 'scope' in request
-      ? await resolveTeamCredentialBrokerEligibility({
-          ...request,
-          agentTargetKeys: await resolveAgentTargetKeys(),
-          projectModels: projectCurrentModels,
-          ...(signal ? { signal } : {}),
-        })
+      ? await (async () => {
+          const snapshot = await observeSnapshot(signal);
+          if (!snapshot) return { status: 'unavailable' as const, reason: 'source_unavailable' as const };
+          const lease = await (input.acquireRuntimeLease ? input.acquireRuntimeLease()
+            : acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: input.happyHomeDir ?? configuration.happyHomeDir }));
+          try {
+            if (typeof lease.registry.generation !== 'number') return { status: 'unavailable' as const, reason: 'source_unavailable' as const };
+            const registry = resolveProviderContributionRegistryView(lease.registry.contributes, lease.registry.generation, lease.registry.readPluginOccurrenceId);
+            if (request.source.kind === 'provider_connection') {
+              const observation = await readProviderConnectionSourceCatalog({ machineId: request.machineId,
+                source: { connectionId: request.source.connectionId, expectedConnectionSecurityFingerprint: request.source.connectionSecurityFingerprint },
+                snapshot, registry, runtime: sharedRuntime, lifetime: createProviderOperationLifetime({ signal }),
+                resolveAddresses: input.resolveAddresses, refreshPolicy: 'current_only' });
+              return observation.status === 'success' && observation.presentation.rows.some(row => !row.catalog.stale)
+                ? { status: 'eligible' as const }
+                : { status: 'unavailable' as const, reason: 'source_unavailable' as const };
+            }
+            if (!sourceSelection) return { status: 'unavailable' as const, reason: 'source_unavailable' as const };
+            const sources = await readConnectedAccountCatalogSources({
+              registry,
+              target: request.source.target, resolveSelection: sourceSelection, signal,
+            });
+            return sources.length > 0 && (await Promise.all([...new Set(sources.map(source => source.selection))].map(selection => selection.isCurrent(signal)))).every(Boolean)
+              ? { status: 'eligible' as const }
+              : { status: 'unavailable' as const, reason: 'source_unavailable' as const };
+          } finally { await lease.release(); }
+        })()
       : await resolveTeamCredentialBrokerEligibility({
           ...request,
           projectModels: projectCurrentModels,
@@ -1160,19 +1233,32 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
 
   const resolveBrokerSourceSelection: RuntimeProviderModelManagementServices['resolveTeamCredentialBrokerSourceSelection'] = async (request) => {
     request.signal.throwIfAborted();
-    const projection = await projectModels({
+    const snapshot = await readAdmittedSnapshot(undefined, request.signal, false);
+    if (!snapshot || !input.featureGate.isEnabled('providers') || request.machineId !== input.machineId) return null;
+    const lease = await (input.acquireRuntimeLease ? input.acquireRuntimeLease()
+      : acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: input.happyHomeDir ?? configuration.happyHomeDir }));
+    try {
+    if (typeof lease.registry.generation !== 'number') return null;
+    const registry = resolveProviderContributionRegistryView(lease.registry.contributes, lease.registry.generation, lease.registry.readPluginOccurrenceId);
+    const observation = await readProviderConnectionSourceCatalog({ machineId: request.machineId,
+      source: { connectionId: request.source.connectionId, expectedConnectionSecurityFingerprint: request.source.connectionSecurityFingerprint },
+      snapshot, registry, runtime: sharedRuntime, lifetime: createProviderOperationLifetime({ signal: request.signal }),
+      resolveAddresses: input.resolveAddresses, refreshPolicy: 'current_only' });
+    if (observation.status !== 'success') return null;
+    const projection = projectProviderConnectionSourceCatalog({ observation, registry, delivery: 'brokered', request: {
       machineId: request.machineId,
       agentTargetKey: request.application.agentTargetKey,
+      application: request.application,
       providerConnection: {
         connectionId: request.source.connectionId,
         expectedConnectionSecurityFingerprint: request.source.connectionSecurityFingerprint,
       },
       includeDirectMaterialization: true,
+      sourceCatalog: true,
       refreshPolicy: 'current_only',
-    }, undefined, request.signal);
+    } });
     request.signal.throwIfAborted();
     if (projection.status !== 'success') return null;
-    const registry = await resolveManagementRegistry();
     const candidates = projection.groups.flatMap((group) => {
       if (
         group.connectionId !== request.source.connectionId
@@ -1198,7 +1284,11 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         }];
       });
     });
+    const current = (input.getAccountSettingsSnapshot ?? getActiveAccountSettingsSnapshot)();
+    if (current?.scopeKey !== snapshot.scopeKey
+      || !sameProviderConnectionsCatalogAuthority(snapshot.providerConnectionsCatalog, current?.providerConnectionsCatalog)) return null;
     return candidates.length === 1 ? Object.freeze(candidates[0]!) : null;
+    } finally { await lease.release(); }
   };
 
   const mutateModelSettings = async (
@@ -1286,9 +1376,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         error: createProviderErrorV1('provider_not_enabled_on_machine', errorContext),
       };
     }
-    const operationLifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    });
+    const operationLifetime = createProviderOperationLifetime({});
     let snapshot;
     try {
       snapshot = await awaitWithinProviderOperation(readAdmittedSnapshot(undefined, operationLifetime.signal), operationLifetime);

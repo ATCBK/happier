@@ -107,21 +107,17 @@ it('settles steady source-any eligibility across three Agents without replaying 
     throw new Error(`Unexpected polling HTTP boundary: ${path}`);
   });
   const projectedTargets: string[] = [];
-  let retireOnProjection = false;
+  let retireOnLease = false;
   // The loaded-plugin boundary declares three Agents without Provider adapters.
-  // Eligibility must try all three through the real projector and return unavailable.
+  // Source-only eligibility must leave every Agent contribution dormant.
   const executable = {
     generation: 7,
-    contributes: { agentDefinitionsById: new Map(['a', 'b', 'c'].map(id => [id, {
+    contributes: { providersByContributionKey: new Map(), agentDefinitionsById: new Map(['a', 'b', 'c'].map(id => [id, {
       id, pluginId: 'acme.polling', identity: { pluginId: 'acme.polling', localId: id },
       definition: { id, kindVersion: 1 },
     }])) },
     activateContributionsOnDemand: async (demands: readonly { localId: string }[]) => {
       projectedTargets.push(...demands.map(demand => demand.localId));
-      if (retireOnProjection) {
-        retireOnProjection = false;
-        setActiveAccountSettingsSnapshot({ ...providerSnapshot(DEFAULT_PROVIDER_SETTINGS_V1), scopeKey: 'replacement-account' });
-      }
       return [];
     },
     agentRuntimesByAgentId: new Map(),
@@ -129,7 +125,13 @@ it('settles steady source-any eligibility across three Agents without replaying 
   const lease: PluginRuntimeRegistryLease = { registry: executable, source: 'active', durableRevision: -1,
     release: async () => {} };
   const services = createRuntimeProviderModelManagementServices({ machineId: 'machine-a',
-    featureGate: { isEnabled: () => true }, acquireRuntimeLease: async () => lease,
+    featureGate: { isEnabled: () => true }, acquireRuntimeLease: async () => {
+      if (retireOnLease) {
+        retireOnLease = false;
+        setActiveAccountSettingsSnapshot({ ...providerSnapshot(DEFAULT_PROVIDER_SETTINGS_V1), scopeKey: 'replacement-account' });
+      }
+      return lease;
+    },
     modelSettingsMutation: async (): Promise<never> => { throw new Error('No mutation during eligibility'); } });
   const request = { machineId: 'machine-a', teamId: 'team-a', resourceId: 'resource-a', expectedResourceRevision: 1,
     scope: 'source_any' as const,
@@ -141,7 +143,7 @@ it('settles steady source-any eligibility across three Agents without replaying 
     const started = performance.now();
     const call = services.resolveTeamCredentialBrokerEligibility(request).then(result => {
       latencies.push(performance.now() - started);
-      expect(result).toEqual({ status: 'unavailable', reason: 'model_unavailable' });
+      expect(result).toEqual({ status: 'unavailable', reason: 'source_unavailable' });
     });
     void call.catch(() => {});
     calls.push(call);
@@ -157,7 +159,7 @@ it('settles steady source-any eligibility across three Agents without replaying 
       .toHaveLength(16), { timeout: onePassDeadlineMs });
     await Promise.all(calls);
     expect(Math.max(...latencies)).toBeLessThan(onePassDeadlineMs);
-    expect(projectedTargets).toEqual(Array.from({ length: 16 }, () => ['a', 'b', 'c']).flat());
+    expect(projectedTargets).toEqual([]);
     // One row+source observation despite steady post-publication demand. The
     // history owner has additionally verified destination row authority once.
     expect(sourceReads).toBe(1);
@@ -170,7 +172,7 @@ it('settles steady source-any eligibility across three Agents without replaying 
     await poll();
     expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
     expect(sourceReads).toBe(2);
-    retireOnProjection = true;
+    retireOnLease = true;
     await expect(services.resolveTeamCredentialBrokerEligibility(request))
       .resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
   } finally {

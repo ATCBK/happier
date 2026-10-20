@@ -40,6 +40,7 @@ describe('projectTeamCredentialSourceModelFilter', () => {
       groupId: 'pool-1',
     };
     expect(projectTeamCredentialSourceModelFilter(source)).toEqual({
+      sourceCatalog: true,
       providerConnection: {
         connectionId: source.connectionId,
         expectedConnectionSecurityFingerprint: source.connectionSecurityFingerprint,
@@ -47,10 +48,10 @@ describe('projectTeamCredentialSourceModelFilter', () => {
     });
     expect(projectTeamCredentialSourceModelFilter({
       v: 1, kind: 'connected_account', target: accountTarget, credentialIncarnation: 'incarnation-1',
-    })).toEqual({ connectedAccountTarget: accountTarget });
+    })).toEqual({ connectedAccountTarget: accountTarget, sourceCatalog: true });
     expect(projectTeamCredentialSourceModelFilter({
       v: 1, kind: 'connected_pool', target: poolTarget, poolIncarnation: 'incarnation-1',
-    })).toEqual({ connectedAccountTarget: poolTarget });
+    })).toEqual({ connectedAccountTarget: poolTarget, sourceCatalog: true });
   });
 });
 
@@ -285,31 +286,7 @@ describe('resolveTeamCredentialBrokerEligibility', () => {
     })).resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
   });
 
-  it('answers source-only Pool eligibility without returning application or request material', async () => {
-    const projectModels = vi.fn(async ({ agentTargetKey }: { agentTargetKey: string }) => (
-      agentTargetKey.endsWith('/eligible')
-        ? projection(agentTargetKey, 'model-a')
-        : { ...projection(agentTargetKey, 'model-a'), groups: [] }
-    ));
-
-    const result = await resolveTeamCredentialBrokerEligibility({
-      machineId: 'machine-1',
-      teamId: 'team-1',
-      resourceId: 'resource-1',
-      expectedResourceRevision: 3,
-      source,
-      scope: 'source_any',
-      agentTargetKeys: ['agent:acme.example/unavailable', 'agent:acme.example/eligible'],
-      projectModels,
-    });
-
-    expect(result).toEqual({ status: 'eligible' });
-    expect(result).not.toHaveProperty('application');
-    expect(result).not.toHaveProperty('request');
-    expect(projectModels).toHaveBeenCalledTimes(1);
-  });
-
-  it('preserves a typed source-row refusal in exact and source-only eligibility while keeping an observed empty catalog distinct', async () => {
+  it('preserves a typed source-row refusal in exact eligibility while keeping an observed empty catalog distinct', async () => {
     const current = projection(application.agentTargetKey, 'model-a');
     const denied: DaemonProviderModelProjectionResponseV1 = {
       ...current,
@@ -323,17 +300,10 @@ describe('resolveTeamCredentialBrokerEligibility', () => {
       expectedResourceRevision: 3, source,
     };
     const exact = { application, modelId: 'model-a', sourceRevision: 'source-revision' };
-    const sourceOnly = { scope: 'source_any' as const, agentTargetKeys: [application.agentTargetKey] };
-    for (const selection of [exact, sourceOnly]) {
-      await expect(resolveTeamCredentialBrokerEligibility({
-        ...base, ...selection, projectModels: async () => denied,
-      })).resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
-    }
-    for (const [selection, reason] of [[exact, 'application_unavailable'], [sourceOnly, 'model_unavailable']] as const) {
-      await expect(resolveTeamCredentialBrokerEligibility({
-        ...base, ...selection, projectModels: async () => ({ ...current, groups: [] }),
-      })).resolves.toEqual({ status: 'unavailable', reason });
-    }
+    await expect(resolveTeamCredentialBrokerEligibility({ ...base, ...exact, projectModels: async () => denied }))
+      .resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
+    await expect(resolveTeamCredentialBrokerEligibility({ ...base, ...exact, projectModels: async () => ({ ...current, groups: [] }) }))
+      .resolves.toEqual({ status: 'unavailable', reason: 'application_unavailable' });
   });
 });
 
@@ -380,6 +350,8 @@ describe('resolveTeamCredentialSourceModelCatalog', () => {
     expect(projectModels).toHaveBeenCalledWith({
       machineId: 'broker-machine',
       agentTargetKey: application.agentTargetKey,
+      application,
+      sourceCatalog: true,
       providerConnection: {
         connectionId: source.connectionId,
         expectedConnectionSecurityFingerprint: source.connectionSecurityFingerprint,

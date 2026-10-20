@@ -9,6 +9,7 @@ export function hasProviderExperimentalConfirmation(input: Readonly<{
   providerSettings: ProviderSettingsV1;
   connectionId: string;
   connectedAccountTarget?: ProviderSettingsV1['experimentalBindingConfirmations'][number]['connectedAccountTarget'];
+  catalogSourceKey?: string;
   agentTargetKey: string;
   modelId: string;
   compatibilityFingerprint: string;

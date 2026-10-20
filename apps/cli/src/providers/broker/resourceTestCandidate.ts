@@ -80,6 +80,9 @@ function sourceCatalogsFromProjection(input: Readonly<{
         },
         descriptor: row.descriptor,
         application: row.application,
+        ...(row.sourceFacts ? { sourceFacts: row.sourceFacts } : {}),
+        ...(row.confirmationSource ? { confirmationSource: row.confirmationSource } : {}),
+        compatibility: { ...row.compatibility, confirmed: false },
         sourceRevision,
         availability: 'available',
       }));
@@ -122,16 +125,17 @@ export function projectTeamCredentialSourceModelFilter(
   source: TeamCredentialSourceBindingV1,
 ): Readonly<Pick<
   DaemonProviderModelProjectionRequestV1,
-  'providerConnection' | 'connectedAccountTarget'
+  'providerConnection' | 'connectedAccountTarget' | 'sourceCatalog'
 >> {
   return source.kind === 'provider_connection'
     ? {
+        sourceCatalog: true,
         providerConnection: {
           connectionId: source.connectionId,
           expectedConnectionSecurityFingerprint: source.connectionSecurityFingerprint,
         },
       }
-    : { connectedAccountTarget: source.target };
+    : { connectedAccountTarget: source.target, sourceCatalog: true };
 }
 
 /** Content-free exact-source eligibility derived from the same canonical
@@ -144,51 +148,14 @@ export async function resolveTeamCredentialBrokerEligibility(input: Readonly<{
   source: TeamCredentialSourceBindingV1;
   projectModels(request: DaemonProviderModelProjectionRequestV1): Promise<DaemonProviderModelProjectionResponseV1>;
   signal?: AbortSignal;
-} & (
-  | {
-      application: ProviderBrokerApplicationBindingV1;
-      modelId: string;
-      sourceRevision: string;
-    }
-  | {
-      scope: 'source_any';
-      agentTargetKeys: readonly string[];
-    }
-)>): Promise<Readonly<
+  application: ProviderBrokerApplicationBindingV1;
+  modelId: string;
+  sourceRevision: string;
+}>): Promise<Readonly<
   | { status: 'eligible' }
   | { status: 'unavailable'; reason: 'source_unavailable' | 'application_unavailable' | 'model_unavailable' | 'source_changed' }
 >> {
   input.signal?.throwIfAborted();
-  if ('scope' in input) {
-    const agentTargetKeys = [...new Set(input.agentTargetKeys)].sort();
-    if (agentTargetKeys.length === 0) {
-      return { status: 'unavailable', reason: 'application_unavailable' };
-    }
-    let sourceUnavailable = false;
-    for (const agentTargetKey of agentTargetKeys) {
-      input.signal?.throwIfAborted();
-      const candidates = await projectCandidates({
-        machineId: input.machineId,
-        teamId: input.teamId,
-        resourceId: input.resourceId,
-        resourceRevision: input.expectedResourceRevision,
-        source: input.source,
-        agentTargetKey,
-        projectModels: input.projectModels,
-      }).catch(caught => {
-        // An incompatible or unconfirmed row is a current source with no
-        // admitted model for this Agent, not an unavailable source.
-        if (!isTeamCredentialSourceModelProjectionFailureV1(caught) || caught.reason !== 'incompatible') {
-          sourceUnavailable = true;
-        }
-        return [];
-      });
-      if (candidates.length > 0) return { status: 'eligible' };
-    }
-    return sourceUnavailable
-      ? { status: 'unavailable', reason: 'source_unavailable' }
-      : { status: 'unavailable', reason: 'model_unavailable' };
-  }
   const candidates = await projectCandidates({
     machineId: input.machineId,
     teamId: input.teamId,
@@ -196,6 +163,7 @@ export async function resolveTeamCredentialBrokerEligibility(input: Readonly<{
     resourceRevision: input.expectedResourceRevision,
     source: input.source,
     agentTargetKey: input.application.agentTargetKey,
+    application: input.application,
     projectModels: input.projectModels,
   }).catch(caught => ({
     status: 'unavailable' as const,
@@ -219,12 +187,14 @@ async function projectCandidates(input: Readonly<{
   resourceRevision: number;
   source: TeamCredentialSourceBindingV1;
   agentTargetKey: string;
+  application?: ProviderBrokerApplicationBindingV1;
   projectModels(request: DaemonProviderModelProjectionRequestV1): Promise<DaemonProviderModelProjectionResponseV1>;
 }>): Promise<readonly Candidate[]> {
   const projection = await input.projectModels({
     machineId: input.machineId,
     agentTargetKey: input.agentTargetKey,
     ...projectTeamCredentialSourceModelFilter(input.source),
+    ...(input.application ? { application: input.application } : {}),
     mode: 'picker',
   });
   return candidatesFromProjection({
@@ -257,6 +227,7 @@ export async function resolveTeamCredentialSourceModelCatalog(input: Readonly<{
     machineId: input.machineId,
     agentTargetKey: input.application.agentTargetKey,
     ...projectTeamCredentialSourceModelFilter(input.source),
+    application: input.application,
     mode: 'picker',
   });
   const matching = sourceCatalogsFromProjection({

@@ -271,7 +271,7 @@ import { readProviderSettingsForCli } from '@/providers/settings/read';
 import { prepareProviderConnectionsCatalogForCli } from '@/providers/settings/hydrate';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderBrokerApplicationBindingV1, ProviderBrokerRelayApplicationBindingV1 } from '@happier-dev/protocol';
-import { TeamCredentialResourceEntitledPageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { readSessionTeamCredentialProviderModels } from '@/session/services/sessionTeamCredentialLaunch';
 import type { TeamCredentialResourceSummaryV1 } from '@happier-dev/protocol/teams';
 import {
   daemonExternalProviderRequestPolicyAcceptsResource,
@@ -356,11 +356,6 @@ import {
   resolveQualifiedConnectedAccountPeerClass,
   resolveQualifiedConnectedAccountPeerOperationTransport,
 } from '@/api/client/qualifiedConnectedAccountApi';
-
-function readTeamCredentialCatalogNextCursor(page: object): string | null {
-  if (!('nextCursor' in page)) return null;
-  return typeof page.nextCursor === 'string' ? page.nextCursor : null;
-}
 
 function resolvePositiveIntEnv(raw: string | undefined, fallback: number, bounds: { min: number; max: number }): number {
   const value = (raw ?? '').trim();
@@ -1947,20 +1942,10 @@ export async function startDaemon(
               lease,
               materializationBaseDir: join(configuration.happyHomeDir, 'providers', 'materialized'),
               signal: input.signal,
-              readCatalog: async (signal) => {
-                let cursor: string | null = null;
-                do {
-                  const raw = await homeDomainAction({
-                    actionId: 'teams.credentials.entitled.list', input: { teamId: input.teamId, ...(cursor ? { cursor } : {}) },
-                    context: { surface: 'cli' }, signal,
-                  });
-                  const parsed = TeamCredentialResourceEntitledPageV1Schema.parse(raw);
-                  const resource = parsed.resources.find(candidate => candidate.id === input.resourceId);
-                  if (resource) return resource.providerModels;
-                  cursor = readTeamCredentialCatalogNextCursor(parsed);
-                } while (cursor);
-                return [];
-              },
+              readCatalog: signal => readSessionTeamCredentialProviderModels({
+                homeDomainAction, lease, agentId: input.agentId, agentTargetKey: input.agentTargetKey,
+                resourceId: input.resourceId, teamId: input.teamId, signal,
+              }),
               ...(openTunnel ? {
                 openBroker: async (request, signal) =>
                   await api.openTeamCredentialProviderBroker(request, { signal }),

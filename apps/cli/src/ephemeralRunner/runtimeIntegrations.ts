@@ -965,6 +965,8 @@ export async function createProductionEphemeralRunnerApplication(input: Readonly
               agentTargetKey: reviewed.selection.agentTargetKey,
               modelId: reviewed.selection.modelId,
               descriptor: reviewed.descriptor,
+              sourceFacts: reviewed.sourceFacts,
+              confirmationSource: reviewed.confirmationSource,
               application: manifest.credentialSelectionBinding.application,
               sourceRevision: manifest.credentialSelectionBinding.sourceRevision,
             },

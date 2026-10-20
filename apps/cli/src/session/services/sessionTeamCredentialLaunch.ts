@@ -10,6 +10,32 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { projectAgentProviderBrokerApplications, resolveManagedProviderBrokerPurpose } from '@/providers/broker/applicationProjection';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { isSameTeamCredentialBrokerApplication } from '@/providers/broker/teamCredentialModelCatalog';
+import { TeamCredentialResourceEntitledPageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
+
+/** Runtime opens read the current resource through the same Home catalog. */
+export async function readSessionTeamCredentialProviderModels(input: Readonly<{
+  homeDomainAction: NonNullable<ActionExecutorDeps['homeDomainAction']>;
+  lease: PluginRuntimeRegistryLease;
+  agentId: string;
+  agentTargetKey: string;
+  resourceId: string;
+  teamId: string;
+  signal: AbortSignal;
+}>): Promise<TeamCredentialResourceCatalogEntryV1['providerModels']> {
+  let cursor: string | null = null;
+  do {
+    const raw = await input.homeDomainAction({
+      actionId: 'teams.credentials.entitled.list', input: { teamId: input.teamId, ...(cursor ? { cursor } : {}) },
+      context: { surface: 'cli' }, signal: input.signal,
+    });
+    const parsed = TeamCredentialResourceEntitledPageV1Schema.parse(raw);
+    const resource = parsed.resources.find(candidate => candidate.id === input.resourceId);
+    if (resource) return resource.providerModels;
+    cursor = parsed.nextCursor;
+  } while (cursor);
+  return [];
+}
 
 export type NormalizedSessionTeamCredentialLaunch = Readonly<{
   options: SpawnSessionOptions;

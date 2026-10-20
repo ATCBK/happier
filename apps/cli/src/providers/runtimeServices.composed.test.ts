@@ -427,15 +427,15 @@ describe('public Provider operations composed routing', () => {
     expect(routeMatrix.map(([operation]) => operation)).toEqual(
       PUBLIC_PROVIDER_OPERATION_IDS,
     );
-    // `catalog.probe` is the one route that also receives the waiter lifetime, so the
-    // producer can keep a long-poll probe alive exactly as long as the binding generation
-    // and the caller's cancellation allow. Every other route stays strictly single-argument.
+    // Probe retains its waiter lifetime; describe carries the same operation's
+    // cancellation interest into advisory installation checks.
     const waiterLifetime = expect.objectContaining({
       signal: expect.any(AbortSignal),
       isCurrent: expect.any(Function),
     });
     for (const [operation, route] of routeMatrix) {
-      const trailingArguments = operation === 'catalog.probe' ? [waiterLifetime] : [];
+      const trailingArguments = operation === 'catalog.probe' ? [waiterLifetime]
+        : operation === 'connections.describe' ? [expect.any(AbortSignal)] : [];
       expect(route).toHaveBeenCalledTimes(2);
       expect(route).toHaveBeenNthCalledWith(
         1,

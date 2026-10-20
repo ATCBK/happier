@@ -7,6 +7,13 @@ import { evaluateTeamCredentialRequestPolicyV1 } from './requestPolicyV1';
 import { PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivateProtocol';
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import { TeamCredentialDirectMaterialPayloadV1Schema } from '@happier-dev/protocol/teams';
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { resolveProviderBindingCompatibilityFromSourceFactsV1 } from '@happier-dev/protocol/providers/binding-compatibility';
+import { setProviderExperimentalConfirmationV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
+import { getProviderExperimentalConfirmationCatalogSourceKeyV1 } from '@happier-dev/protocol/providers/settings/v1';
+import { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
+import { readLeasedAgentProviderBindingAdapter } from '@/plugins/runtime/providerBindings/adapter';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 
@@ -69,13 +76,25 @@ const row = {
     deliveryMode: 'brokered' as const,
     agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5',
   },
-  descriptor: { id: 'gpt-5', name: 'GPT-5 Dynamic', description: 'Source-owned descriptor', contextWindowTokens: 131_072 },
+  descriptor: { id: 'gpt-5', name: 'GPT-5 Dynamic', description: 'Source-owned descriptor', contextWindowTokens: 131_072,
+    capabilities: { toolRoundTrips: 'supported' as const } },
   application: {
     agentTargetKey: 'agent:happier.agent.codex/codex',
     implementationIdentity: { pluginId: 'happier.provider.clipro', localId: 'clipro' },
     endpointTemplateId: 'responses', protocol: 'openai-responses',
   },
   sourceRevision: 'catalog:3', availability: 'available' as const,
+  sourceFacts: ProviderModelBindingSourceV1Schema.parse({
+    endpoint: { id: 'responses', protocol: 'openai-responses', capabilities: {
+      streaming: 'supported', toolRoundTrips: 'supported', statefulResponses: 'supported', reasoningControls: 'supported',
+    } },
+    credential: { kind: 'apiKey', required: true, slotId: 'apiKey', transports: [{ id: 'bearer',
+      protocols: ['openai-responses'], uses: ['runtime'], destination: { kind: 'httpHeader', name: 'authorization', format: 'bearer' } }] },
+    compatibilityOverrides: [{ agentTargetKey: 'agent:happier.agent.codex/codex', protocol: 'openai-responses', status: 'verified',
+      reason: 'Fixture contract', evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-20' } }],
+  }),
+  confirmationSource: ProviderModelConfirmationSourceV1Schema.parse({ connectionId: 'connected-source:fixture',
+    catalogSourceKey: getProviderExperimentalConfirmationCatalogSourceKeyV1({ connectionId: 'connected-source:fixture' }) }),
 } as const;
 
 const authority = {
@@ -94,6 +113,50 @@ const authority = {
 };
 
 describe('Session Team credential Provider binding', () => {
+  afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+
+  it('requires the recipient confirmation and recomputes compatibility with the worker adapter', async () => {
+    const sourceFacts = { ...row.sourceFacts, compatibilityOverrides: row.sourceFacts.compatibilityOverrides!.map(override => ({
+      ...override, status: 'experimental' as const,
+    })) };
+    // A forged/foreign source confirmation can never authorize this worker.
+    const offered = { ...row, sourceFacts, compatibility: { result: { status: 'verified' as const,
+      selectedProtocol: 'openai-responses', evidence: row.sourceFacts.compatibilityOverrides![0]!.evidence! },
+      compatibilityFingerprint: 'compatibility:v1:foreign', confirmed: true } };
+    let settings = ProviderSettingsV1Schema.parse(DEFAULT_PROVIDER_SETTINGS_V1);
+    const publish = () => setActiveAccountSettingsSnapshot({ source: 'cache', scopeKey: 'recipient-account',
+      settings: AccountSettingsSchema.parse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      providerConnectionsCatalog: { status: 'ready', revision: 1, catalog: splitProviderSettingsV1(settings).catalog } });
+    publish();
+    const adapter = { v: 1 as const, adapterVersion: 1, prepare: prepareSpawnEnv, materialize: materializeBrokerAuthoritySpawnEnv };
+    const workerLease = lease(adapter);
+    const captured = readLeasedAgentProviderBindingAdapter({ lease: workerLease, agentId: 'codex' })!;
+    const compatibility = resolveProviderBindingCompatibilityFromSourceFactsV1({
+      agentTargetKey: row.selection.agentTargetKey, agent: captured.support, adapterVersion: adapter.adapterVersion,
+      endpoints: [sourceFacts.endpoint], credential: sourceFacts.credential,
+      compatibilityOverrides: sourceFacts.compatibilityOverrides, model: row.descriptor,
+    });
+    const open = (selectedLease = workerLease) => openSessionTeamCredentialProviderBinding({
+      sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex', agentTargetKey: row.selection.agentTargetKey,
+      modelId: row.selection.modelId, binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: row.selection.resourceId,
+        expectedResourceRevision: 3, deliveryMode: 'brokered' },
+      lease: selectedLease, materializationBaseDir: '/tmp/happier-team-recipient-confirmation', signal: new AbortController().signal,
+      readCatalog: async () => [offered], openBroker: async () => ({ ok: true, authority,
+        target: { custodianAccountId: 'account-2', brokerMachineId: 'broker-1', endpointId: 'b'.repeat(64),
+          endpointRevision: 1, endpoint: { endpointId: 'b'.repeat(64) } } }),
+      openTunnel: async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'relay',
+        retire: async () => undefined, close: async () => undefined }),
+    });
+    await expect(open()).rejects.toMatchObject({ code: 'provider_compatibility_unverified' });
+    settings = setProviderExperimentalConfirmationV1(settings, { ...row.confirmationSource,
+      agentTargetKey: row.selection.agentTargetKey, modelId: null,
+      compatibilityFingerprint: compatibility.compatibilityFingerprint, confirmedAt: 1 });
+    publish();
+    const opened = await open();
+    await opened.cleanup();
+    await expect(open(lease({ ...adapter, adapterVersion: 2 }))).rejects.toMatchObject({ code: 'provider_compatibility_unverified' });
+    await expect(open(lease(adapter, 'anthropic'))).rejects.toMatchObject({ code: 'provider_incompatible_with_agent' });
+  });
   // The tunnel's HTTP transport is the system boundary; ordinary custody cases
   // receive the same endpoint metadata the broker publishes for Responses.
   beforeEach(() => vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
@@ -140,6 +203,9 @@ describe('Session Team credential Provider binding', () => {
       sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex',
       selection: { resourceId: 'resource-1', brokerMachineId: 'broker-1', expectedResourceRevision: 3,
         agentTargetKey: row.selection.agentTargetKey, modelId: row.descriptor.id, descriptor: row.descriptor,
+        sourceFacts: { ...row.sourceFacts, endpoint: { ...row.sourceFacts.endpoint, id: endpointTemplateId, protocol },
+          compatibilityOverrides: row.sourceFacts.compatibilityOverrides!.map(override => ({ ...override, protocol })) },
+        confirmationSource: row.confirmationSource,
         application, sourceRevision: row.sourceRevision },
       lease: lease({ v: 1, adapterVersion: 1, prepare: prepareSpawnEnv, materialize: materializeBrokerAuthoritySpawnEnv }, protocol),
       materializationBaseDir: '/tmp/happier-team-endpoint-test', signal: new AbortController().signal,
@@ -545,6 +611,8 @@ describe('Session Team credential Provider binding', () => {
         agentTargetKey: row.selection.agentTargetKey,
         modelId: row.selection.modelId,
         descriptor: row.descriptor,
+        sourceFacts: row.sourceFacts,
+        confirmationSource: row.confirmationSource,
         application: row.application,
         sourceRevision: row.sourceRevision,
       },
@@ -659,6 +727,8 @@ describe('Session Team credential Provider binding', () => {
         agentTargetKey: row.selection.agentTargetKey,
         modelId: row.selection.modelId,
         descriptor: row.descriptor,
+        sourceFacts: row.sourceFacts,
+        confirmationSource: row.confirmationSource,
         application: row.application,
         sourceRevision: row.sourceRevision,
       },
@@ -717,7 +787,8 @@ describe('Session Team credential Provider binding', () => {
         resourceId: row.selection.resourceId, brokerMachineId: 'broker-1',
         expectedResourceRevision: row.selection.expectedResourceRevision,
         agentTargetKey: row.selection.agentTargetKey, modelId: row.selection.modelId,
-        descriptor: row.descriptor, application: row.application, sourceRevision: row.sourceRevision,
+        descriptor: row.descriptor, sourceFacts: row.sourceFacts, confirmationSource: row.confirmationSource,
+        application: row.application, sourceRevision: row.sourceRevision,
       },
       lease: lease(adapter), materializationBaseDir: '/tmp/happier-team-broker-test',
       signal: new AbortController().signal, openBroker,
@@ -756,6 +827,8 @@ describe('Session Team credential Provider binding', () => {
         agentTargetKey: row.selection.agentTargetKey,
         modelId: row.selection.modelId,
         descriptor: row.descriptor,
+        sourceFacts: row.sourceFacts,
+        confirmationSource: row.confirmationSource,
         application: row.application,
         sourceRevision: row.sourceRevision,
       },
@@ -795,6 +868,8 @@ describe('Session Team credential Provider binding', () => {
         agentTargetKey: row.selection.agentTargetKey,
         modelId: row.selection.modelId,
         descriptor: row.descriptor,
+        sourceFacts: row.sourceFacts,
+        confirmationSource: row.confirmationSource,
         application: row.application,
         sourceRevision: row.sourceRevision,
       },
@@ -833,6 +908,8 @@ describe('Session Team credential Provider binding', () => {
         agentTargetKey: row.selection.agentTargetKey,
         modelId: row.selection.modelId,
         descriptor: row.descriptor,
+        sourceFacts: row.sourceFacts,
+        confirmationSource: row.confirmationSource,
         application: row.application,
         sourceRevision: row.sourceRevision,
       },
@@ -867,6 +944,8 @@ describe('Session Team credential Provider binding', () => {
         agentTargetKey: row.selection.agentTargetKey,
         modelId: row.selection.modelId,
         descriptor: row.descriptor,
+        sourceFacts: row.sourceFacts,
+        confirmationSource: row.confirmationSource,
         application: row.application,
         sourceRevision: row.sourceRevision,
       },
@@ -931,6 +1010,8 @@ describe('Session Team credential Provider binding', () => {
         agentTargetKey: row.selection.agentTargetKey,
         modelId: row.selection.modelId,
         descriptor: row.descriptor,
+        sourceFacts: row.sourceFacts,
+        confirmationSource: row.confirmationSource,
         application: row.application,
         sourceRevision: row.sourceRevision,
       },
