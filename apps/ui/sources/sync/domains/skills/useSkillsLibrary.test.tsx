@@ -31,6 +31,52 @@ afterEach(() => {
     resetPromptLibraryCatalogSnapshotsForTests();
 });
 
+it.each(['local', 'remote'] as const)('updates a mounted library after a %s reach mutation without reload', async origin => {
+    const home = await createSeededSkillsHome(`https://skills-reach-${origin}.test`, {
+        skills: [{ id: 'reach-skill' }, { id: 'unchanged-skill' }],
+        records: [{ key: 'skill-rules', value: { v: 1, rules: [{ id: 'reach-on', skillId: 'reach-skill',
+            target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }] } }],
+    });
+    const hook = await renderHook(() => useSkillsLibrary());
+    const contentReads = () => home.requests.filter(request => request.path === '/v1/artifacts/read-batch'
+        || request.method === 'GET' && ['/v1/artifacts/reach-skill', '/v1/artifacts/unchanged-skill'].includes(request.path)).length;
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+        expect(hook.getCurrent().items.find(item => item.skillId === 'reach-skill')?.rules[0]?.enabled).toBe(true);
+        const opened = contentReads();
+        const unchanged = hook.getCurrent().items.find(item => item.skillId === 'unchanged-skill');
+        for (const enabled of [false, true]) {
+            await act(async () => {
+                if (origin === 'local') {
+                    const result = await createDefaultActionExecutor().execute('skills.rules.set', {
+                        items: [{ skillId: 'reach-skill' }],
+                        change: { kind: 'write', write: { place: { t: 'allMachines' }, state: enabled ? 'on' : 'off' } },
+                    }, { serverId: home.home.id, surface: 'ui', authority: 'present_user' });
+                    expect(result).toMatchObject({ ok: true, result: { ok: true } });
+                } else {
+                    const record = home.catalog.read('skill-rules');
+                    if (record.key !== 'skill-rules') throw new Error('Expected skill rules');
+                    const response = await home.catalog.handle('/v1/account/entity-rows/prompt-library/skill-rules', {
+                        method: 'POST', body: JSON.stringify({ expectedRevision: home.catalog.revision('skill-rules'),
+                            content: { t: 'plain', v: { ...record, value: { ...record.value,
+                                rules: record.value.rules.map(rule => ({ ...rule, enabled, updatedAt: rule.updatedAt + 1 })) } } } }),
+                    });
+                    expect(await response?.json()).toMatchObject({ status: 'updated' });
+                    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+                    const { buildPromptLibraryPhysicalKeyV1 } = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
+                    publishHomeAccountChange(home.home.id, [buildPromptLibraryPhysicalKeyV1('skill-rules')], { changeKinds: ['account'] });
+                }
+            });
+            await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'reach-skill')?.rules[0]?.enabled).toBe(enabled));
+            expect(hook.getCurrent().items.filter(item => item.rules.some(rule => rule.enabled)).length).toBe(enabled ? 1 : 0);
+            expect(hook.getCurrent().items.find(item => item.skillId === 'unchanged-skill')).toBe(unchanged);
+            // The local writer validates its addressed skill; a rules-only remote
+            // publication does not reopen content through either transport.
+            if (origin === 'remote') expect(contentReads()).toBe(opened);
+        }
+    } finally { await hook.unmount(); await home.dispose(); }
+});
+
 it('projects personal folder moves and clears without reopening content or replacing unrelated rows', async () => {
     const home = await createSeededSkillsHome('https://skills-personal-folders.test', {
         skills: [{ id: 'moving', header: { folderId: 'old' } }, { id: 'unchanged' }],

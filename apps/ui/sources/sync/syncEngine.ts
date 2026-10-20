@@ -12084,6 +12084,12 @@ class Sync {
                     return true;
                 },
                 onCursorBlocked: ({ blockedCursor, blockedReason, safeAdvanceCursor, changes }) => {
+                    // Later catalog rows may lie beyond this blocked page. Revalidate
+                    // mounted Account projections through their existing snapshot owner
+                    // without advancing past the unmaterialized change.
+                    if (!embedScope && shouldContinue() && isAppliedTransportCurrent() && transportTarget.serverId) {
+                        publishHomeAccountChange(transportTarget.serverId, undefined, { source: 'catch-up-pending' });
+                    }
                     this.rememberBlockedChangesCursorLag({
                         blockedCursor,
                         blockedReason,
@@ -12449,8 +12455,13 @@ class Sync {
               sourceServerId,
               shouldContinue,
               onAccountChangeWake: () => {
-                  // The focused Home's wake is only a cursor signal. The catch-up it requests
-                  // passes the detailed page through the change planner, which publishes the
+                  // Catalogs that need current rows independently of the history
+                  // cursor opt into this wake at the existing snapshot lifecycle.
+                  if (shouldContinue() && sourceServerId) {
+                      publishHomeAccountChange(sourceServerId, undefined, { source: 'catch-up-pending' });
+                  }
+                  // Other focused-Home observers wait for the detailed page. Catch-up
+                  // passes that page through the change planner, which publishes the
                   // exact changed entities (`publishAccountChanges`), so each Account projection
                   // (governance, eligibility, Teams, follow, lists) refetches only for what it
                   // shows. A content-free event here made every one of them refetch on every

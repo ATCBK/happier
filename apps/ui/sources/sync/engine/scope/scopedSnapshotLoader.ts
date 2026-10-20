@@ -78,6 +78,8 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
     invalidateTarget: (target: TTarget) => void;
     /** Filters exact focused-Home wakes. Content-free secondary/socket wakes stay conservative. */
     matchesWake?: (event: HomeAccountChangeEvent) => boolean;
+    /** Revalidate from the socket wake even while detailed catch-up is unavailable. */
+    observeCatchUpPending?: boolean;
     /**
      * Handles credential replacement/removal at this same refcounted lifecycle owner. Returning
      * true schedules a refresh; false retains the domain state established by the callback.
@@ -268,7 +270,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
             unsubscribeWake = subscribeHomeAccountChange((event) => {
                 if (params.matchesWake && !params.matchesWake(event)) return;
                 handleWake(event.serverId);
-            });
+            }, { includeCatchUpPending: params.observeCatchUpPending });
         }
         if (params.onCredentialMutation && !unsubscribeCredentials) {
             unsubscribeCredentials = subscribeHomeCredentialChange((event) => {

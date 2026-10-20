@@ -24,6 +24,9 @@ const loader = createScopedSnapshotLoader<Target>({
     shouldLoadOnObserve: ({ scope }) => getPromptLibraryCatalogSnapshot(scope)?.catalog.status !== 'ready',
     invalidateServer: invalidatePromptLibraryCatalogsForServer,
     invalidateTarget: ({ scope }) => beginPromptLibraryCatalogLoad(scope),
+    // Reach must follow remote edits while unrelated historical changes are
+    // still being materialized. Reuse the same scoped, coalesced catalog read.
+    observeCatchUpPending: true,
     // Exact focused-Home wakes identify catalog rows or their retained Settings source.
     // Content-free wakes still revalidate through the existing lifecycle owner.
     matchesWake: event => event.entityIds === undefined || event.entityIds.some(id =>

@@ -372,6 +372,59 @@ describe('sync AccountChange catch-up projection', () => {
         vi.unstubAllGlobals();
     });
 
+    it.each(['blocked', 'held'] as const)('revalidates mounted skill reach while the focused catch-up is %s', async phase => {
+        const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+        const { PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1 } = await import('@happier-dev/protocol/projects/projectAccountRowsV1');
+        const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1,
+            rules: [{ id: 'built-in-on', skillId: 'happier:happier', target: { t: 'allMachines' }, enabled: true,
+                createdAt: 1, updatedAt: 1 }] } }] });
+        domainHttp.mockImplementation(async ({ url, init }) => await catalog.handle(new URL(url).pathname, init)
+            ?? Response.json({}, { status: 404 }));
+        await restoreTestAccount();
+        const { useSkillsLibrary } = await import('./domains/skills/useSkillsLibrary');
+        const { buildSkillsReach } = await import('@/components/settings/skills/skillsCollectionModel');
+        const { resetPromptLibraryCatalogEngineForTests } = await import('./engine/settings/promptLibraryCatalogEngine');
+        const { resetPromptLibraryCatalogSnapshotsForTests } = await import('./store/settings/promptLibraryCatalogSnapshot');
+        const hook = await renderHook(() => useSkillsLibrary());
+        const runtime = syncRuntime as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const responseGate = createDeferred<void>();
+        let requestedChanges = false;
+        const count = () => buildSkillsReach(hook.getCurrent().items, [{ machineId: 'online', name: 'Online',
+            platform: 'posix', agentIds: ['codex'], offline: false, lastSeenAt: null }]).reachingCount;
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'happier:happier')?.rules[0]?.enabled).toBe(true));
+            expect(count()).toBe(1);
+            const record = catalog.read('skill-rules');
+            if (record.key !== 'skill-rules') throw new Error('Expected rules');
+            const response = await catalog.handle('/v1/account/entity-rows/prompt-library/skill-rules', {
+                method: 'POST', body: JSON.stringify({ expectedRevision: catalog.revision('skill-rules'), content: { t: 'plain',
+                    v: { ...record, value: { ...record.value, rules: record.value.rules.map(rule => ({ ...rule, enabled: false, updatedAt: 2 })) } } } }),
+            });
+            expect(await response?.json()).toMatchObject({ status: 'updated', revision: 2 });
+            // This real ChangeEntry is an unmaterializable historical row. The newer reach
+            // write lies beyond this short page, so it cannot supply an exact row wake.
+            changesResponse.mockImplementationOnce(async () => {
+                requestedChanges = true;
+                if (phase === 'held') await responseGate.promise;
+                return { changes: [{ cursor: 1, changedAt: 1, kind: 'account',
+                    entityId: `${PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1}unrecognized`, hint: null }], nextCursor: 1 };
+            });
+            const cursorBefore = runtime.changesCursor;
+            await act(async () => {
+                if (phase === 'held') await runtime.handleUpdate(accountChangeWake('reach-changed-during-catch-up'));
+                else await runtime.resumeViaChanges({ accountId: ACCOUNT_ID });
+            });
+            await vi.waitFor(() => expect(requestedChanges).toBe(true));
+            await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'happier:happier')?.rules[0]?.enabled).toBe(false));
+            expect(count()).toBe(0);
+            expect(runtime.changesCursor).toBe(cursorBefore);
+        } finally {
+            responseGate.resolve();
+            await runtime.resumeInFlight;
+            await hook.unmount(); resetPromptLibraryCatalogEngineForTests(); resetPromptLibraryCatalogSnapshotsForTests();
+        }
+    });
+
     it('refreshes shared Machine access in the open store after an AccountChange wake', async () => {
         let role: 'use' | 'manage' = 'use';
         const machine = createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'custodian' });
