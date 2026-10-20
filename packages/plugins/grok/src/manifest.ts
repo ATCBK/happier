@@ -4,6 +4,7 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 import { AGENT_DEFINITION } from './agent/definition.js';
 import { GROK_PREFLIGHT_SESSION_CONTROLS } from './agent/preflight/models.js';
 import { createGrokAgentRuntime } from './agent/runtime/factory.js';
+import { grokExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 import { GROK_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 
 const installScript = 'curl -fsSL https://x.ai/cli/install.sh | bash';
@@ -40,9 +41,20 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
           acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
+        surfaces: {
+          externalSession: {
+            sources: [{
+              sourceKind: 'grokHome', contentSearch: true,
+              schema: { fields: [{ kind: 'literal', name: 'kind', value: 'grokHome' }] },
+              key: { segments: [{ kind: 'literal', value: 'grokHome' }] },
+              instances: [{ kind: 'default', constants: {} }],
+            }],
+          },
+        },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          surfaces: ['externalSessions'],
           skills: {
-            delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
             nativeRoots: {
               user: [['.grok', 'skills'], ['.claude', 'skills'], ['.cursor', 'skills']],
               project: [['.grok', 'skills'], ['.agents', 'skills'], ['.claude', 'skills'], ['.cursor', 'skills']],
@@ -102,10 +114,12 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
         },
       },
       factory: createGrokAgentRuntime,
+      externalSessions: grokExternalSessionsContribution,
       preflightSessionControls: GROK_PREFLIGHT_SESSION_CONTROLS,
       sessionRunnerFactory: {
         module: './agent/runtime/factory',
         export: 'createGrokAgentRuntime',
+        externalSessionsExport: 'grokExternalSessionsContribution',
         runtimeApiVersion: 1,
       },
     },
