@@ -16,6 +16,7 @@ export type SessionAttachSecret =
   | Readonly<{ encryptionMode: 'e2ee'; encryptionKey: Uint8Array; encryptionVariant: 'legacy' | 'dataKey'; lastObservedMessageSeq?: number; initialTranscriptAfterSeq?: number; snapshot?: SessionAttachSnapshot }>;
 
 export type SessionAttachSnapshot = Readonly<{
+  acceptedTeamCredentialBinding?: import('@happier-dev/protocol/teams/credentials/sessionBindingIntentV1').SessionTeamCredentialBindingIntentV1 | null;
   manager?: import('@happier-dev/protocol').SessionManagerV1;
   origin?: import('@happier-dev/protocol').SessionAwarenessOriginV1;
   metadata: Metadata;

@@ -53,6 +53,7 @@ export function daemonLaunchRequiresCommittedSession(options: SpawnSessionOption
   if (options.requesterSessionBootstrap) return true;
   if ((options.promptStack?.length ?? 0) > 0) return true;
   if (options.creationAuthorization || options.initialSessionRolesV1 || (options.initialTriggers?.length ?? 0) > 0) return true;
+  if (options.teamCredentialBindings?.some(binding => binding.slot.kind === 'provider_model' && binding.resourceId !== null)) return true;
   const admitted = ConnectedServicesBindingsIngressSchema.safeParse(options.connectedServices);
   if (!admitted.success || !admitted.data) return false;
   return Object.values(admitted.data.bindingsByServiceId).some((binding) => (

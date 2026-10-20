@@ -5354,7 +5354,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             }
             const teamCredentialBinding = params.sessionInput.teamCredentialBindings?.find((candidate) => (
                 candidate.slot.kind === 'provider_model'
-            ));
+            )) ?? params.sessionInput.resume.sessionAttachSecret?.snapshot?.acceptedTeamCredentialBinding;
             // The Team credential custody this runtime generation actually
             // opened. An inheriting Execution Run consumes exactly this
             // (`teams-lane-10/PLAN.md` §2.3), never a later re-derivation.

@@ -147,6 +147,7 @@ function tryReadExistingSessionAgentState(params: Readonly<{
 
 function buildAttachSnapshot(params: Readonly<{
   rawSession: Readonly<{
+    acceptedTeamCredentialBinding?: import('@happier-dev/protocol/teams/credentials/sessionBindingIntentV1').SessionTeamCredentialBindingIntentV1 | null;
     manager?: SessionManagerV1;
     origin?: SessionAwarenessOriginV1;
     metadata?: unknown;
@@ -177,6 +178,8 @@ function buildAttachSnapshot(params: Readonly<{
   const pendingExecutionRunIds = readPendingExecutionRunIds(params.rawSession);
 
   return {
+    ...(params.rawSession.acceptedTeamCredentialBinding !== undefined
+      ? { acceptedTeamCredentialBinding: params.rawSession.acceptedTeamCredentialBinding } : {}),
     ...(params.rawSession.manager ? { manager: params.rawSession.manager } : {}),
     ...(params.rawSession.origin ? { origin: params.rawSession.origin } : {}),
     metadata: params.metadataRecord as Metadata,

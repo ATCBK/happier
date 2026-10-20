@@ -8,7 +8,7 @@ import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/pl
 import { createNativeAgentRuntimeSessionPlanFixture as createNativeAgentRuntimeSessionPlan } from './nativeAgentSession.testkit';
 import { createNativeSessionClientTestPort, createExternalContributionFixtures, createLease, createSessionHostServiceOwners } from './nativeAgentSession.testkit';
 
-async function openSession(binding?: SessionTeamCredentialBindingIntentV1, connectedAccounts: NonNullable<AgentSessionOpenRequest['connectedAccounts']> = [], runtimeAuth?: AgentSessionRuntime['runtimeAuth']) {
+async function openSession(binding?: SessionTeamCredentialBindingIntentV1, connectedAccounts: NonNullable<AgentSessionOpenRequest['connectedAccounts']> = [], runtimeAuth?: AgentSessionRuntime['runtimeAuth'], attached = false) {
     const agentId = 'acme-applied-reader';
     const contributions = createExternalContributionFixtures(agentId);
     const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
@@ -40,7 +40,9 @@ async function openSession(binding?: SessionTeamCredentialBindingIntentV1, conne
             }),
             ...(binding ? {
                 modelSelection: { v: 1, updatedAt: 1, ref: { agentTargetKey: `backend:${agentId}`, providerConnectionId: null, modelId: 'team-model' } },
-                teamCredentialBindings: [binding],
+                ...(attached ? { existingSessionId: 'applied-reader', sessionAttachSecret: { encryptionMode: 'plain', snapshot: {
+                    metadata: {}, metadataVersion: 1, agentState: null, agentStateVersion: 0, acceptedTeamCredentialBinding: binding,
+                } } } : { teamCredentialBindings: [binding] }),
             } : {}),
         }),
     });
@@ -62,6 +64,13 @@ async function openSession(binding?: SessionTeamCredentialBindingIntentV1, conne
 }
 
 describe('native accepted-open applied selection', () => {
+    it('opens the accepted Team binding from a committed attach for an external Agent', async () => {
+        const { created, hookRuntime } = await openSession({ v: 1, slot: { kind: 'provider_model' },
+            resourceId: 'opened-resource', expectedResourceRevision: 3, deliveryMode: 'brokered', teamId: 'opened-team' }, [], undefined, true);
+        try {
+            expect(hookRuntime.readAppliedTeamCredentialModel?.()).toMatchObject({ resourceId: 'opened-resource', teamId: 'opened-team' });
+        } finally { await created.operations.resetOrDisposeRuntime(); }
+    });
     it('consumes response-bound native account proof across same-model switches and refuses start-only proof', async () => {
         const service = { pluginId: 'acme.connected-account', localId: 'credential' };
         let activeAccount: string | null = 'account-a';

@@ -1,4 +1,5 @@
 import * as z from 'zod/mini';
+import { SessionTeamCredentialBindingIntentV1Schema, type SessionTeamCredentialBindingIntentV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import { ExecutionRunIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionOwnerMetadataEnvelopeV1Schema, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionManagerV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
@@ -6,6 +7,7 @@ import { SessionAwarenessOriginV1Schema } from '@happier-dev/protocol/sessions/a
 import type { SessionManagerV1, SessionAwarenessOriginV1, SessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1 } from '@happier-dev/protocol';
 
 type AttachSnapshotPayload = Readonly<{
+  acceptedTeamCredentialBinding?: SessionTeamCredentialBindingIntentV1 | null;
   manager?: SessionManagerV1;
   origin?: SessionAwarenessOriginV1;
   metadata: Readonly<Record<string, unknown>>;
@@ -51,6 +53,7 @@ export type SessionAttachPayload =
   | LegacyAttachPayload;
 
 const AttachSnapshotSchema = z.object({
+  acceptedTeamCredentialBinding: z.optional(z.nullable(SessionTeamCredentialBindingIntentV1Schema)),
   manager: z.optional(SessionManagerV1Schema),
   origin: z.optional(SessionAwarenessOriginV1Schema),
   metadata: z.record(z.string(), z.unknown()),
