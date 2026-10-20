@@ -7886,6 +7886,9 @@ const enSettingsAppearance = {
     full: 'Full',
     fullDescription: 'Use the available screen width',
   },
+  feedback: "Feedback",
+  haptics: "Haptic feedback",
+  hapticsDescription: "Use touch feedback for actions and reordering on this device.",
   backdropBlur: 'Backdrop blur',
   backdropBlurDescription:
     'Use a soft blur behind layered surfaces where supported',
