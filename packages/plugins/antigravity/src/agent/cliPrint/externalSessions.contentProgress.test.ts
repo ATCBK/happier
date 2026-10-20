@@ -109,8 +109,8 @@ describe('Antigravity native content continuation', () => {
       if (!result.value.nextCursor) { cursor = null; expect(result.value.contentCoverage).toBe('complete'); break; }
       expect(result.value.contentCoverage).toBe('partial');
       if (cursor) expect(result.value.nextCursor).not.toBe(cursor);
-      firstCursor ??= result.value.nextCursor;
-      const continuation = JSON.parse(Buffer.from(result.value.nextCursor, 'base64url').toString('utf8')) as { contentProgress?: { pendingToolCallIds: string[] } };
+      const continuation = JSON.parse(Buffer.from(result.value.nextCursor, 'base64url').toString('utf8')) as { contentProgress?: { conversationId: string; pendingToolCallIds: string[] } };
+      if (continuation.contentProgress?.conversationId === 'conversation-first') firstCursor ??= result.value.nextCursor;
       if (continuation.contentProgress?.pendingToolCallIds.length === 2) {
         expect(continuation.contentProgress.pendingToolCallIds).toEqual(toolCallIds);
         pendingCallsSeen = true;

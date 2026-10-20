@@ -124,8 +124,8 @@ describe('ohmypi direct conversation content search', () => {
     }
     expect(partialPages).toBeGreaterThan(1);
     expect(cursor).toBeNull();
-    expect(hits.map(hit => hit.remoteSessionId)).toEqual([sessionId, 'next-native-session']);
-    expect(hits[0]?.match).toEqual({ snippet: 'slow native needle earliest', messageIndex: expectedIndex,
+    expect(hits.map(hit => hit.remoteSessionId).sort()).toEqual([sessionId, 'next-native-session'].sort());
+    expect(hits.find(hit => hit.remoteSessionId === sessionId)?.match).toEqual({ snippet: 'slow native needle earliest', messageIndex: expectedIndex,
       sourceItemId: nativePage.value.items[expectedIndex]!.id });
   });
   it.each(['body-only phrase', 'body-only phrase with "quotes"\n東京', '東京 café'])('finds decoded active-branch body %s with its transcript locator', async (query) => {

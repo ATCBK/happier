@@ -123,9 +123,14 @@ describe('registered Grok native history', () => {
     }
     expect(ids).toHaveLength(6); expect(new Set(ids).size).toBe(6);
     await f.writeRecords(Array.from({ length: 20 }, (_, index) => ({ type: 'user', content: `message ${index}`, timestamp: '2026-10-01T10:01:00Z' })));
-    const page = await f.reader.pageTranscript({ ...f.request, maxSerializedBytes: 1000, remoteSessionId: f.id, direction: 'older' });
+    // Cursor bytes include the platform's temporary root. Use the actual
+    // one-item envelope rather than a path-length-dependent byte guess.
+    const single = await f.reader.pageTranscript({ ...f.request, maxItems: 1, remoteSessionId: f.id, direction: 'older' });
+    expect(single.ok).toBe(true);
+    const maxSerializedBytes = Buffer.byteLength(JSON.stringify(single));
+    const page = await f.reader.pageTranscript({ ...f.request, maxSerializedBytes, remoteSessionId: f.id, direction: 'older' });
     expect(page).toMatchObject({ ok: true, value: { hasMore: true } });
-    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(1000);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(maxSerializedBytes);
   });
 
   it('rejects same-size prefix rewrites and physical path escapes', async () => {

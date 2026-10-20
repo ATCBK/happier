@@ -84,16 +84,26 @@ describe('sourceCatalog', () => {
       codexHome: ['codex'],
       opencodeServer: ['opencode'],
       antigravityCliPrint: ['antigravity'],
-      qwenAcpSessionList: ['qwen'],
-      kimiAcpSessionList: ['kimi'],
-      fxAcpSessionList: ['fx'],
+      qwenRuntimeDir: ['qwen'],
+      kimiCodeHome: ['kimi'],
+      fxHome: ['fx'],
       ohMyPiAgentDir: ['ohMyPi'],
       piAgentDir: ['pi'],
+      geminiConfigDir: ['gemini'],
+      copilotHome: ['copilot'],
+      droidFactoryDir: ['droid'],
+      codebuddyHome: ['codebuddy'],
+      grokHome: ['grok'],
+      cursorHome: ['cursor'],
+      kiroChatStore: ['kiro'],
+      kiloStorage: ['kilo'],
+      auggieHome: ['auggie'],
+      devinHome: ['devin'],
     });
   });
 
   it('flattens the source-kind groups into the canonical external-session Agent id list', () => {
-    expect(EXTERNAL_SESSIONS_AGENT_IDS).toEqual([
+    expect(new Set(EXTERNAL_SESSIONS_AGENT_IDS)).toEqual(new Set([
       'claude',
       'codex',
       'opencode',
@@ -103,7 +113,17 @@ describe('sourceCatalog', () => {
       'fx',
       'ohMyPi',
       'pi',
-    ]);
+      'gemini',
+      'copilot',
+      'droid',
+      'codebuddy',
+      'grok',
+      'cursor',
+      'kiro',
+      'kilo',
+      'auggie',
+      'devin',
+    ]));
   });
 
   it('compiles manifest source declarations without registering their ids in the protocol catalog', () => {

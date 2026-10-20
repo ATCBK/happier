@@ -1276,6 +1276,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                 || searchTerm === null
                 || (request.searchMode !== undefined && request.searchMode !== 'fast' && request.searchMode !== 'full')
                 || (request.searchTarget !== undefined && request.searchTarget !== 'metadata' && request.searchTarget !== 'content')
+                || (request.updatedAfterMs !== undefined && (!Number.isSafeInteger(request.updatedAfterMs) || request.updatedAfterMs < 0))
+                || (request.includeTitles !== undefined && typeof request.includeTitles !== 'boolean')
                 || (request.includeThreads !== undefined && typeof request.includeThreads !== 'boolean')
                 || (request.cursor !== undefined && cursor === null)
                 || !scope
@@ -1307,6 +1309,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                         ...(searchTerm === undefined ? {} : { searchTerm }),
                         ...(request.searchMode === undefined ? {} : { searchMode: request.searchMode }),
                         ...(request.searchTarget === undefined ? {} : { searchTarget: request.searchTarget }),
+                        ...(request.updatedAfterMs === undefined ? {} : { updatedAfterMs: request.updatedAfterMs }),
+                        ...(request.includeTitles === undefined ? {} : { includeTitles: request.includeTitles }),
                         ...(request.includeThreads === undefined ? {} : { includeThreads: request.includeThreads }),
                         ...(request.readCandidateIndexState === undefined
                             ? {}

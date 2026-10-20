@@ -88,4 +88,4 @@ export function createAuggieExternalSessionsContribution(env: NodeJS.ProcessEnv 
     }),
   };
 }
-export const auggieExternalSessionsContribution = createAuggieExternalSessionsContribution();
+export const auggieExternalSessionsContribution: AgentExternalSessionsContribution = createAuggieExternalSessionsContribution();

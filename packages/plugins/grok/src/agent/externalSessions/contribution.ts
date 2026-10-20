@@ -103,4 +103,4 @@ export function createGrokExternalSessionsContribution(env: () => NodeJS.Process
     }),
   };
 }
-export const grokExternalSessionsContribution = createGrokExternalSessionsContribution();
+export const grokExternalSessionsContribution: AgentExternalSessionsContribution = createGrokExternalSessionsContribution();

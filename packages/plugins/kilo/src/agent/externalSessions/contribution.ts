@@ -100,4 +100,4 @@ export function createKiloExternalSessionsContribution(env: NodeJS.ProcessEnv = 
     }),
   };
 }
-export const kiloExternalSessionsContribution = createKiloExternalSessionsContribution();
+export const kiloExternalSessionsContribution: AgentExternalSessionsContribution = createKiloExternalSessionsContribution();

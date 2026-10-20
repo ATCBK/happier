@@ -138,4 +138,4 @@ export function createFxExternalSessionsContribution(env: () => NodeJS.ProcessEn
   };
 }
 
-export const fxExternalSessionsContribution = createFxExternalSessionsContribution();
+export const fxExternalSessionsContribution: AgentExternalSessionsContribution = createFxExternalSessionsContribution();
