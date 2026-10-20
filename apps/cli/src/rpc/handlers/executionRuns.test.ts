@@ -3630,8 +3630,16 @@ describe('executionRuns session RPC handlers', () => {
   });
 
   it('shares the fallback registry across concurrent mixed-intent starts and releases it on Stop', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'budget-account' })).toString('base64url')}.signature`;
+    const get = vi.spyOn(axios, 'get');
+    const priorGet = get.getMockImplementation()!;
+    get.mockImplementation(async (url, options) => String(url).endsWith('/v2/account/session-follow-preferences')
+      ? { status: 200, data: { ...DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1,
+          ...DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1 } }
+      : priorGet(url, options));
     const client = createEncryptedRpcTestClient({
       scopePrefix: 'sess_1',
+      callerAuthority: 'present_user',
       registerHandlers: (rpc) => {
         registerExecutionRunHandlers(rpc, {
           sessionId: 'sess_1',
@@ -3639,6 +3647,9 @@ describe('executionRuns session RPC handlers', () => {
           parentProvider: 'claude',
           createBackend: () => createDelayedBackend(JSON.stringify({ findings: [], summary: 'late' }), 50_000),
           sendAcp: async () => {},
+          resolveRunReportPolicy: createSessionRunReportPolicyReader({ serverId: 'budget-home',
+            serverHttpBaseUrl: 'https://budget.test', accountId: 'budget-account',
+            readCredentials: async () => ({ token, encryption: null }), isCurrent: () => true }),
           policy: { maxConcurrentRuns: 1, boundedTimeoutMs: 60_000 },
         });
       },
@@ -3661,7 +3672,7 @@ describe('executionRuns session RPC handlers', () => {
       }),
     ]);
     const started = results.find(result => 'runId' in result);
-    expect(started).toMatchObject({ runId: expect.stringMatching(/^run_/) });
+    expect(started, JSON.stringify(results)).toMatchObject({ runId: expect.stringMatching(/^run_/) });
     expect(results.filter(result => 'errorCode' in result)).toEqual([
       expect.objectContaining({ ok: false, errorCode: 'execution_run_budget_exceeded' }),
     ]);

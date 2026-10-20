@@ -671,6 +671,10 @@ async function startAdmittedExecutionRun(
   } catch (error) {
     throw markExecutionRunStartFailure(error, 'noRunCreated');
   }
+  if (requestBoundRunId) {
+    const existing = args.runs.get(requestBoundRunId);
+    if (existing) return projectExistingExecutionRunStartResult(existing);
+  }
   const acquiredBudget = args.params.intent === 'scm_commit_message'
     ? args.budgetRegistry?.tryAcquireOneShotTask(runId, 'scm_commit_message', args.params.requesterWorkAttributionV1) ?? true
     : args.budgetRegistry?.tryAcquireExecutionRun(runId, args.params.intent, args.params.requesterWorkAttributionV1) ?? true;

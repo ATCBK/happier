@@ -16,6 +16,7 @@ import type {
 import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executionRunPolicy';
 import { acquireExecutionRunRuntimeSnapshot } from './acquireExecutionRunRuntimeSnapshot';
 import type { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
+import { createExecutionBudgetRegistry } from '@/daemon/executionBudget/createExecutionBudgetRegistry';
 import type { BrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
 import type { BrowserContextRoutes } from '@/daemon/browser/context/routes';
 import type { BrowserAutomationRoutes } from '@/daemon/browser/automation/routes';
@@ -286,6 +287,7 @@ export function registerExecutionRunRpcHandlers(
     }
     : undefined;
 
+  const budgetRegistry = ctx.budgetRegistry ?? createExecutionBudgetRegistry(policy.maxConcurrentRuns);
   const manager = new ExecutionRunHostBridge({
     resolveVoicePromptPreparation: async ({ sessionId, signal, workingDirectory }) => {
       const credentials = await ctx.readPromptCredentials?.();
@@ -303,7 +305,7 @@ export function registerExecutionRunRpcHandlers(
     onVoiceAgentWelcomed: ctx.onExecutionRunVoiceAgentWelcomed,
     boundedTimeoutMs: policy.boundedTimeoutMs ?? undefined,
     maxTurns: policy.maxTurns ?? undefined,
-    budgetRegistry: ctx.budgetRegistry,
+    budgetRegistry,
     getPermissionRequestStore: ctx.getPermissionRequestStore,
     parentSessionStateTarget: ctx.parentSessionStateTarget ?? null,
     ...(ctx.sessionInteractionHost
@@ -349,7 +351,7 @@ export function registerExecutionRunRpcHandlers(
 
   const actionExecutor = ctx.actionExecutor ?? createExecutionRunRpcActionExecutor({
     manager,
-    context: ctx,
+    context: { ...ctx, budgetRegistry },
     policy,
     isExecutionRunsEnabled,
     ...(ctx.actionsSettingsProvider
