@@ -10936,6 +10936,7 @@ localTailscale: {
       runningOn: ({ count, machine }: { count: number; machine: string }) => `${machine} で ${count} 件実行中`,
       running: ({ count }: { count: number }) => `${count} 件実行中`,
       nothingRunningOn: ({ machine }: { machine: string }) => `${machine} で実行中のものはありません`,
+      nothingRunningInWorkspace: 'このワークスペースで実行中のものはありません',
       nothingRunning: '実行中のものはありません',
       offlineOn: ({ machine }: { machine: string }) => `${machine} はオフラインです`,
       offline: 'このマシンはオフラインです',

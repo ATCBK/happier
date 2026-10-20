@@ -12472,6 +12472,7 @@ const enLocalServices = {
     running: ({ count }: { count: number }) => `${count} running`,
     nothingRunningOn: ({ machine }: { machine: string }) =>
       `Nothing running on ${machine}`,
+    nothingRunningInWorkspace: 'Nothing running in this workspace',
     nothingRunning: 'Nothing running',
     offlineOn: ({ machine }: { machine: string }) => `${machine} is offline`,
     offline: 'This machine is offline',

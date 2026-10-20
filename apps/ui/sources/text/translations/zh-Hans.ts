@@ -10272,6 +10272,7 @@ const zhHansValues = {
       runningOn: ({ count, machine }: { count: number; machine: string }) => `${machine} 上有 ${count} 个正在运行`,
       running: ({ count }: { count: number }) => `${count} 个正在运行`,
       nothingRunningOn: ({ machine }: { machine: string }) => `${machine} 上没有正在运行的服务`,
+      nothingRunningInWorkspace: '此工作区中没有正在运行的服务',
       nothingRunning: '没有正在运行的服务',
       offlineOn: ({ machine }: { machine: string }) => `${machine} 已离线`,
       offline: '这台机器已离线',
