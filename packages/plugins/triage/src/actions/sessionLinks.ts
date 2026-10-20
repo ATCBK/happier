@@ -41,7 +41,7 @@ export function createTriageReadSourceSessionLinksActionHandler(): ActionHandler
         try {
             const result = await createTriageSourceSessionRelations(context,
                 bindCorpusCollections(requireTriageAccountStorage(context))).read(input);
-            return { kind: result.kind, links: result.links };
+            return { kind: result.kind, links: result.links, lanes: result.lanes };
         } catch { return { kind: 'failed', links: [] }; }
     };
 }

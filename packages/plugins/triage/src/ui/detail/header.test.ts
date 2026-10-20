@@ -77,6 +77,24 @@ const HEALTHY_LANE: TriageListLaneV1 = {
 };
 
 describe('projectTriageDetailHeaderV1', () => {
+    it('never repeats the title as the address: a task addressed by its own title falls back to its scope', () => {
+        const outcome = testkitPresentOutcome({
+            locator: testkitLocator({ displayPath: 'Write the release notes' }),
+            snapshot: testkitSnapshot({ title: 'Write the release notes', scopeLabel: 'Personal tasks' }),
+            viewer: testkitViewer(),
+        });
+        const projected = projectTriageDetailHeaderV1({
+            row: { ...row(), content: { sourceInstanceId: INSTANCE, observedAtMs: 1_000, outcome },
+                observations: [{ sourceInstanceId: INSTANCE, observedAtMs: 1_000, outcome }] },
+            lanes: [HEALTHY_LANE], connectionLabel: null, sourceDescriptor: DESCRIPTOR,
+            linkedSessions: [], linkedSessionsHasMore: false,
+        });
+        expect(projected.title).toBe('Write the release notes');
+        expect(projected.addressLabel).toBe('Personal tasks');
+        // An ordinary provider path still leads.
+        expect(header(HEALTHY_LANE).addressLabel).toBe('example/repository #17');
+    });
+
     it('gives the attention chip the same mark as its row chip', () => {
         const projected = projectTriageDetailHeaderV1({
             row: { ...row(), attention: { level: 'required', fromSourceInstanceId: INSTANCE, reasonId: 'involvement/review-requested', reasonLabel: 'Review requested' } },

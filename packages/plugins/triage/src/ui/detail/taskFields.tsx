@@ -2,7 +2,7 @@ import * as React from 'react';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 import {
-  Banner, Button, EmptyState, ErrorState, Form, Item, ItemGroup, LoadingState, Select, Stack,
+  Banner, Button, EmptyState, ErrorState, Form, Item, ItemGroup, LoadingState, Menu, Row, Select, Stack,
   usePluginHostApi, usePluginHostReadiness, usePluginTranslation, useSurfaceContext,
   type ActionFormFieldHint,
 } from '@happier-dev/plugin-ui';
@@ -138,7 +138,8 @@ const TASK_EDIT_HINTS = {
   title: { title: 'Title', widget: 'text', required: true },
   body: { title: 'Notes', widget: 'textarea' },
   assigneeIds: { title: 'Assignees', widget: 'text_list' },
-  labelIds: { title: 'Labels', widget: 'json' },
+  // Labels are a list of names like assignees, never a JSON document.
+  labelIds: { title: 'Labels', widget: 'text_list' },
   scopeId: { title: 'Repository or project', widget: 'text' },
   projectId: { title: 'Project', widget: 'json' },
   priority: { title: 'Priority', widget: 'json' },
@@ -148,10 +149,24 @@ const TASK_EDIT_HINTS = {
   blockedBy: { title: 'Blocked by', widget: 'json' },
 } as const satisfies Record<TriageTaskFieldV1, Omit<ActionFormFieldHint, 'path'>>;
 
-/** Exact editable values belong to the source read, never to the bounded display projection. */
-export function TriageEditTaskFields(props: Readonly<{
+/** Where the detail places a task's controls and, while it is being edited, its form. */
+export type TriageEditTaskPlacementV1 = Readonly<{
+  /** The task's operations (Edit task, Change status) and their last outcome, under the entry's actions. */
+  controls: React.ReactElement | null;
+  /** The open editor. The detail shows it in place of the entry's story until it is saved or cancelled. */
+  form: React.ReactElement | null;
+}>;
+
+/**
+ * Exact editable values belong to the source read, never to the bounded display projection.
+ *
+ * One owner holds the editor's state; the detail decides where its two parts sit. Key it per entry instance so a
+ * different entry never inherits another one's draft.
+ */
+export function TriageEditTaskScope(props: Readonly<{
   row: TriageListRowV1; instance?: TriageConfiguredSourceInstanceV1; disabled: boolean; onApplied(): Promise<void>;
-}>): React.ReactElement | null {
+  children(placement: TriageEditTaskPlacementV1): React.ReactElement;
+}>): React.ReactElement {
   const context = useSurfaceContext();
   const host = usePluginHostApi();
   const text = usePluginTranslation();
@@ -167,10 +182,11 @@ export function TriageEditTaskFields(props: Readonly<{
   const [issues, setIssues] = React.useState<Record<string, string>>({});
   const [readFailed, setReadFailed] = React.useState(false);
   const [reading, setReading] = React.useState(false);
+  const [statusOpen, setStatusOpen] = React.useState(false);
   const read = React.useRef<AbortController | null>(null);
   React.useEffect(() => () => read.current?.abort(), []);
   const write = useTriageTaskCommit(props.onApplied);
-  if (kind?.task !== true || selected === null || snapshot === undefined) return null;
+  if (kind?.task !== true || selected === null || snapshot === undefined) return props.children({ controls: null, form: null });
   const capabilities = snapshot.taskCapabilities ?? kind.taskCapabilities;
   const get = readTriageSourceGetOperationV1(context, props.row.entryRef.source);
   const canEdit = (capabilities?.editFields?.length ?? 0) > 0 && get !== undefined
@@ -211,10 +227,29 @@ export function TriageEditTaskFields(props: Readonly<{
     } catch { if (!controller.signal.aborted) setReadFailed(true); }
     finally { read.current = null; if (!controller.signal.aborted) setReading(false); }
   };
-  return <Stack gap="small">
-    {/* A source without the edit role never gets a greyed "Edit task": a control that cannot succeed is not drawn. */}
-    {!canEdit && !editing ? null : !editing ? <Button title={text('plugins.triage.tasks.edit', 'Edit task')} variant="plain" disabled={disabled}
-      busy={reading} onPress={openEditor} /> : <Form
+  const transitionLabel = text('plugins.triage.tasks.transition', 'Change status');
+  const valuesNotice = readFailed ? <Banner tone="warning" title={text('plugins.triage.tasks.editValuesUnavailable',
+    'Some current task values could not be loaded. Only fully loaded fields can be edited.')} /> : null;
+  // The task's operations sit together as one quiet row under the entry's actions: Edit task opens the editor,
+  // Change status is a menu of the source's own transitions (an operation, not a field to fill). A source without
+  // a role never gets that control: a greyed control that cannot succeed is not drawn.
+  const operations = !canEdit && transitions.length === 0 ? null : <Row gap="small" wrap>
+    {canEdit ? <Button title={text('plugins.triage.tasks.edit', 'Edit task')} variant="secondary" size="small" disabled={disabled}
+      busy={reading} onPress={openEditor} /> : null}
+    {transitions.length === 0 ? null : <Menu open={statusOpen && !disabled} onOpenChange={(open) => setStatusOpen(open && !disabled)}
+      trigger={transitionLabel} triggerAccessibilityLabel={transitionLabel} triggerAppearance="control" disabled={disabled}
+      items={transitions.map((transition) => ({ id: transition.id, label: transition.label }))}
+      onSelect={(value) => { if (!disabled && transitions.some((transition) => transition.id === value))
+        void write.commit(TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1, { ...address, transitionId: value }); }} />}
+  </Row>;
+  const controls = editing || (operations === null && !readFailed && write.result === null) ? null : <Stack gap="small">
+    {operations}
+    {valuesNotice}
+    <TaskWriteNotice result={write.result} />
+  </Stack>;
+  const form = !editing ? null : <ItemGroup title={text('plugins.triage.tasks.edit', 'Edit task')}>
+    {valuesNotice}
+    <Form
       value={draft} onChange={value => { setDraft(value); setIssues({}); }} issues={issues}
       disabled={disabled || !canEdit} busy={write.busy}
       hints={{ submitLabel: text('plugins.triage.tasks.save', 'Save changes'), fields: editable.map(field => ({
@@ -232,13 +267,8 @@ export function TriageEditTaskFields(props: Readonly<{
         if (Object.keys(fields.data).length === 0) return;
         const result = await write.commit(TRIAGE_TASKS_EDIT_ACTION_LOCAL_ID_V1, { ...address, fields: fields.data });
         if (result?.kind === 'applied') setEditing(false);
-      }} />}
-    {readFailed ? <Banner tone="warning" title={text('plugins.triage.tasks.editValuesUnavailable',
-      'Some current task values could not be loaded. Only fully loaded fields can be edited.')} /> : null}
-    {transitions.length === 0 ? null : <Select label={text('plugins.triage.tasks.transition', 'Change status')} presentation="field"
-      disabled={disabled} value={null} options={transitions.map((transition) => ({ value: transition.id, label: transition.label }))}
-      onChange={(value) => { if (!disabled && typeof value === 'string' && transitions.some((transition) => transition.id === value))
-        void write.commit(TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1, { ...address, transitionId: value }); }} />}
+      }} />
     <TaskWriteNotice result={write.result} />
-  </Stack>;
+  </ItemGroup>;
+  return props.children({ controls, form });
 }

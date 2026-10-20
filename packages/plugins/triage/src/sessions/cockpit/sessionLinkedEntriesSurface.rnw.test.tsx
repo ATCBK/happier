@@ -6,6 +6,7 @@ import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type { PluginUiSemanticSurfaceAdapter } from '@happier-dev/plugin-sdk/testing';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
+import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type {
     PluginUiCollectionQueryInput,
     PluginUiCollectionQueryPager,
@@ -15,7 +16,7 @@ import type {
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createUnavailablePluginUiAccountKv } from '../../../../../plugin-ui/src/data/accountKv.js';
-import { CORPUS_SESSION_LINKS_COLLECTION_ID, CORPUS_SESSION_LINKS_FIELD } from '../../corpus/collections/ids.js';
+import { CORPUS_SESSION_LINKS_COLLECTION_ID, CORPUS_SESSION_LINKS_FIELD, CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../../corpus/collections/ids.js';
 import { toCorpusStoredValue } from '../../corpus/collections/rowCodec.js';
 import type { CorpusSessionLinkRowV1 } from '../../corpus/collections/rows.js';
 import { sessionLinkTagComponents } from '../../corpus/identity/components.js';
@@ -34,6 +35,9 @@ import { foldTriageListWindow, TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../project
 import { toTriageListWireRows } from '../../projection/listWindowWire.js';
 import { TriageListEntriesResultV1Schema } from '../../actions/listEntriesProtocol.js';
 import { PluginUiHostApiSurfaceContextV1Schema } from '@happier-dev/protocol/plugins/ui/client';
+import { createTriageReadSourceSessionLinksActionHandler } from '../../actions/sessionLinks.js';
+import { createTestkitCorpusCollections } from '../../corpus/testkit/corpusCollections.test-support.js';
+import { testkitConfiguredInstance, testkitReadOnlySourceSnapshot } from '../testkit/entrySessionTestkit.test-support.js';
 
 /**
  * The mounted Session cockpit, driven through the real host boundary.
@@ -506,6 +510,42 @@ describe('the mounted Session cockpit', () => {
         await act(async () => { await fixture.updateSurface(nextContext); });
         await expect(fixture.queryByText('First Account private task')).resolves.toBeUndefined();
         expect(harness.gets).toHaveLength(0);
+    });
+
+    it('shows healthy source links beside named incomplete coverage and never reports a partial empty read as empty', async () => {
+        const harness = createDataHarness({ snapshot: { status: 'ready', rows: [], hasMore: false } });
+        const { collections, control } = createTestkitCorpusCollections();
+        const configured = testkitConfiguredInstance();
+        for (const [index, instance] of [configured, { ...configured,
+            instance: { source: { pluginId: 'acme.uninstalled', localId: 'items' }, sourceInstanceId: '22222222-2222-4222-8222-222222222222' },
+            locator: { v: 1 as const, displayLabel: 'Retained source' },
+        }].entries()) control.sourceInstances.seed(toCorpusStoredValue({
+            instanceTag: `${index}${'a'.repeat(42)}`, lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active, configuredAtMs: 1,
+            sourceQualifiedId: `${instance.instance.source.pluginId}/${instance.instance.source.localId}`, configured: instance,
+        }));
+        let links = [{ localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '42' }, sessionId: SESSION_ID,
+            linkedAtMs: 10, displayPath: 'Healthy linked work' }];
+        const snapshot = testkitReadOnlySourceSnapshot();
+        const context = { surface: 'ui', caller: { kind: 'plugin', pluginId: PLUGIN_ID }, signal: new AbortController().signal,
+            services: {
+                storage: { account: { collection: () => collections.sourceInstances } },
+                targetedContributions: { observeForSelf: () => ({ readCurrent: async () => ({ contributions: [
+                    { ...snapshot.contributions[0], operations: { readSessionLinks: { role: 'readSessionLinks' } } },
+                ] }), dispose: () => {} }) },
+                actions: { executeAdmittedTargetedOperation: async () => ({ kind: 'complete', links }) },
+            },
+        } as unknown as PluginInvocationContext;
+        const read = createTriageReadSourceSessionLinksActionHandler();
+        const fixture = await mountCockpit(harness, { kind: 'session', sessionId: SESSION_ID },
+            null, true, null, undefined, true, undefined, async () => await read({ v: 1, sessionId: SESSION_ID }, context));
+        await expect(fixture.getByText('Healthy linked work')).resolves.toBeDefined();
+        await expect(fixture.getByText('Some linked entries could not be read: Retained source.')).resolves.toBeDefined();
+        links = [];
+        await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Refresh' })); });
+        await act(async () => { await Promise.resolve(); });
+        await expect(fixture.queryByText('Healthy linked work')).resolves.toBeUndefined();
+        await expect(fixture.getByText('Some linked entries could not be read: Retained source.')).resolves.toBeDefined();
+        await expect(fixture.queryByText('Keep this session’s PRs and issues at hand')).resolves.toBeUndefined();
     });
 
     it('joins source-owned work without a v2 row and retains it after a failed source refresh', async () => {

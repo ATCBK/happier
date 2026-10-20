@@ -81,6 +81,7 @@ import {
     buildTriageRouteSubPathV1,
 } from './navigation/location.js';
 import { TRIAGE_SHELL_FILL_TEST_ID_V1, TRIAGE_SHELL_DETAIL_REGION_TEST_ID_V1 } from './shell/root.js';
+import { TRIAGE_DETAIL_TASK_EDITOR_TEST_ID_V1 } from './detail/region.js';
 import { readTriageListWindowSnapshot, refreshTriageListWindow } from './window/mountedWindow.js';
 import { renderSurface as renderShellSurface } from './surface.js';
 import { renderSurface as renderTasksSurface } from './tasksSurface.js';
@@ -960,7 +961,8 @@ it.each(['current', 'uninstalled', 'aged'] as const)('edits the selected task de
     }
     await openTheRow(shell);
     await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Edit task' })); });
-    const notes = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]');
+    // The open editor takes the story's place instead of squeezing into the header's share of the pane.
+    const notes = document.querySelector<HTMLTextAreaElement>(`[data-testid="${TRIAGE_DETAIL_TASK_EDITOR_TEST_ID_V1}"] textarea[aria-label="Notes"]`);
     expect(notes?.value).toBe('Complete source notes\n\nPreserve Markdown.  \n');
     await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(notes, 'Updated source notes\n');

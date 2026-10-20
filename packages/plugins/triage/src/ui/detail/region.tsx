@@ -89,7 +89,7 @@ import { TriageFixPullRequests } from './fixPullRequests.js';
 import { useTriageDetailFixPullRequest } from './useTriageDetailFixPullRequest.js';
 import { planTriageDetailTabsV1 } from './tabs.js';
 import { TRIAGE_DETAIL_ACTIONS_PANEL_V1 } from '@happier-dev/triage-protocol/v1';
-import { TriageEditTaskFields } from './taskFields.js';
+import { TriageEditTaskScope } from './taskFields.js';
 
 /**
  * The mounted detail region: the aggregate's common header, and beneath it the
@@ -188,6 +188,8 @@ export { readTriageDetailContextLineV1 } from './header.js';
 const DETAIL_HEADER_SCROLL_STYLE_V1 = Object.freeze({ flexGrow: 0, flexShrink: 1, maxHeight: '45%' as const });
 /** The pinned footer a pushed detail ends its column with: the entry's action controls. */
 export const TRIAGE_DETAIL_FOOTER_TEST_ID_V1 = 'triage-detail-footer';
+/** The open task editor, shown in place of the entry's story. */
+export const TRIAGE_DETAIL_TASK_EDITOR_TEST_ID_V1 = 'triage-detail-task-editor';
 /** The entry's attention reason chip, wherever the detail places it. */
 export const TRIAGE_DETAIL_ATTENTION_TEST_ID_V1 = 'triage-detail-attention';
 const DETAIL_FILL_STYLE_V1 = Object.freeze({ flex: 1, minWidth: 0, minHeight: 0 });
@@ -960,6 +962,11 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       />
     </Stack>
   ) : (
+    // The task editor keeps one owner for its state (keyed per entry instance, apart from the action region's key:
+    // one key for two siblings made React drop or duplicate one of them); the detail places its two parts.
+    <TriageEditTaskScope key={`task-fields:${selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}`}
+      row={row} {...(detail?.kind === 'ready' ? { instance: detail.input.instance } : {})}
+      disabled={detail?.kind !== 'ready'} onApplied={completePostMutation}>{(task) => (
     <Stack style={DETAIL_FILL_STYLE_V1}>
     {/* The Collection's detail body owns the edge (given `detailHeader`); the footer below spans the detail. */}
     <Stack gap="medium" style={DETAIL_FILL_STYLE_V1}>
@@ -983,18 +990,19 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       />
 
       {pinned ? null : actionRegion}
-      {/* Keyed per entry instance like the action region beside it, under its own name: one key for two siblings
-          made React drop or duplicate one of them on update. */}
-      <TriageEditTaskFields key={`task-fields:${selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}`}
-        row={row} {...(detail?.kind === 'ready' ? { instance: detail.input.instance } : {})}
-        disabled={detail?.kind !== 'ready'} onApplied={completePostMutation} />
+      {task.controls}
       {actionRegionShown ? null : sourceActions}
       </Stack>
       </ScrollArea>
-      {detailBody}
+      {/* An open task editor takes the story's place (the header keeps at most part of the pane), and Cancel or
+          Save gives it back: the form is never squeezed into the header's share. */}
+      {task.form === null ? detailBody : (
+        <ScrollArea style={DETAIL_FILL_STYLE_V1} testID={TRIAGE_DETAIL_TASK_EDITOR_TEST_ID_V1}>{task.form}</ScrollArea>
+      )}
     </Stack>
     {pinned ? <DetailsPaneFooter testID={TRIAGE_DETAIL_FOOTER_TEST_ID_V1}>{actionRegion}</DetailsPaneFooter> : null}
     </Stack>
+    )}</TriageEditTaskScope>
   );
   if (display === null || actionPresentation === null || selected === null) return renderDetail(null);
   // Custody belongs to the selected entry, not the header/footer where its controls happen to be placed.

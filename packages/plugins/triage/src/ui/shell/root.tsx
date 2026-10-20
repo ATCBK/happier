@@ -2373,6 +2373,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
                   titleKey="plugins.triage.surface.close"
                   title="Close"
                   variant="secondary"
+                  size="small"
                   onPress={() => { setEditingSources(false); }}
                 />
               </Row>
@@ -2402,26 +2403,33 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
                 />
               ) : (
                 <ItemGroup accessibilityLabel={text('plugins.triage.surface.sources.title', 'Configured sources')}>
-                  {configuredSources.sources.map((source) => (
-                    <Item
-                      key={source.sourceInstanceId}
-                      title={source.displayLabel}
-                      {...(source.displayPath === undefined ? {} : { subtitle: source.displayPath })}
-                      accessoryWraps
-                      accessoryOutsidePressable
-                      accessory={(
-                        <Button
-                          title={text('plugins.triage.surface.sources.remove', 'Remove')}
-                          variant="secondary"
-                          disabled={configuredSources.unavailableReason !== null}
-                          busy={configuredSources.busySourceInstanceId === source.sourceInstanceId}
-                          onPress={() => {
-                            void removeConfiguredSource(source.sourceInstanceId);
-                          }}
-                        />
-                      )}
-                    />
-                  ))}
+                  {configuredSources.sources.map((source) => {
+                    // A bare account name ("leeroybrun") does not say what it is: the source's own name does.
+                    const sourceName = resolveTriageSourceDescriptorV1(surfaceContext.targetedContributions,
+                      source.configured.instance.source)?.displayName;
+                    const subtitle = source.displayPath ?? sourceName;
+                    return (
+                      <Item
+                        key={source.sourceInstanceId}
+                        title={source.displayLabel}
+                        {...(subtitle === undefined ? {} : { subtitle })}
+                        // Removing is the row's only operation and it is destructive, so it waits in the row's menu
+                        // (as on a source's own settings page) instead of standing as a column of Remove buttons.
+                        secondaryActions={[{
+                          id: 'remove',
+                          label: text('plugins.triage.surface.sources.remove', 'Remove'),
+                          destructive: true,
+                          disabled: configuredSources.unavailableReason !== null
+                            || configuredSources.busySourceInstanceId !== null,
+                        }]}
+                        secondaryActionAccessibilityLabel={text('plugins.triage.surface.row.moreActions',
+                          'More actions for {title}', { title: source.displayLabel })}
+                        onSecondaryAction={() => {
+                          void removeConfiguredSource(source.sourceInstanceId);
+                        }}
+                      />
+                    );
+                  })}
                 </ItemGroup>
               )}
               {/*

@@ -14,14 +14,15 @@ import { testkitEntryRef, testkitObservation } from '../../corpus/testkit/observ
 import { foldTriageListWindow, TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
 import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema } from '../../actions/tasksProtocol.js';
 import type { TriageMountedConfiguredSourceV1 } from '../configuration/useTriageConfiguredSources.js';
-import { TriageCreateTaskFields, TriageEditTaskFields, useTriageTaskCommit } from './taskFields.js';
+import { TriageCreateTaskFields, TriageEditTaskScope, useTriageTaskCommit } from './taskFields.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mounted: PluginUiTestkit[] = [];
 afterEach(async () => { for (const fixture of mounted.splice(0)) await fixture.dispose(); });
 
 function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, role: 'create' | 'edit', readOnly = false,
-  fields: readonly TriageTaskFieldV1[] = ['title', 'body']): PluginUiTargetedContributionsV1 {
+  fields: readonly TriageTaskFieldV1[] = ['title', 'body'],
+  transitions: readonly Readonly<{ id: string; label: string }>[] = []): PluginUiTargetedContributionsV1 {
   const protocol = { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1 };
   const contributor = { pluginId: source.pluginId, contributionId: source.localId,
     occurrenceId: 'source-one', sourceCustody: { kind: 'development' as const, registeredRootId: 'task-source' } };
@@ -32,8 +33,9 @@ function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, 
       contributor, protocol,
       descriptor: TriageSourceDescriptorV1Schema.parse({ ...createTriageSourceV1Fixture().descriptor,
         kinds: [{ id: kindId, task: true, workflowSubject: 'issue', displayName: 'Issue',
-          taskCapabilities: { [role === 'create' ? 'createFields' : 'editFields']: fields } }] }),
-      operations: readOnly ? [] : [role, 'get'].map(operationRole => ({ point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol },
+          taskCapabilities: { [role === 'create' ? 'createFields' : 'editFields']: fields,
+            ...(transitions.length === 0 ? {} : { transitions }) } }] }),
+      operations: readOnly ? [] : [role, 'get', ...(transitions.length === 0 ? [] : ['transition'])].map(operationRole => ({ point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol },
         contributor, role: operationRole, action: { pluginId: source.pluginId, localId: operationRole } })), surfaces: [],
     }] }] }],
   };
@@ -96,7 +98,7 @@ it('keeps task creation unavailable until sources are read and distinguishes set
 });
 
 async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: boolean; truncated?: boolean; readFailed?: boolean;
-  fields?: readonly TriageTaskFieldV1[]; values?: TriageTaskFieldsV1 }> = {}) {
+  fields?: readonly TriageTaskFieldV1[]; values?: TriageTaskFieldsV1; transitions?: readonly Readonly<{ id: string; label: string }>[] }> = {}) {
   const source = createTriageSourceV1Fixture();
   const entryRef = testkitEntryRef();
   const base = testkitObservation();
@@ -106,21 +108,27 @@ async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: b
   const row = foldTriageListWindow({ observations: [{ ...observation, entryRef }], lanes: [],
     configuredSourcesStatus: 'complete', activeSourceInstanceIds: [observation.sourceInstanceId],
     lens: TRIAGE_LIST_DEFAULT_LENS_V1, assembledAtMs: 1_000 }).rows[0]!;
-  const targeted = targetedTaskSource(entryRef.source, entryRef.kindId, 'edit', options.readOnly, options.fields);
+  const targeted = targetedTaskSource(entryRef.source, entryRef.kindId, 'edit', options.readOnly, options.fields, options.transitions);
   const saved: ReturnType<typeof TriageEditTaskActionInputV1Schema.parse>[] = [];
+  const transitioned: unknown[] = [];
   let rereads = 0;
   let fixture!: PluginUiTestkit;
   await act(async () => {
     fixture = await createPluginUiTestkit({ identity: { instanceId: 'task-edit', mountNonce: `edit-${mounted.length}` },
       authorPlugin: { id: 'happier.triage', version: '0.0.0' },
-      surface: defineUiSurface(() => <TriageEditTaskFields row={row} instance={source.configuredInstance} disabled={false} onApplied={async () => { rereads++; }} />),
+      surface: defineUiSurface(() => <TriageEditTaskScope row={row} instance={source.configuredInstance} disabled={false} onApplied={async () => { rereads++; }}>
+        {(task) => <>{task.controls}{task.form}</>}
+      </TriageEditTaskScope>),
       surfaceContext: createSurfaceContextFixture({ targetedContributions: targeted }),
-      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
       // Host Action transport is the genuine boundary; field drafts and capability decisions stay real.
       handlers: { executeAction: ({ action, input }) => {
         if (typeof action === 'string') {
-          expect(action).toBe('tasks/edit-v1');
-          saved.push(TriageEditTaskActionInputV1Schema.parse(input));
+          if (action === 'tasks/transition-v1') transitioned.push(input);
+          else {
+            expect(action).toBe('tasks/edit-v1');
+            saved.push(TriageEditTaskActionInputV1Schema.parse(input));
+          }
           return options.uncertain ? { kind: 'uncertain' } : { kind: 'applied', observation: {
             ...source.getResult, kind: 'present', localRef: { kindId: entryRef.kindId, collisionScope: entryRef.collisionScope, entryId: entryRef.entryId },
             locator: row.content!.outcome.locator, snapshot: row.content!.outcome.snapshot,
@@ -136,7 +144,7 @@ async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: b
     });
   });
   mounted.push(fixture);
-  return { fixture, saved, rereads: () => rereads };
+  return { fixture, saved, transitioned, rereads: () => rereads };
 }
 
 it('keeps typing local, commits one edit, and does not replay an uncertain edit', async () => {
@@ -229,6 +237,33 @@ it('offers every declared complete field without rewriting untouched structured 
   await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Save changes' })); });
   expect(saved[0]?.fields).toEqual({ title: 'Updated title' });
   expect(document.querySelector('[role="form"]')).toBeNull();
+});
+
+it('edits labels as a list of names, like assignees, not as a JSON document', async () => {
+  const { fixture, saved } = await mountEditor({ fields: ['labelIds'], values: { labelIds: ['bug', 'needs review'] } });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Labels"]');
+  expect(input?.value).toBe('bug, needs review');
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'bug, ui');
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Save changes' })); });
+  expect(saved[0]?.fields).toEqual({ labelIds: ['bug', 'ui'] });
+});
+
+it('offers the source transitions as a Change status menu beside Edit task and commits the chosen one', async () => {
+  const { fixture, saved, transitioned } = await mountEditor({ transitions: [{ id: 'close', label: 'Closed' }, { id: 'reopen', label: 'Open' }] });
+  // An operation, not a field: no unlabelled "Choose…" select waiting for a value.
+  expect(document.querySelector('[aria-label="Change status"][role="combobox"]')).toBeNull();
+  const trigger = await fixture.getByRole('button', { name: 'Change status' });
+  await act(async () => { await fixture.press(trigger); });
+  const closed = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes('Closed'));
+  expect(closed).toBeDefined();
+  await act(async () => { closed!.click(); });
+  expect(transitioned).toHaveLength(1);
+  expect(transitioned[0]).toMatchObject({ transitionId: 'close' });
+  expect(saved).toEqual([]);
 });
 
 it('does not report an unsettled commit when its authoritative reread fails', async () => {

@@ -192,6 +192,13 @@ selects the declared source role, refuses a failed source write without falling
 through, and explicitly removes an existing v2 duplicate only after the source
 commit. Detail/header and Session cockpit consume the same source relationship
 projection; unavailable source reads retain known work with a stale notice.
+The Session-source read reports coverage per configured instance. A missing
+contribution or failed source role leaves healthy sources readable and returns
+`partial` coverage with the unavailable source named; typed source failures and
+safe invocation codes remain in that lane's diagnostic. A source that declares
+neither relationship role uses the external Collection reader. Incomplete reads
+never become a complete empty cockpit. Refresh replaces healthy-source links
+while retaining last-known links only for sources whose read remains incomplete.
 Legacy `/zen` links redirect to Tasks and keep the selected task identity. The
 Zen-specific draft/start/link route is retired; Start/Send uses the ordinary
 entry attachment and Session orchestrator.
