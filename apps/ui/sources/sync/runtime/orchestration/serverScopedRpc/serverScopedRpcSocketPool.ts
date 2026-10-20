@@ -44,7 +44,7 @@ type SocketLike = Readonly<{
 }>;
 
 type ReachabilityDeps = Readonly<{
-    acquireReachability?: (params: Readonly<{ serverUrl: string; runtimeOrigin: string; token: string; homeCarrier?: HomeCarrier | null }>) => Promise<Readonly<{ release: () => Promise<void> }>>;
+    acquireReachability?: (params: Readonly<{ serverUrl: string; runtimeOrigin: string; token: string; homeCarrier?: HomeCarrier | null; signal?: AbortSignal }>) => Promise<Readonly<{ release: () => Promise<void> }>>;
     startReachability: (params: Readonly<{ serverUrl: string; token: string }>) => Promise<void>;
     waitForReachable: (params: Readonly<{ serverUrl: string; token: string; timeoutMs?: number; signal?: AbortSignal; homeIdentityId?: string; homeCarrier?: HomeCarrier | null }>) => Promise<void>;
     reportUnreachable: (serverUrl: string, error: unknown, token: string) => void;
@@ -174,6 +174,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 runtimeOrigin: params.runtimeOrigin,
                 token: params.token,
                 homeCarrier: params.homeCarrier ?? null,
+                signal: params.signal,
             }),
             startReachability: async (params) => {
                 await startServerReachabilitySupervisor({ serverUrl: params.serverUrl, token: params.token });
@@ -356,6 +357,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                         runtimeOrigin: entry.serverUrl,
                         token: entry.token,
                         homeCarrier: entry.homeCarrier,
+                        signal: controller.signal,
                     });
                     if (controller.signal.aborted) {
                         await lease.release();
