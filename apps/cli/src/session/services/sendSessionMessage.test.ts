@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import axios from 'axios';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 
 vi.mock('@/api/session/sockets', () => ({
@@ -11,11 +12,70 @@ vi.mock('@/api/session/sockets', () => ({
     },
 }));
 import {
+    FeaturesResponseSchema,
     SessionOwnerMetadataV1Schema,
   sealSessionOwnerMetadataEnvelopeV1,
 } from '@happier-dev/protocol';
 
 describe('sendSessionMessage', () => {
+    it.each([false, true])('leaves a file review note for the next turn without resuming or materializing (active=%s)', async active => {
+        vi.doUnmock('@/api/session/pendingQueueV2Transport');
+        const { createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } = await import('@/testkit/backends/sessionFixtures');
+        const { runWithServerHttpBaseUrl } = await import('@/api/client/serverHttpBaseUrl');
+        const sessionId = 'c111111111111111111111111';
+        const serverUrl = 'https://file-review-note.test';
+        const session = createSessionRecordFixture({ id: sessionId, active, encryptionMode: 'plain', metadataLayoutVersion: 1,
+            metadata: JSON.stringify({ v: 1, agentPresentation: { agentId: 'codex' } }),
+            ownerMetadata: { t: 'plain', v: { v: 1, workspace: { path: '/repo', machineId: 'machine-session' } } }, share: null,
+            latestTurnStatus: active ? 'in_progress' : 'completed',
+            pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 });
+        // Only Home HTTP is replaced: selector, encryption, receiver policy and Pending serialization remain real.
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            if (String(url) === `${serverUrl}/v1/account/encryption/currentness`) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+            if (String(url) === `${serverUrl}/v2/sessions/${sessionId}`) return { status: 200, data: { session } };
+            throw new Error(`Unexpected Home read: ${String(url)}`);
+        });
+        const writes: unknown[] = [];
+        vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
+            expect(String(url)).toBe(`${serverUrl}/v1/features/authenticated`);
+            return Response.json(FeaturesResponseSchema.parse({ features: {},
+                capabilities: { session: { pendingInput: { protocolVersion: 5 } } } }));
+        });
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            expect(String(url)).toBe(`${serverUrl}/v2/sessions/${sessionId}/pending`);
+            writes.push(body);
+            return { status: 200, data: { didWrite: true, terminal: false, suppressed: false } };
+        });
+        const { sendSessionMessage } = await import('./sendSessionMessage');
+        const result = await runWithServerHttpBaseUrl(serverUrl, () => sendSessionMessage({
+            credentials: { token: 'token', encryption: null },
+            idOrPrefix: sessionId, message: 'You discarded 2 changes in src/app.ts', localId: 'file-review-note',
+            messageMeta: { happier: { kind: 'file_review_note.v1', payload: { action: 'discard', paths: ['src/app.ts'], changeCount: 2 } } },
+            informationDelivery: 'file_review_note',
+            wait: false, timeoutMs: 10_000,
+        }));
+        expect(result).toMatchObject({ ok: true, localId: 'file-review-note', waited: false,
+            receiverDelivery: { disposition: 'next_turn' } });
+        expect(writes).toEqual([expect.objectContaining({ nextTurnNote: 'file_review_note.v1', requestedAction: { v: 1, kind: 'enqueue' } })]);
+        const unsupported = await runWithServerHttpBaseUrl(serverUrl, () => sendSessionMessage({
+            credentials: { token: 'token', encryption: null }, idOrPrefix: sessionId, message: 'Review facts',
+            localId: 'unsupported-file-review-note', informationDelivery: 'file_review_note', wait: false, timeoutMs: 10_000,
+            messageMeta: { happier: { kind: 'file_review_note.v1', payload: { action: 'discard', paths: ['src/app.ts'] } } },
+            serverFeaturesSnapshot: { status: 'ready', features: FeaturesResponseSchema.parse({ features: {},
+                capabilities: { session: { pendingInput: { protocolVersion: 2 } } } }) },
+        }));
+        expect(unsupported).toMatchObject({ ok: false, code: 'unsupported' });
+        expect(writes).toHaveLength(1);
+        const missing = await runWithServerHttpBaseUrl(serverUrl, () => sendSessionMessage({
+            credentials: { token: 'token', encryption: null }, idOrPrefix: sessionId, message: 'Review facts',
+            localId: 'missing-file-review-note', informationDelivery: 'file_review_note', wait: false, timeoutMs: 10_000,
+            messageMeta: { happier: { kind: 'file_review_note.v1', payload: { action: 'discard', paths: ['src/app.ts'] } } },
+            serverFeaturesSnapshot: { status: 'ready', features: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) },
+        }));
+        expect(missing).toMatchObject({ ok: false, code: 'unsupported' });
+        expect(writes).toHaveLength(1);
+    });
+
     beforeEach(() => {
         vi.doMock('@/api/session/pendingQueueV2Transport', async (importOriginal) => ({
             ...await importOriginal<typeof import('@/api/session/pendingQueueV2Transport')>(),
@@ -31,6 +91,7 @@ describe('sendSessionMessage', () => {
         vi.doUnmock('./requestInactiveSessionResume');
         vi.resetModules();
         vi.clearAllMocks();
+        vi.restoreAllMocks();
     });
 
     type SendWaitRowsOptions = Readonly<{

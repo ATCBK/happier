@@ -1,4 +1,4 @@
-import { PENDING_INPUT_PROTOCOL_VERSION_V1, PENDING_INPUT_PROTOCOL_VERSION_V3, PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
+import { PENDING_INPUT_PROTOCOL_VERSION_V1, PENDING_INPUT_PROTOCOL_VERSION_V3, PENDING_INPUT_PROTOCOL_VERSION_V4, PENDING_INPUT_PROTOCOL_VERSION_V5 } from '@happier-dev/protocol/clientCompatibility/primitives';
 
 import type { ServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { isReleasedServerV021CompatibilitySnapshot } from '@/sync/api/capabilities/releasedServerV021Compatibility';
@@ -7,6 +7,7 @@ export type PendingInputServerWireMode =
     | 'pending_input_v1'
     | 'pending_input_v3'
     | 'pending_input_v4'
+    | 'pending_input_v5'
     | 'released_server_v0_2_1'
     | 'indeterminate';
 
@@ -23,6 +24,9 @@ export function resolvePendingInputServerWireMode(
     if (snapshot.status !== 'ready') return 'indeterminate';
     const pendingInputVersion =
         snapshot.features.capabilities.session.pendingInput?.protocolVersion;
+    if (pendingInputVersion !== undefined && pendingInputVersion >= PENDING_INPUT_PROTOCOL_VERSION_V5) {
+        return 'pending_input_v5';
+    }
     if (pendingInputVersion !== undefined && pendingInputVersion >= PENDING_INPUT_PROTOCOL_VERSION_V4) {
         return 'pending_input_v4';
     }

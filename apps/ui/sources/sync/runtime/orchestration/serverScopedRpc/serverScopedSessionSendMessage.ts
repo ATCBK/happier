@@ -183,11 +183,14 @@ export function createServerScopedSessionSendMessage(deps?: Partial<ServerScoped
       if (context.scope === 'active') {
         const session = d.getSession(sessionId);
         if (!session) return { ok: false, errorCode: 'session_not_found', error: 'session_not_found' };
-        const serverWireMode = args.providerDeliveryIntent === 'first_turn'
+        const serverWireMode = args.providerDeliveryIntent === 'first_turn' || args.hostAdmissionOrigin === 'file_review_note'
           ? resolvePendingInputServerWireMode(await getServerFeaturesSnapshot({
               serverId: normalizeServerScopeId(session.serverId) || undefined,
             }))
           : null;
+        if (args.hostAdmissionOrigin === 'file_review_note' && serverWireMode !== 'pending_input_v5') {
+          return { ok: false, errorCode: 'server-upgrade-required', error: 'File review notes require current Pending input support' };
+        }
         requestedAction = args.requestedAction ?? resolveServerScopedPendingRequestedAction({
           providerDeliveryIntent: args.providerDeliveryIntent,
           serverWireMode,

@@ -13,6 +13,10 @@ function ready(payload: unknown) {
 }
 
 describe('Pending-input server wire contract', () => {
+    it('preserves the existing V5 informational-input support instead of downgrading it', () => {
+        expect(resolvePendingInputServerWireMode(ready({ features: {},
+            capabilities: { session: { pendingInput: { protocolVersion: 5 } } } }))).toBe('pending_input_v5');
+    });
     it('selects reset-capable V4 independently of target-aware V3', () => {
         expect(resolvePendingInputServerWireMode(ready({
             features: {}, capabilities: { session: { pendingInput: { protocolVersion: 4 } } },

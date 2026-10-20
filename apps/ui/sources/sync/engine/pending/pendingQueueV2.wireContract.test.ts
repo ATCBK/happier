@@ -14,6 +14,18 @@ const canonicalBody = JSON.stringify({
 });
 
 describe('Pending queue server-wire serialization', () => {
+    it('publishes the unchanged informational-note operand only on the current V5 wire', () => {
+        const body = JSON.stringify({ localId: 'review-note', nextTurnNote: 'file_review_note.v1',
+            content: { t: 'plain', v: { role: 'user' } }, requestedAction: { v: 1, kind: 'enqueue' } });
+        expect(serializePendingEnqueueBodyForServerWire(body, 'pending_input_v5')).toBe(body);
+    });
+    it.each(['pending_input_v1', 'pending_input_v3', 'pending_input_v4', 'released_server_v0_2_1', 'indeterminate'] as const)(
+        'never publishes a next-turn review note without V5 support (%s)', mode => {
+            const body = JSON.stringify({ localId: 'review-note', nextTurnNote: 'file_review_note.v1',
+                content: { t: 'plain', v: { role: 'user' } }, requestedAction: { v: 1, kind: 'enqueue' } });
+            expect(() => serializePendingEnqueueBodyForServerWire(body, mode)).toThrow(
+                expect.objectContaining({ code: 'server-upgrade-required' }));
+        });
     it('keeps direct fresh released-server downgrade admission strict', () => {
         const body = JSON.stringify({ localId: 'fresh-action',
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello' } } },
@@ -31,6 +43,7 @@ describe('Pending queue server-wire serialization', () => {
             } },
         });
         expect(serializePendingEnqueueBodyForServerWire(body, 'pending_input_v4')).toBe(body);
+        expect(serializePendingEnqueueBodyForServerWire(body, 'pending_input_v5')).toBe(body);
         for (const mode of ['pending_input_v1', 'pending_input_v3', 'released_server_v0_2_1', 'indeterminate'] as const) {
             expect(() => serializePendingEnqueueBodyForServerWire(body, mode))
                 .toThrow(expect.objectContaining({ code: 'server-upgrade-required' }));

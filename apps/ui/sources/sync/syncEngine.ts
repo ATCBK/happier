@@ -6076,7 +6076,7 @@ class Sync {
 
     private async assertPendingResetStartAdmission(reset: PendingResetStartBindingV1, scope: ServerAccountScope,
         wireMode: PendingInputServerWireMode, isCurrent: () => boolean | Promise<boolean>, signal?: AbortSignal): Promise<void> {
-        if (wireMode !== 'pending_input_v4') throw Object.assign(new Error('Reset start requires a current Home'), { code: 'reset_start_unsupported' });
+        if (wireMode !== 'pending_input_v4' && wireMode !== 'pending_input_v5') throw Object.assign(new Error('Reset start requires a current Home'), { code: 'reset_start_unsupported' });
         const [{ captureLazyActionAccountContext }, { getProviderAccountUsageQuota, getProviderAccountUsageHistoryWitness },
             { evaluatePendingResetStartAdmissionV1 }] = await Promise.all([
             import('@/sync/ops/actions/actionAccountContext'), import('@/sync/api/account/apiProviderAccountUsage'),
@@ -6107,7 +6107,7 @@ class Sync {
         }>):
         Promise<Readonly<{ localId: string; initialInput: NonNullable<PendingResetStartSetInputV1['initialInput']> }>> {
         return await this.withPendingQueueOwnerContext(sessionId, async ({ outboxScope, encryption, serverWireMode, isCurrent }) => {
-            if (serverWireMode !== 'pending_input_v4') throw Object.assign(new Error('Reset start requires a current Home'), { code: 'reset_start_unsupported' });
+            if (serverWireMode !== 'pending_input_v4' && serverWireMode !== 'pending_input_v5') throw Object.assign(new Error('Reset start requires a current Home'), { code: 'reset_start_unsupported' });
             const session = readExactServerScopedSession(sessionId, outboxScope.serverId);
             if (!session || !await isCurrent()) throw new Error('Pending Session authority is unavailable');
             const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
@@ -8651,7 +8651,7 @@ class Sync {
     }
 
     private async withArtifactReadAuthority<TResult>(signal: AbortSignal | undefined,
-        operation: (params: Omit<Parameters<typeof fetchArtifactForViewFromApi>[0], 'artifactId' | 'includePdfPreview'>) => Promise<TResult>,
+        operation: (params: Omit<Parameters<typeof fetchArtifactForViewFromApi>[0], 'artifactId'>) => Promise<TResult>,
     ): Promise<TResult> {
         if (!this.credentials) throw new Error('Not authenticated');
         const scope = getActiveServerAccountScope();
@@ -8691,9 +8691,9 @@ class Sync {
         });
     }
 
-    public fetchArtifactForView = async (artifactId: string, options: Readonly<{ includePdfPreview: boolean; signal: AbortSignal }>): Promise<ArtifactViewRead | null> => {
+    public fetchArtifactForView = async (artifactId: string, options: Readonly<{ signal: AbortSignal }>): Promise<ArtifactViewRead | null> => {
         return this.withArtifactReadAuthority(options.signal,
-            params => fetchArtifactForViewFromApi({ ...params, artifactId, includePdfPreview: options.includePdfPreview }));
+            params => fetchArtifactForViewFromApi({ ...params, artifactId }));
     };
 
     public fetchArtifactBinary = async (artifactId: string, reference: Parameters<typeof fetchArtifactBinaryFromApi>[0]['reference'], signal?: AbortSignal): Promise<Uint8Array> => {

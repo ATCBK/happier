@@ -132,7 +132,7 @@ function composerAttachmentOnlyMeta(): Record<string, unknown> {
 }
 
 describe('sendSessionMessageWithServerScope', () => {
-  it.each(['sender', 'voice_handler', 'cancelled_voice_handler'] as const)('uses the exact remote Session and Voice origin when the active Home has an encrypted duplicate id through %s', async (entryPoint) => {
+  it.each(['sender', 'voice_handler', 'cancelled_voice_handler', 'file_review_note', 'file_review_note_v2', 'file_review_note_missing'] as const)('uses the exact remote Session and admitted origin when the active Home has an encrypted duplicate id through %s', async (entryPoint) => {
     const active = await upsertServerProfile({ serverUrl: 'https://active-send.example.test', name: 'Active' });
     const remote = await upsertServerProfile({ serverUrl: 'https://remote-send.example.test', name: 'Remote' });
     await setActiveServerId(active.id, { scope: 'device' });
@@ -150,7 +150,8 @@ describe('sendSessionMessageWithServerScope', () => {
     storage.getState().applySessions([createSession({ id: 'same', serverId: active.id, encryptionMode: 'e2ee', modelMode: 'active-private-model' })]);
     const activeSession = storage.getState().sessions.same;
     serverFeaturesSnapshotMock.mockResolvedValue({
-      status: 'ready', features: FeaturesResponseSchema.parse({ features: {}, capabilities: { session: { pendingInput: { protocolVersion: 1 } } } }),
+      status: 'ready', features: FeaturesResponseSchema.parse({ features: {}, capabilities: { session:
+        entryPoint === 'file_review_note_missing' ? {} : { pendingInput: { protocolVersion: entryPoint === 'file_review_note' ? 5 : 2 } } } }),
     });
     saveAccountSettings({ serverId: remote.id, accountId: 'remote-account' }, settingsParse({
       ...storage.getState().settings, claudeRemoteMaxThinkingTokens: 1337,
@@ -198,7 +199,11 @@ describe('sendSessionMessageWithServerScope', () => {
       schedulePendingOutboxRetry: (params) => sync.schedulePendingOutboxOperationRetry(params),
       enqueuePendingMessageActive: (...args) => sync.enqueuePendingMessage(...args),
     });
-    const result = entryPoint !== 'sender'
+    const result = entryPoint.startsWith('file_review_note')
+      ? (await import('@/components/sessions/files/review/sendFileReviewNote')).sendFileReviewNote({
+          target: { sessionId: 'same', serverId: remote.id }, action: 'undo', undoes: 'discard', paths: ['src/app.ts'],
+        })
+      : entryPoint !== 'sender'
       ? (await import('@/voice/tools/handlers')).createVoiceToolHandlers({
         resolveSessionId: () => 'same', currentSessionAddress: { serverId: remote.id, sessionId: 'same' },
       }).sendSessionMessage({ message: 'Remote Voice input' }, { signal: cancellation.signal }).then((value) => JSON.parse(value))
@@ -207,6 +212,12 @@ describe('sendSessionMessageWithServerScope', () => {
       requestedAction: { v: 1, kind: 'send_now' }, hostAdmissionOrigin: 'voice',
     });
     const outcome = await result;
+    if (entryPoint === 'file_review_note_v2' || entryPoint === 'file_review_note_missing') {
+      expect(outcome).toMatchObject({ ok: false });
+      expect(writes).toEqual([]);
+      expect(storage.getState().sessions.same).toEqual(activeSession);
+      return;
+    }
     if (entryPoint === 'cancelled_voice_handler') {
       expect(outcome).toMatchObject({ ok: false, errorCode: 'tool_cancelled' });
       expect(writes).toEqual([]);
@@ -217,6 +228,15 @@ describe('sendSessionMessageWithServerScope', () => {
     expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
     expect(writes).toHaveLength(1);
     expect(writes[0]?.url).toContain('https://remote-send.example.test/');
+    if (entryPoint === 'file_review_note') {
+      expect(writes[0]?.body).toMatchObject({ nextTurnNote: 'file_review_note.v1', requestedAction: { v: 1, kind: 'enqueue' },
+        content: { t: 'plain', v: { meta: { happier: { kind: 'file_review_note.v1', payload: {
+          action: 'undo', undoes: 'discard', paths: ['src/app.ts'],
+        } } } } } });
+      expect(resumeSessionMock).not.toHaveBeenCalled();
+      expect(storage.getState().sessions.same).toEqual(activeSession);
+      return;
+    }
     expect(writes[0]?.body).toMatchObject({ content: { t: 'plain', v: { meta: {
       happierProvenanceV1: { v: 1, kind: 'voice' },
       happierInputRequestV1: { v: 1, producer: 'voiceInput' },

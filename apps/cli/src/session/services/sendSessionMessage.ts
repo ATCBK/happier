@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { FILE_REVIEW_NOTE_KIND, readFileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
 
 import {
   parsePermissionIntentAlias,
@@ -36,7 +37,9 @@ import {
   type TranscriptMessageLookupResult,
 } from '@/api/session/transcriptMessageLookup';
 import type { StoredCredentials } from '@/persistence';
-import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { fetchServerFeaturesSnapshot, type CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { PENDING_INPUT_PROTOCOL_VERSION_V5 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import {
   detectSessionTurnActivity,
   detectSessionTurnActivityFromProjection,
@@ -213,7 +216,7 @@ type SendSessionMessageParams = Readonly<{
   recipient?: ParticipantRecipientV1;
   resumeInactiveSession?: boolean;
   /** Host result owner only. Never populated from authored Action or message metadata. */
-  informationDelivery?: 'returned_answer' | 'session_follow';
+  informationDelivery?: 'returned_answer' | 'session_follow' | 'file_review_note';
   /** Source host match proof; native admission custody only, never encrypted message metadata. */
   followSources?: readonly import('@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1').SessionFollowSourceOccurrenceWitnessV1[];
   followRelations?: SessionPendingEnqueueByMachineRequestV1['followRelations'];
@@ -1372,6 +1375,21 @@ export async function sendSessionMessage(
   const recipient = params.recipient === undefined
     ? undefined : normalizeParticipantRecipientRoutingIdentityV1(params.recipient);
   const executionRunRecipient = recipient?.kind === 'execution_run' ? recipient : undefined;
+  const nextTurnNote = params.informationDelivery === 'file_review_note' ? FILE_REVIEW_NOTE_KIND : undefined;
+  if (nextTurnNote && (executionRunRecipient || !readFileReviewNoteV1(params.messageMeta))) {
+    return { ok: false, code: 'unsupported', message: 'Invalid file review note' };
+  }
+  if (nextTurnNote) {
+    const snapshot = params.serverFeaturesSnapshot ?? await fetchServerFeaturesSnapshot({
+      serverUrl: resolveServerHttpBaseUrl(), token: params.credentials.token, timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+    });
+    if (snapshot.status !== 'ready'
+      || (snapshot.features.capabilities.session.pendingInput?.protocolVersion ?? 0) < PENDING_INPUT_PROTOCOL_VERSION_V5) {
+      return { ok: false, code: 'unsupported', message: 'File review notes require current Pending input support' };
+    }
+  }
   const participantMeta = params.messageMeta?.happier;
   if (!executionRunRecipient && (recipient !== undefined || participantMeta !== null
     && typeof participantMeta === 'object' && 'kind' in participantMeta
@@ -1547,7 +1565,7 @@ export async function sendSessionMessage(
       // is rechecked by protected Pending admission immediately before effect.
       sourceMaterial: 'available', muted: false, exchange: 'open',
     },
-    intent: params.resumeInactiveSession === false ? 'next_turn' : 'wake',
+    intent: nextTurnNote || params.resumeInactiveSession === false ? 'next_turn' : 'wake',
     returnedAnswer: params.informationDelivery === 'returned_answer',
   }) : undefined;
   const shouldResumeInactiveSession = executionRunRecipient === undefined
@@ -1638,6 +1656,7 @@ export async function sendSessionMessage(
         localId,
         content,
         requestedAction,
+        ...(nextTurnNote ? { nextTurnNote } : {}),
         ...(replyAdmission ? { reply: replyAdmission } : {}),
         ...(protectedAdmission?.request.v === 1 && protectedAdmission.request.followDeliveryV1
           ? { followDeliveryV1: protectedAdmission.request.followDeliveryV1,
@@ -1748,6 +1767,7 @@ export async function sendSessionMessage(
               ...(targetMachineId ? { targetMachineId } : {}),
               messageRole: 'user',
               requestedAction,
+              ...(nextTurnNote ? { nextTurnNote } : {}),
               ...(protectedAdmission?.request.v === 1 && protectedAdmission.request.followDeliveryV1 ? {
                 followDeliveryV1: protectedAdmission.request.followDeliveryV1,
                 ...(params.followSources ? { followSources: [...params.followSources] } : {}),
@@ -1763,6 +1783,7 @@ export async function sendSessionMessage(
               ...(targetMachineId ? { targetMachineId } : {}),
               messageRole: 'user',
               requestedAction,
+              ...(nextTurnNote ? { nextTurnNote } : {}),
               ...(protectedAdmission?.request.v === 1 && protectedAdmission.request.followDeliveryV1 ? {
                 followDeliveryV1: protectedAdmission.request.followDeliveryV1,
                 ...(params.followSources ? { followSources: [...params.followSources] } : {}),
