@@ -66,7 +66,9 @@ describe('commit proposal approval through the default Action executor', () => {
     if (sessionId) storage.setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId,
       metadata: { path: '/repo', machineId: 'machine', host: 'fixture', homeDir: '/home/fixture' },
     }) } });
-    const comparison: ScmComparison = { id: 'c'.repeat(64), source: { kind }, repository: { rootPath: '/repo' },
+    const comparison: ScmComparison = { id: 'c'.repeat(64), source: kind === 'turnCheckpoint'
+      ? { kind, sessionId: 'captured-turn-session', turnId: 'captured-turn', checkpointReceiptId: 'checkpoint.finalized', evidenceMode: 'checkpoint' }
+      : { kind }, repository: { rootPath: '/repo' },
       endpoints: { before: 'before', after: 'after' }, inventory: { state: 'complete', reasons: [], files: [{ path: 'a.ts',
         changeKind: 'modified', binary: false, generated: false, lockfile: false, evidence: { state: 'available', unifiedDiff: '@@ -1 +1 @@\n-old\n+new\n' },
         occurrences: [{ id: 'exact', alias: 'c0', path: 'a.ts', position: 0, before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 } }],
@@ -82,9 +84,14 @@ describe('commit proposal approval through the default Action executor', () => {
       : { success: false, errorCode: 'result_unavailable', error: 'No saved narration exists' });
     const operations = createScmDiffSummaryResultOperations({ ...(sessionId ? { sessionId } : { machineId: 'machine' }),
       serverId, accountId: 'account', shouldContinue: () => true });
-    expectReceipt(await operations.setReviewed({ v: 2, cwd: '/repo', comparisonId: comparison.id, source: comparison.source,
+    expectReceipt(await operations.setReviewed({ v: 2, cwd: '/repo', comparisonId: comparison.id, source: { kind },
       ...(sessionId ? { sessionId } : {}), changeRefs: ['exact'] }, true))
       .toMatchObject({ success: true, record: applyScmReviewedMarkIntent(comparison, null, ['exact'], true) });
+    if (kind === 'turnCheckpoint') {
+      expectReceipt(await operations.setReviewed({ v: 2, cwd: '/repo', comparisonId: comparison.id,
+        source: { kind, sessionId: 'foreign-session' }, changeRefs: ['exact'] }, true))
+        .toMatchObject({ success: false, errorCode: 'reviewed_marks_unavailable' });
+    }
     expect(machineRpc.mock.calls.every(([request]) => request.method === 'scm.diffSummary.capture')).toBe(true);
     expect(harness.requestsFor('/v1/kv').map(request => request.input)).toEqual([{ mutations: [{ key, version: 1,
       value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: applyScmReviewedMarkIntent(comparison, null, ['exact'], true) }),

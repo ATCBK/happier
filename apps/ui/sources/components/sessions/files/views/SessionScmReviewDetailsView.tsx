@@ -852,7 +852,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
     });
     const analysisMarkAgentId = resolveExecutionRunAgentMarkId(walkthroughAnalysis?.latestRun?.backendTarget, theme);
     const marksAvailable =
-      marks.record?.comparisonId === walkthroughAnalysis?.comparison?.id &&
+      walkthroughAnalysis?.comparison != null &&
       marks.record !== null &&
       marks.unavailableReason === null;
     const filesReading = React.useMemo(

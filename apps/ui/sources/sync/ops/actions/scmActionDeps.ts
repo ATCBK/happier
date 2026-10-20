@@ -42,8 +42,10 @@ export function createUiScmAction(
                     if (selection.source.kind !== 'workingTree') return null;
                     const response = ScmStatusSnapshotResponseSchema.safeParse(await read(RPC_METHODS.SCM_STATUS_SNAPSHOT, { cwd: selection.cwd }));
                     account.assertCurrent();
-                    if (!response.success || !response.data.success || response.data.snapshot?.repo.rootPath !== selection.cwd) return null;
+                    if (!response.success || !response.data.success || !response.data.snapshot) return null;
                     const snapshot = response.data.snapshot;
+                    const repositoryRootPath = snapshot.repo.rootPath;
+                    if (repositoryRootPath === null || repositoryRootPath !== selection.cwd) return null;
                     const groups = await Promise.all(snapshot.entries.map(async entry => (await Promise.all(snapshot.capabilities.supportedDiffAreas.map(async area => {
                         const diff = ScmDiffFileResponseSchema.safeParse(await read(RPC_METHODS.SCM_DIFF_FILE, { cwd: selection.cwd, path: entry.path, area }));
                         account.assertCurrent();
@@ -51,7 +53,7 @@ export function createUiScmAction(
                         const layer = area === 'both' ? 'combined' : area === 'included' ? 'staged' : entry.kind === 'untracked' ? 'untracked' : 'unstaged';
                         return buildReviewUnits(entry.path, layer, diff.data.diff ?? '').map(unit => unit.key);
                     }))).flat()));
-                    return { repositoryRootPath: snapshot.repo.rootPath, source: selection.source, changeKeys: groups.flat() } satisfies ScmReviewedMarksSource;
+                    return { repositoryRootPath, source: selection.source, changeKeys: groups.flat() } satisfies ScmReviewedMarksSource;
                 }
                 if ('comparisonId' in selection) {
                     const captured = ScmComparisonCaptureOutputSchema.safeParse(await read(RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE, {
@@ -62,7 +64,9 @@ export function createUiScmAction(
                     if (!captured.success || !captured.data.success || captured.data.comparison.id !== selection.comparisonId
                         || captured.data.comparison.repository.rootPath !== selection.cwd) return null;
                     const evidence = captured.data;
-                    const retainedSelectors = { cwd: selection.cwd, turnId: evidence.metadata.turnId,
+                    const retainedSelectors = { cwd: selection.cwd,
+                        sessionId: evidence.comparison.source.kind === 'turnCheckpoint' ? evidence.comparison.source.sessionId : undefined,
+                        turnId: evidence.metadata.turnId,
                         checkpointReceiptId: evidence.metadata.checkpointReceiptId, turnEvidenceMode: evidence.metadata.turnEvidenceMode };
                     const sourceMatches = selection.source.kind === 'turnCheckpoint'
                         ? buildScmComparisonSourceKey({ ...retainedSelectors, source: selection.source })

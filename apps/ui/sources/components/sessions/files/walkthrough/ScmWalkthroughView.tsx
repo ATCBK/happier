@@ -90,7 +90,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
             comparison: capturedComparison,
             walkthrough: viewModel?.outputs?.walkthrough ?? null,
             analysis: viewModel?.analysis ?? null,
-            reviewed: marks.record?.comparisonId === capturedComparison.id ? marks.record : null,
+            reviewed: marks.record,
             provenance: viewModel?.savedResult?.walkthroughProvenance,
         })
         : null), [capturedComparison, marks.record, viewModel?.analysis, viewModel?.outputs?.walkthrough, viewModel?.savedResult?.walkthroughProvenance]);
@@ -214,7 +214,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
 
     const { theme } = useUnistyles();
     const markAgentId = resolveExecutionRunAgentMarkId(viewModel?.latestRun?.backendTarget, theme);
-    const marksAvailable = marks.record?.comparisonId === capturedComparison?.id && marks.record !== null && marks.unavailableReason === null;
+    const marksAvailable = capturedComparison !== null && marks.record !== null && marks.unavailableReason === null;
     const setReviewed = marks.setReviewed;
     const onToggleReviewed = React.useMemo(() => (marksAvailable
         ? (stop: WalkthroughStop) => setReviewed(stop.changeRefs, !stop.reviewed)

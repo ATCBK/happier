@@ -51,7 +51,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
     const scopeLabel = resolveFilesComparisonLabel(comparison, null);
     const marks = useScmReviewedMarks({ comparison: view === 'files' ? captured.comparison : null, serverId: props.serverId ?? null,
         host: { sessionId: props.sessionId } });
-    const marksAvailable = marks.record?.comparisonId === captured.comparison?.id && marks.record !== null && marks.unavailableReason === null;
+    const marksAvailable = captured.comparison !== null && marks.record !== null && marks.unavailableReason === null;
     const reading = React.useMemo(() => walkthrough?.comparison && walkthrough.comparison.id === comparison.comparisonId && walkthrough.outputs?.walkthrough?.value
         ? buildWalkthroughReading({ comparison: walkthrough.comparison, walkthrough: walkthrough.outputs.walkthrough,
             analysis: walkthrough.analysis, reviewed: marksAvailable ? marks.record : null,

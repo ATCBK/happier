@@ -89,6 +89,6 @@ export function SessionWalkthroughWidgetContent(props: Readonly<{
         sessionId: props.sessionId, serverId: props.serverId,
         details: { kind: 'scmReview', comparison, view: 'walkthrough' },
     }) as never), [comparison, props.serverId, props.sessionId, router]);
-    return <WalkthroughWidgetContentView reading={reading} marksLoaded={captured !== null && marks.record?.comparisonId === captured.id}
+    return <WalkthroughWidgetContentView reading={reading} marksLoaded={captured !== null && marks.record !== null && marks.unavailableReason === null}
         {...(props.interactive ? { onOpen } : {})} testID={props.testID} />;
 }

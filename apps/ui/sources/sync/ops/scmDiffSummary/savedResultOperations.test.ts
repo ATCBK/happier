@@ -4,6 +4,7 @@ import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/acti
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import type { AuthContextType } from '@/auth/context/AuthContext';
+import type { ServerFetch } from '@/sync/http/client';
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
@@ -43,11 +44,20 @@ describe('machine saved result operations', () => {
       refreshFromActiveServer: async () => {} } satisfies AuthContextType);
     try {
       const serverId = await addHome();
-      rpc.mockImplementation(async ({ method }) => method === 'scm.diffSummary.result.read' ? { success: true, result: savedResult }
-        : { success: true, deleted: [{ success: true, resultId: 'saved', comparisonId: 'comparison' }], failures: [] });
-      const ops = createScmDiffSummarySavedResultOperations({ machineId: 'machine', serverId, accountId: 'account', shouldContinue: () => true });
-      expect(await ops.clear(input)).toMatchObject({ success: true, deleted: [{ resultId: 'saved' }] });
+      const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+      // An API token enters the signed Home Action API, not the native Account/Machine adapter.
+      const request: ServerFetch = async (path, init) => {
+        expect(path).toBe('/v1/actions/scm.diffSummary.result.clear');
+        expect(JSON.parse(String(init?.body))).toMatchObject({ v: 1, target: { kind: 'machine', machineId: 'machine' }, input });
+        return new Response(JSON.stringify({ v: 1, actionId: 'scm.diffSummary.result.clear', execution: { ok: true,
+          result: { success: true, deleted: [{ success: true, resultId: 'saved', comparisonId: 'comparison' }], failures: [] } } }));
+      };
+      const actionExecutor = createDefaultActionExecutor({ apiTokenAction: { request, target: { kind: 'machine', machineId: 'machine' } } });
+      const ops = createScmDiffSummarySavedResultOperations({ machineId: 'machine', serverId, accountId: 'account', shouldContinue: () => true, actionExecutor });
+      const cleared = await ops.clear(input);
+      expect(cleared, JSON.stringify(cleared)).toMatchObject({ success: true, deleted: [{ resultId: 'saved' }] });
       expect(harness.requestsFor('/v1/kv')).toEqual([]);
+      expect(rpc).not.toHaveBeenCalled();
     } finally { setCurrentAuth(previous); }
   });
   it('deletes saved narration without touching Account content, while keeping revision and application guards', async () => {
