@@ -106,7 +106,7 @@ In development source, injected and managed engines share the Protocol locator p
 page resolver. `selector` and string `locator` inputs accept CSS, `role=`, `text=` and test-id
 locators; retained structured locators normalize at that same boundary. Field contents never
 select the target. Queries return every match. `setValue` replaces existing content, while `type`
-appends. Targeted keyboard input establishes focus before dispatch and refuses a missing or
+appends by default. Managed keyboard input establishes focus before dispatch and refuses a missing or
 unfocusable target. Injected uploads attach the complete admitted file set or return a typed
 refusal. `waitFor` uses the containing Action's deadline, and cancellation retires its page timer.
 
