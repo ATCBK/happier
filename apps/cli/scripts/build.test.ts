@@ -41,6 +41,8 @@ describe('buildCliDist', () => {
       mkdirSync(join(packageRoot, 'scripts'));
       const helperPath = join(packageRoot, 'scripts/native_process_exit.cjs');
       cpSync(fileURLToPath(new URL('./native_process_exit.cjs', import.meta.url)), helperPath);
+      const helperDeclarationPath = join(packageRoot, 'scripts/native_process_exit.d.cts');
+      cpSync(fileURLToPath(new URL('./native_process_exit.d.cts', import.meta.url)), helperDeclarationPath);
       writeFileSync(join(packageRoot, 'scripts/not-a-runtime-input.cjs'), 'throw new Error("must not be captured");\n');
       writeFileSync(join(packageRoot, 'src/terminal/host/borrowed.ts'), [
         "import { isNativeProcessExited } from '../../../scripts/native_process_exit.cjs';",
@@ -59,6 +61,8 @@ describe('buildCliDist', () => {
           const root = dirname(params.packageJsonPath);
           roots.push(root);
           expect(existsSync(join(root, 'scripts/not-a-runtime-input.cjs'))).toBe(false);
+          expect(readFileSync(join(root, 'scripts/native_process_exit.d.cts'), 'utf8'))
+            .toBe(readFileSync(helperDeclarationPath, 'utf8'));
           if (roots.length === 1) writeFileSync(helperPath, `${capturedHelper}\n// New authored generation after admission.\n`);
           await runPkgrollBuild(params);
           expect(readFileSync(join(root, 'scripts/native_process_exit.cjs'), 'utf8')).toBe(capturedHelper);
