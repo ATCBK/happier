@@ -9,7 +9,6 @@ import {
 } from '../settingsViewTestHelpers';
 import {
   createUseSettingMock,
-  createUseSettingMutableMockFromReader,
 } from '@/dev/testkit/mocks/storage';
 import {
   createMachineAdministrationTargetSelectionMock,
@@ -23,12 +22,10 @@ import {
 const capture = vi.hoisted(() => ({
   virtualizedListProps: null as Record<string, unknown> | null,
   windowWidth: 800,
-  setRawSettings: vi.fn(),
   routerPush: vi.fn(),
   reset() {
     this.virtualizedListProps = null;
     this.windowWidth = 800;
-    this.setRawSettings.mockReset();
     this.routerPush.mockReset();
   },
 }));
@@ -145,11 +142,8 @@ installSettingsViewCommonModuleMocks({
     return createStorageModuleMock({
       importOriginal,
       overrides: {
-        useSettingMutable: createUseSettingMutableMockFromReader(
-          () => [{ v: 1, actions: {} }, capture.setRawSettings] as const,
-        ),
         useSetting: createUseSettingMock({
-          fallback: () => ({ privacy: { shareDeviceInventory: true } }),
+          fallback: key => key === 'actionsSettingsV1' ? { v: 1, actions: {} } : ({ privacy: { shareDeviceInventory: true } }),
         }),
       },
     });
@@ -434,7 +428,6 @@ describe('ActionsSettingsView', () => {
     expect(capture.routerPush).toHaveBeenCalledWith(
       '/settings/actions/review.start',
     );
-    expect(capture.setRawSettings).not.toHaveBeenCalled();
   });
 
   it('percent-encodes a qualified contributed action id when opening its detail page', async () => {

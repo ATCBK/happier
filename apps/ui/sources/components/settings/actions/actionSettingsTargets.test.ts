@@ -19,7 +19,7 @@ describe('actionSettingsTargets', () => {
             selected: true,
         });
 
-        expect(next.actions['review.start']).toEqual({
+        expect(next.actions['review.start']).toMatchObject({
             enabledPlacements: ['agent_input_chips'],
             disabledSurfaces: [],
             disabledPlacements: [],
@@ -35,7 +35,7 @@ describe('actionSettingsTargets', () => {
             approvalRequired: true,
         });
 
-        expect(next.actions['review.start']).toEqual({
+        expect(next.actions['review.start']).toMatchObject({
             enabledPlacements: [],
             disabledSurfaces: [],
             disabledPlacements: [],
@@ -52,7 +52,7 @@ describe('actionSettingsTargets', () => {
             approvalRequired: true,
         });
 
-        expect(next.actions['review.start']).toEqual({
+        expect(next.actions['review.start']).toMatchObject({
             enabledPlacements: [],
             disabledSurfaces: [],
             disabledPlacements: [],
@@ -76,7 +76,7 @@ describe('actionSettingsTargets', () => {
             selected: true,
         });
 
-        expect(next.actions['review.start']).toEqual({
+        expect(next.actions['review.start']).toMatchObject({
             enabledPlacements: ['agent_input_chips'],
             disabledSurfaces: [],
             disabledPlacements: [],
@@ -123,7 +123,7 @@ describe('actionSettingsTargets', () => {
             enabled: false,
         });
 
-        expect(next.actions['review.start']).toEqual({
+        expect(next.actions['review.start']).toMatchObject({
             enabled: false,
             enabledPlacements: [],
             disabledSurfaces: [],

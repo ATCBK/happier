@@ -4,13 +4,13 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { SESSION_PERMISSION_MODES } from '@happier-dev/protocol/sessions/metadata/permission-modes';
 import { SessionAgentSpawnPolicyV1Schema, type SessionAgentSpawnPolicyV1 } from '@happier-dev/protocol/account/settings/sessionAgentSpawnPolicyV1';
-import type { SessionAgentStartAllowListsV1 } from '@happier-dev/protocol/account/settings/sessionAgentStartAllowListsV1';
 
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Switch } from '@/components/ui/forms/Switch';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 import { ACTIONS_CREATE_SESSION_SETTINGS } from '@/components/settings/actions/actionsSettings';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 import { t, type TranslationKey } from '@/text';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { SessionAgentStartAllowListsControls } from './SessionAgentStartAllowListsControls';
@@ -181,8 +181,6 @@ export type SessionAgentSpawnPolicyControlsProps = Readonly<{
     rawPolicy: unknown;
     rawAllowLists: unknown;
     disabled?: boolean;
-    onChange: (policy: SessionAgentSpawnPolicyV1) => void;
-    onAllowListsChange: (allowLists: SessionAgentStartAllowListsV1) => void;
 }>;
 
 export const SessionAgentSpawnPolicyControls = React.memo(function SessionAgentSpawnPolicyControls(
@@ -191,18 +189,12 @@ export const SessionAgentSpawnPolicyControls = React.memo(function SessionAgentS
     const { theme } = useUnistyles();
     const [permissionCeilingOpen, setPermissionCeilingOpen] = React.useState(false);
     const policy = React.useMemo(() => normalizeSessionAgentSpawnPolicy(props.rawPolicy), [props.rawPolicy]);
+    const writeSetting = useSettingActionWriter();
     const disabled = props.disabled === true;
     const permissionCeilingItems = React.useMemo(
         () => buildPermissionCeilingItems(theme.colors.text.secondary),
         [theme.colors.text.secondary],
     );
-
-    const updatePolicy = React.useCallback((patch: Partial<SessionAgentSpawnPolicyV1>) => {
-        props.onChange(SessionAgentSpawnPolicyV1Schema.parse({
-            ...policy,
-            ...patch,
-        }));
-    }, [policy, props]);
 
     return (
         <ItemGroup
@@ -222,7 +214,7 @@ export const SessionAgentSpawnPolicyControls = React.memo(function SessionAgentS
                             testID={`settings-actions:session-spawn-policy:${definition.key}`}
                             value={policy[definition.key]}
                             disabled={disabled}
-                            onValueChange={(next) => updatePolicy({ [definition.key]: next })}
+                            onValueChange={(next) => { void writeSetting(ACTIONS_CREATE_SESSION_SETTINGS.settings[definition.key], next); }}
                         />
                     )}
                 />
@@ -238,9 +230,8 @@ export const SessionAgentSpawnPolicyControls = React.memo(function SessionAgentS
                     selectedId={policy.permissionCeiling ?? 'inherit'}
                     showCategoryTitles={false}
                     items={permissionCeilingItems}
-                    onSelect={(itemId) => updatePolicy({
-                        permissionCeiling: parsePermissionCeilingSelection(itemId),
-                    })}
+                    onSelect={(itemId) => { void writeSetting(ACTIONS_CREATE_SESSION_SETTINGS.settings.permissionCeiling,
+                        parsePermissionCeilingSelection(itemId)); }}
                     itemTrigger={{
                         title: t(ACTIONS_CREATE_SESSION_SETTINGS.settings.permissionCeiling.titleKey),
                         subtitle: t('settingsActions.spawnPolicy.permissionCeiling.subtitle'),
@@ -251,7 +242,7 @@ export const SessionAgentSpawnPolicyControls = React.memo(function SessionAgentS
                     }}
                 />
             </SettingAnchor>
-            <SessionAgentStartAllowListsControls rawAllowLists={props.rawAllowLists} disabled={disabled} onChange={props.onAllowListsChange} />
+            <SessionAgentStartAllowListsControls rawAllowLists={props.rawAllowLists} disabled={disabled} />
         </ItemGroup>
     );
 });

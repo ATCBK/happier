@@ -115,13 +115,15 @@ Handoff availability remains the handoff owner's source-and-target decision, not
 an inference from a ready destination. These source contracts still need the
 coordination program's integrated live repair and handoff validation.
 
-In 0.3 development source, `actions.policy.get`, `actions.policy.set` and
-`actions.policy.reset` read or change one exact `{ actionId, audience }` preference.
-Set adds `mode: 'allowed' | 'ask_first' | 'off' | 'default'`; reset restores Default.
-They share the Settings → Actions reducers and Account persistence. Default removes
+In 0.3 development source, `actions.policy.get` and `actions.policy.reset` read or
+reset one exact `{ actionId, audience }` preference. `actions.policy.set` accepts
+that target with `mode: 'allowed' | 'ask_first' | 'off' | 'default'`, or a typed
+`change` for global enablement, audience enablement, placement visibility or slash
+policy, tool exposure, or a plugin's host-capture approval preference. The UI uses
+these same intents and Account persistence. Default removes
 that audience's explicit disable/approval preference and inherits canonical policy.
-The Action's global Off, neighbouring audiences, placements and tool exposure remain
-intact. Results distinguish the stored mode from global `actionEnabled` and
+Audience-only edits leave global Off, neighbouring audiences, placements and tool
+exposure intact. Audience results distinguish stored mode from global `actionEnabled` and
 `enabled` after these settings apply; catalog and runtime availability still govern execution.
 Changes require human authority: Agent/MCP requests use the ordinary approval flow,
 and a saved waiver cannot let an agent approve its own policy relaxation. These

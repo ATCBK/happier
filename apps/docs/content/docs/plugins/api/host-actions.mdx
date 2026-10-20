@@ -479,7 +479,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `actions.policy.get`
 
-**Read Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+**Read Action policy** — Read or change one exact Action policy preference. Default and reset restore inherited audience policy; unrelated preferences remain intact. Policy changes require human authority.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -494,7 +494,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `actions.policy.reset`
 
-**Reset Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+**Reset Action policy** — Read or change one exact Action policy preference. Default and reset restore inherited audience policy; unrelated preferences remain intact. Policy changes require human authority.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -509,7 +509,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `actions.policy.set`
 
-**Change Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+**Change Action policy** — Read or change one exact Action policy preference. Default and reset restore inherited audience policy; unrelated preferences remain intact. Policy changes require human authority.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -520,8 +520,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `actionId` (text, required): Action id
-- `audience` (text, required): Audience
-- `mode` (text, required): Policy
+- `audience` (text): Audience
+- `mode` (text): Audience policy
+- `change` (json): Policy change
 
 ## `agents.acp.backends.delete`
 

@@ -139,7 +139,7 @@ describe('action settings tool exposure', () => {
             value: 'default',
         });
 
-        expect(next.actions['review.start']).toBeUndefined();
+        expect(readToolExposureModes(next, 'review.start')).toEqual({});
     });
 
     it('hides exposure controls for non-tool placement targets', () => {

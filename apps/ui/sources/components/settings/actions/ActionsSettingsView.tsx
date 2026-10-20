@@ -18,7 +18,7 @@ import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaem
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { machineAdministrationTargetsEqual } from '@/sync/domains/machines/administration/targetSelection';
 import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
-import { useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
 import {
@@ -27,9 +27,7 @@ import {
     type ActionSettingsEntry,
 } from './buildActionSettingsEntries';
 import { groupActionSettingsEntriesByFamily } from './groupActionSettingsEntriesByFamily';
-import {
-    setActionEnabled,
-} from './actionSettingsTargets';
+import { useActionPolicyWriter } from './useActionPolicyWriter';
 import { normalizeActionsSettings } from './normalizeActionsSettings';
 import {
     listActionSettingsEntryStatusParts,
@@ -160,7 +158,8 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const [searchQuery, setSearchQuery] = React.useState('');
-    const [rawSettings, setRawSettings] = useSettingMutable('actionsSettingsV1');
+    const rawSettings = useSetting('actionsSettingsV1');
+    const writePolicy = useActionPolicyWriter();
     const scmRemoteConfirmPolicy = useSetting('scmRemoteConfirmPolicy');
     const voice = useSetting('voice') as Readonly<{ privacy?: { shareDeviceInventory?: boolean } }> | null;
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
@@ -227,13 +226,9 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
         [entries, familySections],
     );
 
-    const commitSettings = React.useCallback((update: (current: ActionsSettingsV1) => unknown) => {
-        setRawSettings(current => normalizeActionsSettings(update(normalizeActionsSettings(current))));
-    }, [setRawSettings]);
-
     const handleActionEnabledChange = React.useCallback((actionId: ActionSettingsActionId, enabled: boolean) => {
-        commitSettings(current => setActionEnabled({ settings: current, actionId, enabled }));
-    }, [commitSettings]);
+        void writePolicy({ actionId, change: { kind: 'enabled', enabled } });
+    }, [writePolicy]);
 
     const openActionDetails = React.useCallback((actionId: ActionSettingsActionId) => {
         router.push(`/settings/actions/${encodeURIComponent(actionId)}`);

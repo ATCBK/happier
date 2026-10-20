@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -8,7 +9,9 @@ import { standardCleanup } from '@/dev/testkit';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { getStorage } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
+import { createSecretSettingsTestHarness, type SecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { applyAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
 import { resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalogEngine';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -20,24 +23,29 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 installDisconnectedServerSocketBoundary();
 beforeAll(loadSyncSingletonForTests);
-const scope = { serverId: 'allow-list-home', accountId: 'allow-list-account' };
-beforeEach(() => { getStorage().setState({ settingsScope: scope }); });
+let account: SecretSettingsTestHarness;
+beforeEach(async () => {
+    account = await createSecretSettingsTestHarness({ settings: settingsParse({
+        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+    }) });
+});
 afterEach(async () => {
     await standardCleanup();
+    await account.dispose();
     resetAcpCatalogEngineForTests();
     resetAcpCatalogSnapshotsForTests();
 });
 
 describe('session start Agent allow-list catalog readiness', () => {
     it('does not expand All into an incomplete finite Agent policy when a bundled choice is toggled while ACP is unavailable', async () => {
-        applyAcpCatalogSnapshot(scope, { status: 'unavailable', reason: 'account-mode-mismatch' }, true);
-        const onChange = vi.fn();
-        function PolicyOwner({ initial }: { initial: string[] | null }) {
-            const [selected, setSelected] = React.useState(initial);
-            return <SessionAgentStartAllowListsControls rawAllowLists={{ allowedAgentTargetKeys: selected }}
-                onChange={next => { onChange(next); setSelected(next.allowedAgentTargetKeys); }} />;
+        // The real observer refreshes on demand; the HTTP row must remain unavailable too.
+        account.catalogRows.set('/v1/account/entity-rows/acp', { status: 'account-mode-mismatch' });
+        applyAcpCatalogSnapshot(account.scope, { status: 'unavailable', reason: 'account-mode-mismatch' }, true);
+        function PolicyOwner() {
+            const lists = useSetting('sessionAgentStartAllowListsV1');
+            return <SessionAgentStartAllowListsControls rawAllowLists={lists} />;
         }
-        const screen = await renderSettingsView(<PolicyOwner initial={null} />);
+        const screen = await renderSettingsView(<PolicyOwner />);
         await screen.pressByTestIdAsync('settings-actions:session-start-allow-lists:agents');
         const menu = () => screen.findAll(node => node.type === DropdownMenu)[0];
         expect(menu()).toBeDefined();
@@ -53,30 +61,33 @@ describe('session start Agent allow-list catalog readiness', () => {
         await act(async () => { menu().props.onSelect(bundledChoice.id); });
         // null means every Agent, including configured IDs that have not been read.
         // A partial list of rendered choices cannot author that finite replacement.
-        expect(onChange).not.toHaveBeenCalled();
+        expect(account.settingsWrites).toHaveLength(0);
         await act(async () => { menu().props.onSelect('none'); });
-        expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ allowedAgentTargetKeys: [] }));
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentStartAllowListsV1.allowedAgentTargetKeys).toEqual([]));
         await act(async () => { menu().props.onSelect('all'); });
-        expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ allowedAgentTargetKeys: null }));
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentStartAllowListsV1.allowedAgentTargetKeys).toBeNull());
         await act(async () => { screen.tree.unmount(); });
 
         const retained = 'backend:retained:configured:retained';
-        const finite = await renderSettingsView(<PolicyOwner initial={[retained]} />);
+        account.replaceSettings(settingsParse({ ...account.persistedSettings,
+            sessionAgentStartAllowListsV1: { v: 1, allowedAgentTargetKeys: [retained] },
+        }));
+        const finite = await renderSettingsView(<PolicyOwner />);
         await finite.pressByTestIdAsync('settings-actions:session-start-allow-lists:agents');
         const finiteMenu = () => finite.findAll(node => node.type === DropdownMenu)[0];
         expect(finiteMenu().props.items).toContainEqual(expect.objectContaining({ id: `choice:${retained}`, checked: true }));
         expect(finiteMenu().props.items.find((item: { id: string }) => item.id === bundledChoice.id).disabled).not.toBe(true);
         await act(async () => { finiteMenu().props.onSelect(bundledChoice.id); });
-        expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
-            allowedAgentTargetKeys: [retained, bundledChoice.id.slice('choice:'.length)],
-        }));
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentStartAllowListsV1.allowedAgentTargetKeys)
+            .toEqual([retained, bundledChoice.id.slice('choice:'.length)]));
         await act(async () => { finiteMenu().props.onSelect(bundledChoice.id); });
-        expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ allowedAgentTargetKeys: [retained] }));
-        await act(async () => { applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 2, record: { v: 1, definitions: [] } }, true); });
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentStartAllowListsV1.allowedAgentTargetKeys).toEqual([retained]));
+        await act(async () => { applyAcpCatalogSnapshot(account.scope, { status: 'ready', revision: 2, record: { v: 1, definitions: [] } }, true); });
         await act(async () => { finiteMenu().props.onSelect('all'); });
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentStartAllowListsV1.allowedAgentTargetKeys).toBeNull());
         await act(async () => { finiteMenu().props.onSelect(bundledChoice.id); });
-        const knownFinite = onChange.mock.lastCall?.[0].allowedAgentTargetKeys;
-        expect(knownFinite).toEqual(expect.any(Array));
+        await vi.waitFor(() => expect(account.persistedSettings.sessionAgentStartAllowListsV1.allowedAgentTargetKeys).toEqual(expect.any(Array)));
+        const knownFinite = account.persistedSettings.sessionAgentStartAllowListsV1.allowedAgentTargetKeys;
         expect(knownFinite).not.toContain(bundledChoice.id.slice('choice:'.length));
     });
 });

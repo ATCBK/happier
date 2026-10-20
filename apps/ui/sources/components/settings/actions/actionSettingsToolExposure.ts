@@ -3,6 +3,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionToolExposureMode, ActionToolExposureSurface } from '@happier-dev/protocol/actions/metadata';
 import type { ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { applyActionPolicyMutation } from '@happier-dev/protocol/actions/actionAudiencePolicy';
 
 import {
     getActionSettingsTargetDefinition,
@@ -10,8 +11,6 @@ import {
 } from './actionSettingsTargetDefinitions';
 import {
     getActionSettingsTargetPreferenceSelected,
-    getMutableActionSettingsEntry,
-    writeActionSettingsEntry,
 } from './actionSettingsTargetSelection';
 
 export type ActionSettingsToolExposureControlValue = 'default' | ActionToolExposureMode;
@@ -108,17 +107,8 @@ export function setActionSettingsToolExposureMode(params: Readonly<{
         return params.settings;
     }
 
-    const spec = getActionSpec(params.actionId);
-    if (!spec.bindings?.mcpToolName || spec.surfaces[resolvedTarget.surface] !== true) {
-        return params.settings;
-    }
-
-    const entry = getMutableActionSettingsEntry(params.settings, params.actionId);
-    if (params.value === 'default') {
-        delete entry.toolExposureModes[resolvedTarget.surface];
-    } else {
-        entry.toolExposureModes[resolvedTarget.surface] = params.value;
-    }
-
-    return writeActionSettingsEntry(params.settings, params.actionId, entry);
+    return applyActionPolicyMutation(params.settings, {
+        actionId: params.actionId,
+        change: { kind: 'tool_exposure', surface: resolvedTarget.surface, mode: params.value },
+    }).settings;
 }

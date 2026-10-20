@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
-import type { ActionSettingsActionId, ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import type { ActionSettingsActionId } from '@happier-dev/protocol/actions/actionSettings';
 
 import { SearchHeader } from '@/components/ui/forms/SearchHeader';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -21,17 +21,15 @@ import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaem
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { machineAdministrationTargetsEqual } from '@/sync/domains/machines/administration/targetSelection';
 import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
-import { useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
 import { ActionSettingsTargetModeControl } from './ActionSettingsTargetModeControl';
 import { ActionSettingsToolExposureControl } from './ActionSettingsToolExposureControl';
 import {
-    applyActionSettingsTargetControlState,
+    resolveActionSettingsTargetPolicyInput,
     resolveActionSettingsTargetControlState,
     resolveActionSettingsToolExposureState,
-    setActionEnabled,
-    setActionSettingsToolExposureMode,
     type ActionSettingsApprovalControlValue,
     type ActionSettingsBooleanControlValue,
     type ActionSettingsTargetControlState,
@@ -48,6 +46,7 @@ import { normalizeActionsSettings } from './normalizeActionsSettings';
 import { listActionSettingsFacts, listActionSettingsTargetDefinitions } from './actionSettingsTargetDefinitions';
 import { useActionSettingsNarrowLayout } from './useActionSettingsNarrowLayout';
 import { SessionAgentSpawnPolicyControls } from './SessionAgentSpawnPolicyControls';
+import { useActionPolicyWriter } from './useActionPolicyWriter';
 
 const categoryOrder: readonly ActionSettingsTargetCategory[] = ['app', 'voice', 'integrations'];
 
@@ -162,10 +161,11 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
     const styles = stylesheet;
     const compactLayout = useActionSettingsNarrowLayout();
     const [searchQuery, setSearchQuery] = React.useState('');
-    const [rawSettings, setRawSettings] = useSettingMutable('actionsSettingsV1');
+    const rawSettings = useSetting('actionsSettingsV1');
+    const writePolicy = useActionPolicyWriter();
     const scmRemoteConfirmPolicy = useSetting('scmRemoteConfirmPolicy');
-    const [rawSpawnPolicy, setRawSpawnPolicy] = useSettingMutable('sessionAgentSpawnPolicyV1');
-    const [rawAllowLists, setRawAllowLists] = useSettingMutable('sessionAgentStartAllowListsV1');
+    const rawSpawnPolicy = useSetting('sessionAgentSpawnPolicyV1');
+    const rawAllowLists = useSetting('sessionAgentStartAllowListsV1');
     const settings = React.useMemo(() => normalizeActionsSettings(rawSettings), [rawSettings]);
     const voiceSettings = useSetting('voice') as Readonly<{ privacy?: { shareDeviceInventory?: boolean } }> | null;
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
@@ -252,44 +252,33 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
     ), [entry, filteredTargets, settings]);
     const facts = React.useMemo(() => listActionSettingsFacts(props.actionId), [props.actionId]);
 
-    const commitSettings = React.useCallback((update: (current: ActionsSettingsV1) => unknown) => {
-        setRawSettings(current => normalizeActionsSettings(update(normalizeActionsSettings(current))));
-    }, [setRawSettings]);
-
     const handleActionEnabledChange = React.useCallback((enabled: boolean) => {
-        commitSettings(current => setActionEnabled({
-            settings: current,
-            actionId: props.actionId,
-            enabled,
-        }));
-    }, [commitSettings, props.actionId]);
+        void writePolicy({ actionId: props.actionId, change: { kind: 'enabled', enabled } });
+    }, [writePolicy, props.actionId]);
 
     const handleTargetControlChange = React.useCallback((
         target: ActionSettingsTargetEntry,
         value: ActionSettingsApprovalControlValue | ActionSettingsBooleanControlValue,
     ) => {
-        commitSettings(current => applyActionSettingsTargetControlState({
-            settings: current,
+        void writePolicy(resolveActionSettingsTargetPolicyInput({
+            settings,
             actionId: props.actionId,
             targetId: target.id,
             target: target.definition,
             value,
             scmRemoteConfirmPolicy,
         }));
-    }, [commitSettings, props.actionId, scmRemoteConfirmPolicy]);
+    }, [writePolicy, settings, props.actionId, scmRemoteConfirmPolicy]);
 
     const handleToolExposureChange = React.useCallback((
         target: ActionSettingsTargetEntry,
         value: ActionSettingsToolExposureControlValue,
     ) => {
-        if (entry?.kind !== 'host') return;
-        commitSettings(current => setActionSettingsToolExposureMode({
-            settings: current,
-            actionId: entry.actionId,
-            targetId: target.id,
-            value,
-        }));
-    }, [commitSettings, entry]);
+        if (entry?.kind !== 'host' || target.definition.kind !== 'surface') return;
+        const surface = target.definition.surface;
+        if (surface !== 'agent' && surface !== 'mcp' && surface !== 'cli') return;
+        void writePolicy({ actionId: entry.actionId, change: { kind: 'tool_exposure', surface, mode: value } });
+    }, [writePolicy, entry]);
 
     // The machine chip stays live in the header, while ordinary built-in action content does not
     // subscribe to the high-frequency inventory projection it does not consume.
@@ -442,11 +431,10 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
                                 activeTabId={waived ? 'allowed' : 'ask_first'}
                                 disabled={!entry.enabled}
                                 onSelectTab={(value) => {
-                                    commitSettings(current => {
-                                        const remaining = current.pluginHostCaptureApprovalWaived?.filter(id => id !== plugin.pluginId) ?? [];
-                                        return { ...current, pluginHostCaptureApprovalWaived:
-                                            value === 'allowed' ? [...remaining, plugin.pluginId] : remaining };
-                                    });
+                                    void writePolicy({ actionId: 'capture.view', change: {
+                                        kind: 'plugin_host_capture', pluginId: plugin.pluginId,
+                                        approvalRequired: value !== 'allowed',
+                                    } });
                                 }}
                             />
                         );
@@ -489,8 +477,6 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
                     rawPolicy={rawSpawnPolicy}
                     rawAllowLists={rawAllowLists}
                     disabled={!entry.enabled}
-                    onChange={setRawSpawnPolicy}
-                    onAllowListsChange={setRawAllowLists}
                 />
             ) : null}
         </ItemList>

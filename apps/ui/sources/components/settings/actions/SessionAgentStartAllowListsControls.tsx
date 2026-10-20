@@ -3,7 +3,6 @@ import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import {
     SessionAgentStartAllowListsV1Schema,
-    type SessionAgentStartAllowListsV1,
 } from '@happier-dev/protocol/account/settings/sessionAgentStartAllowListsV1';
 
 import { useRoleEngineCatalog } from '@/components/roles/catalog/useRoleEnginePresentation';
@@ -13,6 +12,7 @@ import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropd
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
 import { SettingRow } from '@/components/settings/shell/SettingRow';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 import { withItemGroupDividers } from '@/components/ui/lists/ItemGroup';
 import { refreshAcpCatalog } from '@/sync/engine/settings/acpCatalogEngine';
 import { t } from '@/text';
@@ -34,12 +34,12 @@ export function SessionAgentStartAllowListsControls(props: Readonly<{
     rawAllowLists: unknown;
     disabled?: boolean;
     showDivider?: boolean;
-    onChange: (allowLists: SessionAgentStartAllowListsV1) => void;
 }>) {
     const lists = SessionAgentStartAllowListsV1Schema.parse(props.rawAllowLists ?? {});
+    const writeSetting = useSettingActionWriter();
     return <>{withItemGroupDividers((['allowedRoleIds', 'allowedAgentTargetKeys'] as const).map((key) => (
         <AllowListField key={key} listKey={key} selected={lists[key]} disabled={props.disabled}
-            onChange={(selected) => props.onChange(SessionAgentStartAllowListsV1Schema.parse({ ...lists, [key]: selected }))} />
+            onChange={(selected) => { void writeSetting(ACTIONS_CREATE_SESSION_SETTINGS.settings[key], selected); }} />
     )), { first: false, last: props.showDivider === false })}</>;
 }
 

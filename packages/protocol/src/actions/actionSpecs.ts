@@ -5345,7 +5345,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
   ...ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING,
   ...ACTION_POLICY_ACTION_IDS.map((id): PreNormalizedActionSpec => ({
     id, title: id === 'actions.policy.get' ? 'Read Action policy' : id === 'actions.policy.reset' ? 'Reset Action policy' : 'Change Action policy',
-    description: 'Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.',
+    description: 'Read or change one exact Action policy preference. Default and reset restore inherited audience policy; unrelated preferences remain intact. Policy changes require human authority.',
     approval: { result: 'required' }, originalExecution: { accountRoot: 'allowed', terminalRoot: 'host' },
     ...(id !== 'actions.policy.get' ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
     safety: id === 'actions.policy.get' ? 'safe' : 'danger', sideEffectClass: id === 'actions.policy.get' ? 'read' : 'write',
@@ -5356,8 +5356,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
     inputSchema: ActionPolicyInputSchemas[id], outputSchema: ActionPolicyOutputSchemas[id],
     inputHints: { fields: [
       { path: 'actionId', title: 'Action id', widget: 'text', required: true },
-      { path: 'audience', title: 'Audience', widget: 'text', required: true },
-      ...(id === 'actions.policy.set' ? [{ path: 'mode', title: 'Policy', widget: 'text' as const, required: true }] : []),
+      { path: 'audience', title: 'Audience', widget: 'text', required: id !== 'actions.policy.set' },
+      ...(id === 'actions.policy.set' ? [
+        { path: 'mode', title: 'Audience policy', widget: 'text' as const },
+        { path: 'change', title: 'Policy change', widget: 'json' as const },
+      ] : []),
     ] },
     cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
   })),
