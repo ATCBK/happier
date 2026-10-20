@@ -159,6 +159,38 @@ describe('BrowserDiagnosticsPanel', () => {
     expect(screen.findByTestId('browser-diagnostics-untrusted')).toBeNull();
   });
 
+  it('a page that reported nothing says it once, with one reason, and no family sections or tools', async () => {
+    const mod = await loadBrowserDiagnosticsPanelModule();
+    if (!mod?.BrowserDiagnosticsPanel)
+      throw new Error('BrowserDiagnosticsPanel missing');
+    const unavailableFamily = (family: string) => ({ family, status: 'unavailable', fidelity: 'unavailable',
+      trusted: false, reasonCode: 'unsupported_fidelity' });
+    const screen = await renderScreen(
+      <mod.BrowserDiagnosticsPanel
+        diagnostics={{
+          status: 'unavailable',
+          sourceKind: 'browserDiagnostics',
+          browserSessionId: 'browser_session_1',
+          viewId: 'view_1',
+          fidelity: 'unavailable',
+          trusted: false,
+          eventCount: 0,
+          families: ['console', 'pageError', 'network'].map(unavailableFamily),
+          events: [],
+        }}
+        interaction={{ state: 'unavailable', ownerOnly: true, unavailableReasonCode: 'adapter_unavailable' }}
+        testID="browser-diagnostics"
+      />,
+    );
+
+    expect(screen.findByTestId('browser-diagnostics-status')).not.toBeNull();
+    expect(screen.findByTestId('browser-diagnostics-unavailable-reason')).not.toBeNull();
+    expect(screen.findByTestId('browser-diagnostics-interaction-unavailable')).toBeNull();
+    expect(screen.findByTestId('browser-diagnostics-console-panel')).toBeNull();
+    expect(screen.findByTestId('browser-diagnostics-family-console-unavailable')).toBeNull();
+    expect(screen.getTextContent().match(/unavailable/gi) ?? []).toHaveLength(0);
+  });
+
   it('renders injected/native browser diagnostics from the shared host projection', async () => {
     const mod = await loadBrowserDiagnosticsPanelModule();
 
@@ -554,9 +586,13 @@ describe('BrowserDiagnosticsPanel', () => {
     expect(
       screen.findByTestId('browser-diagnostics-network-unavailable'),
     ).toBeTruthy();
+    // One unavailable family says so once: its own line, no "Unavailable" badge, no repeated pill.
     expect(
       screen.findByTestId('browser-diagnostics-network-fidelity-unavailable'),
-    ).toBeTruthy();
+    ).toBeNull();
+    expect(
+      screen.findByTestId('browser-diagnostics-family-network-unavailable'),
+    ).toBeNull();
     expect(
       screen.findByTestId('browser-diagnostics-elements-panel'),
     ).toBeTruthy();

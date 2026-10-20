@@ -243,7 +243,7 @@ async function executeBrowserControlAction(
         const request = parsed.data;
         const scope = args.context.serverId && args.context.runtimeAccountId
             ? { serverId: args.context.serverId, accountId: args.context.runtimeAccountId } : null;
-        const owner = scope ? readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(scope, request.scopeId) : null;
+        const owner = scope ? readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(scope, request.scopeId, request.commandId) : null;
         if (!owner || owner.scopeId !== request.scopeId) return browserRuntimeActionDisabledResult('browser_view_unavailable');
         const lifetime = owner.accountLifetime;
         if (!lifetime?.isCurrent() || args.context.signal?.aborted

@@ -11,6 +11,7 @@ import type {
 import { BrowserWorkspaceOpenResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
 import { ActionApprovalRequestCreatedResultSchema, type ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { BrowserRuntimeWorkspaceOpeningAdapter } from '@/sync/domains/browser/actions/runtimeActionExecutor';
+import { claimBrowserRuntimeWorkspaceOpenCommand } from '@/sync/domains/browser/actions/runtimeControlRegistry';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 import type { BrowserLaunchpadOpenTargetOptions } from '@/components/browser/launchpad/BrowserLaunchpad';
@@ -322,6 +323,8 @@ export function resolveBrowserViewTargetOpen(
     };
 }
 
+let workspaceOpenSequence = 0;
+
 /**
  * Canonical admitted workspace opener. The runtime leaf selects the target and opens only the
  * deterministic tab resource; the renderer materializes live Browser state when it mounts.
@@ -368,12 +371,16 @@ export function createOpenBrowserTargetInWorkspace(
     const open = async (target: BrowserViewTargetV1): Promise<ActionExecuteResult> => {
         if (!deps.accountLifetime?.isCurrent() || deps.isCurrent?.() === false || deps.signal?.aborted) return unavailable();
         const execute = deps.actionExecute ?? (await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')).createFrontDoorActionExecute();
-        return await execute('browser.workspace.open', {
-            scopeId: runtimeAdapter.scopeId,
-            commandId: `workspace-open:${Date.now()}`,
-            target,
-        }, { surface: 'ui', authority: 'present_user', serverId: deps.accountLifetime?.scope.serverId,
-            expectedAccountId: deps.accountLifetime?.scope.accountId, signal: deps.signal });
+        const commandId = `workspace-open:${Date.now()}:${++workspaceOpenSequence}`;
+        // The admitted Action opens through this opener, so Details knows which region opened it.
+        const releaseClaim = claimBrowserRuntimeWorkspaceOpenCommand(runtimeAdapter, commandId);
+        try {
+            return await execute('browser.workspace.open', { scopeId: runtimeAdapter.scopeId, commandId, target },
+                { surface: 'ui', authority: 'present_user', serverId: deps.accountLifetime?.scope.serverId,
+                    expectedAccountId: deps.accountLifetime?.scope.accountId, signal: deps.signal });
+        } finally {
+            releaseClaim();
+        }
     };
     return Object.assign(open, { runtimeAdapter });
 }

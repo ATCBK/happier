@@ -621,25 +621,29 @@ export function BrowserDiagnosticsFamilyPanelFrame(props: BrowserDiagnosticsFami
     renderEvent?: BrowserDiagnosticsFamilyEventRenderer;
 }>): React.ReactElement {
     const stateTestID = `${props.testID}-${props.familyKey}-${familyStatusTestIdPart(props.family.status)}`;
+    const unavailable = props.family.status === 'unavailable';
 
     return (
         <View testID={`${props.testID}-${props.familyKey}-panel`} style={browserDiagnosticsPanelStyles.familySection}>
             <View testID={`${props.testID}-family-${props.family.family}`} style={browserDiagnosticsPanelStyles.titleRow}>
                 <Text style={browserDiagnosticsPanelStyles.flowTitle}>{productFamilyTitle(props.familyKey)}</Text>
-                <BrowserDiagnosticsFidelityBadge
-                    fidelity={props.family.fidelity}
-                    testID={`${props.testID}-${props.familyKey}-fidelity-${props.family.fidelity}`}
-                />
+                {unavailable ? null : (
+                    <BrowserDiagnosticsFidelityBadge
+                        fidelity={props.family.fidelity}
+                        testID={`${props.testID}-${props.familyKey}-fidelity-${props.family.fidelity}`}
+                    />
+                )}
             </View>
+            {/* A family the page does not report says so once, as a quiet fact under its title. */}
             <Text
                 testID={stateTestID}
-                style={props.family.status === 'available'
-                    ? browserDiagnosticsPanelStyles.flowMeta
-                    : browserDiagnosticsPanelStyles.warning}
+                style={props.family.status === 'stale'
+                    ? browserDiagnosticsPanelStyles.warning
+                    : browserDiagnosticsPanelStyles.flowMeta}
             >
-                {props.family.status === 'unavailable' ? familyLabel(props.family) : statusLabel(props.family.status)}
+                {unavailable ? t('browserDiagnostics.host.familyNotReported') : statusLabel(props.family.status)}
             </Text>
-            {props.events.length > 0 ? (
+            {unavailable ? null : props.events.length > 0 ? (
                 props.events.map((event) => (
                     props.renderEvent
                         ? props.renderEvent(event, props.testID, props.familyKey)

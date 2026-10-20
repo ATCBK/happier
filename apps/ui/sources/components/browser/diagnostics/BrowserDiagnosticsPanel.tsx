@@ -84,14 +84,16 @@ function renderHostDiagnosticFamily(params: Readonly<{
         <View key={params.family.family} testID={familyTestID} style={stylesheet.familySection}>
             <View style={stylesheet.titleRow}>
                 <Text style={stylesheet.flowTitle}>{params.family.family}</Text>
-                <BrowserDiagnosticsFidelityBadge
-                    fidelity={params.family.fidelity}
-                    testID={`${familyTestID}-fidelity-${params.family.fidelity}`}
-                />
+                {params.family.status === 'unavailable' ? null : (
+                    <BrowserDiagnosticsFidelityBadge
+                        fidelity={params.family.fidelity}
+                        testID={`${familyTestID}-fidelity-${params.family.fidelity}`}
+                    />
+                )}
             </View>
             <Text style={stylesheet.flowMeta}>
                 {params.family.status === 'unavailable'
-                    ? familyLabel(params.family)
+                    ? t('browserDiagnostics.host.familyNotReported')
                     : t('browserDiagnostics.host.eventCount', {
                         count: formatNumber(familyEvents.length),
                     })}
@@ -227,35 +229,40 @@ function BrowserHostDiagnosticsPanel(props: Readonly<{
     interactionSurface?: BrowserDiagnosticsInteractionSurface;
     testID: string;
 }>): React.ReactElement {
-    const unavailableFamilies = props.diagnostics.families.filter((family) => family.status === 'unavailable');
-    // Unavailable says so once, on the status line: an "Unavailable" fidelity badge beside it, a
-    // "0 diagnostic events" count and the injected-page tamper notice all describe a capture that
-    // is not happening.
-    const unavailable = props.diagnostics.status === 'unavailable';
+    // A page that has reported nothing is one fact with one reason. Its tools, per-family sections,
+    // badges, counts and tamper notice would each restate a capture that is not happening.
+    if (props.diagnostics.status === 'unavailable') {
+        return (
+            <View style={stylesheet.header}>
+                <Text testID={`${props.testID}-status`} style={stylesheet.flowTitle}>
+                    {t('browserDiagnostics.host.eventsEmpty')}
+                </Text>
+                <Text testID={`${props.testID}-unavailable-reason`} style={stylesheet.subtitle}>
+                    {t('browserDiagnostics.host.unavailableReason')}
+                </Text>
+            </View>
+        );
+    }
 
     return (
         <>
             <View style={stylesheet.header}>
                 <View style={stylesheet.titleRow}>
                     <Text style={stylesheet.title}>{t('browserDiagnostics.host.title')}</Text>
-                    {unavailable ? null : (
-                        <BrowserDiagnosticsFidelityBadge
-                            fidelity={props.diagnostics.fidelity}
-                            testID={`${props.testID}-fidelity-${props.diagnostics.fidelity}`}
-                        />
-                    )}
+                    <BrowserDiagnosticsFidelityBadge
+                        fidelity={props.diagnostics.fidelity}
+                        testID={`${props.testID}-fidelity-${props.diagnostics.fidelity}`}
+                    />
                 </View>
                 <Text testID={`${props.testID}-status`} style={stylesheet.status}>
                     {statusLabel(props.diagnostics.status)}
                 </Text>
-                {unavailable ? null : (
-                    <Text testID={`${props.testID}-event-count`} style={stylesheet.subtitle}>
-                        {t('browserDiagnostics.host.eventCount', {
-                            count: formatNumber(props.diagnostics.eventCount),
-                        })}
-                    </Text>
-                )}
-                {!unavailable && !props.diagnostics.trusted ? (
+                <Text testID={`${props.testID}-event-count`} style={stylesheet.subtitle}>
+                    {t('browserDiagnostics.host.eventCount', {
+                        count: formatNumber(props.diagnostics.eventCount),
+                    })}
+                </Text>
+                {!props.diagnostics.trusted ? (
                     <Text testID={`${props.testID}-untrusted`} style={stylesheet.subtitle}>
                         {t('browserDiagnostics.host.untrustedNotice')}
                     </Text>
@@ -282,19 +289,6 @@ function BrowserHostDiagnosticsPanel(props: Readonly<{
                 )}
             </View>
 
-            {unavailableFamilies.length > 0 ? (
-                <View style={stylesheet.familyList}>
-                    {unavailableFamilies.map((family) => (
-                        <View
-                            key={family.family}
-                            testID={`${props.testID}-family-${family.family}-unavailable`}
-                            style={stylesheet.familyPill}
-                        >
-                            <Text style={stylesheet.familyText}>{familyLabel(family)}</Text>
-                        </View>
-                    ))}
-                </View>
-            ) : null}
         </>
     );
 }

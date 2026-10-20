@@ -43,10 +43,36 @@ export function registerBrowserRuntimeWorkspaceOpeningAdapter(owner: BrowserRunt
     return () => { retirement.dispose(); dispose(); };
 }
 
+// A UI caller's open request is fulfilled by that caller's own opener, which records where in the
+// pane layout Details was opened from. An Agent or external caller has no opener of its own and is
+// served by the scope's most recently mounted one.
+const claimedWorkspaceOpenCommands = new Map<string, BrowserRuntimeWorkspaceOpeningAdapter>();
+
+function workspaceOpenCommandKey(scope: ServerAccountScope, scopeId: string, commandId: string): string {
+    return JSON.stringify([serverAccountScopedResourceKey(scope, scopeId), commandId]);
+}
+
+/** Routes one open command, for its duration, to the opener that issued it. */
+export function claimBrowserRuntimeWorkspaceOpenCommand(
+    owner: BrowserRuntimeWorkspaceOpeningAdapter,
+    commandId: string,
+): () => void {
+    const lifetime = owner.accountLifetime;
+    if (!lifetime?.isCurrent()) return () => {};
+    const key = workspaceOpenCommandKey(lifetime.scope, owner.scopeId, commandId);
+    claimedWorkspaceOpenCommands.set(key, owner);
+    return () => {
+        if (claimedWorkspaceOpenCommands.get(key) === owner) claimedWorkspaceOpenCommands.delete(key);
+    };
+}
+
 export function readRegisteredBrowserRuntimeWorkspaceOpeningAdapter(
     scope: ServerAccountScope,
     scopeId: string,
+    commandId?: string,
 ): BrowserRuntimeWorkspaceOpeningAdapter | null {
+    const claimed = commandId ? claimedWorkspaceOpenCommands.get(workspaceOpenCommandKey(scope, scopeId, commandId)) : undefined;
+    if (claimed?.accountLifetime?.isCurrent()) return claimed;
     const owners = workspaceOpeners.get(serverAccountScopedResourceKey(scope, scopeId)) ?? [];
     for (let index = owners.length - 1; index >= 0; index--) {
         if (owners[index].accountLifetime?.isCurrent()) return owners[index];
@@ -118,4 +144,5 @@ export function readRegisteredBrowserRuntimeDiagnosticsAdapter(browserSessionId:
 export function clearBrowserRuntimeControlRegistryForTests(): void {
     registrationsBySessionId.clear();
     workspaceOpeners.clear();
+    claimedWorkspaceOpenCommands.clear();
 }
