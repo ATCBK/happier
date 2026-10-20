@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { flattenLazyDirectoryTree } from './flattenLazyDirectoryTree';
 import { reuseLazyDirectoryTreeNodes } from './reuseLazyDirectoryTreeNodes';
+import { collectLazyDirectoryTreeMutationPaths, replaceLazyDirectoryTreeDirectory, resolveLazyDirectoryTreeMutationDirectories } from './reconcileLazyDirectoryTree';
 import type { LazyDirectoryTreeEntry, LazyDirectoryTreeLoadResult, LazyDirectoryTreeNode } from './lazyDirectoryTreeTypes';
 
 function normalizeDirectoryPath(input: string): string {
@@ -218,34 +219,21 @@ export function useLazyDirectoryTree(input: {
         if (result.ok) {
             staleDirectoriesRef.current.delete(directoryPath);
             if (directoryPath === rootDirectoryPathRef.current) setRootError(null);
-            const previousEntries = directoryEntriesByPathRef.current.get(directoryPath);
-            const next = new Map(directoryEntriesByPathRef.current);
-            const nextDirectories = new Set(result.entries.filter(entry => entry.type === 'directory').map(entry => entry.path));
-            for (const removed of previousEntries ?? []) {
-                if (removed.type !== 'directory' || nextDirectories.has(removed.path)) continue;
-                for (const cachedPath of next.keys()) {
-                    if (cachedPath === removed.path || cachedPath.startsWith(`${removed.path}/`)) {
-                        next.delete(cachedPath);
-                        staleDirectoriesRef.current.delete(cachedPath);
-                    }
-                }
-            }
-            next.set(directoryPath, result.entries);
-            directoryEntriesByPathRef.current = next;
-            setDirectoryEntriesByPath(next);
-            if (previousEntries) {
-                const previousPaths = new Set(previousEntries.map(entry => entry.path));
-                const additions = result.entries.filter(entry => !previousPaths.has(entry.path)).map(entry => entry.path);
-                if (additions.length) setArrivedPaths(new Set(additions));
-            }
+            const reconciled = replaceLazyDirectoryTreeDirectory({ directoryEntriesByPath: directoryEntriesByPathRef.current,
+                directoryPath, entries: result.entries });
+            const pruned = (path: string) => reconciled.prunedDirectoryRoots.some(root => path === root || path.startsWith(`${root}/`));
+            for (const path of staleDirectoriesRef.current) if (pruned(path)) staleDirectoriesRef.current.delete(path);
+            directoryEntriesByPathRef.current = reconciled.directoryEntriesByPath;
+            setDirectoryEntriesByPath(reconciled.directoryEntriesByPath);
+            if (reconciled.arrivedPaths.size) setArrivedPaths(reconciled.arrivedPaths);
             setDirectoryErrors((prev) => {
-                if (!prev.has(directoryPath)) return prev;
-                const next = new Map(prev);
-                next.delete(directoryPath);
+                const next = new Map([...prev].filter(([path]) => path !== directoryPath && !pruned(path)));
+                directoryErrorsRef.current = next;
+                if (next.size === prev.size) return prev;
                 return next;
             });
             setDirectoryTruncationByPath((prev) => {
-                const next = new Map(prev);
+                const next = new Map([...prev].filter(([path]) => !pruned(path)));
                 next.set(directoryPath, result.truncated === true);
                 return next;
             });
@@ -344,37 +332,20 @@ export function useLazyDirectoryTree(input: {
     }, [enabled, loadDirectory, loadDirectoryEntries, reloadToken, rootDirectoryPath, scopeKey, warmChildren]);
 
     const reconcilePaths = React.useCallback((paths: readonly string[]) => {
-        if (reconciliationPausedRef.current) {
-            for (const path of paths) queuedMutationPathsRef.current.add(path);
-            return;
-        }
-        const directories = new Set<string>();
-        const root = rootDirectoryPathRef.current;
-        for (const path of paths) {
-            let nearest: string | null = null;
-            for (const loadedPath of directoryEntriesByPathRef.current.keys()) {
-                if (loadedPath !== root && path === loadedPath) continue;
-                if (loadedPath === '' || path === loadedPath || path.startsWith(`${loadedPath}/`)) {
-                    if (nearest === null || loadedPath.length > nearest.length) nearest = loadedPath;
-                }
-            }
-            if (nearest !== null) directories.add(nearest);
-        }
-        for (const directory of directories) {
-            staleDirectoriesRef.current.add(directory);
-            const collapsedAncestor = [...directoryEntriesByPathRef.current.keys()].some(ancestor => ancestor !== root
-                && (directory === ancestor || directory.startsWith(`${ancestor}/`)) && !expandedDirectoriesRef.current.has(ancestor));
-            if (!collapsedAncestor && (directory === root || expandedDirectoriesRef.current.has(directory))) {
-                void loadDirectory(directory, { forceReload: true });
-            }
-        }
+        const batch = collectLazyDirectoryTreeMutationPaths({ paths, pendingPaths: queuedMutationPathsRef.current,
+            paused: reconciliationPausedRef.current });
+        queuedMutationPathsRef.current = batch.pendingPaths;
+        if (batch.paths.length === 0) return;
+        const directories = resolveLazyDirectoryTreeMutationDirectories({ paths: batch.paths,
+            directoryEntriesByPath: directoryEntriesByPathRef.current, expandedDirectories: expandedDirectoriesRef.current,
+            loadingDirectories: loadingRef.current, rootDirectoryPath: rootDirectoryPathRef.current });
+        for (const path of directories.stale) staleDirectoriesRef.current.add(path);
+        for (const directory of directories.reload) void loadDirectory(directory, { forceReload: true });
     }, [loadDirectory]);
 
     React.useEffect(() => {
         if (reconciliationPausedRef.current || queuedMutationPathsRef.current.size === 0) return;
-        const paths = [...queuedMutationPathsRef.current];
-        queuedMutationPathsRef.current.clear();
-        reconcilePaths(paths);
+        reconcilePaths([]);
     }, [enabled, input.reconciliationPaused, reconcilePaths]);
 
     const toggleDirectory = React.useCallback(async (path: string) => {
@@ -462,7 +433,7 @@ export function useLazyDirectoryTree(input: {
         expandedCount,
         retryRoot,
         retryDirectory,
-        reconcilePaths: (_paths: readonly string[]) => {},
+        reconcilePaths,
         arrivedPaths,
     };
 }
