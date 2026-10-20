@@ -6,6 +6,9 @@ import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers
 import type { ProviderConnectionId } from '@happier-dev/protocol';
 import { createDeferred } from '@/testkit/async/deferred';
 import type { SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { registerPrivateSpawnSessionRpcHandlers } from '@/rpc/handlers/sessionLifecycle';
+import type { RpcHandler } from '@/api/rpc/types';
 
 describe('spawn preparation live custody', () => {
   it('publishes coalesced accepted work through actual settlement without counting retained success', async () => {
@@ -780,23 +783,45 @@ describe('createSpawnRequestCoalescer', () => {
     const nowMs = () => now;
     const coalescer = createSpawnRequestCoalescer({ nowMs, recentSuccessTtlMs: 2_000 });
 
-    const work = vi.fn(async () => ({ type: 'success' as const, sessionId: 'sess_new' }));
-    const key = { kind: 'new' as const, key: 'new:abc' };
+    const result = {
+      type: 'success' as const,
+      sessionId: 'sess_new',
+      sessionCreationOutcome: {
+        disposition: 'created' as const,
+        organizationPlacement: { folderId: null, tagIds: [] },
+      },
+    };
+    const work = vi.fn(async () => result);
+    const key = computeDaemonSpawnRequestKey({ directory: '/tmp/project', spawnNonce: 'new-creation' });
 
     const [r1, r2] = await Promise.all([coalescer.run(key, work), coalescer.run(key, work)]);
     expect(work).toHaveBeenCalledTimes(1);
-    expect(r1).toEqual({ type: 'success', sessionId: 'sess_new' });
-    expect(r2).toEqual({ type: 'success', sessionId: 'sess_new' });
+    expect(r1).toEqual(result);
+    expect(r2).toEqual(result);
 
     now += 500;
     const r3 = await coalescer.run(key, work);
     expect(work).toHaveBeenCalledTimes(1);
-    expect(r3).toEqual({ type: 'success', sessionId: 'sess_new' });
+    expect(r3).toEqual(result);
+
+    const handlers = new Map<string, RpcHandler>();
+    registerPrivateSpawnSessionRpcHandlers({
+      rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
+      spawnLifecycleHandler: async () => coalescer.run(key, work),
+      requireSessionCreationOutcome: true,
+    });
+    await expect(handlers.get(RPC_METHODS.SPAWN_HAPPY_SESSION)?.({
+      type: 'spawn-in-directory',
+      directory: '/tmp/project',
+      spawnNonce: 'new-creation',
+      backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+    })).resolves.toEqual(result);
+    expect(work).toHaveBeenCalledTimes(1);
 
     now += 5_000;
     const r4 = await coalescer.run(key, work);
     expect(work).toHaveBeenCalledTimes(2);
-    expect(r4).toEqual({ type: 'success', sessionId: 'sess_new' });
+    expect(r4).toEqual(result);
   });
 
   it('keeps a timed-out nonce admitted as pending so retries do not spawn duplicate provider work', async () => {
