@@ -18,6 +18,13 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { useRegistryItem } from '@/registries/useRegistryItem';
 import { formatAgentNameList } from '@/components/capabilities/identity/agentNameList';
+import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
+import { PluginListingAddsSection, PluginListingFacts } from '@/components/settings/plugins/listing/PluginListingFacts';
+import { catalogReviewStatusLabel } from '@/components/settings/plugins/model/pluginMarketplaceModel';
+import { PluginMark } from '@/components/settings/plugins/PluginMark';
+import { projectRegistryMarketplacePage } from '@/components/settings/plugins/readPluginMarketplaceCatalog';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
 
 import {
@@ -96,6 +103,8 @@ export function AgentRegistryDetail(
     serverId: string | null;
     added: AgentAddState | null;
     existingDefinitionId: string | null;
+    /** The machine a plugin listing installs on (the page's administration target, P9 F6). */
+    targetSelection: MachineAdministrationTargetSelectionV1;
     onDraft: (draft: AgentAddDraft) => void;
     testID: string;
   }>,
@@ -171,6 +180,17 @@ export function AgentRegistryDetail(
           testID={`${props.testID}.adding`}
         />
       </View>
+    );
+  }
+
+  if (read.item && payload?.kind === 'plugin') {
+    return (
+      <AgentPluginDetail
+        item={read.item}
+        sourceTitle={props.sourceTitle}
+        targetSelection={props.targetSelection}
+        testID={props.testID}
+      />
     );
   }
 
@@ -420,14 +440,84 @@ export function AgentRegistryDetail(
 }
 
 /**
- * An agent Happier already ships (lab aa B): say so, show it is that agent, and lead to its page. Adding the
- * registry's wrapper as a separate agent stays possible elsewhere; the primary is Open.
+ * A Happier plugin that adds an agent (lab aa P, P9 F6): what it adds from its manifest, the trusted-code facts
+ * (where it runs, platforms, source) and the machine it installs on. The footer's Review and install opens the
+ * shipped Install & Trust review, which lists exactly what the plugin can reach.
+ */
+export function AgentPluginDetail(
+  props: Readonly<{
+    item: RegistryItemV1;
+    sourceTitle: string;
+    targetSelection: MachineAdministrationTargetSelectionV1;
+    testID: string;
+  }>,
+): React.ReactElement {
+  const entry = React.useMemo(
+    () => projectRegistryMarketplacePage({ items: [props.item], pages: [], sources: [] }).entries[0] ?? null,
+    [props.item],
+  );
+  const payload = props.item.payload.kind === 'plugin' ? props.item.payload : null;
+  const title = entry?.title ?? props.item.summary.title;
+  return (
+    <View style={styles.detail}>
+      <CapabilityDetailHeader
+        testID={`${props.testID}.detail.header`}
+        mark={<PluginMark title={title} pluginId={payload?.listing.pluginId ?? null} size="page" />}
+        title={title}
+        {...(entry?.description ? { purpose: entry.description } : {})}
+        facts={{
+          source: { kind: 'registry', label: props.sourceTitle },
+          extra: [
+            entry?.publisher.displayName,
+            entry?.version,
+            entry ? catalogReviewStatusLabel(entry) : null,
+          ].filter((fact): fact is string => Boolean(fact)),
+        }}
+        {...(payload ? { mono: `${payload.listing.distribution.packageName}@${payload.listing.distribution.version}` } : {})}
+      />
+      {entry ? (
+        <>
+          <PluginListingAddsSection
+            entry={entry}
+            description={t('capabilities.agentAdd.plugin.addsBody')}
+            testID={`${props.testID}.detail.plugin.adds`}
+          />
+          <PluginListingFacts
+            entry={entry}
+            title={t('capabilities.agentAdd.detail.trustTitle')}
+            description={t('capabilities.agentAdd.plugin.trustBody')}
+            testID={`${props.testID}.detail.plugin.trust`}
+          />
+          <MachineAdministrationTargetSelector
+            presentation="section"
+            selection={props.targetSelection}
+            groupTitle={t('capabilities.agentAdd.plugin.installOn')}
+            testIDPrefix={`${props.testID}.detail.plugin.target`}
+          />
+        </>
+      ) : (
+        <SurfaceStateCard
+          kind="unavailable"
+          layout="inline"
+          title={t('capabilities.agentAdd.detail.unsupportedEntry')}
+          testID={`${props.testID}.detail.plugin.unavailable`}
+        />
+      )}
+    </View>
+  );
+}
+
+/**
+ * An agent Happier already ships (lab aa B): say so, show it is that agent, and lead to its page (the primary is
+ * Open). One quiet link offers the registry's version as a separate agent, through the registry agent's own details
+ * and confirmed Add.
  */
 export function AgentBuiltInDetail(
   props: Readonly<{
     row: AgentAddRow;
     entry: ResolvedAgentCatalogEntry;
     sourceTitle: string;
+    onAddSeparate: () => void;
     testID: string;
   }>,
 ): React.ReactElement {
@@ -475,11 +565,27 @@ export function AgentBuiltInDetail(
           showChevron={false}
         />
       </ItemGroup>
+      <View style={styles.alternative}>
+        <Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
+        <View style={styles.alternativeText}>
+          <TextLinkButton
+            tone="strong"
+            label={t('capabilities.agentAdd.builtIn.addSeparate')}
+            onPress={props.onAddSeparate}
+            testID={`${props.testID}.detail.addSeparate`}
+          />
+          <Text variant="meta" style={{ color: theme.colors.text.secondary }}>
+            {t('capabilities.agentAdd.builtIn.addSeparateBody', { agent: props.entry.title })}
+          </Text>
+        </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
   detail: { gap: theme.space.s24 },
+  alternative: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8 },
+  alternativeText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
   mono: { fontVariant: ['tabular-nums'] },
 }));
