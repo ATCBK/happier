@@ -159,18 +159,17 @@ func (b *HTTPBroker) post(ctx context.Context, path string, input, output any, o
 		return fmt.Errorf("request-auth broker operation failed: %w", err)
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 256*1024+1))
 	if response.StatusCode == http.StatusUnauthorized {
 		return &BrokerHTTPError{
 			StatusCode: http.StatusServiceUnavailable,
 			Code:       "request_auth_unavailable",
 		}
 	}
+	// The daemon's strict lease schema owns credential/header bounds. Its
+	// admitted response may exceed a catalog-sized or phase-local envelope.
+	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
 		return fmt.Errorf("read request-auth broker response: %w", err)
-	}
-	if len(responseBody) > 256*1024 {
-		return fmt.Errorf("request-auth broker response is too large")
 	}
 	responseErr := decodeBrokerEnvelope(response.StatusCode, responseBody, output)
 	return responseErr

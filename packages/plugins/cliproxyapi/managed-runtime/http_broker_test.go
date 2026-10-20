@@ -522,7 +522,30 @@ func TestHTTPBrokerPreservesBoundedStatusAndCodeWithoutRetryAuthority(t *testing
 	}
 }
 
-func TestHTTPBrokerBoundsResponsesAndPreservesUnauthorizedUnavailability(t *testing.T) {
+func TestHTTPBrokerAcceptsProtocolValidLeaseBeyondFormerEnvelopeCap(t *testing.T) {
+	t.Parallel()
+	lease := validLease("large-current-lease", nil)
+	lease.RequiredHeaders = make(map[string]string, 32)
+	for index := 0; index < 32; index++ {
+		lease.RequiredHeaders[fmt.Sprintf("x-required-%d", index)] = strings.Repeat("a", 16*1024)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "value": lease})
+	}))
+	defer server.Close()
+	capabilityPath := filepath.Join(t.TempDir(), "capability.json")
+	writeCapabilityV2(t, capabilityPath, testCapability(19), server.Listener.Addr().(*net.TCPAddr).Port)
+	broker, err := NewHTTPBroker(HTTPBrokerConfig{CapabilityPath: capabilityPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := broker.LookupRequestAuth(context.Background(), testPurpose("openai-upstream"))
+	if err != nil || len(got.RequiredHeaders) != 32 || got.RequiredHeaders["x-required-31"] != lease.RequiredHeaders["x-required-31"] {
+		t.Fatalf("protocol-valid current lease was rejected or truncated: %v", err)
+	}
+}
+
+func TestHTTPBrokerRejectsMalformedResponsesAndPreservesUnauthorizedUnavailability(t *testing.T) {
 	testCases := []struct {
 		name       string
 		status     int
@@ -551,7 +574,7 @@ func TestHTTPBrokerBoundsResponsesAndPreservesUnauthorizedUnavailability(t *test
 				daemonCalls.Add(1)
 				writer.Header().Set("Content-Type", "application/json")
 				writer.WriteHeader(testCase.status)
-				_, _ = writer.Write([]byte(strings.Repeat(" ", 256*1024+1)))
+				_, _ = writer.Write([]byte("not-json"))
 			}))
 			defer server.Close()
 
@@ -569,8 +592,8 @@ func TestHTTPBrokerBoundsResponsesAndPreservesUnauthorizedUnavailability(t *test
 
 			_, err = broker.LookupRequestAuth(context.Background(), testPurpose("openai-upstream"))
 			if testCase.wantCode == "" {
-				if err == nil || !strings.Contains(err.Error(), "response is too large") {
-					t.Fatalf("oversized response error = %T %v, want bounded local failure", err, err)
+				if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
+					t.Fatalf("malformed response error = %T %v, want invalid JSON", err, err)
 				}
 			} else {
 				var brokerError *BrokerHTTPError
@@ -867,13 +890,13 @@ func TestHTTPBrokerMatchesProtocolRequestAuthHTTPV1Vectors(t *testing.T) {
 		t.Fatalf("read Protocol request-auth HTTP vectors: %v", err)
 	}
 	var vectors struct {
-		V                int `json:"v"`
-		Paths            struct {
+		V     int `json:"v"`
+		Paths struct {
 			Lookup       string `json:"lookup"`
 			AuthFailure  string `json:"authFailure"`
 			QuotaFailure string `json:"quotaFailure"`
 		} `json:"paths"`
-		Responses        []struct {
+		Responses []struct {
 			Name   string          `json:"name"`
 			Status int             `json:"status"`
 			Body   json.RawMessage `json:"body"`
