@@ -454,6 +454,15 @@ if (wants('vendor-monaco')) {
     }
 }
 
+if (wants('vendor-pdfjs')) {
+    const { vendorPdfjs } = await import('./pdfjs/vendorPdfjs.mjs');
+    await vendorPdfjs({ expoAppDir });
+}
+if (wants('vendor-pdfjs-webview-bundle')) {
+    const { buildPdfjsWebViewBundle } = await import('./pdfjs/buildPdfjsWebViewBundle.mjs');
+    await buildPdfjsWebViewBundle({ expoAppDir });
+}
+
 // Vendor Pierre diffs worker assets for web/desktop. Metro can't reliably resolve worker-module URLs for ESM workers,
 // so we copy Pierre's "portable worker" bundle into `public/` and load it via `new Worker(url, { type: 'module' })`.
 if (wants('vendor-pierre-diffs-worker')) {

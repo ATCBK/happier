@@ -24,6 +24,7 @@ web-build/
 
 # Vendored by postinstall for Monaco web editor surface (do not commit).
 public/monaco/
+public/pdfjs/
 
 # Vendored by postinstall for optional web-only runtimes (do not commit).
 public/vendor/*

@@ -26,6 +26,7 @@ export function resolveUiPostinstallTasks({ env }) {
         tasks.push(
             'setup-skia-web',
             'vendor-monaco',
+            'vendor-pdfjs',
             'vendor-pierre-diffs-worker',
             'vendor-password-kdf-worker',
             'vendor-crypto-worker',
@@ -33,6 +34,7 @@ export function resolveUiPostinstallTasks({ env }) {
             'vendor-xterm-webview-bundle',
             'vendor-tiptap-webview-bundle',
             'vendor-mermaid-webview-bundle',
+            'vendor-pdfjs-webview-bundle',
         )
 
         // The browser Iroh assets (Lane 06 A7.2/A8) are deliberately absent
@@ -48,7 +50,7 @@ export function resolveUiPostinstallTasks({ env }) {
     // their output freshness and last-green reuse at UI preparation instead.
     if (env?.HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY === '1') {
         return tasks.filter(task => !['prepare-atmosphere-renderers', 'vendor-password-kdf-worker', 'vendor-crypto-worker',
-            'vendor-tiptap-webview-bundle', 'vendor-mermaid-webview-bundle'].includes(task))
+            'vendor-tiptap-webview-bundle', 'vendor-mermaid-webview-bundle', 'vendor-pdfjs-webview-bundle'].includes(task))
     }
     return tasks
 }

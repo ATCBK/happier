@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 
 import { resolveUiPostinstallTasks } from './resolveUiPostinstallTasks.mjs';
 
+test('PDF assets are version-vendored and its source bundle is excluded from dependency-only refresh', () => {
+    assert.ok(resolveUiPostinstallTasks({ env: {} }).includes('vendor-pdfjs'));
+    assert.ok(resolveUiPostinstallTasks({ env: {} }).includes('vendor-pdfjs-webview-bundle'));
+    assert.ok(!resolveUiPostinstallTasks({ env: { HAPPIER_UI_VENDOR_WEB_ASSETS: '0' } }).includes('vendor-pdfjs'));
+    assert.ok(!resolveUiPostinstallTasks({ env: { HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' } }).includes('vendor-pdfjs-webview-bundle'));
+});
+
 test('dependency-only preparation leaves source artifact compilation to its independent owner', () => {
     const tasks = resolveUiPostinstallTasks({ env: { HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' } });
     assert.ok(tasks.includes('patch-package'));
