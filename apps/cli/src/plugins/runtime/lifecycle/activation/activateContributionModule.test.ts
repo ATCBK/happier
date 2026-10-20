@@ -33,6 +33,27 @@ function mcpRuntime(dispose: PluginMcpServerRuntime['dispose']): PluginMcpServer
 }
 
 describe('contribution module activation', () => {
+    it('activates a portable Account export with only its declared Account Action rights', async () => {
+        let capturedApi: unknown;
+        const result = await activateContributionModule({
+            pluginId: 'acme.activation', occurrenceId: 'account-7', isOccurrenceCurrent: () => true,
+            target: { realm: 'account', artifactId: 'portable', exportName: 'activateAccount' },
+            manifest: manifest({ actions: [{
+                id: 'read', title: 'Read', scopes: ['global'], surfaces: ['cli', 'agent', 'mcp'],
+                execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activateAccount' } },
+                placementBindings: ['commandPalette'], dangerLevel: 'safe',
+            }] }),
+            moduleNamespace: { activateAccount(api: { actions: { register(id: string, handler: () => Promise<unknown>): void } }) {
+                capturedApi = api;
+                api.actions.register('read', async () => ({ available: true }));
+            } },
+        });
+        expect(result.status).toBe('active');
+        expect(Object.keys(capturedApi as object)).toEqual(['actions']);
+        expect(result.registrations).toMatchObject([{ family: 'actions', localId: 'read' }]);
+        await result.dispose();
+    });
+
     it('passes the canonical speech declaration to unified Voice registration validation', async () => {
         const runtime = Object.freeze({
             kind: 'speech' as const,

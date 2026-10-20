@@ -7,56 +7,18 @@ import type {
   PluginActionPresentUserGatePolicy,
 } from '@happier-dev/protocol';
 import { pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
-import { evaluatePluginPolicyExpressionV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
-import type { PluginAvailabilityDescriptorV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
+import { evaluateContributionAvailability } from '@happier-dev/protocol/plugins/contributions/public-types';
+import type { ContributionPolicyFacts, PluginAvailabilityDescriptorV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
+
+export {
+  evaluateContributionAvailability,
+  resolveInvocationContributionPolicyFacts,
+  type ContributionAvailabilityOutcome,
+  type ContributionAvailabilityDecision,
+  type ContributionPolicyFacts,
+} from '@happier-dev/protocol/plugins/contributions/public-types';
 
 export type TargetActionPolicyOutcome = PluginActionPolicyDecision['outcome'];
-
-export type ContributionAvailabilityOutcome = 'visible' | 'hidden' | 'disabled' | 'unavailable';
-export type ContributionAvailabilityDecision = Readonly<{
-  outcome: ContributionAvailabilityOutcome;
-  code: string;
-}>;
-export type ContributionPolicyFacts = Readonly<Record<string, boolean | string | readonly string[] | undefined>>;
-
-export function resolveInvocationContributionPolicyFacts(params: Readonly<{
-  sessionId?: string;
-  projectId?: string;
-  browserOrigin?: string;
-  featureIds?: readonly string[];
-  facts?: ContributionPolicyFacts;
-}> = {}): ContributionPolicyFacts {
-  return Object.freeze({
-    'plugin.enabled': true,
-    'session.exists': Boolean(params.sessionId),
-    'project.exists': Boolean(params.projectId),
-    'browser.exists': Boolean(params.browserOrigin),
-    'host.platform': 'desktop',
-    ...(params.featureIds ? { 'host.feature': Object.freeze([...params.featureIds]) } : {}),
-    ...(params.projectId ? { 'project.id': params.projectId } : {}),
-    ...(params.browserOrigin ? { 'browser.origin': params.browserOrigin } : {}),
-    ...(params.facts ?? {}),
-  });
-}
-
-export function evaluateContributionAvailability(params: Readonly<{
-  availability: PluginAvailabilityDescriptorV2 | undefined;
-  facts: ContributionPolicyFacts;
-}>): ContributionAvailabilityDecision {
-  const when = params.availability?.when;
-  if (when) {
-    const result = evaluatePluginPolicyExpressionV2(when, params.facts);
-    if (result === null) return Object.freeze({ outcome: 'unavailable', code: 'plugin_contribution_policy_fact_unavailable' });
-    if (!result) return Object.freeze({ outcome: 'hidden', code: 'plugin_contribution_not_applicable' });
-  }
-  const disabledWhen = params.availability?.disabledWhen;
-  if (disabledWhen) {
-    const result = evaluatePluginPolicyExpressionV2(disabledWhen, params.facts);
-    if (result === null) return Object.freeze({ outcome: 'unavailable', code: 'plugin_contribution_policy_fact_unavailable' });
-    if (result) return Object.freeze({ outcome: 'disabled', code: 'plugin_contribution_disabled' });
-  }
-  return Object.freeze({ outcome: 'visible', code: 'plugin_contribution_available' });
-}
 
 export function resolveTargetActionAvailability(params: Readonly<{
   availability: PluginAvailabilityDescriptorV2 | undefined;

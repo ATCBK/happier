@@ -27,6 +27,7 @@ export type PluginRuntimeSourceAuthority = Readonly<
         canonicalRoot: string;
         observedRevision: number;
     })
+    | (Extract<PluginSourceCustodyV1, { kind: 'account_release' }> & { resolvedRoot: string })
 >;
 
 function requireNonEmptyString(value: unknown, label: string): string {
@@ -73,5 +74,8 @@ export function resolvePluginSourceCustody(authority: PluginRuntimeSourceAuthori
             return normalizePluginSourceCustody({ kind: authority.kind, packagedRuntime: authority.packagedRuntime });
         case 'development':
             return normalizePluginSourceCustody({ kind: authority.kind, registeredRootId: authority.registeredRootId });
+        case 'account_release':
+            return normalizePluginSourceCustody({ kind: authority.kind, pluginId: authority.pluginId,
+                version: authority.version, archiveDigestSha256: authority.archiveDigestSha256 });
     }
 }

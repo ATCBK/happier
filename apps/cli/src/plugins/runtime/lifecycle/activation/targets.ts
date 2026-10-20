@@ -3,7 +3,7 @@ import type {
     ResolvedContributionRegistry,
     ResolvedContributionSource,
 } from '../../../projection/registry/types';
-import { derivePluginDaemonContributionRegistrationRights, PLUGIN_CONTRIBUTION_CATALOG_V2 } from '@happier-dev/protocol/plugins/contributions/catalog';
+import { derivePluginAccountContributionRegistrationRights, derivePluginDaemonContributionRegistrationRights, PLUGIN_CONTRIBUTION_CATALOG_V2 } from '@happier-dev/protocol/plugins/contributions/catalog';
 
 export type PluginContributionActivationDemand = Readonly<{
     pluginId: string;
@@ -70,12 +70,16 @@ export function addActivationTarget(targets: Map<string, ActivationTarget>, raw:
     sourceSpec?: ActivationTarget['sourceSpec'];
     activationEvents?: readonly string[];
     manifest?: ActivationTarget['manifest'];
+    account?: ActivationTarget['account'];
+    pluginRootPath?: string;
 }>): void {
     if (!raw.pluginId || !raw.manifestPath
-        || (!raw.daemonEntryPath && !raw.devDaemonEntryPath) || !raw.sourceSpec || !raw.manifest) {
+        || (!raw.daemonEntryPath && !raw.devDaemonEntryPath && !raw.account) || !raw.sourceSpec || !raw.manifest) {
         return;
     }
-    const key = `${raw.pluginId}::${raw.daemonEntryPath ?? raw.devDaemonEntryPath}`;
+    const key = raw.account
+        ? `${raw.pluginId}::account::${raw.account.artifactId}::${raw.account.exportName}`
+        : `${raw.pluginId}::${raw.daemonEntryPath ?? raw.devDaemonEntryPath}`;
     if (targets.has(key)) {
         return;
     }
@@ -88,12 +92,27 @@ export function addActivationTarget(targets: Map<string, ActivationTarget>, raw:
         devDaemonEntryPath: raw.devDaemonEntryPath ?? null,
         sourceSpec: raw.sourceSpec,
         manifest: raw.manifest,
+        ...(raw.account ? { account: raw.account } : {}),
+        ...(raw.pluginRootPath ? { pluginRootPath: raw.pluginRootPath } : {}),
         ...(raw.activationEvents ? { activationEvents: raw.activationEvents } : {}),
     });
 }
 
-export function collectActivationTargets(contributes: ResolvedContributionRegistry): readonly ActivationTarget[] {
+export function collectActivationTargets(contributes: ResolvedContributionRegistry, realm?: 'account'): readonly ActivationTarget[] {
     const targets = new Map<string, ActivationTarget>();
+    if (realm === 'account') {
+        for (const declaration of contributes.pluginDeclarations ?? []) {
+            for (const action of declaration.manifest.contributes.actions) {
+                if (action.execution.target !== 'account') continue;
+                addActivationTarget(targets, { ...declaration,
+                    provenance: declaration.sourceSpec.kind === 'bundled' ? 'first_party' : 'external',
+                    source: { kind: declaration.sourceSpec.kind },
+                    daemonEntryPath: null, devDaemonEntryPath: null, account: action.execution.account,
+                });
+            }
+        }
+        return Object.freeze([...targets.values()]);
+    }
     for (const target of contributes.activationTargets) {
         addActivationTarget(targets, target);
     }
@@ -113,6 +132,7 @@ export function collectActivationTargets(contributes: ResolvedContributionRegist
 }
 
 export function shouldActivateTargetAtStartup(target: ActivationTarget): boolean {
+    if (target.account) return false;
     if (target.activationEvents?.includes('startup')) return true;
     const registrationRights = derivePluginDaemonContributionRegistrationRights(
         target.manifest.contributes as unknown as Readonly<Record<string, unknown>>,
@@ -128,14 +148,18 @@ export function shouldActivateTargetAtStartup(target: ActivationTarget): boolean
     ));
 }
 
+export function deriveActivationTargetRegistrationRights(target: ActivationTarget) {
+    return target.account
+        ? derivePluginAccountContributionRegistrationRights(target.manifest.contributes, target.account)
+        : derivePluginDaemonContributionRegistrationRights(target.manifest.contributes);
+}
+
 export function activationTargetMatchesContributionDemand(
     target: ActivationTarget,
     demand: PluginContributionActivationDemand,
 ): boolean {
     if (demand.pluginId !== target.pluginId) return false;
-    const rights = derivePluginDaemonContributionRegistrationRights(
-        target.manifest.contributes as unknown as Readonly<Record<string, unknown>>,
-    );
+    const rights = deriveActivationTargetRegistrationRights(target);
     if (demand.family === 'machineProvisioners') {
         const descriptor = target.manifest.contributes.machineProvisioners?.find((entry) => entry.id === demand.localId);
         if (!descriptor) return false;

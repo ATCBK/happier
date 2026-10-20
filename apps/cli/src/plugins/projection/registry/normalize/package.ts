@@ -1,4 +1,5 @@
 import type { PluginWorkItemsContributionV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
+import { projectTargetedContributionActionDefinition } from '@happier-dev/plugin-sdk/host/registration';
 import type { PluginLanguageServerContributionV1 } from '@happier-dev/protocol/plugins/contributions/languageServers';
 import type {
   ActionDefinitionV1,
@@ -262,6 +263,7 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
   const kindVersion: ActionDefinitionV1['kindVersion'] = 1;
   const safety: ActionDefinitionV1['safety'] = definition.dangerLevel === 'safe' ? 'safe' : 'danger';
   const normalized = {
+    ...projectTargetedContributionActionDefinition(definition),
     kindVersion,
     id: definition.id,
     title: displayText(definition.title),
@@ -288,17 +290,11 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
       plugin: definition.surfaces.includes('plugin'),
     },
     inputHints: normalizePluginActionInputHintsV2(definition.inputHints) ?? null,
-    ...(definition.connectedAccountPurposeBindings === undefined ? {} : {
-      connectedAccountPurposeBindings: definition.connectedAccountPurposeBindings,
-    }),
-    ...(definition.inputSchema === undefined ? {} : { inputSchema: definition.inputSchema }),
     ...(definition.contextualDefaults ? { contextualDefaults: definition.contextualDefaults } : {}),
     ...(definition.sessionTarget ? { sessionTarget: definition.sessionTarget } : {}),
     ...(definition.confirmationWhen === undefined ? {} : { confirmationWhen: definition.confirmationWhen }),
-    ...(definition.resultSchema ? { outputSchema: definition.resultSchema } : {}),
     ...(definition.operation ? { operation: definition.operation } : {}),
     scopes: definition.scopes,
-    contributionSurfaces: definition.surfaces,
     ...(definition.placementBindings ? { placementBindings: [...definition.placementBindings] } : {}),
     availability: definition.availability,
     hostAccess: definition.hostAccess,

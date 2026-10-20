@@ -56,6 +56,7 @@ import {
     collectActivationTargets,
     shouldActivateTargetAtStartup,
     activationTargetMatchesContributionDemand,
+    deriveActivationTargetRegistrationRights,
 } from './activation/targets';
 import { resolveActivationSource } from './activation/source';
 import { activateContributionModule } from './activation/activateContributionModule';
@@ -238,6 +239,7 @@ function resolveLocalDevelopmentDiagnosticSourceRoot(
 export async function activatePluginRuntimeRegistry(params: Readonly<{
     contributes: ResolvedContributionRegistry;
     generation: number;
+    executionRealm?: 'account';
     happyHomeDir?: string;
     pluginIds?: readonly string[];
     retainedRegistries?: readonly ActivatedPluginRuntimeRegistry[];
@@ -268,7 +270,7 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
     if (params.adoptActivationComponent && !params.activationComponentMode) {
         const requestedPluginIds = params.pluginIds === undefined
             ? [
-                ...collectActivationTargets(params.contributes)
+                ...collectActivationTargets(params.contributes, params.executionRealm)
                     .filter(shouldActivateTargetAtStartup)
                     .map((target) => target.pluginId),
                 ...(params.activationAdmissionFailuresByPluginId?.keys() ?? []),
@@ -304,7 +306,7 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
     const diagnosticsByPluginId: Record<string, PluginCompatibilityDiagnostic[]> = {};
     const activatedPluginSourceCustodies: Array<readonly [string, PluginSourceCustody]> = [];
     const allowedPluginIds = params.pluginIds ? new Set(params.pluginIds) : null;
-    const activationTargets = collectActivationTargets(params.contributes);
+    const activationTargets = collectActivationTargets(params.contributes, params.executionRealm);
     const targetRegistrations: Array<{
         pluginId: string;
         occurrenceId: PluginRuntimeOccurrenceId;
@@ -351,9 +353,7 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
             platform: process.platform,
         });
         const requiredRegistrationFacts = projectPluginTargetActivationRegistrationFacts(
-            derivePluginDaemonContributionRegistrationRights(
-                target.manifest.contributes as unknown as Readonly<Record<string, unknown>>,
-            ),
+            deriveActivationTargetRegistrationRights(target),
         );
         const admissionFailure = params.activationAdmissionFailuresByPluginId?.get(target.pluginId);
         if (admissionFailure) {
@@ -453,15 +453,22 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
                 const developmentAuthority = activationSource.sourceAuthority?.kind === 'development'
                     ? activationSource.sourceAuthority
                     : null;
-                if (!committedAuthorization && !developmentAuthority) {
+                const accountAuthority = activationSource.sourceAuthority?.kind === 'account_release'
+                    ? activationSource.sourceAuthority : null;
+                if (!committedAuthorization && !developmentAuthority && !accountAuthority) {
                     throw new Error(
                         `Plugin '${target.pluginId}' has no committed authorization for daemon activation`,
                     );
                 }
                 cacheGenerationId = committedAuthorization?.immutableGenerationId
+                    ?? (accountAuthority ? JSON.stringify(resolvePluginSourceCustody(accountAuthority)) : undefined)
                     ?? `development:${developmentAuthority!.registeredRootId}:${developmentAuthority!.observedRevision}`;
             }
-            moduleNamespace = await loadPluginModule({
+            moduleNamespace = target.account
+                ? (await activationSource.resolveRelativeModule?.(target.account.artifactId))?.module ?? (() => {
+                    throw new Error(`Account artifact '${target.account.artifactId}' has no admitted module source`);
+                })()
+                : await loadPluginModule({
                 source: activationSource,
                 // Module graphs are scoped by the direct immutable generation,
                 // never a copied manifest/package digest.
@@ -502,8 +509,9 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
                         : 'external',
                 occurrenceId: targetOccurrenceId,
                 manifest: target.manifest,
+                ...(target.account ? { target: { realm: 'account' as const, ...target.account } } : {}),
                 moduleNamespace,
-                isOccurrenceCurrent: () => targetOccurrenceCurrent,
+                isOccurrenceCurrent: () => targetOccurrenceCurrent && isActivationCurrent(),
                 forceActivation: target.activationEvents?.includes('startup') === true
                     || (params.forceActivation ?? params.pluginIds !== undefined),
                 ...(localDevelopmentSourceRoot

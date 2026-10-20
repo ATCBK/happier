@@ -4,6 +4,7 @@ import {
     type PluginRegistrationRight,
     type PluginRuntimeRegistration,
 } from '@happier-dev/plugin-sdk/host/registration';
+import type { PluginApi, PluginAccountApi } from '@happier-dev/plugin-sdk';
 import type {
     AgentSessionRunnerFactoryLocatorV1,
 } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -115,7 +116,7 @@ export function readValidatedAgentSessionRunnerFactory(
  * registration contract. Occurrence currentness and compatibility diagnostics
  * remain CLI host policy and are not exposed by the SDK testkit.
  */
-export function createContributionRegistrationHost(params: Readonly<{
+type ContributionRegistrationHostParams = Readonly<{
     pluginId: string;
     occurrenceId: string;
     rights: readonly ContributionRegistrationRight[];
@@ -130,17 +131,21 @@ export function createContributionRegistrationHost(params: Readonly<{
         localAgentId: string,
         contribution: AgentExternalSessionsContribution,
     ) => void;
-}>): Readonly<{
-    api: ReturnType<typeof createPluginRegistrationScope>['api'];
+}>;
+type AccountRegistrationTarget = Readonly<{ realm: 'account'; artifactId: string; exportName: string }>;
+type ContributionRegistrationHost<TApi> = Readonly<{
+    api: TApi;
     commit(): readonly ContributionRuntimeRegistration[];
     registrations(): readonly ContributionRuntimeRegistration[];
     diagnostics(): readonly PluginCompatibilityDiagnostic[];
     dispose(): Promise<void>;
-}> {
+}>;
+export function createContributionRegistrationHost(params: ContributionRegistrationHostParams & Readonly<{ target: AccountRegistrationTarget }>): ContributionRegistrationHost<PluginAccountApi>;
+export function createContributionRegistrationHost(params: ContributionRegistrationHostParams & Readonly<{ target?: Readonly<{ realm: 'daemon' }> }>): ContributionRegistrationHost<PluginApi>;
+export function createContributionRegistrationHost(params: ContributionRegistrationHostParams & Readonly<{ target?: Readonly<{ realm: 'daemon' }> | AccountRegistrationTarget }>): ContributionRegistrationHost<PluginApi | PluginAccountApi> {
     const diagnostics: PluginCompatibilityDiagnostic[] = [];
-    const scope = createPluginRegistrationScope({
+    const scopeParams = {
         pluginId: params.pluginId,
-        target: { realm: 'daemon' },
         rights: params.rights,
         ...(params.cleanupTimeoutMs === undefined
             ? {}
@@ -150,7 +155,7 @@ export function createContributionRegistrationHost(params: Readonly<{
                 throw new Error(`Plugin '${params.pluginId}' cannot register against retired occurrence '${params.occurrenceId}'`);
             }
         },
-        onFailure(message) {
+        onFailure(message: string) {
             if (diagnostics.length === 0) {
                 diagnostics.push(Object.freeze({
                     code: 'plugin_activation_failed',
@@ -158,11 +163,14 @@ export function createContributionRegistrationHost(params: Readonly<{
                 }));
             }
         },
-    });
+    };
+    const scope = params.target?.realm === 'account'
+        ? createPluginRegistrationScope({ ...scopeParams, target: params.target })
+        : createPluginRegistrationScope({ ...scopeParams, target: { realm: 'daemon' } });
     let disposalPromise: Promise<void> | null = null;
 
-    const api: ReturnType<typeof createPluginRegistrationScope>['api'] =
-        params.onAgentExternalSessionsRegistration === undefined
+    const api =
+        params.onAgentExternalSessionsRegistration === undefined || !('agents' in scope.api)
             ? scope.api
             : Object.freeze({
                 ...scope.api,
@@ -172,7 +180,8 @@ export function createContributionRegistrationHost(params: Readonly<{
                         localAgentId: string,
                         contribution: AgentExternalSessionsContribution,
                     ): void {
-                        scope.api.agents.registerExternalSessions(
+                            if (!('agents' in scope.api)) throw new Error('Agent registration requires the daemon realm');
+                            scope.api.agents.registerExternalSessions(
                             localAgentId,
                             contribution,
                         );

@@ -10,6 +10,24 @@ import { createVerifiedPortablePluginInstallationAvailability, projectVerifiedPl
 const digest = (character: string): `sha256:${string}` => `sha256:${character.repeat(64)}`;
 
 describe('verified portable Plugin Availability facts', () => {
+  it('publishes the exact portable Account executable graph without a renderer declaration', () => {
+    const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({
+      id: 'com.acme.account-only', contributes: { actions: [{
+        id: 'read', title: 'Read', scopes: ['global'], surfaces: ['cli'], dangerLevel: 'safe',
+        placementBindings: ['commandPalette'], execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } },
+      }] },
+    }));
+    const generatedUiArtifacts = PluginUiArtifactsManifestV2Schema.parse({ version: 2, entries: [{
+      artifactId: 'account', tier: 'reactNative', entry: 'react-native/account/entry.cjs.bundle',
+      files: [{ relativePath: 'react-native/account/entry.cjs.bundle', digest: digest('b'), byteSize: 12 }],
+      digest: digest('c'), builtWith: { bundler: 'esbuild', version: '0.27.2' },
+      executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0',
+    }] });
+    expect(projectVerifiedPluginUiReleaseSlotsV2({ manifest, generatedUiArtifacts })).toEqual(
+      ['web', 'ios', 'android'].map(platform => ({ contributionId: 'read', artifactId: 'account', tier: 'reactNative',
+        platform, artifactDigest: digest('c'), hostUiApiRange: '^1.0.0', artifactGraph: generatedUiArtifacts.entries[0] })),
+    );
+  });
   it('does not publish a native declaration backed by the wrong artifact tier', () => {
     const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({
       id: 'com.acme.invalid-ui', contributes: { ui: { renderers: [
@@ -43,6 +61,7 @@ describe('verified portable Plugin Availability facts', () => {
       .toEqual(['web', 'ios', 'android'].map(platform => ({
         contributionId: 'ready-panel', artifactId: 'ready-bundle', tier: 'reactNative', platform,
         artifactDigest: digest('c'), hostUiApiRange: '^1.0.0',
+        artifactGraph: generatedUiArtifacts.entries[0],
       })));
   });
 
@@ -123,14 +142,17 @@ describe('verified portable Plugin Availability facts', () => {
         platform: 'android',
         artifactDigest: digest('c'),
         hostUiApiRange: '^1.0.0',
+        artifactGraph: generatedUiArtifacts.entries[0],
       },
       {
         contributionId: 'native-panel', artifactId: 'native-bundle', tier: 'reactNative', platform: 'ios',
         artifactDigest: digest('c'), hostUiApiRange: '^1.0.0',
+        artifactGraph: generatedUiArtifacts.entries[0],
       },
       {
         contributionId: 'native-panel', artifactId: 'native-bundle', tier: 'reactNative', platform: 'web',
         artifactDigest: digest('c'), hostUiApiRange: '^1.0.0',
+        artifactGraph: generatedUiArtifacts.entries[0],
       },
       {
         contributionId: 'web-panel',
@@ -139,6 +161,7 @@ describe('verified portable Plugin Availability facts', () => {
         platform: 'web',
         artifactDigest: digest('e'),
         hostUiApiRange: '^1.0.0',
+        artifactGraph: generatedUiArtifacts.entries[1],
       },
     ]);
     expect(availability.release?.packageAssetArchive).toEqual({

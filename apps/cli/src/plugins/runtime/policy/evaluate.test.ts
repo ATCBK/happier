@@ -6,6 +6,7 @@ import { createPluginInvocationHostPolicyResolver } from '../hostAccess/resolve'
 import {
   evaluateContributionAvailability,
   evaluateTargetActionPolicy,
+  resolveInvocationContributionPolicyFacts,
   resolveTargetActionResourceSelectionFacts,
   targetActionRequiresCurrentIntent,
 } from './evaluate';
@@ -299,6 +300,22 @@ describe('evaluateTargetActionPolicy', () => {
 });
 
 describe('evaluateContributionAvailability', () => {
+  it('uses the invoking host platform for portable Account contribution policy', () => {
+    const facts = resolveInvocationContributionPolicyFacts({ hostPlatform: 'web' });
+    expect(evaluateContributionAvailability({
+      availability: {
+        when: { fact: 'host.platform', operator: 'equals', value: 'web' },
+      },
+      facts,
+    })).toEqual({ outcome: 'visible', code: 'plugin_contribution_available' });
+    expect(evaluateContributionAvailability({
+      availability: {
+        when: { fact: 'machine.id', operator: 'equals', value: 'unselected-machine' },
+      },
+      facts,
+    })).toEqual({ outcome: 'unavailable', code: 'plugin_contribution_policy_fact_unavailable' });
+  });
+
   it('evaluates known facts and fails closed when a required fact is unavailable', () => {
     const availability = {
       when: { fact: 'plugin.enabled' as const, operator: 'equals' as const, value: true },

@@ -1,4 +1,5 @@
 import type { PluginCleanup } from '@happier-dev/plugin-sdk';
+import { derivePluginAccountContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 
 import type { CanonicalPluginManifest } from '../../../manifest/types';
 import type { PluginCompatibilityDiagnostic } from '../../../validation/diagnostics/types';
@@ -195,6 +196,7 @@ export async function activateContributionModule(params: Readonly<{
     occurrenceId: string;
     manifest: CanonicalPluginManifest;
     moduleNamespace: PluginDaemonModuleNamespace;
+    target?: Readonly<{ realm: 'account'; artifactId: string; exportName: string }>;
     isOccurrenceCurrent(): boolean;
     forceActivation?: boolean;
     cleanupTimeoutMs?: number;
@@ -217,8 +219,10 @@ export async function activateContributionModule(params: Readonly<{
         >['persistValidatedAgentSessionRunnerFactories']
     >;
 }>): Promise<ContributionModuleActivationResult> {
-    const rights = deriveContributionRegistrationRightsForManifest(params.manifest);
-    const activationExport = resolveActivationExport(params.moduleNamespace);
+    const rights = params.target
+        ? derivePluginAccountContributionRegistrationRights(params.manifest.contributes, params.target)
+        : deriveContributionRegistrationRightsForManifest(params.manifest);
+    const activationExport = resolveActivationExport(params.moduleNamespace, params.target?.exportName);
     if (activationExport.status === 'invalid') {
         return unavailable(`Plugin '${params.pluginId}' named activation export is not a function`);
     }
@@ -240,16 +244,19 @@ export async function activateContributionModule(params: Readonly<{
     }
     const registeredExternalSessionsByAgent = new Map<string, unknown>();
     const cleanupTimeoutMs = normalizePositiveTimeoutMs(params.cleanupTimeoutMs);
-    const host = createContributionRegistrationHost({
+    const hostParams = {
         pluginId: params.pluginId,
         occurrenceId: params.occurrenceId,
         rights,
         isOccurrenceCurrent: params.isOccurrenceCurrent,
         ...(cleanupTimeoutMs === null ? {} : { cleanupTimeoutMs }),
-        onAgentExternalSessionsRegistration(localAgentId, contribution) {
+        onAgentExternalSessionsRegistration(localAgentId: string, contribution: unknown) {
             registeredExternalSessionsByAgent.set(localAgentId, contribution);
         },
-    });
+    };
+    const host = params.target
+        ? createContributionRegistrationHost({ ...hostParams, target: params.target })
+        : createContributionRegistrationHost(hostParams);
     let pluginCleanup: PluginCleanup | null = null;
     let pluginCleanupDisposalPromise: Promise<void> | null = null;
     let disposalPromise: Promise<void> | null = null;
@@ -299,7 +306,7 @@ export async function activateContributionModule(params: Readonly<{
     };
     let activationPromise: Promise<void | PluginCleanup>;
     try {
-        activationPromise = Promise.resolve(activationExport.activate(host.api));
+        activationPromise = Promise.resolve(Reflect.apply(activationExport.activate, undefined, [host.api]));
     } catch (error) {
         activationPromise = Promise.reject(error);
     }

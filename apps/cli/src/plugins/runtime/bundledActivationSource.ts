@@ -1,14 +1,17 @@
 import { existsSync as nodeExistsSync, realpathSync } from 'node:fs';
 import { lstat, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 import { defaultCanImportFirstPartyPluginSource } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
 import { projectPathFromModuleUrl } from '@/projectPath';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
-import { readBundledPluginManifest } from '@/plugins/projection/registry/builtIn/locators';
+import { readBundledPluginManifest, loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
+import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
+import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
+import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
 
 import {
     normalizeBundledWorkspaceNameFromPackageName,
@@ -30,7 +33,13 @@ import { resolvePluginModuleCandidatePaths } from './loadPluginModule';
 type BundledActivationTarget = Readonly<{
     pluginId: string;
     daemonEntryPath: string | null;
+    sourceSpec?: Readonly<{ kind: string; locator: string }>;
+    pluginRootPath?: string;
+    manifest?: CanonicalPluginManifest;
+    account?: Readonly<{ artifactId: string; exportName: string }>;
 }>;
+
+export type BundledActivationSourceSelectionOptions = Readonly<{ realm?: 'account' }>;
 
 type BundledActivationSource = Readonly<{
     kind: 'bundled';
@@ -301,6 +310,8 @@ export function resolveSourceDevelopmentBundledPackageNames(params: Readonly<{
 
 export function createBundledActivationSourceResolver(params: Readonly<{
     bundledPackageNames: readonly string[];
+    bundledDeclarations?: readonly LoadedPlugin[];
+    packagedRuntimeRoot?: string;
     signal?: AbortSignal;
     immutableArtifactPackageNames?: readonly string[];
     /**
@@ -469,7 +480,58 @@ export function createBundledActivationSourceResolver(params: Readonly<{
         return await runSourceDevSharedDepsPreflightForPackage(packageName);
     }
 
-    return function resolveBundledActivationSource(target: BundledActivationTarget): BundledActivationSource | null {
+    return function resolveBundledActivationSource(target: BundledActivationTarget,
+        options: BundledActivationSourceSelectionOptions = {}): BundledActivationSource | null {
+        // Account portable code has declaration custody even when this bundled
+        // package has no daemon entry. It is still selected by the existing
+        // host declaration/root owner, never by an arbitrary local pathname.
+        if (options.realm === 'account' || target.account || (!target.daemonEntryPath && target.sourceSpec?.kind === 'bundled')) {
+            const packageName = target.sourceSpec?.kind === 'bundled' ? target.sourceSpec.locator : null;
+            if (!packageName || !bundledPackageNames.has(packageName)) return null;
+            const declaration = (params.bundledDeclarations ?? loadCurrentBundledPluginLocatorResult().loadedPlugins)
+                .find(plugin => plugin.pluginId === target.pluginId && plugin.sourceSpec.kind === 'bundled'
+                    && plugin.sourceSpec.locator === packageName);
+            if (!declaration || !target.manifest || !target.pluginRootPath) return null;
+            const declarationDigest = computePluginAccountBundledDeclarationDigestV1(declaration.manifest);
+            if (computePluginAccountBundledDeclarationDigestV1(target.manifest) !== declarationDigest) return null;
+            if (!isAbsolute(declaration.pluginRootPath) || !isAbsolute(target.pluginRootPath)) return null;
+            const packageRoot = realpathSync(declaration.pluginRootPath);
+            if (realpathSync(target.pluginRootPath) !== packageRoot) return null;
+            if (params.packagedRuntimeRoot) {
+                const expectedRoot = realpathSync(resolve(params.packagedRuntimeRoot, 'node_modules',
+                    ...parseContainedPackageNameSegments(packageName)));
+                if (expectedRoot !== packageRoot || !params.packagedRuntime) return null;
+            }
+            const sourceAuthority = bindPluginRuntimeSourceAuthority({ custody: {
+                kind: 'bundled_first_party', packagedRuntime: params.packagedRuntimeRoot && params.packagedRuntime
+                    ? params.packagedRuntime
+                    : { kind: 'source_declaration', packageName, declarationDigest },
+            }, resolvedRoot: packageRoot });
+            return {
+                kind: 'bundled', moduleId: packageName, sourceAuthority,
+                prepare: async () => {
+                    params.signal?.throwIfAborted();
+                    const metadataPath = join(packageRoot, 'package.json');
+                    const metadata = await lstat(metadataPath);
+                    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error('Bundled Account package metadata must be a regular file');
+                    const packageMetadata: unknown = JSON.parse(await readFile(metadataPath, 'utf8'));
+                    if (!packageMetadata || typeof packageMetadata !== 'object' || Reflect.get(packageMetadata, 'name') !== packageName) {
+                        throw new Error('Bundled Account package identity mismatch');
+                    }
+                    if (params.packagedRuntimeRoot) {
+                        const manifestPath = join(packageRoot, '.happier-plugin', 'plugin.json');
+                        const metadata = await lstat(manifestPath);
+                        if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error('Bundled Account manifest must be a regular file');
+                        const manifest = readCanonicalPluginManifest(JSON.parse(await readFile(manifestPath, 'utf8')));
+                        if (!manifest || computePluginAccountBundledDeclarationDigestV1(manifest) !== declarationDigest) {
+                            throw new Error('Bundled Account declaration mismatch');
+                        }
+                    }
+                },
+                load: async () => { throw new Error('Bundled Account execution requires its declared Account artifact'); },
+                resolveRelativeModule: async () => { throw new Error('Bundled Account execution requires its declared Account artifact'); },
+            };
+        }
         if (!target.daemonEntryPath || !bundledPackageNames.has(target.daemonEntryPath)) {
             return null;
         }

@@ -38,6 +38,8 @@ export function projectVerifiedPluginUiReleaseSlotsV2(input: Readonly<{
   for (const action of input.manifest.contributes.actions) {
     if (action.execution.target === 'client') {
       declarations.push({ contributionId: action.id, artifactId: action.execution.client.artifactId, tier: 'reactNative', platforms: action.execution.platforms });
+    } else if (action.execution.target === 'account') {
+      declarations.push({ contributionId: action.id, artifactId: action.execution.account.artifactId, tier: 'reactNative', platforms: ALL_EXECUTABLE_UI_PLATFORMS });
     }
   }
   return declarations.flatMap((declaration) => {
@@ -52,6 +54,7 @@ export function projectVerifiedPluginUiReleaseSlotsV2(input: Readonly<{
       platform,
       artifactDigest: artifact.digest,
       hostUiApiRange: artifact.hostUiApiRange,
+      artifactGraph: artifact,
     }));
   });
 }

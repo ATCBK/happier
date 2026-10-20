@@ -10,6 +10,9 @@ import {
   type SourceDevSharedDepsPreflightResult,
 } from '@/subprocess/sourceDevSharedDepsPreflight';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
 
 import {
   createBundledActivationSourceResolver,
@@ -97,6 +100,36 @@ afterEach(async () => {
 });
 
 describe('createBundledActivationSourceResolver', () => {
+  it.each([
+    { mode: 'packaged', daemon: false }, { mode: 'source', daemon: false },
+    { mode: 'packaged', daemon: true }, { mode: 'source', daemon: true },
+  ] as const)('admits bundled declaration from its actual $mode root in Account realm (daemon=$daemon)', async ({ mode, daemon }) => {
+    const runtimeRoot = await mkdtemp(join(tmpdir(), 'happier-account-bundled-'));
+    tempDirs.push(runtimeRoot);
+    const packageName = '@happier-dev/plugins-account-fixture';
+    const packageRoot = join(runtimeRoot, 'node_modules', packageName);
+    const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({ id: 'happier.account-fixture',
+      entrypoints: daemon ? { daemon: './daemon.cjs' } : {} }));
+    await mkdir(join(packageRoot, '.happier-plugin'), { recursive: true });
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: packageName }));
+    await writeFile(join(packageRoot, '.happier-plugin/plugin.json'), JSON.stringify(manifest));
+    const packagedRuntime = { kind: 'cli_version_root', versionRootId: 'actual-runtime' } as const;
+    const sourceSpec = { kind: 'bundled', locator: packageName, trustPolicy: 'prompt', installPolicy: 'copy' } as const;
+    const resolveSource = createBundledActivationSourceResolver({ bundledPackageNames: [packageName],
+      bundledDeclarations: [{ pluginId: manifest.id, pluginRootPath: packageRoot, manifestPath: 'bundled:fixture',
+        daemonEntryPath: daemon ? packageName : null, devDaemonEntryPath: null, sourceSpec, manifest }],
+      ...(mode === 'packaged' ? { packagedRuntime, packagedRuntimeRoot: runtimeRoot } : {}),
+    });
+    const target = { pluginId: manifest.id, daemonEntryPath: daemon ? packageName : null, sourceSpec, pluginRootPath: packageRoot, manifest };
+    const source = resolveSource(target, { realm: 'account' });
+    expect(source?.sourceAuthority).toEqual({ kind: 'bundled_first_party',
+      packagedRuntime: mode === 'packaged' ? packagedRuntime : { kind: 'source_declaration', packageName,
+        declarationDigest: computePluginAccountBundledDeclarationDigestV1(manifest) }, resolvedRoot: await realpath(packageRoot) });
+    expect(resolveSource({ ...target, manifest: { ...manifest, version: '9.0.0' } }, { realm: 'account' })).toBeNull();
+    expect(resolveSource({ ...target, pluginRootPath: runtimeRoot }, { realm: 'account' })).toBeNull();
+    await source?.prepare?.();
+    await expect(source?.load()).rejects.toThrow('declared Account artifact');
+  });
   it('activates frozen bundle plugins and runner leaves on first demand from a bundled host chunk', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-source-first-demand-'));
     tempDirs.push(root);

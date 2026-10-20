@@ -59,16 +59,12 @@ import type {
   NormalizedPluginAccountCollectionContractV1,
   PluginCollectionMigrationArtifactReferenceV1,
   PluginContributionPointV1,
-  PluginJsonSchemaV2,
   PluginComposerAttachmentContributionV1,
   PluginComposerReferenceProviderContributionV1,
   PluginSearchProviderContributionV1,
   PluginComposerControlContributionV1,
   PluginComposerRegionContributionV1,
-  PreparedPluginJsonSchema,
   PluginTargetedContributionV1,
-  RehydratedPluginContributionPointOperationV1,
-  RehydratedPluginContributionPointSurfaceV1,
 } from '@happier-dev/protocol';
 import type { PluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import type { MachineProvisionerContributionV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
@@ -170,82 +166,12 @@ export type ResolvedPluginContributionPointDeclaration = ResolvedTargetUiContrib
 /** Cold contributor declarations; they have no execution authority until admitted. */
 export type ResolvedTargetedPluginContributionDeclaration = ResolvedTargetUiContribution<PluginTargetedContributionV1>;
 
-export type AdmittedTargetedContributionContributor = Readonly<{
-    pluginId: string;
-    contributionId: string;
-    occurrenceId: PluginRuntimeOccurrenceId;
-}>;
-
-/**
- * Host-private summary of the exact input selection the target-scoped UI
- * admits for one Action. It carries no selected Account value: that remains
- * only in the transient UI settlement.
- */
-export type AdmittedTargetedContributionActionInputSelection = Readonly<
-    | { kind: 'none' }
-    | { kind: 'connectedAccount'; fieldPath: string }
-    | { kind: 'unavailable' }
->;
-
-export type AdmittedTargetedContributionOperation = Readonly<{
-    role: string;
-    action: Readonly<{
-        pluginId: string;
-        localId: string;
-    }>;
-    /** Exact parent contributor identity, retained for independent role projection. */
-    contributor: AdmittedTargetedContributionContributor;
-    /**
-     * Current Action-definition selection fact retained only for the opaque
-     * admitted-operation execution handle. It never crosses the public
-     * targeted-contribution projection.
-     */
-    selectedActionInput: AdmittedTargetedContributionActionInputSelection;
-    /** Exact target-owned parser pair retained only in the opaque Action handle binding. */
-    targetProtocol: RehydratedPluginContributionPointOperationV1;
-}>;
-
-/**
- * Host-private resolved renderer chain for an admitted embedded surface.
- * UI projection must consume this exact chain; it must not re-search the
- * global renderer catalog by local ID.
- */
-export type AdmittedTargetedContributionSurface = Readonly<{
-    role: string;
-    /** Exact target-owned role contract for the UI mount projection; not public SDK data. */
-    inputSchema: PluginJsonSchemaV2;
-    /**
-     * Exact normalized schema and one compiled validator owned by cold target
-     * admission for this contributor generation. It never crosses RPC.
-     */
-    inputValidation: PreparedPluginJsonSchema;
-    /** Exact target-owned parser retained by cold admission, never projected over RPC. */
-    targetProtocol: RehydratedPluginContributionPointSurfaceV1;
-    presentation: 'content' | 'fill';
-    rendererChain: readonly ResolvedUiRendererV2Contribution[];
-    /** Exact parent contributor identity, retained for independent surface projection. */
-    contributor: AdmittedTargetedContributionContributor;
-}>;
-
-export type AdmittedTargetedContribution = Readonly<{
-    contributor: AdmittedTargetedContributionContributor;
-    protocol: Readonly<{
-        id: string;
-        version: number;
-    }>;
-    descriptor?: ProtocolJsonValue;
-    operations: readonly AdmittedTargetedContributionOperation[];
-    surfaces: readonly AdmittedTargetedContributionSurface[];
-}>;
-
-export type AdmittedTargetedContributionSnapshot = Readonly<{
-    target: Readonly<{
-        pluginId: string;
-        pointId: string;
-        occurrenceId: PluginRuntimeOccurrenceId;
-    }>;
-    contributions: readonly AdmittedTargetedContribution[];
-}>;
+export type AdmittedTargetedContributionContributor = import('@happier-dev/plugin-sdk/host/registration').AdmittedTargetedContributionOperation<PluginRuntimeOccurrenceId>['contributor'];
+export type AdmittedTargetedContributionActionInputSelection = import('@happier-dev/plugin-sdk/host/registration').AdmittedTargetedContributionOperation['selectedActionInput'];
+export type AdmittedTargetedContributionOperation = import('@happier-dev/plugin-sdk/host/registration').AdmittedTargetedContributionOperation<PluginRuntimeOccurrenceId>;
+export type AdmittedTargetedContributionSurface = import('@happier-dev/plugin-sdk/host/registration').AdmittedTargetedContributionSurface<ResolvedUiRendererV2Contribution, PluginRuntimeOccurrenceId>;
+export type AdmittedTargetedContribution = import('@happier-dev/plugin-sdk/host/registration').AdmittedTargetedContribution<ResolvedUiRendererV2Contribution, PluginRuntimeOccurrenceId>;
+export type AdmittedTargetedContributionSnapshot = import('@happier-dev/plugin-sdk/host/registration').AdmittedTargetedContributionSnapshot<ResolvedUiRendererV2Contribution, PluginRuntimeOccurrenceId>;
 
 export type ResolvedAgentDefinitionContract = AgentDefinitionContractV1 & Readonly<
     Partial<Omit<AgentDefinitionV1, keyof AgentDefinitionContractV1>>
@@ -822,6 +748,10 @@ export type ResolvedActivatedHookRegistration = Readonly<{
 }>;
 
 export type ResolvedActivationTarget = Readonly<{
+    /** Invoking-process Account artifact; absence retains daemon placement. */
+    account?: Readonly<{ artifactId: string; exportName: string }>;
+    /** Canonical bundled declaration root when activation has no daemon entry. */
+    pluginRootPath?: string;
     provenance: ResolvedContributionProvenance;
     source: ResolvedContributionSource;
     pluginId: string;

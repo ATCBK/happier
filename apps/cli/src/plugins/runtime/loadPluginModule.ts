@@ -1,5 +1,6 @@
 import { realpath, stat } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 import { createJiti } from 'jiti';
@@ -22,6 +23,7 @@ type PluginModuleLoadErrorCode =
     | 'PLUGIN_DAEMON_TRUST_APPROVAL_REQUIRED';
 
 const moduleLoadCache = new Map<string, Promise<PluginModuleNamespace>>();
+const requirePluginModule = createRequire(import.meta.url);
 type TypeScriptGenerationLoaderState = Readonly<{
     loader: ReturnType<typeof createJiti>;
     moduleLoadCache: Map<string, Promise<PluginModuleNamespace>>;
@@ -260,6 +262,8 @@ async function assertTrusted(
 ): Promise<void> {
     if (committedAuthorization) return;
     if (sourceAuthority?.kind === 'development') return;
+    if (sourceAuthority?.kind === 'account_release') return;
+    if (sourceAuthority?.kind === 'bundled_first_party') return;
     throw createModuleLoadError(
         'PLUGIN_DAEMON_TRUST_APPROVAL_REQUIRED',
         'Plugin executable load requires a reviewed, committed, current daemon generation',
@@ -292,7 +296,8 @@ function assertSupportedEntryExtension(params: Readonly<{
     const supportedExtensions = params.isDevEntry
         ? SUPPORTED_DEV_DAEMON_ENTRY_EXTENSIONS
         : SUPPORTED_DAEMON_ENTRY_EXTENSIONS;
-    if (supportedExtensions.has(params.extension)) {
+    if (supportedExtensions.has(params.extension)
+        || params.resolvedEntryPath.endsWith('.cjs.bundle')) {
         return;
     }
 
@@ -327,6 +332,13 @@ async function importFileBackedModule(params: Readonly<{
     generationScope?: object;
     nativeFileUrlMode: NativeFileUrlMode;
 }>): Promise<PluginModuleNamespace> {
+    if (params.resolvedEntryPath.endsWith('.cjs.bundle')) {
+        // Portable artifacts are compiler-produced, self-contained CommonJS.
+        // Reuse Node's native module host after the same source admission as
+        // every other executable; this owner retains generation cache identity.
+        delete requirePluginModule.cache[params.resolvedEntryPath];
+        return requirePluginModule(params.resolvedEntryPath) as PluginModuleNamespace;
+    }
     if (params.isTypeScriptDevEntry) {
         const generationScope = params.generationScope;
         if (!generationScope) {
@@ -461,6 +473,7 @@ async function loadFileBackedModule(params: Readonly<{
     sourceAuthority?: PluginRuntimeSourceAuthority;
     generationScope?: object;
     nativeFileUrlMode?: NativeFileUrlMode;
+    cacheKey?: string;
 }>): Promise<PluginModuleNamespace> {
     await assertTrusted(params.committedAuthorization, params.sourceAuthority);
 
@@ -475,8 +488,8 @@ async function loadFileBackedModule(params: Readonly<{
             entryPath: selectedEntry.entryPath,
             useDevelopmentEntry: selectedEntry.isDevEntry,
         }),
-        generationScope: params.generationScope ?? params.committedAuthorization!,
-        cacheKey: params.committedAuthorization!.immutableGenerationId,
+        generationScope: params.generationScope ?? params.committedAuthorization ?? params.sourceAuthority!,
+        cacheKey: params.cacheKey ?? params.committedAuthorization?.immutableGenerationId ?? JSON.stringify(params.sourceAuthority),
         nativeFileUrlMode: params.nativeFileUrlMode,
     });
 }
@@ -532,6 +545,7 @@ export async function loadPluginModule<TModule extends PluginModuleNamespace>(pa
             sourceAuthority: params.source.sourceAuthority,
             generationScope: params.source.generationScope,
             nativeFileUrlMode: params.nativeFileUrlMode,
+            cacheKey: params.cacheKey,
         }) as TModule;
     }
 

@@ -87,7 +87,7 @@ function appendComposerSurfaceDeclaration(
  * output to their live Composer mount and never choose a fallback themselves.
  */
 export function listComposerSurfaceDeclarations(
-    registry: ResolvedContributionRegistry,
+    registry: Partial<Pick<ResolvedContributionRegistry, 'composerAttachments' | 'composerControls' | 'composerRegions'>>,
 ): readonly ComposerSurfaceDeclaration[] {
     const declarations: ComposerSurfaceDeclaration[] = [];
     for (const attachment of registry.composerAttachments ?? []) {

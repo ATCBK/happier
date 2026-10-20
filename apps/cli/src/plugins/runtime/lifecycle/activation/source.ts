@@ -15,16 +15,16 @@ export type ActivationExport = (
     api: PluginApi,
 ) => void | PluginCleanup | Promise<void | PluginCleanup>;
 
-export function resolveActivationExport(moduleNamespace: PluginDaemonModuleNamespace): Readonly<
+export function resolveActivationExport(moduleNamespace: PluginDaemonModuleNamespace, exportName = 'activate'): Readonly<
     | { status: 'found'; activate: ActivationExport }
     | { status: 'missing' }
     | { status: 'invalid' }
 > {
-    if (typeof moduleNamespace.activate === 'function') {
-        return { status: 'found', activate: moduleNamespace.activate as ActivationExport };
+    if (typeof moduleNamespace[exportName] === 'function') {
+        return { status: 'found', activate: moduleNamespace[exportName] as ActivationExport };
     }
 
-    if (moduleNamespace.activate !== undefined) {
+    if (moduleNamespace[exportName] !== undefined) {
         return { status: 'invalid' };
     }
 

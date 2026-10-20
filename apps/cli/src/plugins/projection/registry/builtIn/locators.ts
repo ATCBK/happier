@@ -234,9 +234,7 @@ export function loadBundledPluginLocatorResult(
 
         loadedPlugins.push(Object.freeze({
             pluginId: locator.pluginId,
-            pluginRootPath: generatedUiArtifactsManifest && installedPluginRootPath
-                ? installedPluginRootPath
-                : bundledPluginLocator,
+            pluginRootPath: installedPluginRootPath ?? bundledPluginLocator,
             manifestPath: locator.manifestPath,
             daemonEntryPath: locator.daemonEntryPath,
             devDaemonEntryPath: locator.devDaemonEntryPath ?? null,

@@ -102,6 +102,11 @@ describe('bundled plugin locators', () => {
             const retainedPluginRoot = join(root, 'packages/plugins/fixture');
             mkdirSync(join(retainedPluginRoot, 'dist/happier-plugin-ui'), { recursive: true });
             writeFileSync(join(retainedPluginRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-fixture' }));
+            // Declaration custody needs the real host package root even when
+            // this package contributes no executable UI graph.
+            const [declarationOnly] = compiled.loadBundledPluginLocators([locator()]);
+            expect(declarationOnly?.pluginRootPath).toBe(retainedPluginRoot);
+            expect(declarationOnly?.generatedUiArtifactsManifest).toBeUndefined();
             const graph = { version: 2, entries: [{ artifactId: 'panel', tier: 'reactNative',
                 entry: 'react-native/panel/entry.cjs.bundle', files: [{ relativePath: 'react-native/panel/entry.cjs.bundle',
                     digest: `sha256:${'1'.repeat(64)}`, byteSize: 12 }], digest: `sha256:${'2'.repeat(64)}`,

@@ -34,6 +34,21 @@ function createCommittedAuthorization(
 }
 
 describe('loadPluginModule', () => {
+    it('loads the portable CommonJS artifact through the existing admitted module loader', async () => {
+        const entryPath = await writeDaemonModule({
+            extension: 'cjs.bundle',
+            contents: 'exports.activateAccount = (api) => api.actions.register("read", async () => ({ value: 7 }));',
+        });
+        try {
+            const loaded = await loadPluginModule({ source: {
+                kind: 'file_backed', entryPath, committedAuthorization: createCommittedAuthorization(entryPath),
+            } });
+            expect(loaded.activateAccount).toEqual(expect.any(Function));
+        } finally {
+            await rm(entryPath, { force: true });
+        }
+    });
+
     it('uses canonical native ESM identity for JavaScript development leaves and a scoped Jiti graph only for TypeScript', () => {
         expect(resolvePluginModuleLoadMode({
             entryPath: '/plugins/acme/src/factory.mjs',
