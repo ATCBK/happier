@@ -134,7 +134,9 @@ describe('useFileBlame', () => {
     });
 
     it('keeps project scope git-only and never reads another Home Session as evidence', async () => {
-        const hook = await renderHook(useFileBlame, { initialProps: { ...input, session: null } });
+        const hook = await renderHook<ReturnType<typeof useFileBlame>, UseFileBlameInput>(useFileBlame, {
+            initialProps: { ...input, session: null },
+        });
         expect(hook.getCurrent().runs).toMatchObject([{ kind: 'uncommitted', lineCount: 2 }]);
         await hook.rerender({ ...input, session: { ...input.session!, address: { serverId: 'other', sessionId: 's' } } });
         expect(hook.getCurrent().runs).toMatchObject([{ kind: 'uncommitted', lineCount: 2 }]);

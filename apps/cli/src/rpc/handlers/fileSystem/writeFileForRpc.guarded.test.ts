@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, symlink, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, symlink, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +19,8 @@ vi.mock('node:fs/promises', async () => {
 });
 
 import { writeFileForRpc } from './writeFileForRpc';
+import { createWriteFileRpcActionExecutor } from './writeFileHandler';
+import { FilesystemWriteFileOutputSchema, isFilesystemWriteGuardErrorCode } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { OS_USER_FILESYSTEM_ACCESS_POLICY } from './accessPolicy/filesystemAccessPolicy';
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -37,6 +39,26 @@ afterEach(async () => {
 });
 
 describe('guarded filesystem RPC', () => {
+  it.each(['hash_mismatch', 'expected_file_missing', 'expected_file_absent'] as const)(
+    'retains %s through the write Action response consumed by the editor', async errorCode => {
+      const { root, path, deps } = await fixture();
+      if (errorCode !== 'expected_file_missing') await writeFile(path, 'changed on disk');
+      const result = await createWriteFileRpcActionExecutor(deps).execute('daemon.filesystem.writeFile', {
+        rootPath: root, path, content: Buffer.from('mine').toString('base64'),
+        expectedHash: errorCode === 'expected_file_absent' ? null : hash('before'),
+      });
+      if (!result.ok) throw new Error(result.error);
+      const response = FilesystemWriteFileOutputSchema.parse(result.result);
+      expect(response).toMatchObject({ success: false, errorCode });
+      expect(!response.success && isFilesystemWriteGuardErrorCode(response.errorCode)).toBe(true);
+      if (errorCode === 'expected_file_missing') {
+        await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+      } else {
+        expect(await readFile(path, 'utf8')).toBe('changed on disk');
+      }
+    },
+  );
+
   it('keeps private file bytes private before publication', async () => {
     const { path, deps } = await fixture();
     await writeFile(path, 'before', { mode: 0o600 });
@@ -62,6 +84,7 @@ describe('guarded filesystem RPC', () => {
     const { root, path, deps } = await fixture();
     const link = join(root, 'linked.txt');
     await writeFile(path, 'before', { mode: 0o751 });
+    await chmod(path, 0o751);
     await symlink(path, link);
     const result = await writeFileForRpc({ path: link, content: Buffer.from('mine').toString('base64'), expectedHash: hash('before') }, deps);
     expect(result).toEqual({ success: true, hash: hash('mine') });

@@ -57,6 +57,14 @@ describe('executeScmDiffSummaryAction', () => {
         return fixture;
     }
 
+    function savedSummaryOutput(captured: Awaited<ReturnType<typeof captureScmComparison>>, summaryMarkdown: string) {
+        const changeRefs = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(occurrence => occurrence.id));
+        return ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: captured.comparison.id,
+            comparison: captured.comparison, metadata: captured.metadata, summaryMarkdown, requestedOutputs: ['summary'],
+            outputs: { summary: { state: 'complete', value: { summaryMarkdown } } },
+            analysis: { suppliedChangeRefs: changeRefs, analysedChangeRefs: changeRefs, remainingChangeRefs: [] } });
+    }
+
     it.each([
         { sessionId: undefined, comparisonId: undefined },
         { sessionId: 'summary-session', comparisonId: undefined },
@@ -113,10 +121,8 @@ describe('executeScmDiffSummaryAction', () => {
         const fixture = await changedRepository();
         const sessionId = 'draft-session';
         const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' }, sessionId });
-        await scmDiffSummaryResultStore.create({ cwd: fixture.rootPath, sessionId, output: {
-            success: true, sourceKey: captured.comparison.id, comparison: captured.comparison,
-            summaryMarkdown: 'Existing explanation',
-        } });
+        await scmDiffSummaryResultStore.create({ cwd: fixture.rootPath, sessionId,
+            output: savedSummaryOutput(captured, 'Existing explanation') });
         const actions: string[] = [];
         let resultId: string | undefined;
         const request = { cwd: fixture.rootPath,
@@ -186,9 +192,8 @@ describe('executeScmDiffSummaryAction', () => {
     it('keeps missing command results and unavailable transcript pages honest, excluding prose test claims and other Sessions', async () => {
         const fixture = await changedRepository();
         const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' } });
-        await scmDiffSummaryResultStore.create({ cwd: fixture.rootPath, sessionId: 'other-session', output: {
-            success: true, sourceKey: captured.comparison.id, comparison: captured.comparison, summaryMarkdown: 'Unrelated Session summary',
-        } });
+        await scmDiffSummaryResultStore.create({ cwd: fixture.rootPath, sessionId: 'other-session',
+            output: savedSummaryOutput(captured, 'Unrelated Session summary') });
         const scope = { cwd: fixture.rootPath, comparison: captured.comparison, sessionId: 'selected-session',
             executeCanonicalAction: async () => ({ ok: true as const, result: { success: true, nextAction: { kind: 'none' }, template: { kind: 'ready' } } }) };
         const partial = JSON.parse(await loadScmPullRequestDraftEvidence({ ...scope, readTranscriptPage: async ({ afterSeq }) => {

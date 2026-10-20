@@ -188,6 +188,7 @@ const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
   [RPC_METHODS.TRANSCRIPT_SEARCH]: 'transcript.search',
   [RPC_METHODS.SCM_PULL_REQUEST_LIST]: 'scm.pullRequest.list',
   [RPC_METHODS.SCM_BLAME_FILE]: 'scm.blame.get',
+  [RPC_METHODS.SCM_FILE_READ]: 'scm.file.read',
   [RPC_METHODS.SCM_PULL_REQUEST_GET]: 'scm.pullRequest.get',
   [RPC_METHODS.SCM_PULL_REQUEST_OPEN_OR_REUSE]: 'scm.pullRequest.openOrReuse',
   [RPC_METHODS.SCM_PULL_REQUEST_OPEN_COMPOSE]: 'scm.pullRequest.openCompose',

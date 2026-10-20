@@ -19,6 +19,20 @@ async function importRpcPolicy() {
 }
 
 describe('MachineRpcRoutePolicyV1', () => {
+  it('routes revision file reads through the server under their SCM Action', async () => {
+    const protocol = await importRpcPolicy();
+    if ('importError' in protocol) throw protocol.importError;
+    expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.SCM_FILE_READ)).toMatchObject({
+      method: RPC_METHODS.SCM_FILE_READ,
+      routeClass: 'server_required',
+      serverRequiredReason: 'ambiguous',
+      rpcClassification: 'action_spec_bound',
+      actionSpecId: 'scm.file.read',
+      scope: { accountRequired: true, machineRequired: true, serverRequired: true },
+    });
+    expect(protocol.resolveEphemeralRunnerMachineRpcAuthority(RPC_METHODS.SCM_FILE_READ)).toBeNull();
+  });
+
   it('projects prepare-between only from finite Project worker and reviewed Service Move roots', async () => {
     const { resolveMachineRpcExternalActionEffectV1: resolve } = await import('./routePolicyV1');
     const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-root', binding: {

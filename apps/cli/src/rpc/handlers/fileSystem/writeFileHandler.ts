@@ -16,7 +16,7 @@ export function createWriteFileRpcActionExecutor(deps: WriteFileHandlerDeps): Rp
       const result = await writeFileForRpc(input as WriteFileRequest | undefined, deps);
       return {
         ok: true,
-        result: result.success ? result : { success: false, error: result.error },
+        result,
       };
     },
   };

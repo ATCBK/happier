@@ -4,19 +4,42 @@ import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { createUiFilesystemAction } from './filesystemActionDeps';
+import { subscribeAcknowledgedWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 
-const transport = vi.hoisted(() => vi.fn(async (_input: unknown) => ({ success: false, error: 'Destination already exists' })));
+const transport = vi.hoisted(() => vi.fn<(_input: unknown) => Promise<unknown>>(async () => ({ success: false, error: 'Destination already exists' })));
 // Machine RPC is the genuine cross-process boundary; Action admission remains real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc', () => ({ callGuardedMachineRpcWithPolicy: transport }));
 
 // The host fixture uses canonical Account policy waivers for these transport
 // effects. The executor still validates authority, schemas and targets.
 const context = { surface: 'ui', authority: 'present_user', actionsSettings: normalizeActionsSettingsV1({ v: 1,
-    approvalWaivedSurfaces: Object.fromEntries(['daemon.filesystem.rename', 'daemon.filesystem.createDirectory', 'daemon.filesystem.download', 'daemon.filesystem.copy']
+    approvalWaivedSurfaces: Object.fromEntries(['daemon.filesystem.rename', 'daemon.filesystem.createDirectory', 'daemon.filesystem.download', 'daemon.filesystem.copy', 'daemon.filesystem.writeFile']
         .map(actionId => [actionId, ['ui']])),
 }) } as const;
 
 describe('UI filesystem Action transport', () => {
+    it('acknowledges only successful saved bytes on the admitted Account, including mounted byte delivery', async ({ onTestFinished }) => {
+        const writes: Array<string | null> = [];
+        const target = { serverId: 'home', accountId: 'account', machineId: 'machine', rootPath: '/repo' };
+        const dispose = subscribeAcknowledgedWorkspaceFileWrites(target, 'file.txt', write => { writes.push(write.hash); });
+        onTestFinished(dispose);
+        const input = { rootPath: '/repo', path: '/repo/file.txt', content: 'bmV3' };
+        const invocation = { ...context, serverId: 'home', runtimeAccountId: 'account',
+            externalActionTarget: { kind: 'machine' as const, machineId: 'machine' } };
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({ filesystemActionExecute: createUiFilesystemAction() }));
+        transport.mockResolvedValueOnce({ success: true, hash: 'a'.repeat(64) })
+            .mockResolvedValueOnce({ success: false, error: 'Changed', errorCode: 'hash_mismatch' });
+        expect(await executor.execute('daemon.filesystem.writeFile', input, invocation)).toMatchObject({ ok: true, result: { success: true } });
+        expect(writes).toEqual(['a'.repeat(64)]);
+        await executor.execute('daemon.filesystem.writeFile', input, invocation);
+        expect(writes).toEqual(['a'.repeat(64)]);
+        const controller = new AbortController();
+        const delivered = createUiFilesystemAction(undefined, { actionId: 'daemon.filesystem.writeFile', signal: controller.signal,
+            execute: async () => ({ success: true, hash: 'b'.repeat(64) }) });
+        await delivered({ actionId: 'daemon.filesystem.writeFile', input,
+            context: { ...invocation, signal: controller.signal } });
+        expect(writes).toEqual(['a'.repeat(64), 'b'.repeat(64)]);
+    });
     it('preserves the addressed Home, machine, root and explicit conflict choice', async () => {
         const input = { rootPath: '/repo', from: 'a', to: 'b', overwrite: false };
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({ filesystemActionExecute: createUiFilesystemAction() }));

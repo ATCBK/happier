@@ -1,7 +1,7 @@
 import type { Message } from '@happier-dev/session-core/messages';
 import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 import { readToolCallMutationPaths, type ToolCallFileMutation } from '@/scm/refresh/workspaceMutationDetection/extractWorkspaceMutations';
-import { isAbsoluteLocalPath, resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
+import { isAbsoluteLocalPath, normalizeRelativeLocalPath, resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
 
 export type LiveFileWrite = Readonly<{
@@ -20,7 +20,7 @@ function relativePath(path: string, workspaceRoot: string | null): string | null
         ? workspaceRoot ? resolvePathRelativeToRoot({ path, root: workspaceRoot, preservePathSpelling: true }) : null
         : separated;
     if (relative === null) return null;
-    const normalized = relative.replace(/^\.\/+/, '').replace(/\/{2,}/g, '/');
+    const normalized = normalizeRelativeLocalPath(relative);
     return isSafeWorkspaceRelativePath(normalized) ? normalized : null;
 }
 

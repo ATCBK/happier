@@ -3,6 +3,7 @@ import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 
 import { act, flushHookEffects, renderHook } from '@/dev/testkit';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { subscribeAcknowledgedWorkspaceFileWrites } from './workspaceFileAcknowledgements';
 import {
   buildReplaceApplyFiles,
   buildReplacePreviewUnifiedDiff,
@@ -222,7 +223,11 @@ describe('useWorkspaceReplace', () => {
         expect(hook.getCurrent().canApply).toBe(true);
     });
 
-    it('applies the reviewed selection, skips unsaved files, and undoes with the recorded edits', async () => {
+    it('applies the reviewed selection, skips unsaved files, and undoes with the recorded edits', async ({ onTestFinished }) => {
+        const acknowledged: Array<string | null> = [];
+        const dispose = subscribeAcknowledgedWorkspaceFileWrites({ ...scope, accountId: 'acct' }, modal.path,
+            write => { acknowledged.push(write.hash); });
+        onTestFinished(dispose);
         const edits = [{ startUtf16: 9, deleteLength: 19, insertText: 'useSettingsModalKey', originalText: 'useSettingsRouteKey' }];
         rpc.call.mockResolvedValueOnce(previewOk)
             .mockResolvedValueOnce({ ok: true, results: [{ path: modal.path, status: 'replaced', hash: hash('d'), matchCount: 3, edits }] })
@@ -237,13 +242,19 @@ describe('useWorkspaceReplace', () => {
             operation: { kind: 'replace', matcher, files: [{ path: modal.path, expectedHash: hash('a') }] } } });
         expect(hook.getCurrent().results?.map((entry) => [entry.path, entry.status])).toEqual([[modal.path, 'replaced'], [doc.path, 'skipped']]);
         expect(hook.getCurrent().canUndo).toBe(true);
+        expect(acknowledged).toEqual([hash('d')]);
         await act(async () => { await hook.getCurrent().undo(); });
         expect(rpc.call.mock.calls[2]![0]).toMatchObject({ payload: { operation: { kind: 'restore', files: [{ path: modal.path, expectedHash: hash('d'), edits }] } } });
         expect(hook.getCurrent().results?.[0]?.status).toBe('restored');
         expect(hook.getCurrent().canUndo).toBe(false);
+        expect(acknowledged).toEqual([hash('d'), hash('a')]);
     });
 
-    it('reports a file changed since the replace when Undo finds other bytes', async () => {
+    it('reports a file changed since the replace when Undo finds other bytes', async ({ onTestFinished }) => {
+        const acknowledged: Array<string | null> = [];
+        const dispose = subscribeAcknowledgedWorkspaceFileWrites({ ...scope, accountId: 'acct' }, modal.path,
+            write => { acknowledged.push(write.hash); });
+        onTestFinished(dispose);
         const edits = [{ startUtf16: 4, deleteLength: 19, insertText: 'useSettingsModalKey', originalText: 'useSettingsRouteKey' }];
         rpc.call.mockResolvedValueOnce(previewOk)
             .mockResolvedValueOnce({ ok: true, results: [{ path: doc.path, status: 'replaced', hash: hash('e'), matchCount: 1, edits },
@@ -255,5 +266,6 @@ describe('useWorkspaceReplace', () => {
         expect(summarizeReplaceResults(hook.getCurrent().results ?? [])).toMatchObject({ replacedFiles: 1, changed: 1 });
         await act(async () => { await hook.getCurrent().undo(doc.path); });
         expect(hook.getCurrent().results?.find((entry) => entry.path === doc.path)?.status).toBe('undoChanged');
+        expect(acknowledged).toEqual([]);
     });
 });

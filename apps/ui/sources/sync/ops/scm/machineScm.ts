@@ -93,6 +93,9 @@ import {
     resolveScmGitRepoPreferredBackendId,
 } from '@/scm/settings/preferences';
 import { getFirstPartyScmBackendLegacyLocalId } from '@/scm/registry/firstPartyScmBackendIdentity';
+import { ScmChangeDiscardResponseSchema } from '@happier-dev/protocol/scm';
+import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { acknowledgeWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 
 const SCM_DIFF_COMMIT_TIMEOUT_MS = 120_000;
 
@@ -181,7 +184,18 @@ async function callMachineScmTransport<
     options?: MachineScmCallOptions,
 ): Promise<ScmRpcTransportResult<T>> {
     try {
-        return await runMachineScmRpc<T, R>(machineId, method, request, options);
+        const result = await runMachineScmRpc<T, R>(machineId, method, request, options);
+        if (method === RPC_METHODS.SCM_CHANGE_DISCARD && request.cwd) {
+            const account = createServerAccountScope(options?.serverId, options?.accountId);
+            const parsed = ScmChangeDiscardResponseSchema.safeParse(result);
+            // A sibling refusal does not undo entries already committed by the Machine.
+            if (account && parsed.success) {
+                acknowledgeWorkspaceFileWrites({ ...account, machineId, rootPath: request.cwd }, (parsed.data.entries ?? [])
+                    .filter(entry => entry.status !== 'refused' && entry.status !== 'kept_edited')
+                    .map(entry => ({ path: entry.path, hash: entry.hashAfter })));
+            }
+        }
+        return result;
     } catch (error) {
         // A caller-cancelled search must reach the caller as an abort so it can discard the
         // request silently — not be reclassified as a backend failure, which would present

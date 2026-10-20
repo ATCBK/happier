@@ -56,6 +56,17 @@ be presented as an external write. Saved is a short presentation state, not
 another persistence state. Autosave remains opt-in and is suspended by a
 conflict or refusal; reconnection alone does not save.
 
+Acknowledged Save, Discard/Restore and Replace/Undo results notify the same
+mounted saved-byte loader through `workspaceFileAcknowledgements.ts`. The
+notification is qualified by Home, Account, Machine and canonical file path;
+it carries the writer's returned hash, not inferred text. The loader invalidates
+older reads and reuse, records the own-write hash before refreshing, and defers
+hidden-page reads until the page is active. A failed read retains the last
+useful content with stale freshness; a dirty editor remains untouched. This
+notification holds no file bytes, history or watcher, and adds no per-feature
+refresh policy. A known-text Save still publishes its exact acknowledged text
+immediately through that loader.
+
 The focused details group's active editor owns the save keyboard command.
 Retained editors in other groups must not handle that command. The mounted
 editor Action owner uses the same hook operations, without opening a new editor.

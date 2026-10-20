@@ -7,6 +7,8 @@ import { useSessionLiveFileWrites } from './useSessionLiveFileWrites';
 import { useWorkspaceLiveFileWrites } from './useWorkspaceLiveFileWrites';
 import { useWorkspaceFileWriteSettlements } from './useWorkspaceFileWriteSettlements';
 import { useWorkspaceFileWriteTabPresentation } from '@/components/workspaces/files/useWorkspaceFileWriteTabPresentation';
+import { forwardCodeIntelligenceSettlements } from '@/sync/domains/workspaces/languageIntelligence/codeIntelligenceSettlements';
+import { SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } from '@/sync/domains/session/attention/runtimePresentation';
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => ({ serverId: 'home-a', serverUrl: 'https://example.com', generation: 1 }),
@@ -74,7 +76,12 @@ describe('live file-write hooks', () => {
         expect(renders).toBe(initialRenders);
         await act(async () => storage.setState({ sessions: { 'session-1': session('session-1', { thinking: false, latestTurnStatus: 'completed' }) } }));
         expect(hook.getCurrent().size).toBe(0);
-        await act(async () => storage.setState({ sessions: { 'session-1': session('session-1', { presence: 'offline', active: false }) } }));
+        await act(async () => storage.setState({ sessions: { 'session-1': session() } }));
+        expect([...hook.getCurrent().keys()]).toEqual(['src/one.ts']);
+        const lastSeenAt = Date.now() - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1;
+        await act(async () => storage.setState({ sessions: { 'session-1': session('session-1', {
+            presence: lastSeenAt, active: false, activeAt: lastSeenAt,
+        }) } }));
         expect(hook.getCurrent().size).toBe(0);
     });
 
@@ -99,14 +106,73 @@ describe('live file-write hooks', () => {
         expect([...hook.getCurrent().keys()]).toEqual(['src/one.ts']);
     });
 
-    it('keeps a live background agent write after the primary turn completes', async () => {
+    it('keeps own and nested workspace background writes after the primary turn completes without mixing session-current files', async () => {
         const task = createToolCallMessageFixture({ id: 'task', tool: { ...call('task', 'ignored.ts').tool, name: 'Task', input: {} },
-            children: [call('background', 'background.ts')] });
+            children: [call('nested-background', 'nested-background.ts')] });
         storage.setState({ sessions: { 'session-1': session('session-1', {
             thinking: false, latestTurnStatus: 'completed', runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
-        }) }, sessionMessages: { 'session-1': transcript([task]) } });
-        const hook = await renderHook(() => useWorkspaceLiveFileWrites(scope));
-        expect([...hook.getCurrent().keys()]).toEqual(['background.ts']);
+        }) }, sessionMessages: { 'session-1': transcript([call('background', 'background.ts'), task]) } });
+        const hook = await renderHook(() => ({
+            workspace: useWorkspaceLiveFileWrites(scope),
+            session: useSessionLiveFileWrites({ serverId: 'home-a', sessionId: 'session-1' }, '/repo'),
+        }));
+        expect([...hook.getCurrent().workspace.keys()]).toEqual(['background.ts', 'nested-background.ts']);
+        expect([...hook.getCurrent().session.keys()]).toEqual(['background.ts']);
+    });
+
+    it('keeps normalized subagent sidechains out of the parent live map while retaining child-session attribution and settlements', async () => {
+        storage.setState({ sessions: { 'session-1': session(), child: session('child') },
+            sessionMessages: { 'session-1': transcript([]), child: transcript([]) } });
+        const settled = vi.fn<(paths: readonly string[]) => void>();
+        const hook = await renderHook(() => {
+            useWorkspaceFileWriteSettlements(scope, settled);
+            return {
+                parent: useSessionLiveFileWrites({ serverId: 'home-a', sessionId: 'session-1' }, '/repo'),
+                child: useSessionLiveFileWrites({ serverId: 'home-a', sessionId: 'child' }, '/repo'),
+                workspace: useWorkspaceLiveFileWrites(scope),
+            };
+        });
+        await act(async () => {
+            storage.getState().applyMessages('session-1', [{
+                id: 'main-message', localId: null, createdAt: 10, role: 'agent', isSidechain: false,
+                content: [{ type: 'tool-call', id: 'main-write', name: 'Write', input: { file_path: 'main.ts', content: 'main' },
+                    description: null, uuid: 'main-uuid', parentUUID: null },
+                { type: 'tool-call', id: 'task', name: 'Task', input: { prompt: 'Write child.ts' },
+                    description: null, uuid: 'task-uuid', parentUUID: null }],
+            }, {
+                id: 'child-mirror', localId: null, createdAt: 20, role: 'agent', isSidechain: true, sidechainId: 'task',
+                content: [{ type: 'tool-call', id: 'nested-write', name: 'Write', input: { file_path: 'child.ts', content: 'child' },
+                    description: null, uuid: 'nested-uuid', parentUUID: null }],
+            }]);
+        });
+        const parentRows = Object.values(storage.getState().sessionMessages['session-1'].messagesById);
+        expect(parentRows.find(message => message.kind === 'tool-call' && message.tool.id === 'task')).toMatchObject({
+            children: [{ kind: 'tool-call', tool: { id: 'nested-write', state: 'running' } }],
+        });
+        expect([...hook.getCurrent().parent.keys()]).toEqual(['main.ts']);
+        // A sidechain need not have a separately loaded Session. Workspace presence must retain it.
+        expect(hook.getCurrent().workspace.get('child.ts')?.sessionId).toBe('session-1');
+        await act(async () => {
+            storage.getState().applyMessages('child', [{
+                id: 'child-message', localId: null, createdAt: 21, role: 'agent', isSidechain: false,
+                content: [{ type: 'tool-call', id: 'child-write', name: 'Write', input: { file_path: 'child.ts', content: 'child' },
+                    description: null, uuid: 'child-uuid', parentUUID: null }],
+            }]);
+        });
+        expect([...hook.getCurrent().parent.keys()]).toEqual(['main.ts']);
+        expect(hook.getCurrent().child.get('child.ts')?.sessionId).toBe('child');
+        expect([...hook.getCurrent().workspace].map(([path, write]) => [path, write.sessionId])).toEqual([
+            ['main.ts', 'session-1'], ['child.ts', 'child'],
+        ]);
+        await act(async () => {
+            await storage.getState().applyMessages('session-1', [{
+                id: 'nested-result', localId: null, createdAt: 30, role: 'agent', isSidechain: true, sidechainId: 'task',
+                content: [{ type: 'tool-result', tool_use_id: 'nested-write', content: 'written', is_error: false,
+                    uuid: 'nested-result-uuid', parentUUID: null }],
+            }]);
+        });
+        expect(settled.mock.calls).toEqual([[['child.ts']]]);
+        expect([...hook.getCurrent().parent.keys()]).toEqual(['main.ts']);
     });
 });
 
@@ -159,5 +225,21 @@ describe('useWorkspaceFileWriteSettlements', () => {
         }]); });
         expect(hook.getCurrent().size).toBe(0);
         expect(settled.mock.calls).toEqual([[['src/created.ts']]]);
+    });
+
+    it('forwards settled tool paths to language intelligence only while the server accepts external changes', async () => {
+        storage.setState({ sessionMessages: { 'session-1': transcript([]) } });
+        let accepts = false;
+        const syncExternal = vi.fn<(_paths: readonly string[]) => Promise<void>>().mockResolvedValue();
+        await renderHook(() => useWorkspaceFileWriteSettlements(scope, (paths) => {
+            void forwardCodeIntelligenceSettlements(paths, { acceptsExternalChanges: () => accepts, syncExternal });
+        }));
+        await act(async () => storage.setState({ sessionMessages: { 'session-1': transcript([call('without-watch', 'ignored.ts', 'completed')], 2) } }));
+        expect(syncExternal).not.toHaveBeenCalled();
+        accepts = true;
+        await act(async () => storage.setState({ sessionMessages: { 'session-1': transcript([
+            call('without-watch', 'ignored.ts', 'completed'), call('with-watch', 'src/imported.ts', 'completed'),
+        ], 3) } }));
+        expect(syncExternal.mock.calls).toEqual([[['src/imported.ts']]]);
     });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ToolCallMessage, ToolCall } from '@happier-dev/session-core/messages';
 import { createToolCallMessageFixture } from '@/dev/testkit';
 import { readFileSync } from 'node:fs';
-import type { ToolTraceFixturesV1 } from '../../../../../../../cli/src/agent/tools/trace/extractToolTraceFixtures';
+import { z } from 'zod';
 
 import { deriveLiveFileWrites, deriveSettledFileWrites } from './deriveLiveFileWrites';
 
@@ -17,7 +17,9 @@ const options = { workspaceRoot: '/repo', sessionId: 'session-1' };
 describe('deriveLiveFileWrites', () => {
     it('projects the committed Claude, Codex and ACP incoming tool-trace payloads without recreating their input shapes', () => {
         // This is the CLI trace owner's curated, sanitized corpus, not a current-type reconstruction.
-        const fixtures = JSON.parse(readFileSync(new URL('../../../../../../../cli/src/agent/tools/normalization/__fixtures__/tool-trace-fixtures.v1.json', import.meta.url), 'utf8')) as ToolTraceFixturesV1;
+        const fixtures = z.object({
+            examples: z.record(z.string(), z.array(z.object({ sessionId: z.string(), payload: z.unknown() }))),
+        }).parse(JSON.parse(readFileSync(new URL('../../../../../../../cli/src/agent/tools/normalization/__fixtures__/tool-trace-fixtures.v1.json', import.meta.url), 'utf8')));
         const cases = [
             ['claude/claude/tool-call/Edit', '/Users/USER/Development/happy-local', '.tmp/happy-tool-ux.txt'],
             ['claude/claude/tool-call/Write', '/Users/USER/Development/happy-local', '.tmp/happy-tool-ux.txt'],

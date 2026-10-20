@@ -3,6 +3,7 @@ import { createScmCapabilities, ScmPullRequestPrepareWorktreeRequestSchema } fro
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { subscribeAcknowledgedWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
@@ -28,6 +29,65 @@ beforeEach(async () => {
 afterEach(() => standardCleanup());
 
 describe('SCM Action target binding', () => {
+    it('acknowledges Discard and Restore hashes but not refused or kept-edited files', async ({ onTestFinished }) => {
+        const hashes: Array<string | null> = [];
+        const dispose = subscribeAcknowledgedWorkspaceFileWrites({ serverId: 'home', accountId: 'account',
+            machineId: 'machine', rootPath: '/repo' }, 'file.txt', write => { hashes.push(write.hash); });
+        onTestFinished(dispose);
+        const invoke = createUiScmAction();
+        const input = { cwd: '/repo', entries: [{ path: 'file.txt', kind: 'modified' as const }] };
+        const context = { serverId: 'home', runtimeAccountId: 'account', externalActionTarget: { kind: 'machine' as const, machineId: 'machine' } };
+        for (const [status, hashAfter] of [['reverted', 'a'.repeat(64)], ['recreated', 'b'.repeat(64)],
+            ['deleted', null], ['kept_edited', 'c'.repeat(64)], ['refused', null]] as const) {
+            rpc.mockResolvedValueOnce({ success: true, entries: [{ path: 'file.txt', status,
+                hashBefore: 'd'.repeat(64), hashAfter }] });
+            await invoke({ actionId: 'scm.change.discard', input, context, executeCanonicalAction });
+        }
+        expect(hashes).toEqual(['a'.repeat(64), 'b'.repeat(64), null]);
+    });
+    it('acknowledges a Session discard on its resolved workspace, never the authored cwd', async () => {
+        const serverId = await harness.addHome({ name: 'Selected Home', serverUrl: 'https://selected.example',
+            accountId: 'account-other', serverIdentityId: 'srv_selected', currentAccount: true });
+        harness.answer(serverId, '/v1/account/encryption/currentness', { body: {
+            mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        } });
+        storage.setState({ sessions: { selected: createSessionFixture({ id: 'selected', serverId,
+            metadata: { path: '/repo/selected', machineId: 'machine-other', host: 'host', homeDir: '/home/user' },
+        }) } });
+        const hashes: Array<string | null> = [];
+        const workspace = { serverId, accountId: 'account-other', machineId: 'machine-other', rootPath: '/repo/selected' };
+        const dispose = subscribeAcknowledgedWorkspaceFileWrites(workspace, 'file.txt', write => { hashes.push(write.hash); });
+        const wrong: Array<string | null> = [];
+        const disposeWrong = subscribeAcknowledgedWorkspaceFileWrites({ ...workspace, rootPath: '/repo/not-selected' }, 'file.txt',
+            write => { wrong.push(write.hash); });
+        try {
+            rpc.mockResolvedValue({ success: true, entries: [{ path: 'file.txt', status: 'restored',
+                hashBefore: 'a'.repeat(64), hashAfter: 'b'.repeat(64) }] });
+            const result = await createUiScmAction()({ actionId: 'scm.change.discard',
+                input: { cwd: '/repo/not-selected', entries: [{ path: 'file.txt', kind: 'modified' }] },
+                context: { serverId, runtimeAccountId: 'account-other', defaultSessionId: 'selected' }, executeCanonicalAction });
+            expect(result).toMatchObject({ success: true, entries: [{ path: 'file.txt', hashAfter: 'b'.repeat(64) }] });
+            expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-other',
+                method: 'scm.change.discard', payload: expect.objectContaining({ cwd: '/repo/selected' }) }));
+            expect(hashes).toEqual(['b'.repeat(64)]);
+            expect(wrong).toEqual([]);
+        } finally { dispose(); disposeWrong(); }
+    });
+    it('acknowledges committed siblings in a partially refused Discard result', async ({ onTestFinished }) => {
+        const hashes: Array<string | null> = [];
+        onTestFinished(subscribeAcknowledgedWorkspaceFileWrites({ serverId: 'home', accountId: 'account',
+            machineId: 'machine', rootPath: '/repo' }, 'file.txt', write => { hashes.push(write.hash); }));
+        rpc.mockResolvedValue({ success: false, errorCode: 'CHANGE_MOVED_ON', error: 'Other file changed', entries: [
+            { path: 'file.txt', status: 'reverted', hashBefore: 'a'.repeat(64), hashAfter: 'b'.repeat(64) },
+            { path: 'other.txt', status: 'refused', hashBefore: null, hashAfter: null, errorCode: 'CHANGE_MOVED_ON' },
+        ] });
+        const result = await createUiScmAction()({ actionId: 'scm.change.discard',
+            input: { cwd: '/repo', entries: [{ path: 'file.txt', kind: 'modified' }, { path: 'other.txt', kind: 'modified' }] },
+            context: { serverId: 'home', runtimeAccountId: 'account', externalActionTarget: { kind: 'machine', machineId: 'machine' } },
+            executeCanonicalAction });
+        expect(result).toMatchObject({ success: false });
+        expect(hashes).toEqual(['b'.repeat(64)]);
+    });
     it('resolves an address on a Machine without a checkout or repository payload', async () => {
         const result = { success: true, kind: 'unknown' };
         rpc.mockResolvedValue(result);

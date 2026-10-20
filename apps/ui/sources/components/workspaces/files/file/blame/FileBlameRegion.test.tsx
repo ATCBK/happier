@@ -154,6 +154,7 @@ describe('BlameCard', () => {
           run={run}
           nowMs={Date.now()}
           agentId={null}
+          inSession={false}
           onOpenCommit={onOpenCommit}
           onClose={() => {}}
         />,
@@ -167,6 +168,7 @@ describe('BlameCard', () => {
           run={run}
           nowMs={Date.now()}
           agentId={null}
+          inSession={false}
           onClose={() => {}}
         />,
       );

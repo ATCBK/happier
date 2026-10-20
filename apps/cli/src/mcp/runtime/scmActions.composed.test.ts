@@ -24,7 +24,7 @@ import type { ExecutionRunController } from '@/agent/executionRuns/controllers/t
 import { resolveRunnerMcpServers } from './resolveRunnerMcpServers';
 import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
 import { prepareExternalActionRequesterAccountAuthorization } from '@/api/externalActionExecutionAuthorization';
-import { ExternalActionExecutionAuthorizationRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { bindExternalActionExecutionAuthorizationVerifyHttpPathV1, ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { AgentRuntimeDaemonServiceRequestV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemonServiceAuthority,
@@ -122,6 +122,7 @@ describe('Session SCM daemon placement', () => {
         runtimeLifetimeSignal: lifetime.signal, readActiveTurnAdmissionWitness: () => witness });
       const settings = accountSettingsParse({});
       const proofInputs: unknown[] = [];
+      let proofBoundaryFailure: unknown;
       let authority: Parameters<typeof removeAgentRuntimeDaemonServiceAuthorityIfOwned>[0] | undefined;
       if (restricted) {
         const command = 'node /runtime/.runner-snapshots/scm-route/dist/index.mjs';
@@ -138,17 +139,23 @@ describe('Session SCM daemon placement', () => {
         authority = { ...binding, capabilityDigest: hashPrivateBearer('A'.repeat(43)) };
         vi.stubEnv('HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE', path);
         const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31));
-        vi.spyOn(axios, 'post').mockImplementation(async (_url, body) => {
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+          try {
+          if (new URL(String(url)).pathname === bindExternalActionExecutionAuthorizationVerifyHttpPathV1('scm.diff.file')) {
+            expect(body).toEqual({ v: 1 });
+            return { status: 200, data: { ok: true } };
+          }
           const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
           if (request.envelope.v !== 1) throw new Error('Plain fixture requires a plain Action envelope');
           proofInputs.push(request.envelope.input);
-          return { status: 200, data: { v: 1, token: 'fixture-home-proof', binding: {
+          return { status: 200, data: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'fixture-home-proof', binding: {
             serverIdentityId: 'srv_scm_fixture', accountId: 'fixture-account', custodianAccountId: 'fixture-account',
             authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain', machineId,
             installationId: 'scm-fixture-installation', actionId: 'scm.diff.file', requestId: request.envelope.requestId,
             requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target: request.envelope.target,
             sessionActionOrigin: request.sessionActionOrigin, sessionActionSource: request.sessionActionSource,
-          } } };
+          } }) };
+          } catch (error) { proofBoundaryFailure = error; throw error; }
         });
         const daemon = createDaemonSessionAccountActionExecutor({ machineId, serverId: configuration.activeServerId,
           serverHttpBaseUrl: configuration.serverUrl, token: credentials.token, credentials,
@@ -177,7 +184,10 @@ describe('Session SCM daemon placement', () => {
           return Response.json({ ok: true, result: { kind: 'action.execution', requestId: request.operation.requestId, outcome } });
         });
       }
-      const binding = await resolveRunnerMcpServers({
+      const client = new Client({ name: 'scm-route-test', version: '1' });
+      let binding: Awaited<ReturnType<typeof resolveRunnerMcpServers>> | undefined;
+      try {
+      binding = await resolveRunnerMcpServers({
         session: createMutableApiSessionClientFixture({ sessionId, overrides: {
           getServerBinding: () => ({ serverId: configuration.activeServerId, serverUrl: configuration.serverUrl }),
           getCurrentSessionLocation: () => ({ path: parent, machineId }),
@@ -197,14 +207,14 @@ describe('Session SCM daemon placement', () => {
           isCurrent: () => !lifetime.signal.aborted, getPermissionMode: () => 'read-only' as const,
           readActiveTurnAdmissionWitness: () => witness, readCurrentRunOccurrence: registry.reader.readCurrentRunOccurrence } } : {}),
       });
-      const client = new Client({ name: 'scm-route-test', version: '1' });
-      try {
         await client.connect(new StreamableHTTPClientTransport(new URL(binding.happierMcpServer.url)));
         const output = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute', arguments: {
           actionId: 'scm.diff.file', input: { cwd: '/authored/elsewhere', path: 'arithmetic.js', area: 'pending',
             backendPreference: { kind: 'prefer', backendId } },
         } }));
         const content = output.content.find(block => block.type === 'text');
+        if (proofBoundaryFailure) throw proofBoundaryFailure;
+        if (restricted) expect(proofInputs, 'Restricted SCM must reach original Home minting').toHaveLength(1);
         if (content?.type !== 'text') throw new Error('Missing SCM MCP response');
         expect(output.isError, content.text).not.toBe(true);
         const response = ScmDiffFileResponseSchema.parse(JSON.parse(content.text));
@@ -218,7 +228,7 @@ describe('Session SCM daemon placement', () => {
         expect(machineCalls).toMatchObject([{ machineId, method: 'scm.diff.file', authorityCeiling: 'account_automation',
           request: { kind: 'targeted_action_rpc', target: { kind: 'machine', machineId, project: { directory: child ? cwd : parent } },
             input: { cwd: child ? cwd : parent, backendPreference: { kind: 'prefer', backendId }, outcomeVersion: 1 } } }]);
-      } finally { await client.close(); binding.happierMcpServer.stop(); occurrence.dispose();
+      } finally { await client.close(); binding?.happierMcpServer.stop(); occurrence.dispose();
         if (authority) await removeAgentRuntimeDaemonServiceAuthorityIfOwned(authority); }
     });
   });
