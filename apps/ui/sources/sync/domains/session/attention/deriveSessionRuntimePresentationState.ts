@@ -181,10 +181,10 @@ export function deriveSessionRuntimePresentationState(
         activityState,
         runtimeProjectionInProgress: freshInProgress,
         runtimeActivelyWorking,
-        // A pending request stays visible for as long as the runtime that owns it is live. Its
-        // `pendingRequestObservedAt` is stamped once at publication and never refreshed while the
-        // request waits, so its age is not evidence that the request went away; settlement is
-        // durable (it clears the count), and a dead runtime is excluded by `isLiveRuntime`.
+        // Keep an outstanding request visible until its count clears or its owning runtime is no
+        // longer live. `pendingRequestObservedAt` need not advance while a request waits, so its age
+        // is not settlement evidence. Updated CLIs retain and retry exact settlement intents;
+        // older producers can leave an unresolved count after a failed cancellation write.
         freshPermissionRequired:
             input.hasPendingPermissionRequests === true
             && isLiveRuntime,
