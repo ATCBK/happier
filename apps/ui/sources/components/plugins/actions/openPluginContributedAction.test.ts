@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createPluginContributedActionController } from './pluginContributedActionController';
 
 import type {
     PluginContributedActionController,
@@ -155,13 +156,10 @@ describe('openPluginContributedAction', () => {
 
     it('presents an unexpected opening failure without exposing its raw error or claiming startup is pending', async () => {
         const descriptor = { ...action(), inputHints: null, kind: 'direct' as const };
-        const controller = {
-            list: () => [], listSlashCommands: () => [],
-            open: async () => { throw new Error('private transport details'); },
-            isReferenceAvailable: () => false, isSessionReferenceAvailable: () => false,
-            invokeReference: async () => ({ kind: 'stale' as const, reason: 'action_retired' as const }),
-            openSessionReference: async () => ({ kind: 'stale' as const, reason: 'action_retired' as const }),
-        } satisfies PluginContributedActionController;
+        const controller = createPluginContributedActionController({
+            // The placement's host snapshot is an environment boundary; keep the controller real.
+            resolveCurrent: () => { throw new Error('private transport details'); },
+        });
         const { Modal } = await import('@/modal');
         const { t } = await import('@/text');
 
