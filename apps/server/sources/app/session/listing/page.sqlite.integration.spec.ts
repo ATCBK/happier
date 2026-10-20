@@ -43,6 +43,9 @@ import {
     createSessionViewerTagWhere,
 } from "./query";
 import { createV2SessionListServerTiming } from "./timing";
+import tweetnacl from "tweetnacl";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
+import * as accountCurrentness from "@/app/encryption/accountContentKeyAdmission";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -60,6 +63,42 @@ describe("Session listing predicate composition (SQLite)", () => {
 
     it("filters exact folder ANY and tag ANY together before stable cursor paging", async () => {
         await verifyFolderSessionListing();
+    });
+
+    it("verifies one recipient Account binding per listing snapshot and verifies again on the next read", async () => {
+        const binding = createSignedAccountContentBinding(tweetnacl.box.keyPair().publicKey);
+        const owner = await db.account.create({ data: {
+            publicKey: binding.publicKey, encryptionMode: "e2ee",
+            contentPublicKey: Buffer.from(binding.contentPublicKey),
+            contentPublicKeySig: Buffer.from(binding.contentPublicKeySig),
+        } });
+        const { sealEncryptedDataKeyEnvelopeV1 } = await import("@happier-dev/protocol");
+        const envelope = sealEncryptedDataKeyEnvelopeV1({ dataKey: tweetnacl.randomBytes(32),
+            recipientPublicKey: binding.contentPublicKey, randomBytes: tweetnacl.randomBytes });
+        for (let index = 0; index < 3; index += 1) {
+            await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}",
+                encryptionMode: "e2ee", dataKeyEnvelopes: { create: {
+                    recipientAccountId: owner.id, encryptedDataKey: Buffer.from(envelope),
+                } } } });
+        }
+        const rows = await findV2SessionListRows({ userId: owner.id, authentication,
+            orderBy: V2_SESSION_LIST_ORDER_BY });
+        // Transparent counter of the profiled signature-verifying owner; all
+        // currentness, readiness and projection logic still executes.
+        const verify = vi.spyOn(accountCurrentness, "deriveAccountEncryptionCurrentnessFromRow");
+        try {
+            const mapped = mapV2SessionListRows({ rows, userId: owner.id });
+            expect(mapped.sessions).toHaveLength(3);
+            expect(verify).toHaveBeenCalledTimes(1);
+            mapV2SessionListRows({ rows, userId: owner.id });
+            expect(verify).toHaveBeenCalledTimes(2);
+            const invalidRows = rows.map(row => ({ ...row, dataKeyEnvelopes: row.dataKeyEnvelopes.map(value => ({
+                ...value, recipientAccount: { ...value.recipientAccount, contentPublicKeySig: Buffer.alloc(64) },
+            })) }));
+            const invalid = mapV2SessionListRows({ rows: invalidRows, userId: owner.id });
+            expect(invalid.sessions).toHaveLength(3);
+            expect(verify).toHaveBeenCalledTimes(3);
+        } finally { verify.mockRestore(); }
     });
 
     async function fixture() {

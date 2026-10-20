@@ -1,4 +1,5 @@
 import { conjoinSessionListWhereInputs } from "./query";
+import { createAccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import type { Prisma } from "@prisma/client";
 
 import { decodeV2SessionListCursorV1, decodeV2SessionListCursorV2, encodeV2SessionListCursorV2, type V2SessionListCursorV2 } from '@happier-dev/protocol/sessions/control/contract';
@@ -183,11 +184,13 @@ export function mapV2SessionListRows(params: Readonly<{
     now?: number;
 }>) {
     const sessions: ReturnType<typeof mapV2SessionListRow>[] = [];
+    const recipientReadiness = createAccountRecipientEnvelopeReadinessReadScope();
     let metadataUpgradeRequiredCount = 0;
     for (const row of params.rows) {
         try {
             sessions.push(mapV2SessionListRow({
                 row,
+                recipientReadiness,
                 userId: params.userId,
                 ownerAccountMode: params.ownerAccountMode,
                 ownerAccountModes: params.ownerAccountModes,

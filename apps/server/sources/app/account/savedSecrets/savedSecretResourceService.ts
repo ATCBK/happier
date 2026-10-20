@@ -52,7 +52,7 @@ import { readProviderConnectionsRowInTx, mutateProviderConnectionsRowInTx } from
 import { readConnectedAccountCatalogRowInTx, mutateConnectedAccountCatalogRowInTx } from '@/app/account/connectedAccounts/configurationRows';
 import { readPromptLibraryRowInTx, mutatePromptLibraryRowInTx } from '@/app/account/prompts/promptLibraryRows';
 import { acquireAccountChangePublicationLocksInTx, beforeAccountChangePublication, markAccountsChanged } from "@/app/changes/markAccountChanged";
-import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
+import { deriveAccountRecipientEnvelopeReadinessFromRow, type AccountRecipientEnvelopeReadiness } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import {
     resolveSessionAccessGrantAccountSubjectsInTx,
     resolveSessionAccessGrantSubjectInTx,
@@ -796,11 +796,10 @@ function readUsableRecipientEnvelope<TEnvelope extends Readonly<{ encryptedDataK
 }
 
 function resolveEncryptedMaterialStatus(
-    account: SavedSecretRecipientAccountRow | null,
+    readiness: AccountRecipientEnvelopeReadiness | null,
     envelope: StoredResourceRow["keyEnvelopes"] extends readonly (infer T)[] | undefined ? T | null : never,
 ): EncryptedMaterialStatus {
-    if (!account) return "update_required";
-    const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
+    if (!readiness) return "update_required";
     if (readiness.status === "unavailable") {
         if (readiness.reason === "plain_account") return "recipient_mode_unsupported";
         if (readiness.reason === "encryption_setup_required") return "preparing_encrypted_access";
@@ -964,11 +963,14 @@ export async function readSavedSecretResourcesForAccountInTx(
         },
     })]);
     const authorized = await retainQualifiedSavedSecretRowsInTx(tx, { rows, accountId, authentication });
+    const readiness = account && authorized.rows.length > 0
+        ? deriveAccountRecipientEnvelopeReadinessFromRow(account)
+        : null;
     return authorized.rows.flatMap((row) => {
         const projected = projectRow(
             row,
             accountId,
-            resolveEncryptedMaterialStatus(account, row.keyEnvelopes[0] ?? null),
+            resolveEncryptedMaterialStatus(readiness, row.keyEnvelopes[0] ?? null),
             authorized.qualifiedTeamIds,
         );
         return projected ? [projected] : [];
@@ -1084,13 +1086,16 @@ export async function listSavedSecretResourceMaterialsForAccountInTx(
         },
     })]);
     const authorized = await retainQualifiedSavedSecretRowsInTx(tx, { rows, accountId, authentication });
+    const readiness = account && authorized.rows.length > 0
+        ? deriveAccountRecipientEnvelopeReadinessFromRow(account)
+        : null;
     const projectedRows: SavedSecretResourceMaterialProjection[] = [];
     for (const row of authorized.rows) {
         const envelope = row.keyEnvelopes?.[0] ?? null;
         const entry = projectRow(
             row,
             accountId,
-            resolveEncryptedMaterialStatus(account, envelope),
+            resolveEncryptedMaterialStatus(readiness, envelope),
             authorized.qualifiedTeamIds,
         );
         if (!entry) continue;

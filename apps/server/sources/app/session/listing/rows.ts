@@ -31,6 +31,7 @@ import {
     type SessionPersonalDiscussionFacts,
 } from "@/app/session/personal/discussionFacts";
 import { createSessionPersonalProjectionSelect, projectSessionViewer } from "@/app/session/personal/projection";
+import type { AccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import {
     projectEffectiveSessionAccess,
     projectSessionEffectiveAccessV1,
@@ -336,6 +337,7 @@ export function mapV2SessionListRow(params: Readonly<{
     discussionFacts?: ReadonlyMap<string, SessionPersonalDiscussionFacts>;
     hasOtherNamedCollaborator?: boolean;
     effectiveAccess?: EffectiveSessionAccess;
+    recipientReadiness?: AccountRecipientEnvelopeReadinessReadScope;
     /**
      * The caller has already verified the exact Session-scoped runtime
      * principal through `resolveSessionAccessForOperation`. Runtime credentials
@@ -432,6 +434,7 @@ export function mapV2SessionListRow(params: Readonly<{
         : projectSessionViewer({
             row,
             viewerAccountId: userId,
+            recipientReadiness: params.recipientReadiness,
             discussion: params.discussionFacts?.get(row.id) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
             qualifiedTeamIds: params.qualifiedTeamIds,
             effectiveAccess,

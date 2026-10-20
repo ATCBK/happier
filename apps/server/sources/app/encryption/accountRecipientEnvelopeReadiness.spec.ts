@@ -3,6 +3,7 @@ import { signAccountContentKeyBindingV1 } from "@happier-dev/protocol";
 import tweetnacl from "tweetnacl";
 
 import {
+    createAccountRecipientEnvelopeReadinessReadScope,
     deriveAccountRecipientEnvelopeReadinessFromRow,
 } from "./accountRecipientEnvelopeReadiness";
 
@@ -40,6 +41,23 @@ function e2eeRow(overrides: Partial<AccountRow> = {}): AccountRow {
 }
 
 describe("deriveAccountRecipientEnvelopeReadinessFromRow", () => {
+    it("does not reuse a verified row after mode, signing key, content key or signature changes within a read", () => {
+        const original = { id: "recipient", ...e2eeRow() };
+        const read = createAccountRecipientEnvelopeReadinessReadScope();
+        expect(read(original).status).toBe("available");
+        expect(read({ ...original, encryptionMode: "plain" })).toEqual({ status: "unavailable", reason: "plain_account" });
+        const other = createSignedBinding();
+        for (const changed of [
+            { ...original, publicKey: other.publicKey },
+            { ...original, contentPublicKey: other.contentPublicKey },
+            { ...original, contentPublicKeySig: other.contentPublicKeySig },
+        ]) {
+            expect(read(changed)).toEqual({ status: "unavailable", reason: "encryption_inconsistent" });
+        }
+        original.contentPublicKeySig?.fill(0);
+        expect(read(original)).toEqual({ status: "unavailable", reason: "encryption_inconsistent" });
+    });
+
     it("reports a healthy plain Account as keyless rather than a pending recipient", () => {
         expect(deriveAccountRecipientEnvelopeReadinessFromRow({
             publicKey: null,

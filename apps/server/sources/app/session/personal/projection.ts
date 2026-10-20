@@ -7,6 +7,7 @@ import { type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/p
 import { projectSessionFollowDefaultRelationshipsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 import { inTx } from "@/storage/inTx";
+import type { AccountRecipientEnvelopeReadinessReadScope } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import {
     buildSessionAccessProjectionSelect,
     buildSessionAccessProjectionSelectForAccounts,
@@ -204,12 +205,13 @@ export function projectSessionViewer(params: Readonly<{
     qualifiedTeamIds?: ReadonlySet<string>;
     /** Exact access already admitted by the canonical point-operation owner. */
     effectiveAccess?: EffectiveSessionAccess;
+    recipientReadiness?: AccountRecipientEnvelopeReadinessReadScope;
     now?: number;
 }>): SessionViewerProjectionV1 {
     const { row, viewerAccountId, discussion } = params;
     const state = projectSessionViewerAttentionState({
         ...params,
-        contentAvailable: resolveViewerSessionNotificationContentAvailability(row),
+        contentAvailable: resolveViewerSessionNotificationContentAvailability(row, params.recipientReadiness),
     });
     return {
         readState: state.readState,

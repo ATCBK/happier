@@ -9,12 +9,13 @@ import {
     verifyAccountContentKeyBindingV1,
 } from "@happier-dev/protocol";
 import tweetnacl from "tweetnacl";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { openPlainAccountSettingsDbValue } from "@/app/encryption/accountSettingsStorage";
+import * as accountCurrentness from "@/app/encryption/accountContentKeyAdmission";
 
 import {
     SavedSecretResourceTransactionAbort,
@@ -2197,11 +2198,21 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             data: { storedContent: "malformed-at-rest-container" },
         });
 
-        const beforeBindingDamage = await inTx((tx) => listSavedSecretResourceMaterialsForAccountInTx(tx, recipient.id));
-        expect(beforeBindingDamage.find((row) => row.entry.materialStatus === "resource_corrupt")?.entry)
-            .toEqual({ materialStatus: "resource_corrupt", relationship: "recipient", repair: null });
-        expect(beforeBindingDamage.find((row) => "resourceId" in row && row.resourceId === "resource_healthy_sibling")?.entry.materialStatus)
-            .toBe("ready");
+        // Transparent counter of the signature-verifying owner: both list
+        // projections reuse one Account read even with a corrupt neighbor.
+        const verify = vi.spyOn(accountCurrentness, "deriveAccountEncryptionCurrentnessFromRow");
+        try {
+            const beforeBindingDamage = await inTx((tx) => listSavedSecretResourceMaterialsForAccountInTx(tx, recipient.id));
+            expect(beforeBindingDamage.find((row) => row.entry.materialStatus === "resource_corrupt")?.entry)
+                .toEqual({ materialStatus: "resource_corrupt", relationship: "recipient", repair: null });
+            expect(beforeBindingDamage.find((row) => "resourceId" in row && row.resourceId === "resource_healthy_sibling")?.entry.materialStatus)
+                .toBe("ready");
+            expect(verify).toHaveBeenCalledTimes(1);
+            verify.mockClear();
+            const catalog = await inTx(tx => listSavedSecretResourcesForAccountInTx(tx, recipient.id));
+            expect(catalog.map(row => row.materialStatus).sort()).toEqual(["ready", "resource_corrupt"]);
+            expect(verify).toHaveBeenCalledTimes(1);
+        } finally { verify.mockRestore(); }
 
         await db.account.update({
             where: { id: recipient.id },
