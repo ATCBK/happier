@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   clearSessionExplicitStopV1FromMetadata,
   readSessionExplicitStopV1FromMetadata,
+  resolveSessionExplicitControlIntent,
   writeSessionExplicitStopV1ToMetadata,
 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
@@ -11,25 +12,11 @@ import { fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transpo
 import type { ActionExecutorContext } from '@happier-dev/protocol';
 import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 
-/** Classifies an admitted Stop author; Action dispatch and Home own target scope. */
-export function resolveSessionExplicitControlIntent(input: Readonly<{
-  rawSession: RawSessionRecord;
-  executionAuthority?: ActionExecutorContext['authority'];
-  actionContext?: ActionExecutorContext;
-}>): 'person' | 'manager' | 'automatic' | 'unauthorized' {
-  const caller = input.actionContext?.actionCaller;
-  const admittedCaller = input.actionContext?.agentStartContext?.caller;
-  if (caller?.kind === 'session') {
-    return admittedCaller?.kind === 'session' && admittedCaller.sessionId === caller.sessionId
-      && input.rawSession.id !== caller.sessionId
-      ? 'manager' : 'unauthorized';
-  }
-  return (input.actionContext?.authority ?? input.executionAuthority) === 'account_automation'
-    ? 'automatic' : 'person';
-}
+export { resolveSessionExplicitControlIntent } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
 /** One admission for source Resume and the native launch recheck. */
 export function resolveSessionResumeControlIntent(input: Parameters<typeof resolveSessionExplicitControlIntent>[0] & Readonly<{
+  rawSession: RawSessionRecord;
   metadata: unknown;
 }>): 'person' | 'manager' | 'automatic' | 'session_archived' | 'held_by_person' | 'authority_unavailable' {
   if (input.rawSession.archivedAt !== null && input.rawSession.archivedAt !== undefined) return 'session_archived';

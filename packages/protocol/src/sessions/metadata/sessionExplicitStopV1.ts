@@ -1,5 +1,23 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import type { ActionExecutorContext } from '../../actions/executor/types.js';
+
+/** Classifies an admitted Stop author; Action dispatch and Home own target scope. */
+export function resolveSessionExplicitControlIntent(input: Readonly<{
+  rawSession: Readonly<{ id: string }>;
+  executionAuthority?: ActionExecutorContext['authority'];
+  actionContext?: ActionExecutorContext;
+}>): 'person' | 'manager' | 'automatic' | 'unauthorized' {
+  const caller = input.actionContext?.actionCaller;
+  const admittedCaller = input.actionContext?.agentStartContext?.caller;
+  if (caller?.kind === 'session') {
+    return admittedCaller?.kind === 'session' && admittedCaller.sessionId === caller.sessionId
+      && input.rawSession.id !== caller.sessionId
+      ? 'manager' : 'unauthorized';
+  }
+  return (input.actionContext?.authority ?? input.executionAuthority) === 'account_automation'
+    ? 'automatic' : 'person';
+}
 
 export const SESSION_EXPLICIT_STOP_METADATA_KEY = 'sessionExplicitStopV1' as const;
 
