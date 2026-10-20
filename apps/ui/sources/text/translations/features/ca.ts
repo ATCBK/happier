@@ -2208,6 +2208,7 @@ const detailPageTranslations = { ca: {
                 ui: 'Demanat a l’aplicació',
                 api: 'Demanat mitjançant l’API',
                 plugin: 'Demanat per un connector',
+                workflowRun: 'Demanat per una execució de flux de treball',
                 system: 'Demanat per Happier',
             },
             proposalsDescription: 'Es publiquen a la revisió si ho aproves.',

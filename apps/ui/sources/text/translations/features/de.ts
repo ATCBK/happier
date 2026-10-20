@@ -2202,6 +2202,7 @@ const detailPageTranslations = { de: {
                 ui: 'In der App angefragt',
                 api: 'Über die API angefragt',
                 plugin: 'Von einem Plugin angefragt',
+                workflowRun: 'Von einer Workflow-Ausführung angefragt',
                 system: 'Von Happier angefragt',
             },
             proposalsDescription: 'Werden im Review veröffentlicht, wenn du zustimmst.',

@@ -2219,6 +2219,7 @@ const detailPageTranslations = { pl: {
                 ui: 'Poproszono w aplikacji',
                 api: 'Poproszono przez API',
                 plugin: 'Poprosiła wtyczka',
+                workflowRun: 'Poprosiło uruchomienie przepływu pracy',
                 system: 'Poprosił Happier',
             },
             proposalsDescription: 'Zostaną opublikowane w przeglądzie, jeśli zatwierdzisz.',

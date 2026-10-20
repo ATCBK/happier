@@ -2203,6 +2203,7 @@ const detailPageTranslations = { 'zh-Hant': {
                 ui: '在應用程式中請求',
                 api: '透過 API 請求',
                 plugin: '由外掛程式請求',
+                workflowRun: '由工作流程執行請求',
                 system: '由 Happier 請求',
             },
             proposalsDescription: '核准後將發佈到審查中。',

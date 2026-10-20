@@ -2203,6 +2203,7 @@ const detailPageTranslations = { 'zh-Hans': {
                 ui: '在应用中请求',
                 api: '通过 API 请求',
                 plugin: '由插件请求',
+                workflowRun: '由工作流运行请求',
                 system: '由 Happier 请求',
             },
             proposalsDescription: '批准后将发布到评审中。',

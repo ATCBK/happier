@@ -2208,6 +2208,7 @@ const detailPageTranslations = { it: {
                 ui: 'Richiesto nell’app',
                 api: 'Richiesto tramite l’API',
                 plugin: 'Richiesto da un plugin',
+                workflowRun: 'Richiesto da un’esecuzione di workflow',
                 system: 'Richiesto da Happier',
             },
             proposalsDescription: 'Pubblicati nella revisione se approvi.',

@@ -51,7 +51,8 @@ export function describeUnnamedApprovalSession(
 /**
  * The surface a request arrived through, read once for every approval surface: a current built-in
  * request records it on its immutable execution origin, an older one as its requested surface, and
- * any other family on its creator.
+ * any other family on its creator. The host stamps the agent surface on a Workflow Run's own Action,
+ * so that caller reads as the Run, never as an agent that was not involved.
  */
 export function readApprovalRequesterSurface(
   request: ApprovalRequest | Readonly<{ createdBy: Readonly<{ surface?: string }> }> | null,
@@ -60,7 +61,10 @@ export function readApprovalRequesterSurface(
   if (!request) return '';
   if (!builtIn) return request.createdBy.surface ?? '';
   const approval = request as ApprovalRequest;
-  return approval.v === 2 ? approval.executionOriginV1.surface : (approval.requestedSurface ?? '');
+  if (approval.v !== 2) return approval.requestedSurface ?? '';
+  return approval.executionOriginV1.caller.kind === 'workflowRun'
+    ? 'workflow_run'
+    : approval.executionOriginV1.surface;
 }
 
 /**
@@ -85,6 +89,7 @@ const ORIGIN_LABEL_KEYS = {
   ui: 'detailPages.approval.origin.ui',
   api: 'detailPages.approval.origin.api',
   plugin: 'detailPages.approval.origin.plugin',
+  workflow_run: 'detailPages.approval.origin.workflowRun',
   system: 'detailPages.approval.origin.system',
 } as const;
 

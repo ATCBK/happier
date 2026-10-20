@@ -2208,6 +2208,7 @@ const detailPageTranslations = { ja: {
                 ui: 'アプリ内で依頼',
                 api: 'API 経由で依頼',
                 plugin: 'プラグインが依頼',
+                workflowRun: 'ワークフロー実行が依頼',
                 system: 'Happier が依頼',
             },
             proposalsDescription: '承認するとレビューに投稿されます。',

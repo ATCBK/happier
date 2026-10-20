@@ -11,7 +11,7 @@ export type DetailPageTranslations = Readonly<{
         sessionOnHome: (params: Readonly<{ home: string }>) => string;
         sessionElsewhere: string;
         requesterYou: string;
-        origin: Readonly<Record<'voice' | 'agent' | 'mcp' | 'cli' | 'ui' | 'api' | 'plugin' | 'system', string>>;
+        origin: Readonly<Record<'voice' | 'agent' | 'mcp' | 'cli' | 'ui' | 'api' | 'plugin' | 'workflowRun' | 'system', string>>;
         proposalsDescription: string;
         requester: Readonly<{
             title: string;
@@ -85,6 +85,7 @@ export const detailPageTranslationsEnglish = { en: {
                 ui: 'Asked in the app',
                 api: 'Asked through the API',
                 plugin: 'Asked by a plugin',
+                workflowRun: 'Asked by a Workflow Run',
                 system: 'Asked by Happier',
             },
             proposalsDescription: 'Posted to the review if you approve.',

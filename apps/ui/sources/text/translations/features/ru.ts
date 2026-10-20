@@ -2230,6 +2230,7 @@ const detailPageTranslations = { ru: {
                 ui: 'Запрошено в приложении',
                 api: 'Запрошено через API',
                 plugin: 'Запрошено плагином',
+                workflowRun: 'Запрошено запуском рабочего процесса',
                 system: 'Запрошено Happier',
             },
             proposalsDescription: 'Будут опубликованы в ревью, если вы одобрите.',
