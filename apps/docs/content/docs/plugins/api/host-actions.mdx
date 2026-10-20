@@ -1004,7 +1004,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `cli`, `rpc`, `agent`, `mcp`, `voice`, `api`.
 
 ### Input guidance
 
@@ -1144,7 +1144,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `cli`, `rpc`, `agent`, `mcp`, `voice`, `api`.
 
 ### Input guidance
 
@@ -4381,7 +4381,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Preview Follow rule** — Preview the authorized matching corpus without creating Follow enrollments.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -4419,6 +4419,34 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 No field hints are published. Use the typed input accepted by `execute`.
+
+## `friends.add`
+
+**Request or accept friendship** — Send a friend request or accept an incoming request on this Home.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `uid` (text, required): Account id
+
+## `friends.remove`
+
+**Remove or decline friendship** — Remove a friend, decline an incoming request or cancel your outgoing request on this Home.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `uid` (text, required): Account id
 
 ## `home.accounts.delete`
 
@@ -13144,7 +13172,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `session.archive`
 
-**Archive session** — Archive the specified session.
+**Archive session** — Archive the specified session, optionally also archiving its unarchived direct reports. Each report retains its own rights and approval requirements; results include partial outcomes.
 
 - Safety: `safe`; side effect: not classified.
 - Approval: `none` result; `deferred` flow.
@@ -13155,6 +13183,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionId` (text, required): Session id
+- `alsoArchiveReports` (boolean): Also archive direct sub-sessions
 
 ## `session.attention.set`
 
@@ -13342,7 +13371,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 
@@ -13358,7 +13387,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 
@@ -13411,6 +13440,21 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `directory` (text, required): Directory
 - `backendTarget` (text, required): Backend target
 - `replay` (textarea, required): Replay seed
+
+## `session.control.switch`
+
+**Switch Session control** — Switch between local terminal and remote control through the active Session terminal owner.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text): Session id
+- `to` (select, required): Control
 
 ## `session.coordinator.enable`
 
@@ -13719,7 +13763,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Hand off session** — Move the current session to another machine or another directory on the same machine while keeping the same session id. Select target storage and workspace transfer behavior explicitly when needed.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -14250,7 +14294,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -14266,7 +14310,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -14769,6 +14813,21 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionIds` (text_list, required): Session ids
+
+## `session.targets.resolve`
+
+**Preview session targets** — Inspect the complete authorized target selection for an Action without executing it. Final invocation prepares its own current selection.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Session target
+- `actionId` (text, required): Action
 
 ## `session.terminalComposer.clear`
 

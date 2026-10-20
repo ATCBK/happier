@@ -21,6 +21,13 @@ Plain Session IDs retain their existing result shape. Group sends/status reads
 return each target's outcome. Native participant recipients remain separate
 inside-Session routing identities.
 
+`session.targets.resolve { target, actionId }` is the safe read-only inspection
+Action for that same resolver. It exposes authorized addresses and complete or
+unavailable coverage through the catalog's UI, Voice, Agent, MCP, CLI and SDK
+projections. The picker delegates to this Action; it owns no separate traversal.
+Inspection creates no effect or approval. The eventual operation prepares its
+own current selection once, then retains that concrete list for approval/replay.
+
 For Session-placed Actions with exact targets in 0.3 development, original CLI
 invocation reuses the ingress selector owner and the protected-message Session transport lookup
 to derive the owning Machine before delivery. Session Actions enter that
@@ -448,11 +455,20 @@ unavailable at the dispatcher.
 
 In 0.3 development source, an accepted Session Action retries temporarily unavailable
 requester Home reads while acquiring its requester context, checking Session ownership,
-and preparing Home authorization. The admitted request's cancellation and lifetime own
+and preparing Home authorization. These reads use the shared Home-offline delay policy,
+and cancellation interrupts the pending delay. The admitted request's cancellation and lifetime own
 that recovery; preparation does not add a separate deadline or attempt limit. Each retry
 reads current authority again. The Action executor runs once after preparation succeeds;
 an effect failure is not replayed by this recovery path. Callers without an admitted
 request lifetime retain their existing failure and recovery policy.
+
+The final requester currentness check before runner launch retains a classified temporary
+Home outage as the bounded `requester_home_unavailable` spawn detail. The Session-spawn
+Action projects that cause as `target_unavailable` with `retryable: true`; it does not
+replay the launch. A revoked admission, unavailable handoff custody, or genuinely missing
+daemon capability keeps its existing refusal or incompatible-target result. Cancellation
+keeps the existing spawn disposition: a submitted request whose outcome is unknown remains
+pending with the same creation key; cancellation is reported when no such custody remains.
 
 The resolved Session transport reads the requester's persisted Account encryption currentness
 under that same signed invocation, without borrowing the daemon's bearer.
@@ -2738,6 +2754,15 @@ revision list and storage usage are reads. CLI commands and MCP tools project
 from these same catalog rows; the canonical schemas and generated SDK types
 come from [`artifactActionsV1.ts`](../packages/protocol/src/artifacts/artifactActionsV1.ts).
 
+Host Voice also exposes `artifact.get` and `artifact.update`. As with the Inbox,
+its captured Account may read its own private notice and dismiss it through the
+same revision-checked update, or mark an informational update/mention read.
+Notice admission retains the exact stored body and permits only those header
+changes; update still requires ordinary approval by default. Dismissal does not
+resolve a source request. A plugin updates or resolves its own stable notice item
+through its existing `notifications.send` SDK service; consumer Voice does not
+gain producer identity or permission to resolve another plugin's item.
+
 List search, kind filtering and sorting operate on decrypted headers at the
 key-holding host, using the existing paginated server list. The server never
 indexes plaintext titles or provenance for E2EE Accounts. Publication copies
@@ -2853,6 +2878,18 @@ excluding the target retains `unsupported_action` / `target_outside_led_subtree`
 Relation membership does not replace ordinary Home access or grant other
 mutation rights. Caller identity, turn depth and subtree membership cannot be
 supplied in Action input.
+
+The development `session.archive` Action accepts optional `alsoArchiveReports`.
+Omission or `false` archives only the selected Session. With `true`, the archive
+owner reads the current Home's active Session list and archives only unarchived
+direct reports, not grandchildren. Each report re-enters ordinary Action rights,
+scope and approval admission; approval for the lead does not approve its reports.
+An active report uses the existing Stop Action before retrying Archive. The
+strict result confirms the lead with `success` and `sessionId`, and returns each
+report as `archived`, `failed` or `approval_pending`. A failure does not prevent
+the remaining reports from being attempted. `reportsError` records incomplete
+discovery after the lead was archived. The existing UI scope dialog supplies
+this operand and presents these outcomes; its cached count is display-only.
 
 The development UI Stop producer retains the canonical `sessionId`, `stopped`
 and optional `stopOutcome` alongside its incumbent presentation fields. Exact
@@ -3709,9 +3746,11 @@ client through its incumbent lifecycle, held-input, recovery and Inbox delivery
 owners. Read the current attempt with `ui.voice_global.get`; mutations carry the
 returned attempt identity, so later navigation cannot redirect a stop, mute or
 hold operation. Starting a microphone, unmuting it, recovery that may reopen it,
-and Brief request/retry require approval by default for Agent, MCP and plugin
-callers through the ordinary Action policy. A validated `set_muted` request with
-`muted: true` stays safe; the present user's UI mute/unmute remains direct.
+and Brief request/retry use the existing configurable approval defaults for UI,
+Agent, MCP and plugin callers through the ordinary Action policy. A validated
+`set_muted` request with `muted: true` stays safe. UI transport, dismissal,
+turn controls and held-input gestures enter the same client-local executor;
+Action admission adds no remote Action dispatch.
 Explicit Action approval requirements and waivers still apply. End, mute,
 dismissal and reads are direct by default. The current attempt read
 reports captured destinations and actual availability, rather than promising
@@ -3755,11 +3794,19 @@ changed selection cancels the result.
 
 The declared diagnostics inspection returns daemon status (null without an
 execution Machine), current client runtime/revocation facts, and the canonical
-processing disclosures. Account retirement refuses disclosure. Native local
-neural preview Stop is a declared Settings operation; the picker, Test/Preview
+processing disclosures. Account retirement refuses disclosure. Local neural
+preview Stop is a declared Settings operation; the picker, Test/Preview
 Actions and Stop share playback custody, including a pending sample whose
 stopper arrives after cancellation. Web playback still requires a user gesture.
 Picker close/unmount retires only its own sample; explicit Stop remains shared.
+
+The development Voice catalog declarations expose `listCatalog` and
+`retryCatalog` operations through `settings.invoke` for contributed conversation
+services and selected speech engines. Local neural voices use
+`voiceConversations.ttsCatalog` and `voiceConversations.ttsCatalogRetry`.
+These reads reuse the current catalog owners without starting playback, changing
+settings, or acquiring microphone consent. Preview and Stop presses enter the
+same local Settings Action executor; picker retirement releases its own sample.
 
 In 0.3 development, `settings.invoke` on `voicePrivacy.privacyPolicy` opens the
 public privacy policy through the answering client's ordinary external-link
@@ -4267,6 +4314,13 @@ An embed's Send grant includes current-turn cancellation, and an abort-only
 grant does not authorize sending messages or stopping the Session process.
 Permission decisions continue through `session.permission.respond` and retain
 their separate approval authority.
+
+The development `session.control.switch` Action requests `remote` or `local`
+control through the existing Session terminal switch owner. The Session's
+release-to-remote callback uses this same Action and its configurable Off, Ask
+or Allowed policy. Unsupported or retired terminal control returns
+`session_control_unavailable`. Submission's existing composed switch and the
+predecessor `switch` RPC retain that same effect owner and boolean wire reply.
 
 The development `session.permission_mode.set` Action applies immediately;
 `applyTiming`, when supplied, must be `immediate`. A `next_prompt` request returns
