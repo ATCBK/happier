@@ -1,4 +1,5 @@
 import { storage } from '@/sync/domains/state/storage';
+import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
 import type { VoiceAssistantAction } from '@happier-dev/protocol';
 import {
     attachVoiceAgentActionEffectId,
@@ -172,13 +173,17 @@ export function createVoiceTurnStreaming(args: Readonly<{
                     ? response.actions ?? []
                     : withClientTurnEffectIdentity(handle, response.actions ?? []),
             };
-            if (
-                normalizedResponse.assistantText.trim().length === 0
-            ) {
-                const recoveredAssistantTexts = collectAssistantTextMessagesSinceBaseline(
+            const submittedUserLocalId = options?.userTranscript?.localId;
+            if (normalizedResponse.assistantText.trim().length === 0 && submittedUserLocalId) {
+                const messages = readStoredSessionMessages(storage.getState(), handle.rpcSessionId);
+                const submittedUserIndex = messages.findIndex((message) =>
+                    message.kind === 'user-text' && message.localId === submittedUserLocalId);
+                // History can hydrate after baseline capture. Recover only after
+                // the admitted input, using the same boundary as the direct waiter.
+                const recoveredAssistantTexts = submittedUserIndex < 0 ? [] : collectAssistantTextMessagesSinceBaseline(
                     handle.rpcSessionId,
                     transcriptBaseline.baselineIds,
-                    transcriptBaseline.baselineCount,
+                    submittedUserIndex + 1,
                 );
                 const recoveredAssistantText = recoveredAssistantTexts.at(-1)?.trim() ?? '';
                 if (recoveredAssistantText) {
