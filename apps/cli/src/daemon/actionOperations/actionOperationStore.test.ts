@@ -1,10 +1,40 @@
 import { describe, expect, it } from 'vitest';
 
 import { createActionOperationStore } from './actionOperationStore';
+import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationSnapshotV1Schema as PredecessorActionOperationSnapshotV1Schema } from './testFixtures/predecessorActionOperationV1';
 
 const ACCOUNT_SCOPE = { accountId: 'account-1', machineId: 'machine-1' } as const;
 
 describe('action operation store', () => {
+  it.each(['succeeded', 'failed', 'cancelled'] as const)('keeps %s snapshots readable when the wall clock moves backwards', state => {
+    let now = 1_000;
+    const store = createActionOperationStore({ now: () => now });
+    for (const { startClock, expectedTime } of [
+      { startClock: null, expectedTime: 1_000 },
+      { startClock: 900, expectedTime: 1_000 },
+      { startClock: 1_200, expectedTime: 1_200 },
+    ]) {
+      now = 1_000;
+      const operationId = `${state}-${startClock}`;
+      store.create({ operationId, actionId: 'projects.script.run', title: 'Run tests', scope: ACCOUNT_SCOPE,
+        cancellation: 'supported', inputIdentity: '{}' });
+      if (startClock !== null) {
+        now = startClock;
+        const running = store.markRunning(operationId);
+        expect(ActionOperationSnapshotV1Schema.parse(running)).toMatchObject({ startedAt: expectedTime });
+        expect(PredecessorActionOperationSnapshotV1Schema.parse(running)).toMatchObject({ startedAt: expectedTime });
+      }
+      now = 800;
+      const settled = state === 'succeeded' ? store.succeed(operationId, {})
+        : state === 'failed' ? store.fail(operationId, { errorCode: 'project_command_step_failed', error: 'Process failed' })
+          : store.cancel(operationId);
+      expect(ActionOperationSnapshotV1Schema.parse(settled)).toMatchObject({ state,
+        createdAt: 1_000, startedAt: expectedTime, settledAt: expectedTime });
+      expect(PredecessorActionOperationSnapshotV1Schema.parse(settled)).toMatchObject({ state,
+        createdAt: 1_000, startedAt: expectedTime, settledAt: expectedTime });
+    }
+  });
   it('measures finite elapsed work from the first observed spawn across later setup and Script processes', () => {
     let now = 100;
     const store = createActionOperationStore({ now: () => now });

@@ -79,6 +79,9 @@ export function createActionOperationStore(options?: Readonly<{
   onSnapshot?: (snapshot: ActionOperationSnapshotV1) => void;
 }>) {
   const now = options?.now ?? Date.now;
+  // Wall-clock corrections cannot reverse the schema-ordered lifecycle facts.
+  const lifecycleTime = (current: ActionOperationSnapshotV1): number =>
+    Math.max(current.startedAt ?? current.createdAt, now());
   const settledRetentionLimit = options?.settledRetentionLimit ?? SETTLED_RETENTION_LIMIT;
   const settledRetentionMs = options?.settledRetentionMs ?? SETTLED_RETENTION_MS;
   const snapshots = new Map<string, ActionOperationSnapshotV1>();
@@ -238,7 +241,7 @@ export function createActionOperationStore(options?: Readonly<{
         ...current,
         revision: current.revision + 1,
         state: 'running',
-        startedAt: current.startedAt ?? now(),
+        startedAt: current.startedAt ?? lifecycleTime(current),
       }));
     },
 
@@ -290,13 +293,14 @@ export function createActionOperationStore(options?: Readonly<{
 
     succeed(operationId: string, result: unknown): ActionOperationSnapshotV1 | null {
       return mutate(operationId, (current) => {
+        const settledAt = lifecycleTime(current);
         const { observation: _observation, setupReview: _review, ...settled } = current;
         return {
           ...settled,
           revision: current.revision + 1,
           state: 'succeeded',
-          startedAt: current.startedAt ?? now(),
-          settledAt: now(),
+          startedAt: current.startedAt ?? settledAt,
+          settledAt,
           result,
         };
       });
@@ -305,13 +309,14 @@ export function createActionOperationStore(options?: Readonly<{
     fail(operationId: string, error: ActionOperationFailureV1): ActionOperationSnapshotV1 | null {
       return mutate(operationId, (current) => {
         const failure = ActionOperationFailureV1Schema.parse(error);
+        const settledAt = lifecycleTime(current);
         const { observation: _observation, setupReview: _review, ...settled } = current;
         return {
           ...settled,
           revision: current.revision + 1,
           state: 'failed',
-          startedAt: current.startedAt ?? now(),
-          settledAt: now(),
+          startedAt: current.startedAt ?? settledAt,
+          settledAt,
           error: failure,
         };
       });
@@ -319,13 +324,14 @@ export function createActionOperationStore(options?: Readonly<{
 
     cancel(operationId: string): ActionOperationSnapshotV1 | null {
       return mutate(operationId, (current) => {
+        const settledAt = lifecycleTime(current);
         const { observation: _observation, setupReview: _review, ...settled } = current;
         return {
           ...settled,
           revision: current.revision + 1,
           state: 'cancelled',
-          startedAt: current.startedAt ?? now(),
-          settledAt: now(),
+          startedAt: current.startedAt ?? settledAt,
+          settledAt,
         };
       });
     },
