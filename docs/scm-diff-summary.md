@@ -384,12 +384,11 @@ they do not wait for a resumable Run's lifetime to end. Later discussion and
 refinement return their actual admitted input identity through the same owner.
 Personal reviewed marks use the requester's Account material, never a Machine
 custodian's material on behalf of another actor. Missing requester material
-returns `reviewed_marks_unavailable`; result deletion reports personal-mark
-cleanup separately without changing that authority.
-In current 0.3 development, admitted native mark/unmark and saved-result
-deletion/clear use the existing signed Home request for Account currentness and
-the reviewed-mark KV namespace only. They do not grant access to other Account
+returns `reviewed_marks_unavailable`. In current 0.3 development, admitted native
+mark/unmark uses the existing signed Home request for Account currentness and
+the reviewed-mark KV namespace only. It grants no access to other Account
 settings or KV keys, and inconsistent Account mode still refuses the write.
+Deleting a saved explanation leaves these personal content marks intact.
 
 Stored comparison, result and personal-mark readers use the canonical recursive
 stored-read normalizer: unknown fields are removed at known nested schema
@@ -637,27 +636,35 @@ progress preserves that same input's unchanged output basis without rebasing
 over manual edits or refreshing unrelated pending inputs.
 
 Results survive Run termination/cache eviction until explicit deletion. Personal
-marks use `workspace:scm-reviewed:v1:<comparison identity>` with
-`{ v: 1, comparisonId, reviewedChangeRefs }`. Both UI and Actions validate exact
-membership and rebase the user's specific intent on a CAS conflict; unresolved
-conflicts remain visible. The UI subscribes through the existing
+marks use `workspace:scm-reviewed:scope:<encoded scopeId>` with
+`{ v: 1, scopeId, reviewedChangeKeys }`. The scope identifies the repository root
+and source selector, independently of captured endpoint revisions. Each change
+key identifies path, layer and exact removed/added line content, with an ordinal
+for identical runs. `buildReviewUnits`, `buildScmFileReviewUnits` and
+`buildScmChangeKeys` in Protocol's occurrence owner supply that identity to the
+renderer, controller, Walkthrough and Actions. Captured Actions still validate
+exact occurrence membership before translating refs to keys; live working-tree
+Actions recompute key membership without creating a capture. Both paths rebase
+the specific intent once on a CAS conflict; a further conflict remains visible.
+The UI subscribes through the existing
 `subscribeKvPrefixChanges`, scoped to captured Home/Account credentials. Account
 JSON transport owns plain/encrypted envelope admission: plain Accounts need no
 fabricated E2EE keys and unreadable/mismatched encrypted data fails closed.
 
-A new code basis gets a different comparison identity and no fuzzy mark transfer.
-Prose edits on the same selections keep their marks. A merged stop is reviewed
-only when all of its selections were explicitly marked. Unloaded marks are
-unknown, not a confirmed zero count.
+An unrelated edit or line shift can change the comparison identity without
+dropping marks for unchanged content. Rewriting the run makes it unreviewed;
+the same content in another file, layer or source scope has its own identity.
+Absent keys are retained, so content that returns is reviewed again. An explicit
+Reset review clears the scope. Prose edits keep marks, and a merged stop is
+reviewed only when every run of all its selections is marked. Unloaded marks are
+unknown, not a confirmed zero count. The native UI writes displayed key intents
+through Account KV; an offline Machine does not block Keep.
 
-Settings list count/bytes from the selected machine, not all machines. Its
-confirmed Clear combines captured-Account mark cleanup with exact-revision result
-deletion. Failed mark cleanup retains the result for retry. A concurrent edit can
-refuse deletion after marks were cleared: this is reported partial success, not
-an atomic distributed transaction. Combined UI Clear rejects API-token execution;
-generic machine deletion retains its separate contract. Neither cache eviction
-nor result deletion deletes review findings or Session checkpoints. Individual
-machine deletion and optional mark cleanup can also report separate outcomes.
+Settings list count/bytes from the selected machine, not all machines. Confirmed
+Clear uses exact-revision result deletion and retains application-lock admission.
+It does not read or clear personal marks. A concurrent edit can refuse deletion;
+other selected results can still succeed and report their own outcome. Neither
+cache eviction nor result deletion deletes review findings or Session checkpoints.
 
 Offline clients can retain an already-loaded projection; they cannot write the
 machine result, obtain fresh evidence or accept commits. There is no cold-offline
