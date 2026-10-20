@@ -12,6 +12,7 @@ import type { discoverNativeUsageSourceMetadata as DiscoverNativeUsageSourceMeta
 import type { createExternalSessionObservationDaemonProjection } from '@/api/session/external/leases/createExternalSessionObservationDaemonProjection';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
 import { externalMemoryStorageId, type MemoryExternalSourceReader } from './externalTranscriptIndex';
+import { resolveMemoryCoverageCreatedAtCutoffMs } from './transcript/coveragePolicy';
 import { logger } from '@/ui/logger';
 
 export type MemoryExternalObservation = Pick<ReturnType<typeof createExternalSessionObservationDaemonProjection>, 'registerAccountingSource'>;
@@ -113,8 +114,23 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
   let configuredSourceKeys = new Set<string>();
   const completeSources = new Set<string>();
   let stopped = false;
+  let indexSettings: MemorySettingsV1 | null = null;
   let unsubscribeRegistry: (() => void) | null = null;
   const lifetime = new AbortController();
+
+  const releaseSources = async () => {
+    const prior = records;
+    records = [];
+    traversal.replace([]);
+    configuredSourceKeys.clear();
+    completeSources.clear();
+    inventories.clear();
+    inventoryChanged = false;
+    indexSettings = null;
+    unsubscribeRegistry?.();
+    unsubscribeRegistry = null;
+    await Promise.all(prior.map(record => record.demand?.dispose()));
+  };
 
   const invalidateInventory = (agentId?: string, sourceKey?: string, changed = true) => {
     for (const [key, state] of inventories) {
@@ -142,17 +158,14 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
   };
 
   const refresh = async (settings: MemorySettingsV1, signal: AbortSignal) => {
-    if (stopped || !observation || !settings.enabled || !settings.conversationSearch.indexExternal.enabled) {
-      const prior = records;
-      records = [];
-      traversal.replace([]);
-      configuredSourceKeys.clear();
-      completeSources.clear();
-      inventories.clear();
-      inventoryChanged = false;
-      await Promise.all(prior.map(record => record.demand?.dispose()));
+    if (stopped || !observation || !settings.enabled || !settings.conversationSearch.indexExternal.enabled
+      || settings.conversationSearch.indexExternal.agents.length === 0) {
+      await releaseSources();
       return;
     }
+    if (indexSettings && indexSettings.conversationSearch.indexExternal.historyDays
+      !== settings.conversationSearch.indexExternal.historyDays) invalidateInventory();
+    indexSettings = settings;
     const operationSignal = AbortSignal.any([signal, lifetime.signal]);
     if (!unsubscribeRegistry) {
       const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
@@ -231,7 +244,9 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
   };
 
   const inventory = async (signal: AbortSignal) => {
-    if (!observation) return null;
+    if (!observation || !indexSettings) return null;
+    const cutoff = resolveMemoryCoverageCreatedAtCutoffMs({ nowMs: Date.now(), enabledAtMs: 0,
+      historyDays: indexSettings.conversationSearch.indexExternal.historyDays });
     let changed = inventoryChanged;
     inventoryChanged = false;
     for (const native of records) {
@@ -259,6 +274,10 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         if (!page.ok) throw new Error(page.code);
         state.failed = false;
         for (const candidate of page.value.candidates) {
+          // Native activity metadata is the source's last-update authority.
+          // Unknown activity stays eligible; an expired source never needs a
+          // link-identity or transcript read just to discard its old rows.
+          if (cutoff !== null && typeof candidate.updatedAtMs === 'number' && candidate.updatedAtMs < cutoff) continue;
           const identity = await native.reader.resolveLinkIdentity({ source: native.source,
             remoteSessionId: candidate.remoteSessionId, ...(candidate.linkData ? { linkData: candidate.linkData } : {}), signal });
           signal.throwIfAborted();
@@ -346,7 +365,6 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         maxSerializedBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes, signal });
       return result.ok ? result.value : null;
     },
-    async dispose() { stopped = true; lifetime.abort(); unsubscribeRegistry?.(); unsubscribeRegistry = null;
-      await Promise.all(records.map(record => record.demand?.dispose())); records = []; },
+    async dispose() { stopped = true; lifetime.abort(); await releaseSources(); observation = null; },
   };
 }

@@ -50,15 +50,16 @@ export function resolveMemoryCoverageCreatedAtCutoffMs(params: Readonly<{
   policy?: MemoryCoveragePolicyV1 | null;
   nowMs: number;
   enabledAtMs: number;
+  historyDays?: number | null;
 }>): number | null {
   const policy = params.policy ?? { type: 'full' };
-  if (policy.type === 'latest_days') {
-    return Math.max(0, Math.trunc(params.nowMs) - policy.days * DAY_MS);
-  }
-  if (policy.type === 'since_enabled') {
-    return Math.max(0, Math.trunc(params.enabledAtMs));
-  }
-  return null;
+  const coverageCutoff = policy.type === 'latest_days'
+    ? Math.max(0, Math.trunc(params.nowMs) - policy.days * DAY_MS)
+    : policy.type === 'since_enabled' ? Math.max(0, Math.trunc(params.enabledAtMs)) : null;
+  const historyCutoff = params.historyDays == null
+    ? null : Math.max(0, Math.trunc(params.nowMs) - params.historyDays * DAY_MS);
+  return coverageCutoff === null ? historyCutoff
+    : historyCutoff === null ? coverageCutoff : Math.max(coverageCutoff, historyCutoff);
 }
 
 /**
