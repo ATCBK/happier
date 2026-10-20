@@ -60,6 +60,7 @@ function detailInput(
     nativeLabel?: string;
     routingToken?: string | null;
     nativeRevision?: string | null;
+    headRevision?: string | null;
   }> = {},
 ): TriageDetailSurfaceInputV1 {
   const routingToken = overrides.routingToken === undefined
@@ -68,6 +69,9 @@ function detailInput(
   const nativeRevision = overrides.nativeRevision === undefined
     ? OBSERVED_HEAD
     : overrides.nativeRevision;
+  const headRevision = overrides.headRevision === undefined
+    ? OBSERVED_HEAD
+    : overrides.headRevision;
   return TriageDetailSurfaceInputV1Schema.parse({
     v: 1,
     instance: CONFIGURED_INSTANCE,
@@ -94,6 +98,13 @@ function detailInput(
           nativeLabel: overrides.nativeLabel ?? 'Open',
         },
         facts: [],
+        ...((overrides.kindId ?? 'pull-request') === 'pull-request' && headRevision !== null ? {
+          reviewRevision: {
+            baseSha: 'a'.repeat(40),
+            headSha: headRevision,
+            nativeRevision: headRevision,
+          },
+        } : {}),
       },
       viewer: { involvement: ['reviewRequested'] },
       ...(nativeRevision === null ? {} : { nativeRevision }),
@@ -200,6 +211,17 @@ describe('the issue write inputs', () => {
 });
 
 describe('the remaining exact mutation inputs', () => {
+  it('uses the public review head when native revision is not on the list wire', () => {
+    const input = detailInput({ nativeRevision: null });
+    for (const built of [
+      buildGithubPullRequestMarkReadyInputV1(input),
+      buildGithubPullRequestUpdateBranchInputV1(input),
+      buildGithubPullRequestMergeInputV1(input, 'merge'),
+    ]) {
+      expect(built).toMatchObject({ headRevision: OBSERVED_HEAD });
+    }
+  });
+
   it('pins mark-ready and update-branch to the head the reader saw', () => {
     for (const built of [
       buildGithubPullRequestMarkReadyInputV1(detailInput()),
@@ -211,8 +233,8 @@ describe('the remaining exact mutation inputs', () => {
         headRevision: OBSERVED_HEAD,
       });
     }
-    expect(buildGithubPullRequestMarkReadyInputV1(detailInput({ nativeRevision: null }))).toBeNull();
-    expect(buildGithubPullRequestUpdateBranchInputV1(detailInput({ nativeRevision: null }))).toBeNull();
+    expect(buildGithubPullRequestMarkReadyInputV1(detailInput({ headRevision: null }))).toBeNull();
+    expect(buildGithubPullRequestUpdateBranchInputV1(detailInput({ headRevision: null }))).toBeNull();
   });
 
   it('builds exact reviewer deltas and never sends an empty one', () => {
@@ -269,7 +291,7 @@ describe('buildGithubPullRequestMergeInputV1', () => {
     // acted on. A build that substituted anything else would send a precondition the
     // user never saw.
     expect(buildGithubPullRequestMergeInputV1(
-      detailInput({ nativeRevision: null }),
+      detailInput({ headRevision: null }),
       'merge',
     )).toBeNull();
   });
@@ -285,7 +307,7 @@ describe('buildGithubPullRequestMergeInputV1', () => {
     // A provider identifier that is not a commit object cannot be a merge precondition.
     // Catching it here keeps the control from dispatching a write that can only fail.
     expect(buildGithubPullRequestMergeInputV1(
-      detailInput({ nativeRevision: 'not-a-sha' }),
+      detailInput({ headRevision: 'not-a-sha' }),
       'merge',
     )).toBeNull();
   });
@@ -312,7 +334,7 @@ describe('buildGithubPullRequestTargetInputV1', () => {
   it('still builds when no head revision was observed', () => {
     // Close and reopen are head-independent by contract; pinning them would add a
     // failure mode protecting no invariant.
-    expect(buildGithubPullRequestTargetInputV1(detailInput({ nativeRevision: null })))
+    expect(buildGithubPullRequestTargetInputV1(detailInput({ nativeRevision: null, headRevision: null })))
       .not.toBeNull();
   });
 
