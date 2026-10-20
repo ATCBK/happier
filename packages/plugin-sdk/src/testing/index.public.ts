@@ -1,7 +1,7 @@
 export type { AgentSessionRuntimeEventKind } from './runtimeEvents.js';
 export type { ObservedAgentLaunch, AgentLaunchObserverBoundaries } from './observeAgentLaunch.js';
 export { createAgentLaunchObserver } from './observeAgentLaunch.js';
-export type { AgentSkillDeliveryContractInput } from './skillDeliveryContract.js';
+export type { AgentSkillDeliveryContractInput, AgentSkillDeclarationContractInput } from './skillDeliveryContract.js';
 export { runAgentSkillDeliveryContract } from './skillDeliveryContract.js';
 export type {
     AgentMcpToolPolicyControl,

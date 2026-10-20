@@ -66,7 +66,6 @@ export type { AgentExternalSessionsManagedEndpointRead } from '../../externalSes
 export type { AgentExternalSessionsManagedEndpointReadRequest } from '../../externalSessions.js';
 export type { AgentExternalSessionsManagedEndpointReadResponse } from '../../externalSessions.js';
 export type { AgentExternalSessionsManagedEndpointServiceRequest } from '../../externalSessions.js';
-export type { ManagedServiceSpec } from '../../managed-services/contract.js';
 export type { AgentExternalSessionsPageTranscriptRequest } from '../../externalSessions.js';
 export type { AgentExternalSessionsReadAfterDiagnostic } from '../../externalSessions.js';
 export type { AgentExternalSessionsReadAfterTranscriptRequest } from '../../externalSessions.js';

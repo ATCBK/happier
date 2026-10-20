@@ -14,6 +14,8 @@ export type { ManagedSessionMcpPortabilityV1, ManagedSessionMcpReasonCodeV1 } fr
 export type { AccountCreationOperand, AccountOperand, BoundedLegacyJsonValue, PluginSettingFieldSchemaV2, SystemTaskJsonArray, SystemTaskJsonObject, SystemTaskJsonPrimitive, SystemTaskJsonValue, WorkflowSelectionEdit } from './dtos/pluginActionDtoSupport.generated.js';
 export type { BuiltinWidgetIdV1, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input, SessionBoardItemUpsertSchemaInputV1 } from './dtos/pluginActionDtoSupport.generated.js';
 /** Named dependencies of the canonical host Action input/result maps. */
+export type { CodeIntelligenceActionInputById, CodeIntelligenceActionResultById } from './dtos/codeIntelligenceActionDtos.generated.js';
+export type { LanguageIntelligenceDocumentSymbol } from './dtos/pluginActionDtoSupport.generated.js';
 export type { NpmRegistryProfilesActionInputById, NpmRegistryProfilesActionResultById } from './dtos/npmRegistryProfilesActionDtos.generated.js';
 export type { PluginAccountAdministrationActionInputById, PluginAccountAdministrationActionResultById } from './dtos/pluginAccountAdministrationActionDtos.generated.js';
 export type { AccountLifecycleActionInputById, AccountLifecycleActionResultById } from './dtos/accountLifecycleActionDtos.generated.js';
@@ -199,6 +201,7 @@ export type { ContributedActionExecutionWithOriginOptions } from './service.js';
 export type { ContributedActionExecutionWithOriginResult } from './service.js';
 export type { EffectiveActionInputField } from './inputHints.js';
 export type { PluginActionDeclaration } from '../definePlugin.js';
+export type { PluginActionRuntimeDeclaration } from '../definePlugin.js';
 export type { PluginActionExecutionV2 } from '../definePlugin.js';
 export type { PluginActionAuthorDefaults } from '../definePlugin.js';
 export type { PluginActionHandlerInvocation } from './service.js';

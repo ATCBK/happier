@@ -20,7 +20,7 @@ export type AgentSkillDeliveryContractInput = Readonly<{
     }>[];
 }>;
 
-type AgentSkillDeclarationContractInput = Pick<AgentSkillDeliveryContractInput, 'agent'>
+export type AgentSkillDeclarationContractInput = Pick<AgentSkillDeliveryContractInput, 'agent'>
     & Partial<Record<Exclude<keyof AgentSkillDeliveryContractInput, 'agent'>, never>>;
 
 function launchStrings(launch: ObservedAgentLaunch): string[] {

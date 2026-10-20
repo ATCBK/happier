@@ -108,6 +108,7 @@ const HOST_BINDING_OWNER_EVIDENCE = Object.freeze({
   'apps/cli/src/plugins/projection/registry/inputTypes.ts': 'export const inputTypesProjectionFamily',
   'apps/cli/src/plugins/projection/registry/atmospherePictures.ts': 'export const atmospherePicturesProjectionFamily',
   'apps/cli/src/plugins/projection/registry/registrySources.ts': 'export const registrySourcesProjectionFamily',
+  'apps/cli/src/plugins/projection/registry/skills.ts': 'export const skillsProjectionFamily',
   'apps/cli/src/plugins/projection/registry/targetedContributions.ts': 'export function resolveAdmittedTargetedContributions',
   'apps/cli/src/cli/pluginCommandContributions.ts': 'export async function handlePluginCommandCliCommand',
   'apps/cli/src/plugins/runtime/toolCatalog.ts': 'export function projectExecutablePluginToolCatalog',
@@ -488,7 +489,7 @@ test('derives entity drag families through the client occurrence owner and maint
   const entries = PLUGIN_CONTRIBUTION_CATALOG_V2.filter(entry => (
     entry.manifestKey === 'dragSources' || entry.manifestKey === 'dropTargets' || entry.manifestKey === 'workItems'
   ));
-  assert.equal(entries.length, 2);
+  assert.equal(entries.length, 3);
   const metadata = deriveCapabilityMatrixMetadata({
     contributionCatalog: entries,
     hostAccessCatalog: [],
@@ -501,7 +502,8 @@ test('derives entity drag families through the client occurrence owner and maint
     assert.equal(row.availabilityDisposition, 'available');
     assert.equal(row.specialistOwner, CAPABILITY_HOST_BINDING_OWNERS_V1.clientExecutableRegistration);
     assert.equal(row.lifecycleOwner, CAPABILITY_HOST_BINDING_OWNERS_V1.clientExecutableRegistration);
-    assert.equal(row.provingConsumer, 'packages/plugins/triage/src/manifest.ts');
+    assert.equal(row.provingConsumer, entry.manifestKey === 'workItems'
+      ? null : 'packages/plugins/triage/src/manifest.ts');
     assert.equal(row.loadedPlatformProof, 'not-recorded');
     assert.equal(row.releaseAvailability, 'not-published');
   }

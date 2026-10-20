@@ -1,5 +1,4 @@
 export type { ActionConfirmationWhen } from './definePlugin.js';
-export type { PluginAccountApi, PluginAccountActivationModule } from './activation.js';
 export type { ActionOperationDeclarationV1 } from './definePlugin.js';
 export { COMPOSER_MEDIA_CONTENT_CAPABILITY_V1 } from './composer.js';
 export type { ComposerAttachmentAuthorDeclaration } from './definePlugin.js';
@@ -59,6 +58,8 @@ export { MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1 } from './searchProviders.
 export type { MachineProvisionerBootstrapCredentialLeaseV1 } from './services/machineProvisioners.js';
 export type { MachineProvisionersService } from './services/machineProvisioners.js';
 export type { MessageActionAvailableSnapshotV1 } from './invocation.js';
+export type { PluginAccountActivationModule } from './activation.js';
+export type { PluginAccountApi } from './activation.js';
 export type { PluginAccountCollectionMigrationRuntimeProjection } from './definePlugin.js';
 export type { PluginActionOperationContextV1 } from './invocation.js';
 export type { PluginActionOperationProgressUpdateV1 } from './invocation.js';
@@ -103,6 +104,7 @@ export type { PluginInvocationContext } from './invocation.js';
 export type { PluginInvocationContributionIdentity } from './identity.js';
 export type { PluginInvocationOriginSurface } from './invocation.js';
 export type { PluginJsonValueV2 } from './identity.js';
+export type { PluginLanguageServerContributionV1 } from './manifest.js';
 export type { PluginMachineMaterializationRefV1 } from './invocation.js';
 export type { PluginOperationAvailability } from './availability.js';
 export type { PluginPath } from './services/io.js';

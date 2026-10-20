@@ -11,6 +11,7 @@ export type { AgentSessionRuntimeEventKind } from './runtimeEvents.js';
 export type { AgentSessionRuntimeEventSubscriber } from './runtimeEvents.js';
 export type { AgentSessionRuntimeEventValidationFailure } from './runtimeEvents.js';
 export type { AgentSessionRuntimeHarness } from './runtimeEvents.js';
+export type { AgentSkillDeclarationContractInput } from './skillDeliveryContract.js';
 export type { AgentSkillDeliveryContractInput } from './skillDeliveryContract.js';
 export type { ObservedAgentLaunch } from './observeAgentLaunch.js';
 export type { PluginTestServicesFixture } from './types.js';

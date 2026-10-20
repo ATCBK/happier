@@ -164,6 +164,7 @@ describe('managed-services author contract', () => {
             | 'plugin_managed_service_spec_invalid'
             | 'plugin_managed_service_spec_conflict'
             | 'plugin_managed_service_capacity_exceeded'
+            | 'plugin_managed_service_request_too_large'
             | 'plugin_managed_service_not_reusable'
             | 'plugin_managed_service_unavailable'
             | 'plugin_managed_service_establishment_failed'

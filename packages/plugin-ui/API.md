@@ -145,6 +145,7 @@ Declaration: `dist/index.d.ts`
 - type `DocEditProposalLine` from `dist/index.d.ts`
 - type `DocEditProposalProps` from `dist/index.d.ts`
 - type `DocEditProposalState` from `dist/index.d.ts`
+- type `DockedPaneResizeCommitMeta` from `dist/index.d.ts`
 - value `DotGrid` from `dist/index.d.ts`
 - type `DotGridProps` from `dist/index.d.ts`
 - value `DragSource` from `dist/index.d.ts`
@@ -498,7 +499,9 @@ Declaration: `dist/index.d.ts`
 - type `HappierFormActionsProps` from `dist/index.d.ts`
 - type `HappierFormPendingInput` from `dist/index.d.ts`
 - type `HappierFormProps` from `dist/index.d.ts`
+- value `HappierFreshnessClauses` from `dist/index.d.ts`
 - value `HappierFreshnessLine` from `dist/index.d.ts`
+- type `HappierFreshnessTextParts` from `dist/index.d.ts`
 - type `HappierGridAxis` from `dist/index.d.ts`
 - type `HappierGridCell` from `dist/index.d.ts`
 - type `HappierGridFrame` from `dist/index.d.ts`
@@ -697,6 +700,7 @@ Declaration: `dist/index.d.ts`
 - type `HappierReplyQuoteProps` from `dist/index.d.ts`
 - type `HappierReplyQuoteSource` from `dist/index.d.ts`
 - type `HappierReplyQuoteTextProps` from `dist/index.d.ts`
+- value `HappierResizeHandle` from `dist/index.d.ts`
 - type `HappierResolvedMenuGroup` from `dist/index.d.ts`
 - type `HappierResolvedPopoverPlacement` from `dist/index.d.ts`
 - type `HappierResolvedScene` from `dist/index.d.ts`
@@ -1035,6 +1039,8 @@ Declaration: `dist/index.d.ts`
 - type `LocalDateTimeFieldProps` from `dist/index.d.ts`
 - type `LocalDateTimeValue` from `dist/index.d.ts`
 - value `Markdown` from `dist/index.d.ts`
+- type `MarkdownImageResolver` from `dist/index.d.ts`
+- type `MarkdownImageSource` from `dist/index.d.ts`
 - type `MarkdownInlineReference` from `dist/index.d.ts`
 - type `MarkdownInlineReferences` from `dist/index.d.ts`
 - type `MarkdownProps` from `dist/index.d.ts`
@@ -1116,6 +1122,8 @@ Declaration: `dist/index.d.ts`
 - type `RankedRowsProps` from `dist/index.d.ts`
 - value `ReplyQuote` from `dist/index.d.ts`
 - type `ReplyQuoteProps` from `dist/index.d.ts`
+- type `ResizableSizeInput` from `dist/index.d.ts`
+- type `ResizableSizeResult` from `dist/index.d.ts`
 - type `ReturnedAnswerOutcome` from `dist/index.d.ts`
 - type `ReturnedAnswerQuestion` from `dist/index.d.ts`
 - value `ReturnedAnswerQuote` from `dist/index.d.ts`
@@ -1204,6 +1212,9 @@ Declaration: `dist/index.d.ts`
 - type `TabsProps` from `dist/index.d.ts`
 - value `TargetedSurface` from `dist/index.d.ts`
 - type `TargetedSurfaceProps` from `dist/index.d.ts`
+- type `TaskStatusCategory` from `dist/index.d.ts`
+- value `TaskStatusGlyph` from `dist/index.d.ts`
+- type `TaskStatusGlyphProps` from `dist/index.d.ts`
 - value `TechnicalDetailsDisclosure` from `dist/index.d.ts`
 - type `TechnicalDetailsDisclosureProps` from `dist/index.d.ts`
 - type `TechnicalDetailsLine` from `dist/index.d.ts`
@@ -1486,6 +1497,7 @@ Declaration: `dist/index.d.ts`
 - value `usePluginUiDataClientOrNull` from `dist/index.d.ts`
 - value `usePluginUiEphemeralSharedScope` from `dist/index.d.ts`
 - value `usePluginUiFocusTarget` from `dist/index.d.ts`
+- value `useResizableSize` from `dist/index.d.ts`
 - value `useReviewCommentProposalsForEntry` from `dist/index.d.ts`
 - value `useSessionState` from `dist/index.d.ts`
 - value `useSessionStates` from `dist/index.d.ts`
@@ -1662,6 +1674,7 @@ Declaration: `dist/components/index.d.ts`
 - type `DocEditProposalLine` from `dist/components/index.d.ts`
 - type `DocEditProposalProps` from `dist/components/index.d.ts`
 - type `DocEditProposalState` from `dist/components/index.d.ts`
+- type `DockedPaneResizeCommitMeta` from `dist/components/index.d.ts`
 - value `DotGrid` from `dist/components/index.d.ts`
 - type `DotGridProps` from `dist/components/index.d.ts`
 - value `DragSource` from `dist/components/index.d.ts`
@@ -2015,7 +2028,9 @@ Declaration: `dist/components/index.d.ts`
 - type `HappierFormActionsProps` from `dist/components/index.d.ts`
 - type `HappierFormPendingInput` from `dist/components/index.d.ts`
 - type `HappierFormProps` from `dist/components/index.d.ts`
+- value `HappierFreshnessClauses` from `dist/components/index.d.ts`
 - value `HappierFreshnessLine` from `dist/components/index.d.ts`
+- type `HappierFreshnessTextParts` from `dist/components/index.d.ts`
 - type `HappierGridAxis` from `dist/components/index.d.ts`
 - type `HappierGridCell` from `dist/components/index.d.ts`
 - type `HappierGridFrame` from `dist/components/index.d.ts`
@@ -2214,6 +2229,7 @@ Declaration: `dist/components/index.d.ts`
 - type `HappierReplyQuoteProps` from `dist/components/index.d.ts`
 - type `HappierReplyQuoteSource` from `dist/components/index.d.ts`
 - type `HappierReplyQuoteTextProps` from `dist/components/index.d.ts`
+- value `HappierResizeHandle` from `dist/components/index.d.ts`
 - type `HappierResolvedMenuGroup` from `dist/components/index.d.ts`
 - type `HappierResolvedPopoverPlacement` from `dist/components/index.d.ts`
 - type `HappierResolvedScene` from `dist/components/index.d.ts`
@@ -2552,6 +2568,8 @@ Declaration: `dist/components/index.d.ts`
 - type `LocalDateTimeFieldProps` from `dist/components/index.d.ts`
 - type `LocalDateTimeValue` from `dist/components/index.d.ts`
 - value `Markdown` from `dist/components/index.d.ts`
+- type `MarkdownImageResolver` from `dist/components/index.d.ts`
+- type `MarkdownImageSource` from `dist/components/index.d.ts`
 - type `MarkdownInlineReference` from `dist/components/index.d.ts`
 - type `MarkdownInlineReferences` from `dist/components/index.d.ts`
 - type `MarkdownProps` from `dist/components/index.d.ts`
@@ -2610,6 +2628,8 @@ Declaration: `dist/components/index.d.ts`
 - type `RankedRowsProps` from `dist/components/index.d.ts`
 - value `ReplyQuote` from `dist/components/index.d.ts`
 - type `ReplyQuoteProps` from `dist/components/index.d.ts`
+- type `ResizableSizeInput` from `dist/components/index.d.ts`
+- type `ResizableSizeResult` from `dist/components/index.d.ts`
 - type `ReturnedAnswerOutcome` from `dist/components/index.d.ts`
 - type `ReturnedAnswerQuestion` from `dist/components/index.d.ts`
 - value `ReturnedAnswerQuote` from `dist/components/index.d.ts`
@@ -2693,6 +2713,9 @@ Declaration: `dist/components/index.d.ts`
 - type `TabsProps` from `dist/components/index.d.ts`
 - value `TargetedSurface` from `dist/components/index.d.ts`
 - type `TargetedSurfaceProps` from `dist/components/index.d.ts`
+- type `TaskStatusCategory` from `dist/components/index.d.ts`
+- value `TaskStatusGlyph` from `dist/components/index.d.ts`
+- type `TaskStatusGlyphProps` from `dist/components/index.d.ts`
 - value `TechnicalDetailsDisclosure` from `dist/components/index.d.ts`
 - type `TechnicalDetailsDisclosureProps` from `dist/components/index.d.ts`
 - type `TechnicalDetailsLine` from `dist/components/index.d.ts`
@@ -2959,6 +2982,7 @@ Declaration: `dist/components/index.d.ts`
 - value `usePluginTheme` from `dist/components/index.d.ts`
 - value `usePluginTranslation` from `dist/components/index.d.ts`
 - value `usePluginUiFocusTarget` from `dist/components/index.d.ts`
+- value `useResizableSize` from `dist/components/index.d.ts`
 - value `useSurfaceContext` from `dist/components/index.d.ts`
 - value `useTabPanelActivity` from `dist/components/index.d.ts`
 - value `useWidgetPresentation` from `dist/components/index.d.ts`

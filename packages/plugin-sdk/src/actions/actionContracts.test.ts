@@ -138,7 +138,6 @@ describe('single-declaration Action contracts', () => {
                 },
             });
 
-            // @ts-expect-error Client Action handlers belong only to the client artifact activation.
             const invalidClientAction: PluginActionDefinition<{
                 title: 'Open details';
                 execution: {
@@ -161,6 +160,7 @@ describe('single-declaration Action contracts', () => {
                     platforms: ['web'],
                 },
                 surfaces: ['ui'],
+                // @ts-expect-error Client Action handlers belong only to the client artifact activation.
                 run: async () => null,
             };
             void invalidClientAction;

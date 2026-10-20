@@ -75,6 +75,8 @@ export type { CaptureViewingActionInputById } from './dtos/captureViewingActionD
 export type { CaptureViewingActionResultById } from './dtos/captureViewingActionDtos.generated.js';
 export type { ClipboardActionInputById } from './dtos/clipboardActionDtos.generated.js';
 export type { ClipboardActionResultById } from './dtos/clipboardActionDtos.generated.js';
+export type { CodeIntelligenceActionInputById } from './dtos/codeIntelligenceActionDtos.generated.js';
+export type { CodeIntelligenceActionResultById } from './dtos/codeIntelligenceActionDtos.generated.js';
 export type { CommandContribution } from './service.js';
 export type { CommandPaletteActionInputById } from './dtos/commandPaletteActionDtos.generated.js';
 export type { CommandPaletteActionResultById } from './dtos/commandPaletteActionDtos.generated.js';
@@ -149,6 +151,7 @@ export type { InternalTasksActionResultById } from './dtos/internalTasksActionDt
 export type { InventoryActionInputById } from './dtos/inventoryActionDtos.generated.js';
 export type { InventoryActionResultById } from './dtos/inventoryActionDtos.generated.js';
 export type { JSONType } from './actionTypeMap.generated.js';
+export type { LanguageIntelligenceDocumentSymbol } from './dtos/pluginActionDtoSupport.generated.js';
 export type { LaunchProfilesActionInputById } from './dtos/launchProfilesActionDtos.generated.js';
 export type { LaunchProfilesActionResultById } from './dtos/launchProfilesActionDtos.generated.js';
 export type { ListReorderActionInputById } from './dtos/listReorderActionDtos.generated.js';
@@ -215,6 +218,8 @@ export type { PeerMediationObservabilityActionInputById } from './dtos/peerMedia
 export type { PeerMediationObservabilityActionResultById } from './dtos/peerMediationObservabilityActionDtos.generated.js';
 export type { PersonalSavedSecretsActionInputById } from './dtos/personalSavedSecretsActionDtos.generated.js';
 export type { PersonalSavedSecretsActionResultById } from './dtos/personalSavedSecretsActionDtos.generated.js';
+export type { PluginAccountActionContext } from './contracts.js';
+export type { PluginAccountActionHandler } from './contracts.js';
 export type { PluginAccountAdministrationActionInputById } from './dtos/pluginAccountAdministrationActionDtos.generated.js';
 export type { PluginAccountAdministrationActionResultById } from './dtos/pluginAccountAdministrationActionDtos.generated.js';
 export type { PluginActionAuthorDefaults } from '../definePlugin.js';
@@ -225,6 +230,7 @@ export type { PluginActionInputById } from './service.js';
 export type { PluginActionInvocationSurfaceV2 } from './service.js';
 export type { PluginActionPlacement } from '../definePlugin.js';
 export type { PluginActionResultById } from './service.js';
+export type { PluginActionRuntimeDeclaration } from '../definePlugin.js';
 export type { PluginActionWorkflowAuthoredResultReferenceV1 } from './actionTypeMap.generated.js';
 export type { PluginActionWorkflowBlockV1 } from './actionTypeMap.generated.js';
 export type { PluginActionWorkflowConditionV1 } from './actionTypeMap.generated.js';
@@ -241,7 +247,6 @@ export type { PluginAgentExternalSessionLinkDataArray } from './actionTypeMap.ge
 export type { PluginAgentExternalSessionLinkDataObject } from './actionTypeMap.generated.js';
 export type { PluginAgentExternalSessionLinkDataValue } from './actionTypeMap.generated.js';
 export type { PluginClientActionContext } from './service.js';
-export type { PluginAccountActionContext, PluginAccountActionHandler } from './contracts.js';
 export type { PluginClientActionHandler } from './service.js';
 export type { PluginClientActionUi } from './service.js';
 export type { PluginDevLoopActionInputById } from './dtos/pluginDevLoopActionDtos.generated.js';

@@ -1149,7 +1149,6 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     pluginOwner: { module: 'components/StoredImage.tsx', symbol: 'StoredImage' },
     coreConsumers: [
       'components/sessions/media/SessionMediaInlineImages.tsx',
-      'components/workspaces/files/file/FileUriPreview.tsx',
     ],
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'Session image reads require a mounted host; V2 has no stored-image node.' },

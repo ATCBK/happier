@@ -632,6 +632,36 @@
       "availabilityDisposition": "available"
     },
     {
+      "manifestFamily": "languageServers",
+      "pluginApiRegistrationFamily": null,
+      "registrationHost": null,
+      "definePluginAuthorKey": "languageServers",
+      "definePluginInputShape": "descriptor",
+      "definePluginClassification": "descriptor-only",
+      "authorEntrypoint": ".",
+      "realm": "any",
+      "lifecycle": [
+        "declared",
+        "normalized",
+        "projected",
+        "bound",
+        "active",
+        "unavailable",
+        "invalid"
+      ],
+      "catalogDisposition": "retained",
+      "producer": "packages/protocol/src/plugins/contributions/catalog.ts#languageServers",
+      "provingConsumer": "packages/plugins/lang-typescript/src/manifest.ts",
+      "specialistOwner": "apps/cli/src/lsp/languageServerDefinitions.ts",
+      "lifecycleOwner": "apps/cli/src/lsp/languageServerHost.ts",
+      "predecessorRemoval": "catalog-disposition:retained",
+      "sourceApiAvailability": "present",
+      "sourceConsumer": null,
+      "loadedPlatformProof": "not-recorded",
+      "releaseAvailability": "not-published",
+      "availabilityDisposition": "available"
+    },
+    {
       "manifestFamily": "machineProvisioners",
       "pluginApiRegistrationFamily": null,
       "registrationHost": null,
@@ -1753,6 +1783,12 @@
       "realms": [
         "daemon"
       ],
+      "accountInvocation": {
+        "members": [
+          "execute",
+          "executeAdmittedTargetedOperation"
+        ]
+      },
       "producer": "src/actions/service.ts",
       "lifecycle": "invocation-scoped",
       "provingConsumer": "packages/plugins/channels/src/ingress.ts",
@@ -2149,6 +2185,11 @@
       "realms": [
         "daemon"
       ],
+      "accountInvocation": {
+        "members": [
+          "account"
+        ]
+      },
       "producer": "src/storage.ts",
       "lifecycle": "invocation-scoped",
       "provingConsumer": "packages/plugins/channels/src/requiredAccountStorage.ts",
@@ -2169,8 +2210,11 @@
         "."
       ],
       "realms": [
-        "daemon"
+        "any"
       ],
+      "accountInvocation": {
+        "members": "all"
+      },
       "producer": "src/services/targetedContributions.ts",
       "lifecycle": "invocation-scoped",
       "provingConsumer": "packages/plugins/channels/src/ingress.ts",
