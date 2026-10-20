@@ -157,6 +157,7 @@ let activeStartRequest: TriageEntrySessionStartRequestV1 = START_REQUEST;
 let mintedKeys: string[] = [];
 let notice: string | null = null;
 let effectSetups = 0;
+let probeKey = 0;
 const mintCreationKey = () => {
     const key = `minted-key-${mintedKeys.length + 1}`;
     mintedKeys.push(key);
@@ -176,7 +177,10 @@ function StartProbe(_context: RenderContext): React.ReactElement {
         />
     );
 }
-const startProbeSurface = defineUiSurface(StartProbe);
+function StartProbeScope(context: RenderContext): React.ReactElement {
+    return <StartProbe key={probeKey} {...context} />;
+}
+const startProbeSurface = defineUiSurface(StartProbeScope);
 
 const mounted: PluginUiTestkit[] = [];
 let seeds: unknown[] = [];
@@ -220,6 +224,7 @@ async function mountProbe(input: Readonly<{
     startResults?: readonly ('lost' | TriageStartEntrySessionResultV1)[];
     /** How the host answers the source selection, in order. Default: submitted. */
     selectionResults?: readonly ScriptedSelection[];
+    beforePreparedSelection?: (signal: AbortSignal) => Promise<void>;
     linkedSession?: Readonly<{ sessionId: string; serverId?: string; machineId: string; path: string }>;
     projects?: readonly unknown[];
     profilePlacement?: TriageActionProfilePreferencesV1['placement'];
@@ -284,7 +289,7 @@ async function mountProbe(input: Readonly<{
                 if (input.seedError) throw input.seedError;
                 if (input.seedResult !== undefined) throw new Error('New Session unavailable');
             },
-            selectActionInput: async ({ request }) => {
+            selectActionInput: async ({ request, signal }) => {
                 if (!('operation' in request)) {
                     draftRequests.push(request);
                     return {
@@ -299,6 +304,7 @@ async function mountProbe(input: Readonly<{
                         },
                     };
                 }
+                await input.beforePreparedSelection?.(signal);
                 const scripted = selectionResults.shift() ?? 'submitted';
                 if (scripted === 'cancelled') return { kind: 'cancelled' as const };
                 const selected = {
@@ -356,6 +362,7 @@ afterEach(async () => {
     mintedKeys = [];
     notice = null;
     effectSetups = 0;
+    probeKey = 0;
     activeStartRequest = START_REQUEST;
     for (const fixture of mounted.splice(0)) await fixture.dispose();
 });
@@ -444,6 +451,28 @@ describe('read-only PR Walk placement', () => {
 });
 
 describe('single-entry compose checkout handoff', () => {
+    it.each([PREPARED_REVIEW_START_REQUEST, PREPARED_REVIEW_SEND_REQUEST])(
+        'withdraws its prepared-workspace selector on entry retirement ($action.actionId)', async (request) => {
+            let pendingSignal!: AbortSignal;
+            let finishSelection!: () => void;
+            const { fixture } = await mountProbe({ request, beforePreparedSelection: (signal) => {
+                pendingSignal = signal;
+                return new Promise((resolve) => { finishSelection = resolve; });
+            } });
+            await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Compose in worktree' })); });
+            await settle();
+            expect(pendingSignal.aborted).toBe(false);
+            // Retire just the entry owner; the mounted Host API and its chooser remain live.
+            probeKey += 1;
+            await act(async () => { await fixture.updateSurface(fixture.context.surface); });
+            await settle();
+            expect(pendingSignal.aborted).toBe(true);
+            await act(async () => { finishSelection(); });
+            await settle();
+            expect(startInputs).toEqual([]);
+            expect(seeds).toEqual([]);
+        },
+    );
     it.each([
         new PluginError({ code: 'plugin_action_current_intent_rejected' }),
         new PluginError({ code: 'denied', diagnostics: [{ code: 'plugin_action_current_intent_rejected', severity: 'error' }] }),

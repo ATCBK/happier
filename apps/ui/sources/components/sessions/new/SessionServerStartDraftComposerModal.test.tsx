@@ -322,7 +322,7 @@ describe('mounted Session server-start recipe composer', () => {
         } finally { adapter.dispose(); await plugin.unmount(); }
     });
 
-    it('delivers the real chooser settlement through the mounted Triage controller to session.open after the chooser remounts', async () => {
+    it.each([false, true])('settles the real chooser through its mounted Triage owner (owner retired=%s)', async (retireOwner) => {
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) throw new Error('Missing Home lifetime');
         const requestSurface: PluginUiSurfaceContextV1 = {
@@ -344,12 +344,17 @@ describe('mounted Session server-start recipe composer', () => {
         } satisfies TriageEntrySessionStartRequestV1;
         const starts: TriageStartEntrySessionInputV1[] = [];
         const opens: unknown[] = [];
+        const selections: PluginUiJsonValueV1[] = [];
         const selector = createPluginActionInputSelectionHostApiHandler({
             host: { machineId: 'machine-1', serverId, targetPluginId: requestSurface.pluginId, accountLifetime: lifetime },
             isCurrent: lifetime.isCurrent,
         });
         const host = createPluginSurfaceHostApi({ surfaceContext: requestSurface, handlers: {
-            selectActionInput: selector,
+            selectActionInput: async (envelope, options) => {
+                const outcome = await selector(envelope, options);
+                if (outcome !== undefined) selections.push(outcome);
+                return outcome;
+            },
             executeAction: async (envelope): Promise<PluginUiJsonValueV1> => {
                 const action = PluginUiExecuteActionRequestV1Schema.parse(envelope.payload);
                 if (action.action === 'projects.list') return { items: [], truncated: false };
@@ -374,6 +379,7 @@ describe('mounted Session server-start recipe composer', () => {
         </PluginHostApiProvider>);
         try {
             vi.mocked(Modal.show).mockClear();
+            vi.mocked(Modal.hide).mockClear();
             await act(async () => { plugin.findByType(RoundButton).props.onPress(); });
             await waitForHomeGovernance(() => expect(Modal.show).toHaveBeenCalledTimes(1));
             expect(phase).toEqual({ kind: 'choosing' });
@@ -394,6 +400,18 @@ describe('mounted Session server-start recipe composer', () => {
                 try {
                     const submit = footer.findAllByType(RoundButton).find(node => node.props.title === 'newSession.recipeComposerSubmit')!;
                     expect(submit.props.disabled).toBe(false);
+                    if (retireOwner) {
+                        await plugin.unmount();
+                        await flushHookEffects();
+                        // The host presentation must withdraw before any old submit callback can run.
+                        expect(Modal.hide).toHaveBeenCalledTimes(1);
+                        expect(selections).toEqual([{ code: 'unavailable', diagnostics: ['aborted'] }]);
+                        await act(async () => { submit.props.onPress(); });
+                        await flushHookEffects();
+                        expect(starts).toEqual([]);
+                        expect(opens).toEqual([]);
+                        return;
+                    }
                     await act(async () => { submit.props.onPress(); });
                 } finally { await footer.unmount(); }
                 await flushHookEffects();

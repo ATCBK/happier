@@ -498,8 +498,8 @@ export function createTriageEntrySessionStartController(
     // the gate the way a state read would.
     const inFlight = ({ current: false } as { current: boolean });
     const retired = ({ current: false } as { current: boolean });
-    // The recipe is a host presentation borrowed by this controller, not independent pending work.
-    let recipeLifetime = new AbortController();
+    // Input selectors are host presentations borrowed by this controller, not independent pending work.
+    let selectionLifetime = new AbortController();
     // The one identity a retry repeats. Scoped to this mount, like every other
     // fact here: a Session the user navigates back to is reached through its
     // link, not through a remembered start.
@@ -773,6 +773,7 @@ export function createTriageEntrySessionStartController(
                             host,
                             operation,
                             prepared,
+                            { signal: selectionLifetime.signal },
                         );
                         if (retired.current) return;
                         if (authorization.status !== 'authorized') {
@@ -901,6 +902,7 @@ export function createTriageEntrySessionStartController(
                     const seeded = await requestTriageNewSessionAuthoringV1(host, {
                         entries: [request], promptText, profileId: action.profileId,
                         checkoutIntent: checkout, placement: executionPlacement, candidates: placementCandidates,
+                        signal: selectionLifetime.signal,
                         isCurrent: () => !retired.current,
                     });
                     if (retired.current) return;
@@ -943,7 +945,7 @@ export function createTriageEntrySessionStartController(
                         }]),
                     );
                     setPhase(CHOOSING);
-                    const draft = await requestTriageNewSessionDraft(host, seed, { signal: recipeLifetime.signal });
+                    const draft = await requestTriageNewSessionDraft(host, seed, { signal: selectionLifetime.signal });
                     if (retired.current) return;
                     if (draft.status === 'cancelled') {
                         // The reader closed the surface. Nothing was chosen,
@@ -993,6 +995,7 @@ export function createTriageEntrySessionStartController(
                         host,
                         request.reviewWorkspace!.operation,
                         destination.destination.materialization.request,
+                        { signal: selectionLifetime.signal },
                     );
                     if (retired.current) return;
                     if (authorization.status === 'cancelled') {
@@ -1099,10 +1102,10 @@ export function createTriageEntrySessionStartController(
         },
         activate: () => {
             retired.current = false;
-            if (recipeLifetime.signal.aborted) recipeLifetime = new AbortController();
+            if (selectionLifetime.signal.aborted) selectionLifetime = new AbortController();
         },
         subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        dispose: () => { retired.current = true; recipeLifetime.abort(); listeners.clear(); },
+        dispose: () => { retired.current = true; selectionLifetime.abort(); listeners.clear(); },
         waitForSettled: () => inFlight.current ? new Promise<TriageEntrySessionStartControllerV1>((resolve) => {
             const listener = () => { if (!inFlight.current) { listeners.delete(listener); resolve(snapshot); } };
             listeners.add(listener);

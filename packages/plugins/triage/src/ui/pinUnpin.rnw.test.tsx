@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, cloneElement, type ReactElement } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
+import type { SessionId } from '@happier-dev/plugin-sdk/sessions';
+import type { SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
+import type { PluginUiDataClient } from '@happier-dev/plugin-ui/data';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import {
+    TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1,
     TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
     TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
     TriageConfiguredSourceInstanceV1Schema,
@@ -30,6 +34,8 @@ import { CORPUS_SOURCE_INSTANCE_LIFECYCLE, CORPUS_USER_MARKS_INDEX_ID } from '..
 import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
 import type { CorpusSourceInstanceRowV1 } from '../corpus/collections/rows.js';
 import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
+import { createTestkitAccountKv } from '../settings/testkit/accountKv.test-support.js';
+import { linkEntryToSession } from '../sessions/entrySessionLinks.js';
 import {
     testkitLocator,
     testkitSnapshot,
@@ -87,7 +93,7 @@ function instanceRow(): CorpusSourceInstanceRowV1 {
     };
 }
 
-function createHarness() {
+function createHarness(options: Readonly<{ withRowFacts?: boolean }> = {}) {
     const { collections, control } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow()));
 
@@ -113,20 +119,26 @@ function createHarness() {
         surfaces: { detail: {} },
     } as unknown as TriageAdmittedSourceV1];
 
-    const state = { marksUnreachable: false, includeEntry: true };
+    const state = { marksUnreachable: false, includeEntry: true, scanGate: null as Promise<void> | null };
 
-    const executeScan: TriageAdmittedOperationExecutorV1 = async () => ({
-        kind: 'complete',
-        observations: state.includeEntry ? [{
-            kind: 'present',
-            localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
-            locator: testkitLocator(),
-            snapshot: testkitSnapshot({ title: 'Replace the duplicated normalizer' }),
-            viewer: testkitViewer(),
-            sourceUpdatedAtMs: 3_000,
-        }] : [],
-        evidence: { kind: 'walkFinished' },
-    } satisfies TriageScanResultV1);
+    const executeScan: TriageAdmittedOperationExecutorV1 = async () => {
+        await state.scanGate;
+        return ({
+            kind: 'complete',
+            observations: state.includeEntry ? [{
+                kind: 'present',
+                localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                locator: testkitLocator(),
+                snapshot: testkitSnapshot({ title: 'Replace the duplicated normalizer',
+                    ...(options.withRowFacts ? { facts: [{ id: 'checks', label: 'Checks', importance: 'primary',
+                        value: { kind: 'status', value: 'Checks passing', tone: 'success' } }] } : {}),
+                }),
+                viewer: testkitViewer(),
+                sourceUpdatedAtMs: 3_000,
+            }] : [],
+            evidence: { kind: 'walkFinished' },
+        } satisfies TriageScanResultV1);
+    };
 
     async function executeAction(request: Readonly<{ action: unknown; input: unknown }>) {
         const action = String(request.action);
@@ -155,11 +167,35 @@ function createHarness() {
         });
     }
 
+    const byCollectionId = new Map<string, unknown>([
+        ['source-instances', collections.sourceInstances], ['session-links', collections.sessionLinks],
+        ['user-marks', collections.userMarks],
+    ]);
+    // Account Collections and KV are the storage boundary; domain readers and writers stay real.
+    const dataClient = options.withRowFacts ? {
+        collection(definition: Readonly<{ id: string }>) {
+            const collection = byCollectionId.get(definition.id);
+            if (collection === undefined) throw new Error(`Unknown collection ${definition.id}`);
+            return collection;
+        },
+        async openCollectionQuery() { throw new Error('No declared UI query is opened by this surface.'); },
+        accountKv: createTestkitAccountKv().kv,
+    } as unknown as PluginUiDataClient : undefined;
+
     return {
         collections,
         control,
         executeAction,
         state,
+        dataClient,
+        targetedContributions: {
+            target: { pluginId: 'happier.triage', occurrenceId: 'generation-1',
+                sourceCustody: { kind: 'development' as const, registeredRootId: 'triage-root' } },
+            points: [{ pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocols: [{
+                protocol: admitted[0]!.protocol,
+                contributions: admitted.map((source) => ({ ...source, operations: [], surfaces: [] })),
+            }] }],
+        },
         ephemeralSharedScope: createTriageEphemeralSharedScopeFixture(),
     };
 }
@@ -187,15 +223,29 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
             identity: { instanceId: 'fixture-instance-184', mountNonce: 'fixture-mount-184' },
             authorPlugin: { id: 'happier.triage', version: '0.0.0' },
             surface: renderShellSurface,
-            surfaceContext: createSurfaceContextFixture(),
-            adapter: createPluginUiRnwSemanticSurfaceAdapter({
-                ephemeralSharedScope: harness.ephemeralSharedScope,
-                // The row menu presents inline, so a test opens it the way a reader does.
-                overlays: true,
-            }),
+            surfaceContext: createSurfaceContextFixture({ targetedContributions: harness.targetedContributions }),
+            adapter: {
+                async mount(input) {
+                    return await createPluginUiRnwSemanticSurfaceAdapter({
+                        ephemeralSharedScope: harness.ephemeralSharedScope,
+                        // The row menu presents inline, so a test opens it the way a reader does.
+                        overlays: true,
+                    }).mount({
+                        ...input,
+                        surface: (context) => harness.dataClient === undefined ? input.surface(context) : cloneElement(
+                            input.surface(context) as ReactElement<{ dataClient?: PluginUiDataClient }>,
+                            { dataClient: harness.dataClient },
+                        ),
+                    });
+                },
+            },
             handlers: {
                 publishCurrentUiContext: () => undefined,
                 executeAction: async ({ action, input }) => await harness.executeAction({ action, input }),
+                readSession: ({ sessionId }) => ({
+                    sessionId, lifecycle: 'active', runtime: 'working', operational: 'working',
+                    workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' }, pendingPermissions: [],
+                } satisfies SessionStateV1),
                 // Selection is route-owned. This harness is testing Pin/Unpin,
                 // so acknowledge the canonical location rather than exercising
                 // the separate host-refusal recovery path.
@@ -234,6 +284,42 @@ async function unpinFromRowMenu(shell: PluginUiTestkit, title: string): Promise<
 }
 
 describe('the mounted Pin/Unpin affordance', () => {
+    it('retains a pinned row, source kind, Session activity and signal while a manual refresh is still reading', async () => {
+        const harness = createHarness({ withRowFacts: true });
+        await seedPin(harness, entryRef('17'), {
+            title: 'Replace the duplicated normalizer', scopeLabel: 'example/repository',
+        });
+        expect((await linkEntryToSession({ collections: harness.collections, entryRef: entryRef('17'),
+            display: { locator: testkitLocator(), scopeLabel: 'example/repository' },
+            sessionId: 'refresh-facts-session' as SessionId, nowMs: Date.now() })).status).toBe('linked');
+        const shell = await mountShell(harness);
+        const assertFacts = async () => {
+            await expect(shell.getByRole('row', { name: 'Pinned' })).resolves.toBeDefined();
+            const row = document.querySelector('[data-testid^="triage-entry-row:"]');
+            const description = row?.querySelector('[id^="happier-list-item-description-"]');
+            expect(description?.textContent).toContain('Pull request');
+            expect(description?.textContent).toContain('Working');
+            expect(description?.textContent).toContain('Checks passing');
+            expect(await shell.getAllByRole('button', {
+                name: 'More actions for Replace the duplicated normalizer',
+            })).toHaveLength(1);
+        };
+        await assertFacts();
+        let finishScan!: () => void;
+        harness.state.scanGate = new Promise<void>((resolve) => { finishScan = resolve; });
+        let refreshing!: Promise<void>;
+        try {
+            await act(async () => {
+                refreshing = refreshTriageListWindow('manual', shell.context.hostApi, harness.ephemeralSharedScope);
+            });
+            await expect(shell.getByText('Refreshing')).resolves.toBeDefined();
+            await assertFacts();
+        } finally {
+            await act(async () => { finishScan(); await refreshing; });
+        }
+        await assertFacts();
+    });
+
     it('lists a pinned entry once, under Pinned rather than its lane', async () => {
         const harness = createHarness();
         await seedPin(harness, entryRef('17'), {
