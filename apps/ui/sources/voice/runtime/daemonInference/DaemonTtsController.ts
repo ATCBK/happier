@@ -241,6 +241,7 @@ export class DaemonTtsController {
         let abortObserved = params.abortController.signal.aborted;
         let cancelDelivery: Promise<void> | null = null;
         let abortPlayback: (() => void) | null = null;
+        const playbackOutcome: { failure?: Readonly<{ error: unknown }> } = {};
         const maxResidentSegments = 2;
         let producerTerminated = false;
         let resolveProducerTermination!: () => void;
@@ -311,20 +312,22 @@ export class DaemonTtsController {
                 }
                 await stream?.ackSegment(chunk.segment);
             },
-            onPlaybackError: async () => {
+            onPlaybackError: async (_chunk, error) => {
                 terminateProducer();
                 if (this.speakEpoch !== epoch || abortObserved || params.abortController.signal.aborted) {
                     return;
                 }
+                playbackOutcome.failure ??= { error };
                 abortPlayback?.();
                 await cancelDeliveredStream();
             },
-            onConfirmationError: async () => {
+            onConfirmationError: async (_chunk, error) => {
                 terminateProducer();
                 params.stopActivePlayback();
                 if (this.speakEpoch !== epoch || abortObserved || params.abortController.signal.aborted) {
                     return;
                 }
+                playbackOutcome.failure ??= { error };
                 abortPlayback?.();
                 await cancelDeliveredStream();
             },
@@ -401,6 +404,9 @@ export class DaemonTtsController {
                 playbackController.enqueue(chunk);
             }
             await playback.done;
+            if (playbackOutcome.failure) {
+                throw playbackOutcome.failure.error;
+            }
         } catch (error) {
             terminateProducer();
             params.stopActivePlayback();

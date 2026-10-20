@@ -405,6 +405,8 @@ export function createVoiceTranscriptProjector(deps: VoiceTranscriptProjectorDep
         > | null;
         source?: RealtimeConversationTurnSource | null;
         continuation?: VoiceContinuationProvenance;
+        localId?: string;
+        createdAt?: number;
     }>): NormalizedMessage | null => {
         const conversationSessionId = normalizeNonEmptyString(params.conversationSessionId);
         // The ordinary transcript format requires a text body. Its non-relative
@@ -425,11 +427,12 @@ export function createVoiceTranscriptProjector(deps: VoiceTranscriptProjectorDep
             return null;
         }
         const turn = params.turn ?? null;
-        const createdAt = turn?.ts ?? Math.max(nowMs(), lastLocalProjectionCreatedAt + 1);
+        const createdAt = params.continuation && params.createdAt !== undefined ? params.createdAt
+            : turn?.ts ?? Math.max(nowMs(), lastLocalProjectionCreatedAt + 1);
         if (!turn) lastLocalProjectionCreatedAt = createdAt;
         const localSequence = turn ? null : ++localProjectionSequence;
         const canonicalItem = params.canonicalItem ?? null;
-        const id = params.continuation ? `voice-note:${randomUUID()}` : canonicalItem && params.role !== 'note'
+        const id = params.continuation ? params.localId ?? `voice-note:${randomUUID()}` : canonicalItem && params.role !== 'note'
             ? deriveCanonicalVoiceTranscriptEntryId({
                 attemptIdentity: canonicalItem.attemptIdentity,
                 itemId: canonicalItem.itemId,
@@ -476,14 +479,8 @@ export function createVoiceTranscriptProjector(deps: VoiceTranscriptProjectorDep
                 ),
         };
         if (params.continuation) {
-            if (!deps.persistFinal) return null;
-            const input: PersistSessionTranscriptMessageInput = { sessionId: conversationSessionId, localId: id, createdAt,
-                messageRole: 'agent', rawRecord: { ...buildRealtimeConversationRawRecord({ id, role: 'assistant', text }), meta: message.meta } };
             // No optimistic control note: the other device reacts only to its ordinary
             // acknowledged, Account-encrypted transcript row from the sync owner.
-            fireAndForget((async () => { await deps.persistFinal!(input); })(), { tag: 'VoiceTranscriptProjector.persistContinuation', logError: false,
-                onError: (error) => recordVoiceRuntimeFailure('voice.transcript', 'transcript_dropped', 'continuation_persist_failed',
-                    readSafeVoiceRuntimeFailureCode(error) ?? 'voice_continuation_persist_failed') });
             return message;
         }
         if (canonicalItem && params.role !== 'note' && deps.persistFinal) {
@@ -655,13 +652,34 @@ export function createVoiceTranscriptProjector(deps: VoiceTranscriptProjectorDep
         return created;
     };
 
+    type NoteTextInput = Readonly<{ conversationSessionId: string; text: string; continuation?: VoiceContinuationProvenance; localId?: string; createdAt?: number }>;
+    function projectNoteText(params: NoteTextInput & { continuation: VoiceContinuationProvenance }): Promise<NormalizedMessage>;
+    function projectNoteText(params: NoteTextInput & { continuation?: undefined }): NormalizedMessage | null;
+    function projectNoteText(params: NoteTextInput): NormalizedMessage | null | Promise<NormalizedMessage>;
+    function projectNoteText(params: NoteTextInput) {
+        const message = projectTextMessage({ ...params, role: 'note' });
+        if (!params.continuation) return message;
+        return (async () => {
+            try {
+                const localId = message?.localId;
+                if (!message || !localId || !deps.persistFinal) throw new Error('voice_continuation_persist_unavailable');
+                await deps.persistFinal({ sessionId: params.conversationSessionId, localId, createdAt: message.createdAt,
+                    messageRole: 'agent', rawRecord: { ...buildRealtimeConversationRawRecord({ id: localId, role: 'assistant', text: 'Voice continued.' }), meta: message.meta } });
+                return message;
+            } catch (error) {
+                recordVoiceRuntimeFailure('voice.transcript', 'transcript_dropped', 'continuation_persist_failed',
+                    readSafeVoiceRuntimeFailureCode(error) ?? 'voice_continuation_persist_failed');
+                throw error;
+            }
+        })();
+    }
+
     return {
         projectUserText: (params: Readonly<{ conversationSessionId: string; text: string; turn?: VoiceTranscriptTurn | null }>) =>
             projectTextMessage({ ...params, role: 'user' }),
         projectAssistantText: (params: Readonly<{ conversationSessionId: string; text: string; turn?: VoiceTranscriptTurn | null }>) =>
             projectTextMessage({ ...params, role: 'assistant' }),
-        projectNoteText: (params: Readonly<{ conversationSessionId: string; text: string; continuation?: VoiceContinuationProvenance }>) =>
-            projectTextMessage({ ...params, role: 'note' }),
+        projectNoteText,
         projectCanonicalEvent: (params: Readonly<{
             conversationSessionId: string;
             event: VoiceTranscriptCanonicalEventV1;

@@ -31,6 +31,7 @@ import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpee
 import type { HappierAudioStreamNativeEventMap } from '../../../../../packages/audio-stream-native/src/HappierAudioStreamNative.types';
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -538,6 +539,8 @@ async function createLocalVoiceAccountHarness() {
             await connection?.dispose();
             metadataHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
             const authoringMemoryHttp = createAuthoringMemoryHttpBoundary();
+            let artifactRequestAccountId: string | null = null;
+            const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => artifactRequestAccountId, encryptionMode: 'plain' });
             activeSessionMetadataHttp = metadataHttp;
             const accountSettings = normalizeVoiceSettingsLocalDelta(BASE_SETTINGS);
             const { serveAccountHomes } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
@@ -558,6 +561,12 @@ async function createLocalVoiceAccountHarness() {
                     if (path === '/v1/account/profile') return request.accountId
                         ? Response.json({ ...profileDefaults, id: request.accountId })
                         : Response.json({}, { status: 401 });
+                    if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/')) {
+                        // The boundary captures this authenticated Account synchronously at admission.
+                        artifactRequestAccountId = request.accountId;
+                        const response = artifacts.handle(`${path}${request.url.search}`, init);
+                        if (response) return response;
+                    }
                     const authoringMemoryResponse = await authoringMemoryHttp.handle(input, init);
                     if (authoringMemoryResponse) return authoringMemoryResponse;
                     if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(ProjectAccountRowListResponseV1Schema.parse({

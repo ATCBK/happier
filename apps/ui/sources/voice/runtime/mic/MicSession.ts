@@ -26,7 +26,8 @@ export type MicSession = Readonly<{
     /** Request microphone permission without allocating a transport-specific stream. */
     ensurePermission?: () => Promise<void>;
     ensureActive: () => Promise<void>;
-    setMuted: (muted: boolean) => void;
+    /** Settles only after the platform acknowledges the requested input state. */
+    setMuted: (muted: boolean) => Promise<void> | void;
     isMuted: () => boolean;
     teardown: () => Promise<void>;
     getStream: () => MediaStream | null;

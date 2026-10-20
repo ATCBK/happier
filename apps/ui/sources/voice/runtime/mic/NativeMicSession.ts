@@ -203,32 +203,23 @@ export function createExpoAudioRecordingMicSession(
         if (audioModeLease === activeLease) audioModeLease = null;
     };
 
-    const syncRecorderMuteState = (activeRecorder: ExpoAudioRecorderLike | null): void => {
-        if (!activeRecorder) {
-            if (nativeFileRecording) void nativeFileRecording.setMuted(muted).catch(() => {});
-            return;
-        }
-
-        // Expo's recorder does not expose a dedicated mute API; pause/resume is the recorder-level seam.
-        if (muted) {
-            activeRecorder.pause();
-            return;
-        }
-
-        activeRecorder.record();
-    };
-
     return {
         ensureActive: async () => {
             rejectRefusedMicrophone(await requestPermission(), showPermissionDenied);
         },
-        setMuted: (nextMuted) => {
+        setMuted: async (nextMuted) => {
             if (muted === nextMuted) {
                 return;
             }
 
+            if (nativeFileRecording) {
+                await nativeFileRecording.setMuted(nextMuted);
+            } else if (recorder) {
+                // Expo acknowledges pause/resume synchronously at this seam.
+                if (nextMuted) recorder.pause();
+                else recorder.record();
+            }
             muted = nextMuted;
-            syncRecorderMuteState(recorder);
         },
         isMuted: () => muted,
         teardown: async () => {

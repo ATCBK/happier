@@ -1213,7 +1213,7 @@ export async function setLocalVoiceMuted(sessionId: string, muted: boolean): Pro
   if (current.sessionId !== resolvedSessionId) return;
 
   try {
-    await localVoiceCaptureOwner.setMuted({ muted, sessionId: resolvedSessionId });
+    if (!await localVoiceCaptureOwner.setMuted({ muted, sessionId: resolvedSessionId })) return;
   } catch (error) {
     // Provider-managed capture could not prove the requested physical mute.
     // Retire the existing attempt through its canonical owner rather than

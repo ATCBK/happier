@@ -811,7 +811,7 @@ describe('VoiceSessionRuntime', () => {
             seq: boundary + 1, createdAt: Date.now() } }) }, input);
         return persistence;
       } });
-    projector.projectNoteText({ conversationSessionId: conversation.sessionId, text: 'Voice continued.', continuation: note });
+    await projector.projectNoteText({ conversationSessionId: conversation.sessionId, text: 'Voice continued.', ...note });
     const persisted = await persistence;
     if (!persisted) throw new Error('Expected an acknowledged continuation');
     const received = reducer(createReducer(), [persisted.message]).messages;
@@ -825,7 +825,7 @@ describe('VoiceSessionRuntime', () => {
     await act(async () => { voiceHooks.onMessages(conversation, received); });
     await vi.waitFor(() => expect(mounted.lifecycle.getSnapshot().status).toBe('disconnected'));
     expect(getVoiceSessionEndedAttempt()).toMatchObject({ attemptId, conversationSessionAddress: conversation,
-      reason: { kind: 'continued_elsewhere', continuation: note } });
+      reason: { kind: 'continued_elsewhere', continuation: note.continuation } });
     expect(remote.observe(conversation, received)).toBeNull();
     expect(sdk.endSession).toHaveBeenCalledOnce();
 
