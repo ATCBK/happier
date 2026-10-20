@@ -1,4 +1,4 @@
-import { ArtifactActionInputSchemasV1, ArtifactDocumentV1Schema, projectArtifactHeaderV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { ArtifactActionInputSchemasV1, ArtifactDocumentV1Schema, projectArtifactHeaderV1, type ArtifactActionInputV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { artifactSavedByFromActionContextV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { createArtifactPublicLinkActionsV1, type ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol/actions/executor/artifactPublicLinkActions';
 import { listArtifactHeadersV1 } from '@happier-dev/protocol/artifacts/artifactListSelectionV1';
@@ -24,6 +24,9 @@ import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1, DocEditAcceptHostInputV1Schema, DocEdi
 import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
 import { readArtifactWorkspaceSourceSessionId } from './artifactWorkspaceSource';
+import { storage } from '@/sync/domains/state/storage';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { readMachineInventoryRowReadiness } from '@/sync/domains/machines/resolveServerScopedMachines';
 
 /** Artifact-backed Actions use the captured Account transport and canonical sync codecs. */
 export function createUiArtifactAction(account: LazyActionAccountContext, options?: Readonly<{
@@ -35,15 +38,25 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
         const { artifactId, revision } = await account.createArtifactDocument(input);
         return { artifactId, revision };
     };
-    const readWorkspaceFile = async (context: ActionExecutorContext, path: string, signal?: AbortSignal) => {
+    const readWorkspaceFile = async (context: ActionExecutorContext, path: string, signal?: AbortSignal,
+        workspace?: ArtifactActionInputV1<'artifact.publish_from_file'>['workspace']) => {
         account.assertCurrent();
-        const sessionId = readArtifactWorkspaceSourceSessionId(context);
-        if (!sessionId || context.runtimeAccountId !== account.accountId
+        const sessionId = workspace ? null : readArtifactWorkspaceSourceSessionId(context);
+        if ((!workspace && !sessionId) || context.runtimeAccountId !== account.accountId
             || !areServerProfileIdentifiersEquivalent(context.serverId, account.serverId))
             throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
-        const target = readMachineControlTargetForSession({ serverId: account.serverId, accountId: account.accountId, sessionId });
+        const resolveTarget = () => {
+            if (!workspace) return sessionId ? readMachineControlTargetForSession({
+                serverId: account.serverId, accountId: account.accountId, sessionId }) : null;
+            const machine = resolveServerScopedMachine(storage.getState(), account.serverId, workspace.machineId);
+            return machine && !machine.revokedAt && !machine.replacedByMachineId
+                && readMachineInventoryRowReadiness(machine) === 'available'
+                ? { machineId: machine.id, basePath: workspace.rootPath, agentBasePath: undefined } : null;
+        };
+        const target = resolveTarget();
         if (!target) throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
-        const absolutePath = resolveMachineAbsolutePath({ rootPath: target.basePath, agentRootPath: target.agentBasePath, requestPath: path });
+        const absolutePath = resolveMachineAbsolutePath({ rootPath: target.basePath, agentRootPath: target.agentBasePath,
+            requestPath: path, pathKind: 'workspace_entry' });
         const relativePath = resolvePathRelativeToRoot({ root: target.basePath, path: absolutePath });
         if (relativePath === null || !isSafeWorkspaceRelativePath(relativePath))
             throw Object.assign(new Error('artifact_source_forbidden'), { code: 'artifact_source_forbidden' });
@@ -60,11 +73,13 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
             account.assertCurrent();
             cancellation.signal.throwIfAborted();
             if (!downloaded.ok) throw Object.assign(new Error('artifact_source_transfer_failed'), { code: 'artifact_source_transfer_failed' });
-            const current = readMachineControlTargetForSession({ serverId: account.serverId, accountId: account.accountId, sessionId });
+            const current = resolveTarget();
             if (!current || current.machineId !== target.machineId || current.basePath !== target.basePath)
                 throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
             const bytes = buffered.toBytes();
-            return { caller: { sessionId, machineId: target.machineId, ...(context.runtimeRunId ? { runId: context.runtimeRunId } : {}) },
+            const caller = workspace ? { rootPath: target.basePath, machineId: target.machineId }
+                : { sessionId: sessionId!, machineId: target.machineId, ...(context.runtimeRunId ? { runId: context.runtimeRunId } : {}) };
+            return { caller,
                 file: { bytes, name: downloaded.name, path: relativePath, sha: hashArtifactBinaryContent(bytes) } };
         } finally {
             buffered.reset();
@@ -201,7 +216,7 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
                 }
                 case 'artifact.publish_from_file': {
                     const args = ArtifactActionInputSchemasV1[actionId].parse(input);
-                    const source = await readWorkspaceFile(context, args.path, signal);
+                    const source = await readWorkspaceFile(context, args.path, signal, args.workspace);
                     const content = prepareArtifactWorkspaceFileV1({ ...source, input: args });
                     return await createDocument({ header: content.header, body: content.binary ?? content.body, source: content.source, savedBy, signal });
                 }

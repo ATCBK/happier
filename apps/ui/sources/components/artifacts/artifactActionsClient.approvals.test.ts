@@ -11,6 +11,7 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { storage } from '@/sync/domains/state/storageStore';
 
 const transport = vi.hoisted(() => ({ download: vi.fn() }));
@@ -94,19 +95,25 @@ describe('Artifact surface pending approvals', () => {
         expect(artifacts.readPlainBody(artifactId)).toBe(update.body);
     });
 
-    it('prefills a private file copy and publishes the edited title and path through the real UI composition', async () => {
-        const { serverId, artifacts } = await serveArtifactAccount('https://file-copy-dialog.test');
+    it.each(['session', 'workspace', 'workspace-with-session'] as const)('prefills a private %s file copy and publishes the edited title and path through the real UI composition', async sourceKind => {
+        const { serverId, artifacts } = await serveArtifactAccount(`https://file-copy-dialog-${sourceKind}.test`);
         const session = createSessionFixture({ id: 'source-session', serverId,
-            metadata: { ...createSessionFixture().metadata!, path: '/repo', machineId: 'source-machine' } });
+            metadata: { ...createSessionFixture().metadata!,
+                path: sourceKind === 'workspace-with-session' ? '/ambient' : '/repo',
+                machineId: sourceKind === 'workspace-with-session' ? 'ambient-machine' : 'source-machine' } });
         storage.setState({ sessions: { [session.id]: session }, machineListByServerId: {
             [serverId]: [createMachineFixture({ id: 'source-machine' })],
         } });
-        transport.download.mockImplementation(async (request: { request: { path: string }; destination: { writeBytes(bytes: Uint8Array): Promise<void> } }) => {
+        transport.download.mockImplementation(async (request: { machineId: string; rootPath: string; request: { path: string }; destination: { writeBytes(bytes: Uint8Array): Promise<void> } }) => {
+            expect(request.machineId).toBe('source-machine');
+            expect(request.rootPath).toBe('/repo');
             expect(request.request.path).toBe('docs/note.txt');
             await request.destination.writeBytes(new TextEncoder().encode('Copied bytes'));
             return { ok: true, name: 'note.txt', sizeBytes: 12 };
         });
-        const hook = await renderHook(() => useSaveWorkspaceFileAsArtifact({ scope: { serverId, accountId: 'owner-1' }, sourceSessionId: session.id,
+        const hook = await renderHook(() => useSaveWorkspaceFileAsArtifact({ scope: { serverId, accountId: 'owner-1' },
+            sourceSessionId: sourceKind === 'workspace' ? null : session.id,
+            ...(sourceKind !== 'session' ? { sourceWorkspace: { machineId: 'source-machine', rootPath: '/repo' } } : {}),
             filePath: 'docs/note.txt', team: { teamId: 'team-1', name: 'Payments' } }));
         await act(async () => { hook.getCurrent().open(); });
         expect(hook.getCurrent().title).toBe('note.txt');
@@ -121,6 +128,38 @@ describe('Artifact surface pending approvals', () => {
         expect(artifacts.readPlainBody(created!)).toBe('Copied bytes');
         expect(decodePlainArtifactStoredContent(artifacts.read(created!)!.header)).toMatchObject({ title: 'Notes for review' });
         expect(artifacts.list()).toHaveLength(1);
+        await hook.unmount();
+    });
+
+    it('keeps the mounted workspace publication pending until approval delivers its real receipt', async () => {
+        const { serverId, artifacts } = await serveArtifactAccount('https://file-copy-dialog-approval.test', 'artifact.publish_from_file');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'source-machine' })] } });
+        transport.download.mockImplementation(async (request: { destination: { writeBytes(bytes: Uint8Array): Promise<void> } }) => {
+            await request.destination.writeBytes(new TextEncoder().encode('Approved bytes'));
+            return { ok: true, name: 'note.txt', sizeBytes: 14 };
+        });
+        const hook = await renderHook(() => useSaveWorkspaceFileAsArtifact({ scope: { serverId, accountId: 'owner-1' },
+            sourceSessionId: null, sourceWorkspace: { machineId: 'source-machine', rootPath: '/repo' }, filePath: 'docs/note.txt' }));
+        let operation: Promise<string | null> | undefined;
+        let settled = false;
+        await act(async () => { hook.getCurrent().open(); });
+        await flushHookEffects();
+        await act(async () => {
+            operation = hook.getCurrent().submit();
+            void operation.then(() => { settled = true; });
+        });
+        await vi.waitFor(() => expect(hook.getCurrent().approval.approvalId).toEqual(expect.any(String)));
+        expect(settled).toBe(false);
+        expect(hook.getCurrent().canSubmit).toBe(false);
+        expect(hook.getCurrent().status.kind).toBe('publishing');
+        const approvalId = hook.getCurrent().approval.approvalId!;
+        expect(await decideApprovalAsInbox(serverId, approvalId, 'approve')).toMatchObject({ ok: true });
+        let created: string | null = null;
+        await act(async () => { created = await operation!; });
+        expect(settled).toBe(true);
+        expect(hook.getCurrent().status).toMatchObject({ kind: 'saved', receipt: { artifactId: created } });
+        expect(artifacts.readPlainBody(created!)).toBe('Approved bytes');
+        expect(artifacts.list()).toHaveLength(2);
         await hook.unmount();
     });
 
