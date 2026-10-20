@@ -176,6 +176,9 @@ describe('credential projection lifecycle identity', () => {
         }
         let renders = 0;
         const hook = await renderHook(() => {
+            // These projections share the real store with the draft screens.
+            // Include that subscription, not just the callback's store write.
+            useSetting('experiments');
             // Test-only escape from the known feedback loop: fail instead of hanging the runner.
             if (++renders > 64) throw new Error('credential projection keeps rendering instead of settling');
             return useServerCredentialAccountScopeResolutions([home.id], {
@@ -185,6 +188,12 @@ describe('credential projection lifecycle identity', () => {
         expect(hook.getCurrent().get(home.id)?.kind).toBe(state);
         const settled = hook.getCurrent().get(home.id);
         await hook.rerender();
+        expect(hook.getCurrent().get(home.id)).toBe(settled);
+        const beforeStoreUpdate = renders;
+        await act(async () => {
+            storage.getState().applySettingsLocal({ experiments: !storage.getState().settings.experiments });
+        });
+        expect(renders - beforeStoreUpdate).toBe(1);
         expect(hook.getCurrent().get(home.id)).toBe(settled);
         if (state === 'bound') expect(storage.getState().profileScope?.accountId).toBe('account-inline');
         await hook.unmount();

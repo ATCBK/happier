@@ -20,6 +20,7 @@ import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSession
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { resolveDisplayIdentityForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storage';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { readSessionSnapshotForAuthority, SessionSnapshotReadError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
@@ -32,7 +33,8 @@ export function createUiSessionStatusGet(account: LazyActionAccountContext | nul
     if (!account) return { ok: false, code: 'not_authenticated' };
     account.assertCurrent();
     signal?.throwIfAborted();
-    if (serverId && serverId !== account.serverId) return { ok: false, code: 'server_scope_mismatch' };
+    // The Action context names the Home by its profile id; the captured Account scope by its portable id.
+    if (serverId && !areServerProfileIdentifiersEquivalent(serverId, account.serverId)) return { ok: false, code: 'server_scope_mismatch' };
     let session: Awaited<ReturnType<typeof readSessionSnapshotForAuthority>>['session'];
     try {
       ({ session } = await runWithServerRequestAuthorityForServerAccountScope({ scope: account.accountLifetime.scope,

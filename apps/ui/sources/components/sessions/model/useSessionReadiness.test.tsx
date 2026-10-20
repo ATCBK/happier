@@ -230,3 +230,19 @@ it('answers a Session the Home reports missing as not found, so a picked Session
         expect(await createUiSessionStatusGet(account)({ sessionId: 'gone' })).toEqual({ ok: false, code: 'session_not_found' });
     } finally { account.dispose(); }
 });
+
+it('reads a Session the Action context names by the Home profile id when the captured Account scope carries the portable Home id', async () => {
+    const home = await network.addHome('https://status-portable.test', 'alice');
+    const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+    await setServerProfileIdentityForUrl(home.serverUrl, 'srv_status_portable');
+    network.resetRequests();
+    network.setHttpResponder(async input => new URL(String(input)).pathname === '/v2/sessions/gone'
+        ? Response.json({ error: 'Session not found' }, { status: 404 }) : null);
+    const account = await captureLazyActionAccountContext(home.id);
+    try {
+        expect(account.serverId).toBe('srv_status_portable');
+        // The Home answers; it is not refused as another Home's Session.
+        expect(await createUiSessionStatusGet(account)({ sessionId: 'gone', serverId: home.id })).toEqual({ ok: false, code: 'session_not_found' });
+        expect(await createUiSessionStatusGet(account)({ sessionId: 'gone', serverId: 'another-home' })).toEqual({ ok: false, code: 'server_scope_mismatch' });
+    } finally { account.dispose(); }
+});

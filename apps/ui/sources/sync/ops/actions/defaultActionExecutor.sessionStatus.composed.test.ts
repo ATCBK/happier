@@ -39,3 +39,13 @@ it('retains the requested credential operation without borrowing the viewing Acc
   if (result.ok) expect(SessionStatusActionResultV1Schema.parse(result.result)).toEqual(result.result);
   expect(homes.requests.filter(request => request.path === '/v1/account/profile')).toHaveLength(0);
 });
+
+it('reads a Session for a Home the Action context names by profile id and the Account scope by its portable id', async () => {
+  // A widget's picked Session is qualified by the portable Home id, while the caller's context carries the device profile id.
+  const serverId = await homes.addHome({ name: 'Portable', serverUrl: 'https://portable.test', serverIdentityId: 'srv_status_portable', accountId: 'alice', currentAccount: true });
+  const session = createSessionFixture({ id: 'portable-session', encryptionMode: 'plain', access: createSessionAccessFixture('view') });
+  homes.answer(serverId, `/v2/sessions/${session.id}`, { body: createPlainSessionByIdResponseFixture(session) });
+  const result = await createDefaultActionExecutor().execute('session.status.get', { sessionId: session.id },
+    { surface: 'ui', serverId, expectedAccountId: 'alice' });
+  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { session: { id: session.id } } });
+});
