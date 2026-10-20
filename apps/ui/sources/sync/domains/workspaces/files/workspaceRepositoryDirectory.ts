@@ -7,6 +7,17 @@ import {
 import { warmInFlight, type WarmInFlightRequest } from '@/sync/domains/input/warmInFlight';
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { markWorkspaceRepositoryDirectoryChanged } from './workspaceRepositoryDirectoryRevision';
+import {
+    clearWorkspaceRepositoryDirectoryCacheEntries,
+    getCachedWorkspaceRepositoryDirectoryEntries,
+    getCachedWorkspaceRepositoryGitIgnoreAvailable,
+    setCachedWorkspaceRepositoryDirectoryEntries,
+} from './workspaceRepositoryDirectoryCache';
+export {
+    getCachedWorkspaceRepositoryDirectoryEntries,
+    getCachedWorkspaceRepositoryGitIgnoreAvailable,
+    setCachedWorkspaceRepositoryDirectoryEntries,
+} from './workspaceRepositoryDirectoryCache';
 
 function joinPathAbsolute(rootPath: string, directoryPath: string): string {
     const root = rootPath.replace(/\/+$/g, '');
@@ -20,31 +31,7 @@ function getCacheKey(workspaceCacheKey: string, directoryPath: string): string {
     return `${workspaceCacheKey}:${directoryPath}`;
 }
 
-const workspaceRepositoryDirectoryCache = new Map<string, { entries: RepositoryDirectoryEntry[]; gitIgnoreAvailable?: boolean }>();
 const workspaceRepositoryDirectoryWarmInFlight = new Map<string, WarmInFlightRequest<ListRepositoryDirectoryEntriesResult>>();
-
-export function getCachedWorkspaceRepositoryDirectoryEntries(input: Readonly<{
-    workspaceCacheKey: string;
-    directoryPath: string;
-}>): RepositoryDirectoryEntry[] | null {
-    const key = getCacheKey(input.workspaceCacheKey, input.directoryPath);
-    const cached = workspaceRepositoryDirectoryCache.get(key);
-    return cached ? cached.entries.slice() : null;
-}
-
-export function getCachedWorkspaceRepositoryGitIgnoreAvailable(input: Readonly<{ workspaceCacheKey: string; directoryPath: string }>): boolean | undefined {
-    return workspaceRepositoryDirectoryCache.get(getCacheKey(input.workspaceCacheKey, input.directoryPath))?.gitIgnoreAvailable;
-}
-
-export function setCachedWorkspaceRepositoryDirectoryEntries(input: Readonly<{
-    workspaceCacheKey: string;
-    directoryPath: string;
-    entries: RepositoryDirectoryEntry[];
-    gitIgnoreAvailable?: boolean;
-}>): void {
-    const key = getCacheKey(input.workspaceCacheKey, input.directoryPath);
-    workspaceRepositoryDirectoryCache.set(key, { entries: input.entries.slice(), gitIgnoreAvailable: input.gitIgnoreAvailable });
-}
 
 export function clearCachedWorkspaceRepositoryDirectoryEntries(input: Readonly<{
     workspaceCacheKey: string;
@@ -52,19 +39,14 @@ export function clearCachedWorkspaceRepositoryDirectoryEntries(input: Readonly<{
 }>): void {
     const workspacePrefix = `${input.workspaceCacheKey}:`;
     const directoryPath = typeof input.directoryPath === 'string' ? input.directoryPath : null;
+    clearWorkspaceRepositoryDirectoryCacheEntries(input);
     if (directoryPath != null) {
         const key = getCacheKey(input.workspaceCacheKey, directoryPath);
-        workspaceRepositoryDirectoryCache.delete(key);
         workspaceRepositoryDirectoryWarmInFlight.delete(key);
         markWorkspaceRepositoryDirectoryChanged(input.workspaceCacheKey);
         return;
     }
 
-    for (const key of workspaceRepositoryDirectoryCache.keys()) {
-        if (key.startsWith(workspacePrefix)) {
-            workspaceRepositoryDirectoryCache.delete(key);
-        }
-    }
     for (const key of workspaceRepositoryDirectoryWarmInFlight.keys()) {
         if (key.startsWith(workspacePrefix)) {
             workspaceRepositoryDirectoryWarmInFlight.delete(key);
