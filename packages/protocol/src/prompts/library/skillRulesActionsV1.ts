@@ -47,18 +47,22 @@ export async function mutateSkillRulesV1(port: SkillRulesActionPortV1,
   };
   assertCurrent();
   let projection: Awaited<ReturnType<SkillRulesActionPortV1['readCatalog']>>;
-  try { projection = await port.readCatalog(signal, 'skill-rules'); }
+  let library: Awaited<ReturnType<SkillRulesActionPortV1['listSkills']>>;
+  try {
+    // Both authenticated observations are independent. Keep their latency off
+    // each other's critical path; no rule is written until both are admitted.
+    [projection, library] = await Promise.all([
+      port.readCatalog(signal, 'skill-rules'),
+      port.listSkills(signal, input.items.every(item => 'skillId' in item)
+        ? input.items.flatMap(item => 'skillId' in item ? [item.skillId] : []) : undefined),
+    ]);
+  }
   catch (cause) { return unavailable(cause); }
   assertCurrent();
   const read = readPromptLibraryCatalogRecordV1({ ...projection, key: 'skill-rules' });
   if (read.status !== 'ready' || read.record.key !== 'skill-rules'
     || read.authority === 'inactive' && projection.sourceSettingsVersion === undefined) return { ok: false, code: 'catalog_unavailable' };
   const retainedRules = read.record.value.rules;
-  let library: Awaited<ReturnType<SkillRulesActionPortV1['listSkills']>>;
-  try { library = await port.listSkills(signal, input.items.every(item => 'skillId' in item)
-    ? input.items.flatMap(item => 'skillId' in item ? [item.skillId] : []) : undefined); }
-  catch (cause) { return unavailable(cause); }
-  assertCurrent();
   const ids = new Set<string>();
   for (const item of input.items) {
     const matches = library.filter(skill => 'skillId' in item ? skill.id === item.skillId : skill.name === item.name);

@@ -82,6 +82,9 @@ async function readPromptLibraryCatalogWithMaintenanceInContext(context: PromptL
                     rawSettings: source.value?.raw ?? {}, sourceSettingsVersion: source.value?.version ?? 0 };
             };
             const catalog = await loadPromptLibraryCatalogV1({ mode, material, signal, readRows: () => readRows(context, signal),
+                // Finite Actions need current destination rows and required migration,
+                // while the observed catalog loader owns retained-source/history cleanup.
+                ...(publication?.onReady ? {} : { maintainSource: false }),
                 skillMigration: {
                     writeRecord: input => writePromptLibraryRecordInContext(context, input, signal),
                     readArtifact: async ref => {
@@ -129,12 +132,7 @@ async function readPromptLibraryCatalogWithMaintenanceInContext(context: PromptL
 /** Finite Actions borrow admitted rows; the existing Account watch owns the cleanup tail. */
 export function readPromptLibraryCatalogProjectionInContext(context: PromptLibraryAccountContext, signal?: AbortSignal,
     publication?: PromptLibraryReadPublication): Promise<PromptLibraryCatalogProjection> {
-    if (publication?.onReady) return readPromptLibraryCatalogWithMaintenanceInContext(context, signal, publication);
-    let finishReady!: (projection: PromptLibraryCatalogProjection) => void;
-    const ready = new Promise<PromptLibraryCatalogProjection>(resolve => { finishReady = resolve; });
-    const completion = context.runPrepared(() => readPromptLibraryCatalogWithMaintenanceInContext(context, signal,
-        { ...publication, onReady: finishReady })).catch(error => ({ catalog: failure(error, signal), rawSettings: {}, sourceSettingsVersion: 0 }));
-    return Promise.race([ready, completion]);
+    return readPromptLibraryCatalogWithMaintenanceInContext(context, signal, publication);
 }
 export async function readPromptLibraryCatalogProjection(scope: ServerAccountScope, signal?: AbortSignal,
     assertCapturedAccountCurrent?: () => void, publication?: PromptLibraryReadPublication): Promise<PromptLibraryCatalogProjection> {

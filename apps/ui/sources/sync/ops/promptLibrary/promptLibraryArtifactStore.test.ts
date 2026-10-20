@@ -78,6 +78,46 @@ async function home(
 }
 
 describe('UI qualified prompt-library Artifact authority', () => {
+  it('prepares addressed skill reach from independent current catalog and content reads before writing', async () => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const catalogRequested = createDeferred<void>();
+    const releaseCatalog = createDeferred<void>();
+    let holdCatalog = true;
+    let contentRequested = false;
+    let wroteRules = false;
+    const f = await home('prompt_bundle.v2', JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1,
+      entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+        contentBase64: encodeBase64(new TextEncoder().encode('---\nname: current\ndescription: Current skill\n---\n# Current'), 'base64') }] }), {
+      handleRequest: async (path, init) => {
+        if (path === '/v1/artifacts/current' || path === '/v1/artifacts/read') contentRequested = true;
+        if (path === '/v1/account/entity-rows/prompt-library' && holdCatalog) {
+          catalogRequested.resolve();
+          await releaseCatalog.promise;
+        }
+        if (path === '/v1/account/entity-rows/prompt-library/skill-rules' && init?.method === 'POST') wroteRules = true;
+        return catalog.handle(path, init);
+      },
+    });
+    const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+    await withUiPromptLibraryArtifactStore(async (_store, account) => {
+      const pending = executeDefaultActionInCapturedAccount(account, 'skills.rules.set', {
+        items: [{ skillId: 'current' }], change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } },
+      }, { surface: 'ui', authority: 'present_user', serverId: f.home.id, expectedAccountId: account.accountId });
+      try {
+        await catalogRequested.promise;
+        await vi.waitFor(() => expect(contentRequested).toBe(true));
+        expect(wroteRules).toBe(false);
+      } finally {
+        holdCatalog = false;
+        releaseCatalog.resolve();
+        await pending;
+      }
+      expect(await pending).toMatchObject({ ok: true, result: { ok: true, items: [
+        expect.objectContaining({ skillId: 'current', rules: [expect.objectContaining({ enabled: true })] }),
+      ] } });
+      expect(wroteRules).toBe(true);
+    }, { serverId: f.home.id });
+  });
   it.each([true, false])('reads Skills through captured filtered pages with truthful unclassified fallback (%s)', async hasUnclassified => {
     const catalog = createPromptLibraryCatalogBoundary();
     const inventoryQueries: string[] = [];
