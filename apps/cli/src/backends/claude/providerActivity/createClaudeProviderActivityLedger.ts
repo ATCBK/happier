@@ -34,7 +34,7 @@ export type ClaudeProviderTaskActivity =
     | (ClaudeProviderTaskIdentity & Readonly<{
         type: 'terminal';
         terminalStatus?: 'completed' | 'failed' | 'stopped';
-        rememberIfUnknown?: true;
+        rememberIfUnknown?: boolean;
     }>);
 export type ClaudeProviderTaskActivitySource =
     | 'hook-agent-launch'
@@ -77,10 +77,6 @@ function normalizedString(value: unknown): string | null {
 
 function exactTerminalStatus(value: unknown): 'completed' | 'failed' | 'stopped' | null {
     return value === 'completed' || value === 'failed' || value === 'stopped' ? value : null;
-}
-
-function isTerminalTaskStatus(value: unknown): boolean {
-    return value === 'completed' || value === 'failed' || value === 'stopped' || value === 'killed';
 }
 
 function isFailedToolResponse(value: Readonly<Record<string, unknown>>): boolean {
@@ -270,13 +266,21 @@ export function readClaudeSessionHookProviderTaskActivity(
     const nestedTask = record(toolResponse.task);
     const confirmedTask = nestedTask ?? toolResponse;
     const confirmedTaskId = readTaskId(confirmedTask);
-    if (confirmedTaskId !== requestedTaskId || !isTerminalTaskStatus(confirmedTask.status)) return null;
+    const terminalStatus = confirmedTask.status === 'killed' ? 'stopped' : exactTerminalStatus(confirmedTask.status);
+    if (confirmedTaskId !== requestedTaskId || !terminalStatus) return null;
     if (
         toolName === 'TaskOutput'
         && toolResponse.retrieval_status !== 'success'
         && toolResponse.retrievalStatus !== 'success'
     ) return null;
-    return { type: 'terminal', sessionId, taskId: requestedTaskId };
+    // Tool retrieval/stop confirms a known task's outcome, without admitting an unknown identity.
+    return {
+        type: 'terminal',
+        terminalStatus: toolName === 'TaskStop' ? 'stopped' : terminalStatus,
+        sessionId,
+        taskId: requestedTaskId,
+        rememberIfUnknown: false,
+    };
 }
 
 function withParent(parentTaskId: string | undefined): { parentTaskId?: string } {
@@ -427,7 +431,7 @@ export function createClaudeProviderActivityLedger() {
                     tasks.set(key, terminal);
                     return true;
                 }
-                if (!current && (activity.rememberIfUnknown === true || activity.terminalStatus !== undefined)) {
+                if (!current && (activity.rememberIfUnknown ?? (activity.terminalStatus !== undefined))) {
                     tasks.set(key, {
                         phase: 'terminal-before-confirmation',
                         identity: { sessionId: activity.sessionId, taskId: activity.taskId },

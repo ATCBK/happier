@@ -356,7 +356,10 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
             expect(taskOutput({
                 retrieval_status: 'success',
                 task: { task_id: 'task-1', status },
-            })).toEqual({ type: 'terminal', sessionId, taskId: 'task-1' });
+            })).toEqual({
+                type: 'terminal', sessionId, taskId: 'task-1',
+                terminalStatus: status === 'killed' ? 'stopped' : status, rememberIfUnknown: false,
+            });
         }
 
         expect(readClaudeSessionHookProviderTaskActivity({
@@ -372,7 +375,7 @@ describe('readClaudeSessionHookProviderTaskActivity', () => {
             tool_name: 'TaskStop',
             tool_input: { task_id: 'task-1' },
             tool_response: { task: { task_id: 'task-1', status: 'stopped' } },
-        })).toEqual({ type: 'terminal', sessionId, taskId: 'task-1' });
+        })).toEqual({ type: 'terminal', terminalStatus: 'stopped', sessionId, taskId: 'task-1', rememberIfUnknown: false });
     });
 
     it('treats a vetoable SubagentStop as progress and re-admits a known resumed invocation', () => {
@@ -657,6 +660,15 @@ describe('createClaudeProviderActivityLedger', () => {
             hook_event_name: 'PostToolUse', tool_name: 'TaskStop',
             tool_input: { task_id: 'agent-1' }, tool_response: { task_id: 'agent-1', status: 'stopped' },
         }],
+        ['completed TaskStop', {
+            hook_event_name: 'PostToolUse', tool_name: 'TaskStop',
+            tool_input: { task_id: 'agent-1' }, tool_response: { task_id: 'agent-1', status: 'completed' },
+        }],
+        ['failed TaskOutput', {
+            hook_event_name: 'PostToolUse', tool_name: 'TaskOutput',
+            tool_input: { task_id: 'agent-1' },
+            tool_response: { retrieval_status: 'success', task: { task_id: 'agent-1', status: 'failed' } },
+        }],
         ['StopFailure', { hook_event_name: 'StopFailure', agent_id: 'agent-1' }],
     ])('retires an awaiting Agent after %s evidence', (_label, terminalRow) => {
         const ledger = createClaudeProviderActivityLedger();
@@ -674,6 +686,43 @@ describe('createClaudeProviderActivityLedger', () => {
         apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
         apply({ subtype: 'task_progress', task_id: 'agent-1' });
         expect(ledger.getActiveProviderTaskCount()).toBe(0);
+    });
+
+    it.each(['typed', 'TaskOutput'])('keeps an Agent resumable after %s completion and completed TaskOutput aliases', (firstCompletion) => {
+        const ledger = createClaudeProviderActivityLedger();
+        const apply = sdkRowApplier(ledger);
+        apply({ subtype: 'task_started', task_id: 'agent-1', task_type: 'local_agent', is_backgrounded: true });
+        apply({
+            subtype: 'task_started', task_id: 'bash-1', task_type: 'local_bash',
+            is_backgrounded: true, parent_task_id: 'agent-1',
+        });
+        const output = readClaudeSessionHookProviderTaskActivity({
+            hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'TaskOutput',
+            tool_input: { task_id: 'agent-1' },
+            tool_response: { retrieval_status: 'success', task: { task_id: 'agent-1', status: 'completed' } },
+        });
+        if (!output) throw new Error('expected completed TaskOutput evidence');
+        if (firstCompletion === 'TaskOutput') ledger.apply(output);
+        else apply({ subtype: 'task_notification', task_id: 'agent-1', status: 'completed' });
+        ledger.apply(output);
+        apply({ subtype: 'task_notification', task_id: 'agent-1', status: 'completed' });
+        apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+        apply({ subtype: 'task_progress', task_id: 'agent-1' });
+        expect(ledger.hasActiveProviderTask({ sessionId: 's1', taskId: 'agent-1' })).toBe(true);
+    });
+
+    it.each(['TaskOutput', 'TaskStop'])('keeps an unknown %s terminal from suppressing a later launch', (toolName) => {
+        const ledger = createClaudeProviderActivityLedger();
+        const terminal = readClaudeSessionHookProviderTaskActivity({
+            hook_event_name: 'PostToolUse', session_id: 's1', tool_name: toolName,
+            tool_input: { task_id: 'agent-1' },
+            tool_response: { retrieval_status: 'success', task: { task_id: 'agent-1', status: 'completed' } },
+        });
+        if (!terminal) throw new Error('expected exact terminal hook evidence');
+        ledger.apply(terminal);
+        const apply = sdkRowApplier(ledger);
+        apply({ subtype: 'task_started', task_id: 'agent-1', task_type: 'local_agent', is_backgrounded: true });
+        expect(ledger.hasActiveProviderTask({ sessionId: 's1', taskId: 'agent-1' })).toBe(true);
     });
 
     it('keeps an agent resumable while a nested agent it owns still waits on or resumes its own work', () => {

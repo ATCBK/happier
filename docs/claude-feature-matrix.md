@@ -114,6 +114,9 @@ own typed SDK `task_progress` after it wakes reactivates it until its next
 terminal. Hook `SubagentStop` progress cannot reactivate an awaiting Agent, so an
 Agent that never wakes cannot hold runtime activity open. A later stop or failure
 settles an awaiting Agent and prevents typed progress from reactivating it.
+Confirmed TaskOutput hooks retain the task's terminal status, while confirmed
+TaskStop hooks settle it as stopped. Neither remembers unknown task identities;
+a completed TaskOutput preserves the pending wake.
 Workflow correlation folds every tool block in a message,
 keeps each child's native task alias, and closes an implicit Agent activity group
 when all children settle. A successful native resume can reopen that group.
