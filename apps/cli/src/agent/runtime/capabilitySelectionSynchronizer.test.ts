@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { logger } from '@/ui/logger';
 import { once } from 'node:events';
 import { configuration } from '@/configuration';
 import { withConfiguredDaemonTestHome, writeDaemonStateFixture } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
@@ -50,6 +51,20 @@ function fixture(results: RestartSessionRunnerResultV1[] = [{ ok: true, status: 
 }
 
 describe('capability selection settled-turn apply', () => {
+  it('records the changed capability basis before requesting runner replacement', async () => {
+    const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const f = fixture();
+    try {
+      f.change('server'); f.settle();
+      await f.sync.flushAfterSettledTurn();
+      expect(log).toHaveBeenCalledWith('[CapabilitySelection] Requesting runner refresh', {
+        sessionId: 'session', changes: { mcpSelection: true, skillsSelection: false, mcpRules: false, skillRules: false },
+      });
+    } finally {
+      await f.sync.dispose(); log.mockRestore();
+    }
+  });
+
   it('retires a pending restart HTTP observation on disposal without publishing a failure or resending', async () => {
     await withConfiguredDaemonTestHome({ prefix: 'happier-capability-restart-cancellation-' }, async ({ homeDir }) => {
       let started!: () => void;

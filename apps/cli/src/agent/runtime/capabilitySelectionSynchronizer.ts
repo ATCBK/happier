@@ -73,7 +73,8 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   const initialMcpRules = input.initialMcpRules;
   // Only the launch resolver establishes the applied server set. In particular,
   // an unavailable launch or preserved-process refusal is not today's empty set.
-  const appliedMcpRules = initialMcpRules && !readPendingCapabilityRuleApplyV1(initialMetadata, 'mcp')
+  // A retained pending status cannot invalidate that positive launch evidence.
+  const appliedMcpRules = initialMcpRules
     ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null;
   let desiredMcpRules = initialMcpRules ? mcpRuleSelection(initialMcpRules, desired) : appliedMcpRules;
   let mcpRulesAvailable = initialMcpRules != null;
@@ -137,6 +138,12 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     const capturedSkillRules = desiredSkillRules;
     const agent = readSessionCapabilityAgentFactsV1(input.session.getMetadataSnapshot()) ?? input.agent;
     const kinds = pending();
+    const changes = {
+      mcpSelection: !areSessionCapabilitySelectionsEquivalentV1({ mcp: applied.mcp }, { mcp: captured.mcp }),
+      skillsSelection: !areSessionCapabilitySelectionsEquivalentV1({ skills: applied.skills }, { skills: captured.skills }),
+      mcpRules: mcpRulesAvailable && desiredMcpRules !== appliedMcpRules,
+      skillRules: skillRulesAvailable && desiredSkillRules !== appliedSkillRules,
+    };
     // Restoration can withdraw a refusal while a busy request awaits its next
     // settlement. It never acknowledges an unavailable observation.
     for (const kind of ['mcp', 'skills'] as const) {
@@ -190,6 +197,11 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     // The daemon rechecks active turns and approvals immediately before signaling.
     const requestRestart = input.requestRestart ?? (await import('@/daemon/controlClient')).requestDaemonSessionRunnerRestart;
     if (lifetime.signal.aborted) return;
+    logger.infoFile('[CapabilitySelection] Requesting runner refresh', {
+      sessionId: input.session.sessionId,
+      changes: { mcpSelection: kinds.mcp && changes.mcpSelection, skillsSelection: kinds.skills && changes.skillsSelection,
+        mcpRules: kinds.mcp && changes.mcpRules, skillRules: kinds.skills && changes.skillRules },
+    });
     const result = await requestRestart({
       sessionId: input.session.sessionId, mode: 'force_current_cli', reason: 'capability_selection_change',
     }, { signal: lifetime.signal });
