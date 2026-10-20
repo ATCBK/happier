@@ -222,7 +222,7 @@ describe('MarkdownView (enriched renderer)', () => {
     it.each([undefined, documentImages])('keeps absolute URL entities while rejecting encoded local-path schemes, with resolver %s', async (images) => {
         const { MarkdownView } = await import('./MarkdownView');
         const onLinkPress = vi.fn(() => true);
-        const screen = await renderScreen(<MarkdownView markdown="[target](https://host.test/a?x=1&amp;y=2)" images={images} onLinkPress={onLinkPress} />);
+        const screen = await renderScreen(<MarkdownView markdown={'[target](https://host.test/a?x=1&amp;y=2)'} images={images} onLinkPress={onLinkPress} />);
         const run = screen.findByType('EnrichedMarkdownText');
         expect(run.props.markdown).toBe('[target](https://host.test/a?x=1&amp;y=2)');
         run.props.onLinkPress({ url: 'https://host.test/a?x=1&amp;y=2' });
