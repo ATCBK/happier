@@ -104,8 +104,14 @@ import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
 import { readStoredCredentials } from '@/persistence';
 import { sendFileReviewNoteToSession } from '@/session/services/sendFileReviewNote';
 import type { FileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
+import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
+import { resolveCwd } from '@/scm/runtime';
 
-const scmRpcOperationContextStorage = new AsyncLocalStorage<RpcHandlerContext>();
+const scmRpcOperationContextStorage = new AsyncLocalStorage<Readonly<{
+    context: RpcHandlerContext;
+    workingDirectory: string;
+    accessPolicy: FilesystemAccessPolicy;
+}>>();
 
 export function registerScmHandlers(
     rpcHandlerManager: RpcHandlerRegistrar,
@@ -120,22 +126,40 @@ export function registerScmHandlers(
         prepareFileBytesExport?: Parameters<typeof executeScmActionOperation>[0]['prepareFileBytesExport'];
     }>,
 ): void {
-    const scmRpcHandlerManager: RpcHandlerRegistrar = {
-        registerHandler<TRequest = any, TResponse = any>(
+    const scopedRegistrar = (unwrapTarget: boolean): RpcHandlerRegistrar => ({
+        registerHandler<TRequest, TResponse>(
             method: string,
             handler: RpcHandler<TRequest, TResponse>,
         ): void {
             rpcHandlerManager.registerHandler(method, (request, context) => {
                 const operationContext = context ?? Object.freeze({ signal: new AbortController().signal });
+                const machinePolicy = deps?.accessPolicy ?? resolveFilesystemAccessPolicy();
+                const wrapped = request && typeof request === 'object' && 'kind' in request
+                    && request.kind === 'targeted_action_rpc';
+                const target = wrapped ? TargetedActionRpcRequestV1Schema.safeParse(request) : null;
+                if (target && (!target.success || target.data.target.kind !== 'machine'
+                    || target.data.target.machineId !== deps?.machineId)) {
+                    return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.INVALID_REQUEST };
+                }
+                const root = target?.success && target.data.target.kind === 'machine'
+                    ? target.data.target.project?.directory : undefined;
+                const scoped = root ? resolveCwd(root, workingDirectory, machinePolicy) : null;
+                // A selected root can narrow Machine access, never expand it.
+                // Resolve this on the receiving filesystem, including symlinks.
+                const accessPolicy: FilesystemAccessPolicy = scoped
+                    ? { kind: 'restrictedRoots', roots: scoped.ok ? [scoped.cwd] : [] } : machinePolicy;
                 return (
                 scmRpcOperationContextStorage.run(
-                    operationContext,
-                    () => handler(request, operationContext),
+                    { context: operationContext, workingDirectory: scoped?.ok ? scoped.cwd : workingDirectory, accessPolicy },
+                    // Raw SCM methods consume semantic input; Action-spec RPCs
+                    // retain the same envelope for their canonical target parser.
+                    () => handler((unwrapTarget && target?.success ? target.data.input : request) as TRequest, operationContext),
                 )
                 );
             });
         },
-    };
+    });
+    const scmRpcHandlerManager = scopedRegistrar(true);
     const routeBase = {
         emitFileReviewNote: async ({ sessionId, ...note }: FileReviewNoteV1 & Readonly<{ sessionId: string }>) => {
             const credentials = await readStoredCredentials();
@@ -143,26 +167,26 @@ export function registerScmHandlers(
             await sendFileReviewNoteToSession({ credentials, sessionId, note });
         },
         get sessionId(): string | undefined {
-            const authorization = scmRpcOperationContextStorage.getStore()?.authorization;
+            const authorization = scmRpcOperationContextStorage.getStore()?.context.authorization;
             return authorization?.kind === 'session.write' ? authorization.sessionId : undefined;
         },
-        workingDirectory,
-        accessPolicy: deps?.accessPolicy,
+        get workingDirectory() { return scmRpcOperationContextStorage.getStore()?.workingDirectory ?? workingDirectory; },
+        get accessPolicy() { return scmRpcOperationContextStorage.getStore()?.accessPolicy ?? deps?.accessPolicy; },
         registry: deps?.registry,
         hostingProviderRegistry: deps?.hostingProviderRegistry,
         deliverFileAtRevision: deps?.deliverFileAtRevision,
         prepareFileBytesExport: deps?.prepareFileBytesExport,
         get signal(): AbortSignal | undefined {
-            return scmRpcOperationContextStorage.getStore()?.signal;
+            return scmRpcOperationContextStorage.getStore()?.context.signal;
         },
     } as const;
     const authorizeWorkSession = async (sessionId: string): Promise<boolean> => {
-        const ingress = scmRpcOperationContextStorage.getStore();
+        const ingress = scmRpcOperationContextStorage.getStore()?.context;
         return ingress?.signal.aborted === false && ingress.authorization?.kind === 'session.write'
             && ingress.authorization.sessionId === sessionId;
     };
     registerActionSpecRpcHandlers({
-        rpcHandlerManager: scmRpcHandlerManager,
+        rpcHandlerManager: scopedRegistrar(false),
         actionIds: ['scm.diffSummary.capture', 'scm.diffSummary.generate', 'scm.diffSummary.draftPullRequest',
             'scm.diffSummary.result.list', 'scm.diffSummary.result.clear',
             'scm.diffSummary.result.read', 'scm.diffSummary.result.edit',
@@ -183,9 +207,9 @@ export function registerScmHandlers(
             const { createCliActionExecutorFromCredentials } = await import('@/session/actions/createCliActionExecutorFromCredentials');
             return createCliActionExecutorFromCredentials({
                 credentials,
-                scmFilesystemAccessPolicy: deps?.accessPolicy ?? resolveFilesystemAccessPolicy(),
+                scmFilesystemAccessPolicy: routeBase.accessPolicy ?? resolveFilesystemAccessPolicy(),
                 readCredentials: async () => await readStoredCredentials().catch(() => null),
-                sessionLogAccess: { workingDirectory, accessPolicy: deps?.accessPolicy ?? resolveFilesystemAccessPolicy() },
+                sessionLogAccess: { workingDirectory: routeBase.workingDirectory, accessPolicy: routeBase.accessPolicy ?? resolveFilesystemAccessPolicy() },
             });
         },
     });
@@ -199,6 +223,8 @@ export function registerScmHandlers(
         return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1_000;
     })();
     const statusSnapshotKey = (request: ScmStatusSnapshotRequest): string => JSON.stringify({
+        workingDirectory: routeBase.workingDirectory,
+        accessPolicy: routeBase.accessPolicy,
         cwd: request.cwd ?? null,
         backendPreference: request.backendPreference ?? null,
         includeWorktreeStatus: request.includeWorktreeStatus === true,

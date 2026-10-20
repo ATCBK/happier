@@ -12,11 +12,12 @@ import { createScmBackendRegistry } from '@/scm/registry';
 import { createRegisteredScmBackendAdapter } from '@/scm/pluginBackends/registeredScmBackendAdapter';
 import { createScmHostingProviderRegistry } from '@/scm/hostingProviders/registry';
 import { createGitScmBackendRuntimeRegistration } from '../../../../../../packages/plugins/scm-git/src/backend';
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 
 /** Real registered Git runtime for RPC tests outside a running daemon's plugin activation. */
 type ScmExportPublisher = NonNullable<Parameters<typeof registerScmHandlers>[2]>['prepareFileBytesExport'];
 
-export function createTestGitRpcManager(params: { workingDirectory: string; prepareFileBytesExport?: ScmExportPublisher }) {
+export function createTestGitRpcManager(params: { workingDirectory: string; machineId?: string; prepareFileBytesExport?: ScmExportPublisher }) {
     return createTestRpcManager({ ...params, registry: createTestGitScmBackendRegistry() });
 }
 
@@ -33,8 +34,8 @@ export function createTestGitScmBackendRegistry() {
     return createScmBackendRegistry([backend]);
 }
 
-export function createTestRpcManager(params?: { scopePrefix?: string; workingDirectory?: string; registry?: ScmBackendRegistry;
-    prepareFileBytesExport?: ScmExportPublisher }) {
+export function createTestRpcManager(params?: { scopePrefix?: string; machineId?: string; workingDirectory?: string; registry?: ScmBackendRegistry;
+    accessPolicy?: FilesystemAccessPolicy; prepareFileBytesExport?: ScmExportPublisher }) {
     const encryptionKey = new Uint8Array(32).fill(7);
     const encryptionVariant = 'legacy' as const;
     const scopePrefix = params?.scopePrefix ?? 'machine-test';
@@ -47,7 +48,8 @@ export function createTestRpcManager(params?: { scopePrefix?: string; workingDir
         logger: () => undefined,
     });
 
-    registerScmHandlers(manager, workingDirectory, { registry: params?.registry, prepareFileBytesExport: params?.prepareFileBytesExport });
+    registerScmHandlers(manager, workingDirectory, { registry: params?.registry, accessPolicy: params?.accessPolicy,
+        machineId: params?.machineId ?? scopePrefix, prepareFileBytesExport: params?.prepareFileBytesExport });
 
     const content: SocketRpcContent = { mode: 'e2ee', cipher: {
         encryptRaw: async (value) => encodeBase64(encrypt(encryptionKey, encryptionVariant, value)),

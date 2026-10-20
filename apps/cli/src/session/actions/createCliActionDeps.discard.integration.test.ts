@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol';
 import { ScmChangeDiscardResponseSchema } from '@happier-dev/protocol/scm';
+import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
 import { markRpcRequestDisposition } from '@happier-dev/sync-client';
@@ -24,7 +25,7 @@ import { createCliActionDeps, type MachineActionDirectTargetTransport } from './
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('local Session comparison Undo export placement', () => {
+describe('Session comparison discard Machine placement', () => {
   it('retains Session proof for existing raw SCM work evidence at the real receiver', async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'happier-scm-proof-' });
     const sessionId = 'c111111111111111111111111';
@@ -57,7 +58,7 @@ describe('local Session comparison Undo export placement', () => {
     } finally { await rm(fixture.rootPath, { recursive: true, force: true }); }
   });
 
-  it.each(['small', 'withoutUndo', 'export', 'direct', 'unavailable', 'unknown'] as const)('uses the existing Machine only at proven export preflight (%s)', async mode => {
+  it.each(['small', 'withoutUndo', 'export', 'direct', 'unavailable', 'unknown'] as const)('uses the existing Machine for every discard and Undo export (%s)', async mode => {
     await withTempDir('happier-local-discard-home-', async home => {
       const environment = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
       environment.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: 'discard-test-home' });
@@ -89,7 +90,7 @@ describe('local Session comparison Undo export placement', () => {
           ? { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }
           : { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', machineId,
             metadata: JSON.stringify({ path: fixture.rootPath }), share: null }) } }));
-        const remote = createTestGitRpcManager({ workingDirectory: fixture.rootPath,
+        const remote = createTestGitRpcManager({ machineId, workingDirectory: fixture.rootPath,
           prepareFileBytesExport: async input => {
             for (const key of ['small', 'large'] as const) expect(await readFile(join(fixture.rootPath, `${key}.txt`), 'utf8')).toBe(after[key]);
             return await prepareScmFileBytesExport({ ...input, lifecycle });
@@ -102,14 +103,15 @@ describe('local Session comparison Undo export placement', () => {
           expect(request).toMatchObject({ machineId, method: 'scm.change.discard', authorization: { kind: 'session.write', sessionId } });
           for (const key of ['small', 'large'] as const) expect(await readFile(join(fixture.rootPath, `${key}.txt`), 'utf8')).toBe(after[key]);
           if (mode === 'unavailable') throw markRpcRequestDisposition(new Error('Machine unavailable'), 'notSent');
-          expect(request.request).toMatchObject({ entries: [
-            expect.objectContaining({ against: expect.objectContaining({ sessionId }) }),
-            expect.objectContaining({ against: expect.objectContaining({ sessionId }) }),
-          ] });
+          const envelope = TargetedActionRpcRequestV1Schema.parse(request.request);
+          expect(envelope).toMatchObject({ defaultSessionId: sessionId,
+            target: { kind: 'machine', machineId, project: { machineId, directory: fixture.rootPath } } });
+          const scopedEntries = entries.map(entry => ({ ...entry, against: { ...entry.against, sessionId } }));
+          const scopedRequest = { ...envelope, input: { cwd: fixture.rootPath, outcomeVersion: 1, entries: scopedEntries } };
           // These refusals exercise the actual registered encrypted receiver,
           // not a fake executor or an adapter-only call assertion.
           for (const authorization of [undefined, { kind: 'session.write' as const, sessionId: 'foreign-session' }]) {
-            expect(await remote.call(request.method, request.request, authorization))
+            expect(await remote.call(request.method, scopedRequest, authorization))
               .toMatchObject({ success: false, errorCode: 'COMPARISON_UNAVAILABLE' });
             for (const key of ['small', 'large'] as const) expect(await readFile(join(fixture.rootPath, `${key}.txt`), 'utf8')).toBe(after[key]);
           }
@@ -146,7 +148,7 @@ describe('local Session comparison Undo export placement', () => {
         const response = ScmChangeDiscardResponseSchema.parse(result.result);
         if (mode === 'small' || mode === 'withoutUndo') {
           expect(response.success).toBe(true);
-          expect(transport).not.toHaveBeenCalled();
+          expect(transport).toHaveBeenCalledTimes(1);
           if (mode === 'small') expect(response.entries![0]!.inverseEdits).toBeDefined();
           else expect(response.entries![0]!.inverseEdits).toBeUndefined();
           expect(await readFile(join(fixture.rootPath, 'small.txt'), 'utf8')).toBe(before.small);

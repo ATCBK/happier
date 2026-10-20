@@ -117,7 +117,8 @@ describe('Session-backed SCM owner workspace', () => {
         return { data, status: 200 };
       });
       const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
-        sessionId, mode: 'plain', ctx: null, scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [workspace] },
+        sessionId, mode: 'plain', ctx: null, rawSession: { path: workspace },
+        scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [workspace] },
         resolveServerFeaturesSnapshot: () => ({ status: 'unsupported', reason: 'endpoint_missing' }),
       }));
       const result = await executor.execute('scm.diffSummary.result.read', {
@@ -203,6 +204,11 @@ describe('exact-machine SCM Action targeting', () => {
           result: { success: true, results: [expect.objectContaining({ resultId: saved.resultId })] } });
         expect(await executor.execute('scm.diffSummary.result.read', { cwd: home, resultId: saved.resultId }, context))
           .toMatchObject({ ok: true, result: { success: true, result: { resultId: saved.resultId } } });
+        expect(await executor.execute('scm.diffSummary.result.read', { cwd: home, resultId: saved.resultId }, {
+          ...context, defaultSessionId: 'caller-session',
+          actionCaller: { kind: 'session', sessionId: 'caller-session', starterDepth: 0, turnDepth: 0 },
+          externalActionTarget: { kind: 'machine', machineId: 'machine', project: { machineId: 'machine', directory: home } },
+        })).toMatchObject({ ok: true, result: { success: false, errorCode: 'result_unavailable' } });
         expect(await executor.execute('scm.diffSummary.result.read', { cwd: home, resultId: saved.resultId },
           { ...context, serverId: 'srv_wrong_home' })).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
         for (const scenario of ['ambiguous', 'retired'] as const) {

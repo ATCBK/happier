@@ -124,6 +124,8 @@ import { DaemonLocalServicePublicPreviewCreateResponseV1Schema, DaemonLocalServi
 import type { RpcHandlerContext, RpcLocalActionContext } from '@/api/rpc/types';
 import { resolveFilesystemAccessPolicy, type FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { resolveCwd } from '@/scm/runtime';
+import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import { bindScmActionToSessionWorkspace, isRetainedScmReviewAction, requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
 import { resolveSocketRpcSessionAuthorization, type SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
 import { hasReceivedWorkflowSessionRoleAuthority, resolveSessionRoleRpcOrigin } from './sessionRoleRpcOrigin';
 import { isWorkflowRunExecutorStorageOperationV1 } from '@happier-dev/protocol/workflows/workflowRunStorageV1';
@@ -493,7 +495,6 @@ import type {
   RevalidatePluginActionCallerMaterialization,
 } from '@/plugins/runtime/invocation/services/actionCaller';
 import { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
-import { ScmChangeDiscardResponseSchema, type ScmChangeDiscardRequest, type ScmChangeDiscardResponse } from '@happier-dev/protocol/scm';
 import { sendFileReviewNoteToSession } from '@/session/services/sendFileReviewNote';
 import { createCliScmReviewedMarkAction } from '@/scm/actions/executeScmReviewedMarkAction';
 import { executeScmDiffSummaryAction } from '@/scm/actions/executeScmDiffSummaryAction';
@@ -3230,13 +3231,19 @@ export function createCliActionDeps(params: Readonly<{
       if (!result.ok) throw new Error(`Pull-request source Action unavailable: ${result.errorCode}`);
       return result.result;
     };
-    const machineInventory = actionId === 'scm.diffSummary.result.list' || actionId === 'scm.diffSummary.result.clear'
-      || actionId === 'scm.hostingRepository.resolveAddress';
+    const machineInventory = requiresExplicitScmMachineTarget(actionId);
+    // These operations consume protected saved evidence/revisions, not a live
+    // backend. Keep their existing local Home/Session access and currentness owner.
+    const retainedReviewAction = isRetainedScmReviewAction(actionId, inputRecord);
     if (machineInventory && context.externalActionTarget?.kind !== 'machine') {
       return { ok: false, errorCode: 'machine_not_selected', error: 'machine_not_selected' };
     }
-    if (context.externalActionTarget?.kind === 'machine') {
-      const machineId = normalizeStringValue(context.externalActionTarget.machineId);
+    const executeMachineScmAction = async (machineId: string | null, selectedInput: Readonly<Record<string, unknown>>,
+      sessionAuthorization = context.rpcSessionAuthorization, sessionRoot?: string) => {
+      const selectedTarget = context.externalActionTarget?.kind === 'machine' ? context.externalActionTarget : undefined;
+      const root = sessionRoot ?? selectedTarget?.project?.directory;
+      const inputRecord = root && context.defaultSessionId && context.actionCaller?.kind === 'session'
+        ? bindScmActionToSessionWorkspace(actionId, selectedInput, root, context.defaultSessionId) : selectedInput;
       const cwd = normalizeStringValue(actionId === 'scm.repository.clone'
         ? inputRecord.destinationParentPath
         : inputRecord.cwd);
@@ -3249,13 +3256,23 @@ export function createCliActionDeps(params: Readonly<{
       }
       if (!await isMachineActionServerScopeCurrent({ serverId: context.serverId, machineId, context,
         ...(context.signal ? { signal: context.signal } : {}) })) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
-      if (params.credentials && actionId.startsWith('scm.diffSummary.')) {
+      // Only the installed daemon has a serving runtime. A runner on the same
+      // Machine must still take transport; it cannot recreate that registry.
+      const localRuntime = !retainedReviewAction && actionId.startsWith('scm.diffSummary.')
+        ? tryAcquireAuthoritativePluginRuntimeRegistryLease() : null;
+      const installedScmOwner = localRuntime !== null;
+      await localRuntime?.release();
+      if (params.credentials && actionId.startsWith('scm.diffSummary.') && (retainedReviewAction || installedScmOwner)) {
         const currentMachine = await readCurrentMachineControlIdentity();
         if (currentMachine.machineId === machineId) {
           if (!await localReviewHomeCurrent()) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
           return executeScmActionOperation({ actionId, input: inputRecord, workingDirectory: cwd ?? process.cwd(),
             emitFileReviewNote,
-            accessPolicy: params.scmFilesystemAccessPolicy ?? resolveFilesystemAccessPolicy(),
+            ...(root && context.defaultSessionId && (context.actionCaller?.kind === 'session'
+              || sessionAuthorization?.sessionId === context.defaultSessionId) ? { sessionId: context.defaultSessionId } : {}),
+            accessPolicy: root ? { kind: 'restrictedRoots', roots: resolveCwd(root, cwd ?? process.cwd(),
+              params.scmFilesystemAccessPolicy ?? resolveFilesystemAccessPolicy()).ok ? [root] : [] }
+              : params.scmFilesystemAccessPolicy ?? resolveFilesystemAccessPolicy(),
             ...(readComparisonTranscriptPage ? { readComparisonTranscriptPage } : {}), readPullRequestComparisonPage,
             authorizeSession: authorizeReviewSession,
             executeCanonicalAction, actionContext: localReviewContext, ...accountMarksDeps, ...(context.signal ? { signal: context.signal } : {}),
@@ -3290,8 +3307,9 @@ export function createCliActionDeps(params: Readonly<{
         let capabilities: ScmCapabilities | undefined;
         try {
           const description = ScmBackendDescribeResponseSchema.safeParse(await callMachineAction({
-            machineId, method: 'scm.backend.describe',
+            machineId, serverId: context.serverId ?? undefined, method: 'scm.backend.describe',
             request: { cwd, ...(inputRecord.backendPreference ? { backendPreference: inputRecord.backendPreference } : {}), outcomeVersion: 1 },
+            authority: context.authority, context, effectActionId: 'scm.backend.describe', exactMachine: true,
             ...(context.signal ? { signal: context.signal } : {}),
           }));
           if (description.success && description.data.success) capabilities = description.data.capabilities;
@@ -3302,15 +3320,35 @@ export function createCliActionDeps(params: Readonly<{
         const admission = admitPolicy(capabilities);
         if (!admission.success) return admission;
       }
-      return await attachSuccessfulPullRequest(await callMachineAction({ machineId, method, request: {
+      const machineInput = {
         ...inputRecord,
         ...(actionId.startsWith('scm.diffSummary.') || actionId === 'scm.hostingRepository.resolveAddress'
           ? {}
           : { outcomeVersion: 1 }),
         ...(actionId === 'scm.status.snapshot' ? { operationStateVersion: 1 } : {}),
-      }, ...(context.rpcSessionAuthorization ? { authorization: context.rpcSessionAuthorization } : {}),
+      };
+      const request = root ? createTargetedActionRpcRequestV1(machineInput,
+        { kind: 'machine', machineId, project: selectedTarget?.project ?? { machineId, directory: root } }, context) : machineInput;
+      const invoke = () => callMachineAction({ machineId, serverId: context.serverId ?? undefined, method, request,
+        ...(sessionAuthorization ? { authorization: sessionAuthorization } : {}),
         context, effectActionId: actionId,
-        ...(context.signal ? { signal: context.signal } : {}) }));
+        authority: context.authority, exactMachine: true,
+        ...(context.signal ? { signal: context.signal } : {}) });
+      try {
+        return await attachSuccessfulPullRequest(await (params.serverHttpBaseUrl
+          ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke()));
+      } catch (error) {
+        if (actionId !== 'scm.change.discard') throw error;
+        if (readMachineRpcRequestDisposition(error) === 'notSent'
+          || isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
+          return { success: false, errorCode: 'COMPARISON_UNAVAILABLE', error: 'Prepared Undo delivery is unavailable' };
+        }
+        // A lost acknowledgement must never trigger a local mutation/replay.
+        return { success: false, errorCode: 'COMMAND_OUTCOME_UNKNOWN', error: 'The Machine discard outcome could not be established' };
+      }
+    };
+    if (context.externalActionTarget?.kind === 'machine') {
+      return await executeMachineScmAction(normalizeStringValue(context.externalActionTarget.machineId), inputRecord);
     }
     if (!params.credentials) {
       return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
@@ -3333,14 +3371,20 @@ export function createCliActionDeps(params: Readonly<{
     if (!sessionId) {
       return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
     }
-    const transport = await resolveTransportForSession(sessionId, context.signal);
+    if (!await isMachineActionServerScopeCurrent({ serverId: context.serverId, context, signal: context.signal })) {
+      return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+    }
+    const transport = await resolveTransportForSession(sessionId, context.signal, { context, actionId });
     if (!transport.ok) {
       return { ok: false, errorCode: transport.code, error: transport.code };
     }
 
     const metadata = readTransportSessionOwnerMetadata(transport);
-    const persistedWorkingDirectory = normalizeStringValue(metadata?.path);
-    if (!persistedWorkingDirectory) {
+    // The bound host's location includes a child Run's cwd. An authored cwd
+    // never replaces it, and another Session cannot borrow this host's location.
+    const boundHostPath = sessionId === params.sessionId ? normalizeStringValue(params.rawSession?.path) : null;
+    const ownerWorkingDirectory = normalizeStringValue(metadata?.path);
+    if (!ownerWorkingDirectory) {
       return {
         ok: false,
         errorCode: 'scm_action_worktree_unavailable',
@@ -3348,16 +3392,23 @@ export function createCliActionDeps(params: Readonly<{
       };
     }
 
+    const persistedWorkingDirectory = boundHostPath ?? ownerWorkingDirectory;
     const currentMachine = await readCurrentMachineControlIdentity();
+    const sessionMachineId = normalizeStringValue(transport.rawSession.machineId)
+      ?? normalizeStringValue(metadata?.machineId);
     const workingDirectory = metadata
       ? resolveSessionMachineWorkspacePath({
           metadata,
-          currentMachineId: currentMachine.machineId,
+          currentMachineId: sessionMachineId,
           candidatePath: persistedWorkingDirectory,
         }) ?? persistedWorkingDirectory
       : persistedWorkingDirectory;
-    const sessionMachineId = normalizeStringValue(transport.rawSession.machineId)
-      ?? normalizeStringValue(metadata?.machineId);
+    const boundMachineId = sessionId === params.sessionId ? normalizeStringValue(params.rawSession?.machineId) : null;
+    const expectedMachineIds = [boundMachineId, normalizeStringValue(context.defaultSessionMachineId),
+      normalizeStringValue(context.executionRunTargetMachineId)];
+    if (expectedMachineIds.some(id => id && sessionMachineId !== id)) {
+      return { ok: false, errorCode: 'scm_action_session_not_local', error: 'scm_action_session_not_local' };
+    }
     const sessionHost = normalizeStringValue(transport.rawSession.host)
       ?? normalizeStringValue(metadata?.host);
     const machineMismatch = Boolean(
@@ -3371,7 +3422,7 @@ export function createCliActionDeps(params: Readonly<{
       && currentMachine.host
       && sessionHost !== currentMachine.host,
     );
-    if (machineMismatch || hostMismatch) {
+    if (retainedReviewAction && (machineMismatch || hostMismatch)) {
       return {
         ok: false,
         errorCode: 'scm_action_session_not_local',
@@ -3384,15 +3435,13 @@ export function createCliActionDeps(params: Readonly<{
       if (!authorized.ok) return { ok: false, errorCode: 'scm_action_path_denied', error: authorized.error };
     }
 
-    const sessionBoundInput = actionId === 'scm.repository.clone'
-      ? inputRecord
-      : actionId === 'scm.pullRequest.prepareWorktree'
-        ? { ...inputRecord, cwd: workingDirectory, sourcePath: workingDirectory }
-        : { ...inputRecord, cwd: workingDirectory,
-            ...(actionId === 'scm.diffSummary.capture' ? { sessionId: transport.sessionId } : {}),
-          };
-    const backendTarget = actionId === 'scm.diffSummary.generate' || actionId === 'scm.diffSummary.draftPullRequest'
-      ? resolveScmBackendTarget(metadata) : null;
+    const sessionBoundInput = bindScmActionToSessionWorkspace(actionId, inputRecord, workingDirectory, transport.sessionId);
+    if (!retainedReviewAction) {
+      if (!sessionMachineId) return { ok: false, errorCode: 'machine_not_selected', error: 'machine_not_selected' };
+      return await executeMachineScmAction(sessionMachineId, sessionBoundInput,
+        context.rpcSessionAuthorization ?? (resolveSocketRpcSessionAuthorization(getActionSpec(actionId).bindings?.rpcMethod ?? '')
+          ? { kind: 'session.write', sessionId: transport.sessionId } : undefined), workingDirectory);
+    }
 
     if (actionId.startsWith('scm.diffSummary.') && !await localReviewHomeCurrent()) {
       return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
@@ -3400,34 +3449,6 @@ export function createCliActionDeps(params: Readonly<{
 
     return await attachSuccessfulPullRequest(await executeScmActionOperation({
       emitFileReviewNote,
-      ...(actionId === 'scm.change.discard' ? {
-        delegateComparisonDiscardForUndoExport: async (request: ScmChangeDiscardRequest): Promise<ScmChangeDiscardResponse> => {
-          const machineId = sessionMachineId ?? currentMachine.machineId;
-          const unavailable = { success: false as const, errorCode: 'COMPARISON_UNAVAILABLE' as const,
-            error: 'Prepared Undo delivery is unavailable' };
-          if (!machineId) return unavailable;
-          try {
-            // Canonical preflight invokes this only before every local commit.
-            // The selected Machine revalidates and owns the single mutation/result.
-            const result = ScmChangeDiscardResponseSchema.safeParse(await callMachineAction({
-              machineId, method: 'scm.change.discard', exactMachine: true,
-              request: { ...request, cwd: workingDirectory, outcomeVersion: 1,
-                entries: request.entries.map(entry => entry.kind === 'comparison'
-                  ? { ...entry, against: { ...entry.against, sessionId: entry.against.sessionId ?? transport.sessionId } } : entry) },
-              authorization: context.rpcSessionAuthorization ?? { kind: 'session.write', sessionId: transport.sessionId },
-              authority: context.authority, context, effectActionId: actionId,
-              ...(context.signal ? { signal: context.signal } : {}),
-            }));
-            return result.success ? result.data : { success: false, errorCode: 'COMMAND_OUTCOME_UNKNOWN',
-              error: 'The Machine discard outcome could not be established' };
-          } catch (error) {
-            if (readMachineRpcRequestDisposition(error) === 'notSent'
-              || isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) return unavailable;
-            // A lost acknowledgement is never permission to replay locally.
-            return { success: false, errorCode: 'COMMAND_OUTCOME_UNKNOWN', error: 'The Machine discard outcome could not be established' };
-          }
-        },
-      } : {}),
       actionId,
       input: sessionBoundInput,
       workingDirectory,
@@ -3440,16 +3461,6 @@ export function createCliActionDeps(params: Readonly<{
       actionContext: localReviewContext,
       ...accountMarksDeps,
       ...(context.signal ? { signal: context.signal } : {}),
-      executeDiffSummary: async ({ request }) => await executeScmDiffSummaryAction({
-        request: request as ScmDiffSummaryGenerateInput,
-        sessionId: transport.sessionId,
-        ...(readComparisonTranscriptPage ? { readTranscriptPage: readComparisonTranscriptPage } : {}),
-        readPullRequestComparisonPage,
-        backendTarget,
-        credentials: params.credentials,
-        executeCanonicalAction,
-        ...(context.signal ? { signal: context.signal } : {}),
-      }),
     }));
   };
 

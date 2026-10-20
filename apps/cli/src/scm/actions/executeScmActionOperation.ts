@@ -75,8 +75,6 @@ export type ExecuteScmActionOperationParams = Readonly<{
     rpcCompatibility?: true;
     deliverFileAtRevision?: (request: scm.ScmFileAtRevisionRequest, response: scm.ScmFileAtRevisionResponse, signal?: AbortSignal) => Promise<scm.ScmFileReadResponse>;
     prepareFileBytesExport?: (input: import('./deliverScmFileAtRevision').ScmFileBytesExportInput) => ReturnType<typeof import('./deliverScmFileAtRevision').prepareScmFileBytesExport>;
-    /** Local Session transport, called only by proven Undo-export preflight before any mutation. */
-    delegateComparisonDiscardForUndoExport?: (request: scm.ScmChangeDiscardRequest) => Promise<scm.ScmChangeDiscardResponse>;
 }>;
 
 async function admitReviewScope(params: ExecuteScmActionOperationParams,
@@ -401,7 +399,6 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
         }
         case 'scm.change.discard': {
             const request = params.input as scm.ScmChangeDiscardRequest;
-            let delegatedUndoExport = false;
             const headNoteEvidence: { changedPaths: readonly string[] | null } = { changedPaths: null };
             const result = await runMutation(async () => runScmRoute<scm.ScmChangeDiscardRequest, scm.ScmChangeDiscardResponse>({
                 request,
@@ -464,12 +461,6 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                         return [];
                     }).sort((a, b) => b.weight - a.weight);
                     const exceedsReplyBudget = () => Buffer.byteLength(JSON.stringify(projectedResponse()), 'utf8') > DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES;
-                    if (exceedsReplyBudget() && undoPayloads.length && !params.prepareFileBytesExport && params.delegateComparisonDiscardForUndoExport) {
-                        // This is the only delegation point: every entry is prepared, no
-                        // local commit has run, and the Machine becomes the result/note owner.
-                        delegatedUndoExport = true;
-                        return await params.delegateComparisonDiscardForUndoExport(request);
-                    }
                     while (exceedsReplyBudget() && undoPayloads.length) {
                         const { item, bytes } = undoPayloads.shift()!;
                         if (!params.prepareFileBytesExport) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
@@ -492,7 +483,7 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                         ...(failure?.error ? { error: failure.error } : {}) };
                 },
             }));
-            if (params.emitFileReviewNote && !delegatedUndoExport) {
+            if (params.emitFileReviewNote) {
                 const bySession = new Map<string, FileReviewNoteOperationV1[]>();
                 let noteDeliveryFailed = false;
                 for (const [index, entry] of request.entries.entries()) {
