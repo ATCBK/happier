@@ -423,6 +423,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
         showDocumentShareSheet({ artifactId: document.id, kind: document.kind, name: document.name, subtitle: document.subtitle });
         const chrome = capture.chrome;
         if (!chrome) throw new Error('Document share modal supplied no chrome');
+        if (chrome.kind === 'stage') throw new Error('Document share modal must supply card chrome');
         const adapter = { ...createDocumentShareAdapter({ artifactId: document.id, kind: document.kind, grants: [], loading: false,
             readOnly: false, retryContent: noop, linkPath: `/documents/${document.id}`, sendCopy: noop }),
             publicLink: { stateLabel: t('common.off'), onOpen: noop } };

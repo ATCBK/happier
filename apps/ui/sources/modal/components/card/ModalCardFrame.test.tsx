@@ -187,6 +187,24 @@ describe('ModalCardFrame', () => {
             act(() => storage.setState(previousState, true));
         }
     });
+    it('keeps a one-line subtitle to one line when the chrome asks for it', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { ModalCardFrame } = await import('./ModalCardFrame');
+        const subtitle = 'Scripts · a-long-project-name · a-long-checkout-name';
+        const screen = await renderScreen(React.createElement(ModalCardFrame, {
+            children: React.createElement('Child'),
+            title: 'test',
+            subtitle,
+            subtitleLines: 1,
+            subtitleTestID: 'sub',
+            onClose: vi.fn(),
+        }));
+        expect(screen.findByTestId('sub')?.props.numberOfLines).toBe(1);
+        await screen.update(React.createElement(ModalCardFrame, {
+            children: React.createElement('Child'), title: 'test', subtitle, subtitleTestID: 'sub', onClose: vi.fn(),
+        }));
+        expect(screen.findByTestId('sub')?.props.numberOfLines).toBeUndefined();
+    });
     it('gives a phone card’s title the full row and moves wide header actions beneath it', async () => {
         windowState.width = 390;
         windowState.height = 844;

@@ -146,6 +146,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, visible, zIn
                 leading={chrome?.leading}
                 title={chrome?.title}
                 subtitle={chrome?.subtitle}
+                subtitleLines={chrome?.subtitleLines}
                 actions={chrome?.actions}
                 footer={chrome?.footer}
                 testID={chrome?.testID}

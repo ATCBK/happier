@@ -30,6 +30,8 @@ type ModalCardFrameProps = Readonly<{
     leading?: React.ReactNode;
     title?: React.ReactNode;
     subtitle?: React.ReactNode;
+    /** `1`: the subtitle stays on one line and ends in an ellipsis. */
+    subtitleLines?: 1;
     actions?: React.ReactNode;
     footer?: React.ReactNode;
     scrollHost?: 'overlay' | 'body' | 'bounded';
@@ -201,6 +203,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                         leading={props.leading}
                         title={props.title}
                         subtitle={props.subtitle}
+                        subtitleLines={props.subtitleLines}
                         actions={props.actions}
                         onClose={props.onClose}
                         inset={props.headerInset}

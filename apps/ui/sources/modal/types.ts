@@ -91,6 +91,8 @@ export type CustomModalChromeCardConfig = Readonly<{
     leading?: ReactNode;
     title?: ReactNode;
     subtitle?: ReactNode;
+    /** `1`: the subtitle stays on one line and ends in an ellipsis (a subtitle made of facts that can be long). */
+    subtitleLines?: 1;
     actions?: ReactNode;
     footer?: ReactNode;
     /**

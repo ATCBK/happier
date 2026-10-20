@@ -13,6 +13,7 @@ type ModalCardHeaderProps = Readonly<{
     leading?: React.ReactNode;
     title?: React.ReactNode;
     subtitle?: React.ReactNode;
+    subtitleLines?: 1;
     actions?: React.ReactNode;
     onClose?: () => void;
     /** `wide`: the band stands on the content's 24 edge; a phone keeps the page gutter. */
@@ -44,9 +45,14 @@ export function ModalCardHeader(props: ModalCardHeaderProps) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const compact = useDeviceType() === 'phone';
+    const subtitleLines = props.subtitleLines;
     const renderText = React.useCallback<HappierModalHeaderTextRender>((input) => (
-        <Text testID={input.testID} style={input.role === 'title' ? styles.title : styles.subtitle}>{input.children}</Text>
-    ), [styles]);
+        <Text
+            testID={input.testID}
+            style={input.role === 'title' ? styles.title : styles.subtitle}
+            numberOfLines={input.role === 'subtitle' ? subtitleLines : undefined}
+        >{input.children}</Text>
+    ), [styles, subtitleLines]);
 
     return (
         <HappierModalHeader
