@@ -10,3 +10,4 @@ export const createCursorAgentRuntime: AgentRuntimeFactory = () => ({
     executionRunContextV1: { open: openCursorAcpExecutionRun },
   },
 });
+export { cursorExternalSessionsContribution } from '../externalSessions/contribution.js';

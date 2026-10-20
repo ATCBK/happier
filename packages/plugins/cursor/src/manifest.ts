@@ -6,6 +6,7 @@ import { interpretCursorCliAuthCommand } from './agent/auth/status.js';
 import { CURSOR_PREFLIGHT_SESSION_CONTROLS } from './agent/preflight/models.js';
 import { createCursorAgentRuntime } from './agent/runtime/engine.js';
 import { CURSOR_AGENT_SETTINGS_CONTRIBUTION } from './agent/settings.js';
+import { cursorExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 
 const {
   id: CURSOR_AGENT_SETTINGS_CONTRIBUTION_ID,
@@ -88,8 +89,9 @@ export const CURSOR_PLUGIN = definePlugin({
           agentCliSystemTool: { toolId: 'cursor-agent' },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          surfaces: ['externalSessions'],
           skills: {
-            delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
             nativeRoots: {
               user: [['.agents', 'skills'], ['.cursor', 'skills'], ['.claude', 'skills'], ['.codex', 'skills']],
               project: [['.agents', 'skills'], ['.cursor', 'skills'], ['.claude', 'skills'], ['.codex', 'skills']],
@@ -104,8 +106,20 @@ export const CURSOR_PLUGIN = definePlugin({
             workStateSources: [{ id: 'todos', itemKinds: ['todo'] }],
           },
         }),
+        surfaces: { externalSession: {
+          externalLinkedTakeover: { writerSafety: 'unsupported' },
+          sources: [{ sourceKind: 'cursorHome', contentSearch: true,
+            schema: { fields: [
+              { kind: 'literal', name: 'kind', value: 'cursorHome' },
+              { kind: 'string', name: 'homeDir', min: 1, max: 10_000, nullish: true },
+            ] },
+            key: { segments: [{ kind: 'literal', value: 'cursorHome' }, { kind: 'field', field: 'homeDir' }] },
+            instances: [{ kind: 'default', constants: {} }],
+          }],
+        } },
       },
       factory: createCursorAgentRuntime,
+      externalSessions: cursorExternalSessionsContribution,
       preflightSessionControls: CURSOR_PREFLIGHT_SESSION_CONTROLS,
       cliAuth: {
         detectAuthStatus: async ({ runDeclaredSystemToolCommand }) =>
@@ -119,6 +133,7 @@ export const CURSOR_PLUGIN = definePlugin({
         module: './agent/runtime/engine',
         export: 'createCursorAgentRuntime',
         runtimeApiVersion: 1,
+        externalSessionsExport: 'cursorExternalSessionsContribution',
       },
     },
   },
