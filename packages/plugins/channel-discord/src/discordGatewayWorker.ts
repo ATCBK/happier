@@ -223,18 +223,18 @@ function hasGuildMemberRoleEvidence(
   return value !== null && !('kind' in value);
 }
 
-class DiscordGatewayRoleLookupFailure extends Error {
+class DiscordGatewayLookupFailure extends Error {
   readonly failure: DiscordApiFailure;
 
   constructor(failure: DiscordApiFailure) {
-    super('Discord Gateway could not obtain current bot role evidence.');
-    this.name = 'DiscordGatewayRoleLookupFailure';
+    super('Discord Gateway could not obtain current message routing evidence.');
+    this.name = 'DiscordGatewayLookupFailure';
     this.failure = failure;
   }
 }
 
-function isDiscordGatewayRoleLookupFailure(value: unknown): value is DiscordGatewayRoleLookupFailure {
-  return value instanceof DiscordGatewayRoleLookupFailure;
+function isDiscordGatewayLookupFailure(value: unknown): value is DiscordGatewayLookupFailure {
+  return value instanceof DiscordGatewayLookupFailure;
 }
 
 function workerFailure(reason: ConversationProviderFailureV1['reason'], diagnostic: string): DiscordGatewayWorkerResult {
@@ -364,6 +364,22 @@ export function startDiscordGatewayWorker(input: DiscordGatewayWorkerInput): Dis
     let providerFailure: ConversationProviderFailureV1 | null = null;
     let mustDrainIncumbentAdmissions = false;
 
+    const readForAdmission = async <T>(read: () => Promise<T>, admissionSignal: AbortSignal): Promise<T> => {
+      while (true) {
+        admissionSignal.throwIfAborted();
+        const result = await read();
+        admissionSignal.throwIfAborted();
+        if (isRecord(result) && result.kind === 'notReady' && result.reason === 'rateLimited'
+          && typeof result.retryAfterMs === 'number') {
+          // Keep this dispatch in its existing scheduler task. Discord owns the
+          // delay; retirement/cancellation ends both the wait and its retry.
+          await clock.sleep(result.retryAfterMs, admissionSignal);
+          continue;
+        }
+        return result;
+      }
+    };
+
     const closeForAdmissionLoss = (failure?: ConversationProviderFailureV1): void => {
       if (signal.aborted || admissionLost) return;
       admissionLost = true;
@@ -402,9 +418,9 @@ export function startDiscordGatewayWorker(input: DiscordGatewayWorkerInput): Dis
         signal,
         async run(taskSignal) {
           const admissionSignal = taskSignal ?? signal;
-          const channel = await input.api.getChannel({ channelId }, { signal: admissionSignal });
+          const channel = await readForAdmission(() => input.api.getChannel({ channelId }, { signal: admissionSignal }), admissionSignal);
           if (channel === null) throw new Error('Discord Gateway message channel is no longer available.');
-          if (channel.kind === 'notReady') throw new Error(`Discord Gateway message channel lookup failed: ${channel.reason}.`);
+          if (channel.kind === 'notReady') throw new DiscordGatewayLookupFailure(channel);
           if (channel.kind !== 'direct' && channel.kind !== 'shared' && channel.kind !== 'thread') {
             throw new Error(`Discord Gateway message channel kind '${channel.kind}' is unsupported.`);
           }
@@ -413,20 +429,20 @@ export function startDiscordGatewayWorker(input: DiscordGatewayWorkerInput): Dis
             ? messageGuildId
             : null;
           const member = roleMentionGuildId !== null
-            ? await input.api.getGuildMember({
+            ? await readForAdmission(() => input.api.getGuildMember({
               guildId: roleMentionGuildId,
               userId: input.connection.botUserId,
-            }, { signal: admissionSignal })
+            }, { signal: admissionSignal }), admissionSignal)
             : null;
           if (member === null && roleMentionGuildId !== null) {
-            throw new DiscordGatewayRoleLookupFailure({
+            throw new DiscordGatewayLookupFailure({
               kind: 'notReady',
               reason: 'permissionMissing',
               diagnostic: 'Discord did not confirm the current bot as a member of the guild for role mention evidence.',
             });
           }
           if (member !== null && !hasGuildMemberRoleEvidence(member)) {
-            throw new DiscordGatewayRoleLookupFailure(member);
+            throw new DiscordGatewayLookupFailure(member);
           }
           // `GUILD_MEMBER_UPDATE` requires Discord's separate privileged
           // GUILD_MEMBERS intent. A single-member REST read is the current
@@ -467,7 +483,7 @@ export function startDiscordGatewayWorker(input: DiscordGatewayWorkerInput): Dis
       const tracked = task.then(
         () => undefined,
         (error: unknown) => {
-          if (isDiscordGatewayRoleLookupFailure(error)) {
+          if (isDiscordGatewayLookupFailure(error)) {
             closeForAdmissionLoss(error.failure);
             return;
           }
