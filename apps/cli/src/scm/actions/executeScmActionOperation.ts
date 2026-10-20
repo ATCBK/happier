@@ -1,14 +1,21 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import type { FileReviewNoteV1, FileReviewNoteOperationV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
+import { scmPathMatchesScopePath } from '@happier-dev/protocol/scm/pathScope';
+import { logger } from '@/ui/logger';
 import type { ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
 import { SCM_OPERATION_ERROR_CODES, ScmOperationErrorCodeSchema } from '@happier-dev/protocol/scm/operationError';
 import { ScmDiffSummaryErrorCodeSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { ScmDiffSummaryResultClearInputSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import type { ScmReviewedMarksSource } from '@happier-dev/protocol/scm/reviewedMarks';
 import type { ScmDiffSummaryResultClearResponse, ScmComparisonCaptureInput, ScmActionExecute, ActionExecutorContext, ScmComparison, ScmReviewedMarkInput, ScmReviewedMarkResponse, ScmActionId, ScmHostingRepositoryDescribePublishTargetsRequest, ScmHostingRepositoryDescribePublishTargetsResponse, ScmHostingRepositoryPublishRequest, ScmHostingRepositoryPublishResponse, ScmPullRequestCheckoutRequest, ScmPullRequestCheckoutResponse, ScmPullRequestGetRequest, ScmPullRequestGetResponse, ScmPullRequestListRequest, ScmPullRequestListResponse, ScmPullRequestOpenComposeRequest, ScmPullRequestOpenComposeResponse, ScmPullRequestOpenOrReuseRequest, ScmPullRequestOpenOrReuseResponse, ScmPullRequestPrepareWorktreeRequest, ScmPullRequestPrepareWorktreeResponse, ScmPullRequestRunStackedRequest, ScmPullRequestRunStackedResponse, ScmReviewWorkspaceMaterializePreparedRequest, ScmReviewWorkspaceMaterializePreparedResponse, ScmRepositoryCloneInput, ScmRepositoryCloneOutput, ScmRepositoryInitRequest, ScmRepositoryInitResponse, ScmRepositoryRemoveIndexLockRequest, ScmRepositoryRemoveIndexLockResponse } from '@happier-dev/protocol';
 import { admitScmRemotePolicy } from '@happier-dev/protocol/scm/remotePolicy';
 import { admitScmCommitPolicy, admitScmCommitUndoLast } from '@happier-dev/protocol/scm/capabilities';
 import { normalizeScmOperationOutcome, ScmOperationOutcomeSchema } from '@happier-dev/protocol/scm/operationOutcome';
 import type * as scm from '@happier-dev/protocol/scm';
 import { parseScmRepositoryCloneRpcRequest, projectScmLegacyRpcResponse } from './scmRpcCompatibility';
+import { prepareDiscardAgainstComparison, type PreparedComparisonDiscard } from './discard/discardAgainstComparison';
+import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
 
 import { resolveFilesystemAccessPolicy, type FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { authorizeFilesystemPath } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
@@ -45,6 +52,7 @@ export type ExecuteScmDiffSummaryAction = (input: Readonly<{
 }>) => Promise<unknown>;
 
 export type ExecuteScmActionOperationParams = Readonly<{
+    emitFileReviewNote?: (note: FileReviewNoteV1 & Readonly<{ sessionId: string }>) => Promise<void>;
     actionId: ScmActionId;
     input: unknown;
     workingDirectory: string;
@@ -62,10 +70,11 @@ export type ExecuteScmActionOperationParams = Readonly<{
     executeCanonicalAction?: Parameters<ScmActionExecute>[0]['executeCanonicalAction'];
     /** Exact host-stamped caller context, never parsed from SCM Action input. */
     actionContext?: ActionExecutorContext;
-    executeReviewedMarks?: (comparison: ScmComparison, request: ScmReviewedMarkInput, reviewed: boolean) => Promise<ScmReviewedMarkResponse>;
-    clearReviewedMarks?: (comparison: ScmComparison) => Promise<ScmReviewedMarkResponse>;
+    executeReviewedMarks?: (evidence: ScmComparison | ScmReviewedMarksSource, request: ScmReviewedMarkInput, reviewed: boolean) => Promise<ScmReviewedMarkResponse>;
     /** Released RPC readers have a closed outer error-code vocabulary. */
     rpcCompatibility?: true;
+    deliverFileAtRevision?: (request: scm.ScmFileAtRevisionRequest, response: scm.ScmFileAtRevisionResponse, signal?: AbortSignal) => Promise<scm.ScmFileReadResponse>;
+    prepareFileBytesExport?: (input: import('./deliverScmFileAtRevision').ScmFileBytesExportInput) => ReturnType<typeof import('./deliverScmFileAtRevision').prepareScmFileBytesExport>;
 }>;
 
 async function admitReviewScope(params: ExecuteScmActionOperationParams,
@@ -156,7 +165,7 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                     const response = await executeScmDiffSummaryResultAction({ actionId: 'scm.diffSummary.result.delete',
                         input: { cwd: authorized.cwd, resultId: item.resultId, expectedRevision: item.expectedRevision }, cwd: authorized.cwd,
                         ...(item.sessionId ? { sessionId: item.sessionId } : {}), ...(params.signal ? { signal: params.signal } : {}),
-                        ...(params.clearReviewedMarks ? { clearReviewedMarks: params.clearReviewedMarks } : {}) });
+                    });
                     if (!response.success) failures.push({ ...response, resultId: item.resultId });
                     else if ('resultId' in response) deleted.push(response);
                 } catch { failures.push({ ...reviewUnavailable, resultId: item.resultId }); }
@@ -205,6 +214,29 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                 const scope = { cwd: authorized.cwd, ...(sessionId ? { sessionId } : {}) };
                 if (!await admitReviewScope(params, scope)) return reviewUnavailable;
                 try {
+                    if ('changeKeys' in request) {
+                        if (request.source.kind !== 'workingTree' || !params.executeReviewedMarks) return reviewUnavailable;
+                        return runScmRoute({ request: { cwd: authorized.cwd }, ...routeBase,
+                            onNonRepository: () => reviewUnavailable,
+                            runWithBackend: async ({ context, selection }) => {
+                                const status = await selection.backend.statusSnapshot({ context, request: { cwd: authorized.cwd } });
+                                if (!status.success || !status.snapshot?.repo.rootPath || status.snapshot.repo.rootPath !== authorized.cwd) return reviewUnavailable;
+                                const groups = await Promise.all(status.snapshot.entries.map(async entry => {
+                                    const areas = status.snapshot!.capabilities.supportedDiffAreas;
+                                    return (await Promise.all(areas.map(async area => {
+                                        const diff = await selection.backend.diffFile({ context, request: { cwd: authorized.cwd, path: entry.path, area } });
+                                        if (!diff.success) throw new Error('Live change evidence is unavailable');
+                                        const layer = area === 'both' ? 'combined' : area === 'included' ? 'staged' : entry.kind === 'untracked' ? 'untracked' : 'unstaged';
+                                        return buildReviewUnits(entry.path, layer, diff.diff ?? '').map(unit => unit.key);
+                                    }))).flat();
+                                }));
+                                const source: ScmReviewedMarksSource = { repositoryRootPath: status.snapshot.repo.rootPath,
+                                    source: request.source, changeKeys: groups.flat() };
+                                if (request.changeKeys.some(key => !source.changeKeys.includes(key))) return { success: false, errorCode: 'reviewed_marks_invalid_selection', error: 'Content keys no longer belong to the live diff.' };
+                                return params.executeReviewedMarks!(source, request, params.actionId === 'scm.diffSummary.reviewed.mark');
+                            },
+                        });
+                    }
                     const captured = await readCapturedScmComparison({ ...scope, comparisonId: request.comparisonId, source: request.source });
                     const sourceSessionId = typeof captured.comparison.source.sessionId === 'string' ? captured.comparison.source.sessionId : undefined;
                     if (!await admitReviewScope(params, { ...scope, ...(sourceSessionId ? { sourceSessionId } : {}) })) return reviewUnavailable;
@@ -236,7 +268,6 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                     ...(params.executeCanonicalAction ? { executeCanonicalAction: params.executeCanonicalAction } : {}),
                     ...(params.actionContext ? { actionContext: params.actionContext } : {}),
                     ...(params.signal ? { signal: params.signal } : {}),
-                    ...(params.clearReviewedMarks ? { clearReviewedMarks: params.clearReviewedMarks } : {}),
                 });
             } catch (error) {
                 return { success: false, errorCode: 'result_unavailable', error: error instanceof Error ? error.message : 'Saved result is unavailable' };
@@ -300,6 +331,17 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                     : { success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED, error: 'SCM backend operation is unavailable' },
             });
         }
+        case 'scm.file.read': {
+            const request = params.input as scm.ScmFileAtRevisionRequest;
+            const response = await runScmRoute<scm.ScmFileAtRevisionRequest, scm.ScmFileAtRevisionResponse>({
+                request, ...routeBase,
+                onNonRepository: async () => notRepositoryResponse<scm.ScmFileAtRevisionResponse>(),
+                runWithBackend: async ({ context, selection }) => selection.backend.fileAtRevision
+                    ? await selection.backend.fileAtRevision({ context, request })
+                    : { success: false, errorCode: 'unsupported' },
+            });
+            return params.deliverFileAtRevision ? await params.deliverFileAtRevision(request, response, params.signal) : response;
+        }
         case 'scm.diff.file': {
             const request = params.input as scm.ScmDiffFileRequest;
             return runScmRoute<scm.ScmDiffFileRequest, scm.ScmDiffFileResponse>({
@@ -308,6 +350,17 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                 onNonRepository: async () => notRepositoryResponse<scm.ScmDiffFileResponse>(),
                 runWithBackend: async ({ context, selection }) => selection.backend.diffFile
                     ? await selection.backend.diffFile({ context, request })
+                    : { success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED, error: 'SCM backend operation is unavailable' },
+            });
+        }
+        case 'scm.blame.get': {
+            const request = params.input as scm.ScmBlameFileRequest;
+            return runScmRoute<scm.ScmBlameFileRequest, scm.ScmBlameFileResponse>({
+                request,
+                ...routeBase,
+                onNonRepository: async () => notRepositoryResponse<scm.ScmBlameFileResponse>(),
+                runWithBackend: async ({ context, selection }) => selection.backend.blameFile
+                    ? await selection.backend.blameFile({ context, request, ...(params.signal ? { signal: params.signal } : {}) })
                     : { success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED, error: 'SCM backend operation is unavailable' },
             });
         }
@@ -346,14 +399,141 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
         }
         case 'scm.change.discard': {
             const request = params.input as scm.ScmChangeDiscardRequest;
-            return runMutation(async () => runScmRoute<scm.ScmChangeDiscardRequest, scm.ScmChangeDiscardResponse>({
+            const headNoteEvidence: { changedPaths: readonly string[] | null } = { changedPaths: null };
+            const result = await runMutation(async () => runScmRoute<scm.ScmChangeDiscardRequest, scm.ScmChangeDiscardResponse>({
                 request,
                 ...routeBase,
                 onNonRepository: async () => notRepositoryResponse<scm.ScmChangeDiscardResponse>(),
-                runWithBackend: async ({ context, selection }) => selection.backend.changeDiscard
-                    ? await selection.backend.changeDiscard({ context, request })
-                    : { success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED, error: 'SCM backend operation is unavailable' },
+                runWithBackend: async ({ context, selection }) => {
+                    if (params.emitFileReviewNote && request.entries.some(entry => entry.kind !== 'comparison')) {
+                        // HEAD discard's success reply does not distinguish no-op paths. Use
+                        // the existing status owner before mutation, never command stdout.
+                        const before = await selection.backend.statusSnapshot({ context, request: { cwd: context.cwd } }).catch(() => null);
+                        if (before?.success && before.snapshot) headNoteEvidence.changedPaths = before.snapshot.entries.flatMap(entry =>
+                            entry.previousPath ? [entry.path, entry.previousPath] : [entry.path]);
+                    }
+                    if (request.entries.every(entry => entry.kind !== 'comparison')) return selection.backend.changeDiscard
+                        ? await selection.backend.changeDiscard({ context, request })
+                        : { success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED, error: 'SCM backend operation is unavailable' };
+                    // Admit every retained Session namespace before any entry can mutate the tree.
+                    for (const entry of request.entries) {
+                        if (entry.kind !== 'comparison') continue;
+                        const sourceSessionId = 'sessionId' in entry.against.source ? entry.against.source.sessionId : undefined;
+                        for (const sessionId of new Set([params.sessionId, entry.against.sessionId, sourceSessionId])) {
+                            if (!await admitReviewScope(params, { cwd: context.cwd, ...(sessionId ? { sessionId } : {}) })) {
+                                return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
+                                    error: 'Comparison evidence is unavailable for this caller.' };
+                            }
+                        }
+                    }
+                    const prepared: PreparedComparisonDiscard[] = [];
+                    for (const entry of request.entries) {
+                        if (entry.kind === 'comparison') {
+                            const sessionId = entry.against.sessionId
+                                ?? ('sessionId' in entry.against.source ? entry.against.source.sessionId : undefined)
+                                ?? params.sessionId;
+                            prepared.push(await prepareDiscardAgainstComparison({ entry, context, backend: selection.backend,
+                                ...(sessionId ? { sessionId } : {}) }));
+                        } else {
+                            prepared.push({ result: { path: entry.path, status: 'discarded', hashBefore: null, hashAfter: null },
+                                commit: async () => {
+                                    const result = await selection.backend.changeDiscard({ context, request: { ...request, entries: [entry] } });
+                                    return { path: entry.path, status: result.success ? 'discarded' : 'refused', hashBefore: null, hashAfter: null,
+                                        ...(result.errorCode ? { errorCode: result.errorCode } : {}), ...(result.error ? { error: result.error } : {}) };
+                                } });
+                        }
+                    }
+                    // Size the actual containing success reply, including all entries, hashes,
+                    // outcome and note receipt, before admitting the first filesystem effect.
+                    const projectedResponse = () => {
+                        const entries = prepared.map(item => item.result);
+                        const failure = entries.find(item => item.status === 'refused');
+                        return { success: !failure, entries, outcome: normalizeScmOperationOutcome({ success: !failure,
+                            ...(failure?.errorCode ? { errorCode: failure.errorCode } : {}) }),
+                            ...(failure?.errorCode ? { errorCode: failure.errorCode } : {}), ...(failure?.error ? { error: failure.error } : {}),
+                            ...(params.emitFileReviewNote ? { noteDelivery: { status: 'queued' } } : {}) };
+                    };
+                    const inlinePrevious = prepared.filter(item => item.result.previous && 'inlineBase64' in item.result.previous)
+                        .sort((a, b) => {
+                            const previousA = a.result.previous;
+                            const previousB = b.result.previous;
+                            return (previousB && 'inlineBase64' in previousB ? previousB.inlineBase64.length : 0)
+                                - (previousA && 'inlineBase64' in previousA ? previousA.inlineBase64.length : 0);
+                        });
+                    while (Buffer.byteLength(JSON.stringify(projectedResponse()), 'utf8') > DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES && inlinePrevious.length) {
+                        const item = inlinePrevious.shift()!;
+                        const previous = item.result.previous;
+                        if (!previous || !('inlineBase64' in previous)) continue;
+                        if (!params.prepareFileBytesExport) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
+                            error: 'Prepared Undo delivery is unavailable' };
+                        try {
+                            item.result.previous = { export: await params.prepareFileBytesExport({ bytes: Buffer.from(previous.inlineBase64, 'base64'),
+                                name: item.result.path.split(/[\\/]/).at(-1) || 'content', signal: context.signal }) };
+                        } catch { return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
+                            error: 'Prepared Undo delivery is unavailable' }; }
+                    }
+                    // Oversized inverse-unit delivery is blocked pending the approved
+                    // previous-export fallback. Never mutate without deliverable Undo.
+                    if (Buffer.byteLength(JSON.stringify(projectedResponse()), 'utf8') > DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES) {
+                        return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
+                            error: 'Prepared Undo delivery is unavailable' };
+                    }
+                    const entries: scm.ScmChangeDiscardResultEntry[] = [];
+                    for (const item of prepared) entries.push(await item.commit());
+                    const failure = entries.find(entry => entry.status === 'refused');
+                    return { success: !failure, entries, ...(failure?.errorCode ? { errorCode: failure.errorCode } : {}),
+                        ...(failure?.error ? { error: failure.error } : {}) };
+                },
             }));
+            if (params.emitFileReviewNote) {
+                const bySession = new Map<string, FileReviewNoteOperationV1[]>();
+                let noteDeliveryFailed = false;
+                for (const [index, entry] of request.entries.entries()) {
+                    const outcome = result.entries?.[index];
+                    if (outcome ? outcome.status === 'refused' || outcome.status === 'kept_edited' : !result.success) continue;
+                    const source = entry.kind === 'comparison' ? entry.against.source : undefined;
+                    const sessionId = (entry.kind === 'comparison' ? entry.against.sessionId : undefined)
+                        ?? (source && 'sessionId' in source ? source.sessionId : undefined)
+                        ?? params.sessionId ?? params.actionContext?.defaultSessionId;
+                    if (!sessionId) continue;
+                    if (entry.kind !== 'comparison') {
+                        if (headNoteEvidence.changedPaths === null) {
+                            // Missing note evidence cannot undo or replay the successful write.
+                            noteDeliveryFailed = true;
+                            continue;
+                        }
+                        if (!headNoteEvidence.changedPaths.some(changedPath => scmPathMatchesScopePath({ changedPath, scopePath: entry.path }))) continue;
+                    }
+                    const restore = entry.kind === 'comparison' && !entry.changeKeys && !entry.changeRefs;
+                    const count = entry.kind === 'comparison' ? (entry.changeKeys?.length ?? entry.changeRefs?.length) : undefined;
+                    const turnId = source?.kind === 'turnCheckpoint' ? source.turnId : undefined;
+                    const operations = bySession.get(sessionId) ?? [];
+                    const action = restore ? 'restore' : 'discard';
+                    const previous = operations.find(operation => operation.action === action && operation.turnId === turnId);
+                    if (previous) {
+                        previous.paths.push(entry.path);
+                        previous.changeCount = previous.changeCount === undefined || count === undefined
+                            ? undefined : previous.changeCount + count;
+                    } else {
+                        operations.push({ action, paths: [entry.path], ...(count !== undefined ? { changeCount: count } : {}),
+                            ...(turnId ? { turnId } : {}) });
+                    }
+                    bySession.set(sessionId, operations);
+                }
+                for (const [sessionId, operations] of bySession) {
+                    try {
+                        const normalized = operations.map(operation => ({ ...operation, paths: [...new Set(operation.paths)] }));
+                        const note: FileReviewNoteV1 = normalized.length === 1 ? normalized[0]! : { action: 'mixed', operations: normalized };
+                        await params.emitFileReviewNote({ sessionId, ...note });
+                    } catch {
+                        // A note transport failure must never replay an already successful file write.
+                        noteDeliveryFailed = true;
+                        logger.warn('[scm] File review note delivery failed after discard');
+                    }
+                }
+                if (bySession.size > 0 || noteDeliveryFailed) return { ...result, noteDelivery: { status: noteDeliveryFailed ? 'failed' as const : 'queued' as const } };
+            }
+            return result;
         }
         case 'scm.commit.create': {
             const request = params.input as scm.ScmCommitCreateRequest;

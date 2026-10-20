@@ -349,6 +349,7 @@ export function machineUpdateHandler(
                     ...(parsed.data.followSources ? { followSources: parsed.data.followSources } : {}),
                     ...(parsed.data.followRelations ? { followRelations: parsed.data.followRelations } : {}),
                     ...(parsed.data.followDeliveryV1 ? { followDeliveryV1: parsed.data.followDeliveryV1 } : {}),
+                    ...(parsed.data.nextTurnNote ? { nextTurnNote: parsed.data.nextTurnNote } : {}),
                     accountId: userId,
                     sourceMachineId,
                     targetMachineId: parsed.data.targetMachineId,
