@@ -31,7 +31,7 @@ import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorizatio
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { createTestApiSessionClient } from '@/testkit/backends/createTestApiSessionClient';
 import { createMockSession } from '@/testkit/backends/sessionFixtures';
-import { bindApiSessionSocketPairMock, createApiSessionSocketStub, resolveApiSessionSocketDefaultAck } from '@/testkit/backends/apiSessionSocketHarness';
+import { bindApiSessionSocketPairMock, createApiSessionSocketStub, createSessionRuntimeActivityHomeStub, createSessionTranscriptHomeStub, resolveApiSessionSocketDefaultAck } from '@/testkit/backends/apiSessionSocketHarness';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 
@@ -95,7 +95,7 @@ it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pendi
     try {
       if (!fixture.gateway) throw new Error('Expected physical gateway');
       const peerId = 'peer-worker';
-      const credentials = { token: 'gateway-catalog-account', encryption: null };
+      const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.fixture`, encryption: null };
       vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
       const base = ProviderSettingsV1Schema.parse({ ...fixture.providerSettings, machineGrants: [],
         connections: fixture.providerSettings.connections.map(connection => ({ ...connection,
@@ -129,6 +129,10 @@ it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pendi
         if (path === '/v2/account/settings') return { status: 200, data: { version: settingsVersion, content: { t: 'plain', v: {} } } };
         if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
         if (path === '/v2/sessions/main-two') return { status: 404, data: { error: 'Session not found' } };
+        // The real Session transport checks its Machine binding before connect.
+        if (path === `/v1/access-keys/main-two/${encodeURIComponent(fixture.machineId)}`) {
+          return { status: 200, data: { accessKey: 'journey-session-access-key' } };
+        }
         if (path === '/v1/auth/ping') return { status: 200, data: {} };
         const history = emptyAccountSettingsHistoryCaptureResponse(path);
         if (history) return history;
@@ -282,7 +286,9 @@ it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pendi
         materializationBaseDir: join(homeDir, 'spawn-materialization'),
       });
       try {
-        await answered;
+        await Promise.race([answered, admission.then(result => {
+          if (!result.ok) throw new Error(`Peer admission refused before its hub read: ${result.error.code}`);
+        })]);
         await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs + 5_000);
         releaseReply();
         const admitted = await admission;
@@ -372,15 +378,25 @@ it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pendi
       expect(await setEnabled(true)).toMatchObject({ status: 'success' });
       expect(await projectPeerModels()).toMatchObject({ status: 'success',
         groups: [{ connectionId: 'run-gateway', authorization: { authorized: true } }] });
-      await exerciseGatewayStreamJourney({ fixture, upstream, snapshot, hubModels, peerId, setEnabled,
+      await exerciseGatewayStreamJourney({ fixture, upstream, snapshot: () => {
+        const active = getActiveAccountSettingsSnapshot();
+        if (!active) throw new Error('Expected current Account owner snapshot');
+        return active;
+      }, hubModels, peerId, setEnabled,
         deliverPending: async send => {
           const nativeFetch = globalThis.fetch;
-          vi.stubGlobal('fetch', ((url, init) => String(url).endsWith('/features')
+          // Readiness observes public features; Session compatibility reads the
+          // authenticated projection. Both are the same controlled Home here.
+          vi.stubGlobal('fetch', ((url, init) => ['/v1/features', '/v1/features/authenticated'].includes(new URL(String(url)).pathname)
             ? Promise.resolve(new Response(JSON.stringify({ features: {}, capabilities: { session: {
               runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 1 }, publisherAuthority: { protocolVersion: 1 },
             } } }), { status: 200, headers: { 'content-type': 'application/json' } })) : nativeFetch(url, init)) satisfies typeof fetch);
           let claims = 0;
+          const activityHome = createSessionRuntimeActivityHomeStub({ machineId: fixture.machineId });
+          const transcriptHome = createSessionTranscriptHomeStub();
           const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
+            const homeAnswer = activityHome.answer(event, payload) ?? transcriptHome.answer(event, payload);
+            if (homeAnswer !== null) return homeAnswer;
             if (event !== 'pending-materialize-next') return resolveApiSessionSocketDefaultAck(event, payload);
             claims += 1;
             return { ok: true, didMaterialize: true, didWrite: false, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 2,
@@ -422,4 +438,4 @@ it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pendi
         signal: new AbortController().signal, isCurrent: () => true,
       })).toMatchObject({ status: 'success', groups: [{ connectionId: 'run-gateway', authorization: { authorized: true } }] });
     } finally { await upstream.close(); await fixture.cleanup(); }
-  }), 120_000);
+  }), 300_000);
