@@ -383,7 +383,7 @@ export async function startDaemonRuntimeBootstrap(
 export async function startDaemonConnectedServiceRuntime(
   params: Pick<StartDaemonRuntimeBootstrapParams,
     'activeServerDir' | 'api' | 'credentials' | 'machineId' | 'machineIdProvider' | 'runtimeId'
-    | 'happyHomeDir' | 'logger' | 'processEnv' | 'pidToTrackedSession'
+    | 'happyHomeDir' | 'logger' | 'processEnv' | 'pidToTrackedSession' | 'isDaemonQuiescing'
     | 'connectedServiceAuthGroupPreTurnSwitchCoordinator' | 'connectedServicePredictiveSwitchGuard'
     | 'connectedServiceQuotaFetcherDescriptors' | 'connectedServiceRuntimeQuotaSnapshots'
     | 'connectedServiceRuntimeRegistry' | 'consumeCommittedAuthGroupGeneration'

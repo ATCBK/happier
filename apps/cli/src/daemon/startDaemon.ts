@@ -225,10 +225,10 @@ import { createProviderBrokerMachineCarrierTunnelOpen } from './peer/iroh/provid
 import {
   applyDaemonHomeDescriptorRefresh,
   prepareDaemonHomeIrohTransport,
+  resolveCurrentDaemonHomeProfile,
   type DaemonHomeTransport,
 } from './peer/iroh/daemonHomeIrohTransport';
-import { resolveCliHomeTarget, resolveCurrentCliHomeTarget } from '@/server/homeTarget';
-import { getServerProfile } from '@/server/serverProfiles';
+import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import { createDaemonSessionMutationCustody } from './connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
 import { installPeerMediationObservabilityRuntimeActionContextProvider } from './peer/mediation/observability/runtimeActionContextProvider';
 import {
@@ -477,7 +477,6 @@ export async function startDaemon(
     }
     daemonLockHandle = credentialsGate.daemonLockHandle;
 
-    let homeTarget = await resolveCurrentCliHomeTarget();
     const bootstrapContext = await prepareDaemonBootstrapContext({
       daemonLockHandle,
       initialMachineMetadata,
@@ -509,10 +508,7 @@ export async function startDaemon(
         preparedIrohState.home = await prepareDaemonHomeIrohTransport({
           signal: homeTransportCancellation.signal,
           runtime: preparedIrohState.machine,
-          profile: homeTarget.profileId ? await getServerProfile(homeTarget.profileId) : {
-            serverUrl: homeTarget.canonicalAuthUrl,
-            ...(homeTarget.descriptor ? { homeConnectionDescriptor: homeTarget.descriptor } : {}),
-          },
+          profile: await resolveCurrentDaemonHomeProfile(),
           applicationCarrierEligibility,
           ...(persistedCredentials ? { token: persistedCredentials.token } : {}),
         });
@@ -536,9 +532,7 @@ export async function startDaemon(
     const api = bootstrapContext.api;
     // Authentication can establish a descriptor for a credential-seeded or
     // predecessor profile. Downstream owners consume that same persisted binding.
-    if (homeTarget.profileId) {
-      homeTarget = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: homeTarget.profileId });
-    }
+    const homeTarget = await resolveCurrentCliHomeTarget();
     // Missing/refused Project rows leave Project effects unavailable, while
     // unrelated daemon services remain usable with supported older Homes.
     await readProjectAccountRows({

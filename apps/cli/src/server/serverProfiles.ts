@@ -12,7 +12,6 @@ import { resolveHappyHomeDirFromEnvironment } from '@happier-dev/cli-common/agen
 import { observeServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { resolveAuthenticatedExactHomeConnectionDescriptorObservation } from '@/auth/terminalAuthEnrollmentClient';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
-import { configuration } from '@/configuration';
 
 function normalizeServerUrlForEnvId(url: string): string {
   return String(url ?? '').trim().replace(/\/+$/, '');
@@ -309,21 +308,18 @@ export async function refreshServerProfileHomeConnectionDescriptor(params: Reado
   token: string;
   signal?: AbortSignal;
 }>): Promise<'unavailable' | 'updated' | 'unchanged' | 'stale'> {
-  const profile = (await listServerProfiles()).find(profile => profile.id === params.profileId);
-  const isCurrentEnvScope = params.profileId === configuration.activeServerId;
-  if (!profile && !isCurrentEnvScope) throw new Error(`Server profile not found: ${params.profileId}`);
+  const profile = await getServerProfile(params.profileId);
   const snapshot = await observeServerFeaturesSnapshot({
     serverUrl: params.serverUrl, token: params.token, signal: params.signal,
   });
   const observation = resolveAuthenticatedExactHomeConnectionDescriptorObservation({
     snapshot,
-    expectedHomeServerIdentityId: profile?.homeConnectionDescriptor?.homeServerIdentityId
+    expectedHomeServerIdentityId: profile.homeConnectionDescriptor?.homeServerIdentityId
       ?? (snapshot.status === 'ready' ? snapshot.features.capabilities.serverIdentity.serverIdentityId ?? '' : ''),
   });
   if (observation.kind !== 'available') return 'unavailable';
   return (await adoptServerProfileHomeConnectionDescriptor({
-    descriptor: observation.descriptor, expectedProfileId: params.profileId, observation: 'exact',
-    createIfMissing: !profile, webappUrl: profile?.webappUrl ?? configuration.webappUrl,
+    descriptor: observation.descriptor, expectedProfileId: profile.id, observation: 'exact',
   })).outcome;
 }
 

@@ -113,6 +113,10 @@ describe('server profiles', () => {
       const id = configuration.activeServerId;
       await writeCredentialsTokenOnlyForServerId(id, { token: 'env-home-token' });
       const before = await readSettings();
+      const { resolveCurrentDaemonHomeProfile } = await import('@/daemon/peer/iroh/daemonHomeIrohTransport');
+      const profile = await resolveCurrentDaemonHomeProfile();
+      expect(profile.id).toBe(id);
+      expect(profile.homeConnectionDescriptor).toBeUndefined();
       const descriptor = { v: 1 as const, homeServerIdentityId: 'srv_env_home', canonicalServerUrl: serverUrl,
         revision: 1, endpoints: [{ kind: 'https' as const, url: serverUrl }] };
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},

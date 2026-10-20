@@ -22,8 +22,10 @@ import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 import { resolveServerProfileApiUrl } from '@/configuration/serverSelection';
 import { logger } from '@/ui/logger';
 import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
+import { configuration } from '@/configuration';
 import {
   getServerProfile,
+  setServerProfileEndpointsById,
   adoptServerProfileHomeConnectionDescriptor,
   refreshServerProfileHomeConnectionDescriptor,
   type ServerProfile,
@@ -66,6 +68,19 @@ class DaemonHomeReadinessError extends Error {
 }
 
 type DaemonHomeProfile = Pick<ServerProfile, 'serverUrl' | 'localServerUrl' | 'homeConnectionDescriptor' | 'homeConnectionDescriptorAuthority'> & Readonly<{ id?: string }>;
+
+/** Retain the invocation's URL-only metadata before transport starts reading it.
+ * Only authenticated publication may subsequently establish Home authority. */
+export async function resolveCurrentDaemonHomeProfile(): Promise<ServerProfile> {
+  const target = await resolveCurrentCliHomeTarget();
+  if (target.profileId) return await getServerProfile(target.profileId);
+  return await setServerProfileEndpointsById({
+    id: configuration.activeServerId,
+    serverUrl: target.canonicalAuthUrl,
+    localServerUrl: configuration.apiServerUrl,
+    webappUrl: configuration.webappUrl,
+  });
+}
 
 type PrepareDaemonHomeIrohTransportInput = Readonly<{
   runtime: DaemonMachineIrohRuntime | null;

@@ -4,13 +4,14 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
-import { addServerProfile, getServerProfile, isServerProfileHomeIdentity, useServerProfile } from '@/server/serverProfiles';
+import { addServerProfile, getServerProfile, isServerProfileHomeIdentity, removeServerProfile, useServerProfile } from '@/server/serverProfiles';
 import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 import {
   applyDaemonHomeDescriptorRefresh,
   prepareDaemonHomeIrohTransport,
+  resolveCurrentDaemonHomeProfile,
 } from './daemonHomeIrohTransport';
 
 const descriptor = {
@@ -22,6 +23,47 @@ const descriptor = {
 };
 
 describe('prepareDaemonHomeIrohTransport', () => {
+  it('reconnects an env scope before exact binding and fails closed after its profile is removed', async () => {
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL',
+      'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+    try {
+      await withTempDir('happier-daemon-env-reconnect-', async homeDir => {
+        envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: 'retained-env-scope',
+          HAPPIER_SERVER_URL: descriptor.canonicalServerUrl, HAPPIER_LOCAL_SERVER_URL: undefined,
+          HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
+        reloadConfiguration();
+        const id = configuration.activeServerId;
+        const exact = { ...descriptor, endpoints: [{ kind: 'https' as const, url: descriptor.canonicalServerUrl }] };
+        let available = false;
+        vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},
+          capabilities: { serverIdentity: { serverIdentityId: exact.homeServerIdentityId } },
+          ...(available ? { homeConnectionDescriptor: exact } : {}) })));
+        const profile = await resolveCurrentDaemonHomeProfile();
+        const transport = await prepareDaemonHomeIrohTransport({ runtime: null, profile,
+          applicationCarrierEligibility: 'standard_only', probe: async () => ({ status: 'ready' }) });
+        try {
+          await expect(transport.verifyAuthenticated('fixture-env-token')).resolves.toEqual({ status: 'ready' });
+          await expect(transport.reacquire()).resolves.toEqual({ status: 'ready' });
+          expect((await getServerProfile(id)).homeConnectionDescriptor).toBeUndefined();
+          available = true;
+          await expect(transport.reacquire()).resolves.toEqual({ status: 'ready' });
+          await expect(transport.verifyAuthenticated('fixture-env-token')).resolves.toEqual({ status: 'ready' });
+          expect((await getServerProfile(id)).homeConnectionDescriptor).toEqual(exact);
+          expect((await resolveCurrentCliHomeTarget()).homeServerIdentityId).toBe(exact.homeServerIdentityId);
+          await expect(transport.reacquire()).resolves.toEqual({ status: 'ready' });
+          await removeServerProfile(id);
+          await expect(transport.reacquire()).resolves.toMatchObject({ status: 'auth_failed' });
+        } finally {
+          await transport.release();
+        }
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      envScope.restore();
+      reloadConfiguration();
+    }
+  });
+
   it.each([true, false])('binds a fresh daemon through its authenticated tunnel (publication initially available: %s)', async initiallyAvailable => {
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL',
       'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
@@ -71,7 +113,7 @@ describe('prepareDaemonHomeIrohTransport', () => {
     }
   });
 
-  it('does not attach an env-only daemon Home descriptor to the focused profile or manufacture a saved profile', async () => {
+  it('ignores passive descriptor refresh for an unbound env target without changing the focused profile', async () => {
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL',
       'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
     try {
