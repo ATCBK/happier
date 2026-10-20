@@ -13,4 +13,15 @@ describe('host MCP launch policy', () => {
     expect(projectMcpToolLaunchPolicies(input)).toBeUndefined();
     expect(projectMcpToolLaunchPolicies({ ...input, control: { off: 'hidden', approval: 'native' } })).toEqual({ docs_2: { unlisted: 'allow', tools: { read: 'allow', write: 'off' } } });
   });
+  it.each([
+    { permissionMode: 'default' as const, unlisted: 'ask' },
+    { permissionMode: 'yolo' as const, unlisted: 'allow' },
+    { permissionMode: 'read-only' as const, unlisted: 'deny' },
+  ])('uses canonical defaults for an admitted plugin with no settings in $permissionMode', ({ permissionMode, unlisted }) => {
+    expect(projectMcpToolLaunchPolicies({ catalog: { v: 1, servers: [], bindings: [] }, permissionMode,
+      control: { off: 'hidden', approval: 'native' }, mcpServerIdentities: {
+        plugin: { serverId: 'plugin:acme.tools/docs', serverTitle: 'Docs', plugin: { pluginId: 'acme.tools', localId: 'docs' } },
+        missing: { serverId: 'missing-user-server', serverTitle: 'Missing' },
+      } })).toEqual({ plugin: { unlisted, tools: {} }, missing: { unlisted: 'deny', tools: {} } });
+  });
 });

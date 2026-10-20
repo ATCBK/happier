@@ -12,7 +12,7 @@ export function projectMcpToolLaunchPolicies(input: Readonly<{
   return Object.fromEntries(Object.entries(input.mcpServerIdentities).filter(([key]) => key !== 'happier').map(([key, identity]) => {
     const server = servers.get(identity.serverId);
     const settings = identity.plugin ? input.catalog.pluginServers?.[identity.serverId] : server;
-    const projected = settings || server ? projectMcpToolLaunchPolicyV1({ policy: settings?.tools, snapshot: settings?.toolsSnapshot, permissionMode: input.permissionMode })
+    const projected = identity.plugin || server ? projectMcpToolLaunchPolicyV1({ policy: settings?.tools, snapshot: settings?.toolsSnapshot, permissionMode: input.permissionMode })
       : { unlisted: 'deny' as const, tools: {} };
     const policy = input.control?.approval === 'host' ? {
       unlisted: projected.unlisted === 'allow' ? 'ask' as const : projected.unlisted,
