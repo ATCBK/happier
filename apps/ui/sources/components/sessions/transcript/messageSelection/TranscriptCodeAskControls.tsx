@@ -48,7 +48,7 @@ export function TranscriptCodeAskControls(
     Platform.OS === 'web' ? props.sessionId : '',
     props.serverId,
   );
-  if (Platform.OS !== 'web' || !workspaceScope) return null;
+  if (Platform.OS !== 'web' || typeof document === 'undefined' || !workspaceScope) return null;
   return (
     <TranscriptCodeAskControlsContent
       {...props}

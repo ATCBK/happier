@@ -1670,6 +1670,9 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.variant('meta'),
     alignSelf: 'stretch',
     marginHorizontal: theme.space.s16,
+    // The tag belongs to the bubble under it: the gap above (clear of the previous turn's meta row) is
+    // wider than the one between tag and bubble.
+    marginTop: theme.space.s12,
     marginBottom: theme.space.s4,
     color: theme.colors.text.secondary,
     textAlign: 'right',
@@ -1678,6 +1681,7 @@ const styles = StyleSheet.create((theme) => ({
     alignSelf: 'stretch',
     alignItems: 'flex-end',
     paddingHorizontal: theme.space.s16,
+    marginTop: theme.space.s12,
     marginBottom: theme.space.s4,
   },
   workflowProvenanceInline: {
