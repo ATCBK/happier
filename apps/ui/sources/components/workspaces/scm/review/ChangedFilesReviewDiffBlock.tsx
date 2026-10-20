@@ -1,9 +1,7 @@
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
-import { Modal } from '@/modal';
 import type { CodeLinesExternalScrollView } from '@/components/ui/code/view/CodeLinesViewCore';
 import * as React from 'react';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
-import { Image, Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -21,7 +19,8 @@ import { resolveInlineDiffVirtualizedMaxHeight } from '@/components/ui/code/diff
 import { resolveInlineDiffVirtualizedViewportStyle } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedViewportStyle';
 
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
-import { useFilePreviewSource } from '@/components/ui/media/useFilePreviewSource';
+import { useFilePreviewSource, type UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
+import { ReviewImageCompare, type ReviewImageCompareInput } from './ReviewImageCompare';
 import { buildWorkspacePreviewIdentity } from '@/components/ui/media/buildWorkspacePreviewIdentity';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
@@ -60,6 +59,8 @@ export type ChangedFilesReviewDiffBlockProps = Readonly<{
     /** Edge to edge under the file header, without the inset rounded frame (the comparison stream). */
     flat?: boolean;
     evidenceOnly?: boolean;
+    /** Before/after facts for a changed image (Review wells); absent shows the current picture alone. */
+    imageCompare?: ReviewImageCompareInput | null;
     hunkNotes?: Readonly<{
         placement: 'column' | 'inline';
         columnWidth: number;
@@ -105,6 +106,7 @@ function areChangedFilesReviewDiffBlockPropsEqual(
         || prev.onReviewCommentError !== next.onReviewCommentError
         || prev.flat !== next.flat
         || prev.evidenceOnly !== next.evidenceOnly
+        || prev.imageCompare !== next.imageCompare
         || prev.hunkNotes !== next.hunkNotes
     ) {
         return false;
@@ -231,14 +233,21 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     const fileIsBinary = fileViewer.kind !== 'code' && fileViewer.kind !== 'markdown' && fileViewer.kind !== 'svg';
     const fileIsImage = fileViewer.kind === 'image' || fileViewer.kind === 'svg';
 
-    const imagePreview = useFilePreviewSource({
+    const imagePreviewInput: UseFilePreviewSourceInput = {
         source: props.workspaceScope ? { kind: 'workspace', scope: props.workspaceScope, filePath }
             : { kind: 'session', sessionId, filePath },
         ...(props.workspaceScope ? buildWorkspacePreviewIdentity(props.workspaceScope, filePath, null, snapshotSignature)
             : { cacheKey: snapshotSignature }),
         mimeType: fileViewer.mimeType,
         enabled: props.evidenceOnly !== true && diffLoaded && !state.diff && fileIsImage,
-    });
+    };
+    const imagePreview = useFilePreviewSource(imagePreviewInput);
+    const svgPreviewInput: UseFilePreviewSourceInput = { ...imagePreviewInput, enabled: props.evidenceOnly !== true && diffLoaded && fileViewer.kind === 'svg' };
+    // An SVG change reads as pictures and as text (lab files RV1v).
+    const svgPictures = fileViewer.kind === 'svg' && props.workspaceScope && props.evidenceOnly !== true ? (
+        <ReviewImageCompare scope={props.workspaceScope} filePath={filePath} viewer={fileViewer}
+            compare={props.imageCompare ?? null} after={svgPreviewInput} signature={snapshotSignature} testID="scm-review-svg-preview" />
+    ) : null;
 
     const wrapLines = useSetting('wrapLinesInDiffs');
     const showLineNumbers = useSetting('showLineNumbers');
@@ -321,41 +330,18 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                 );
             }
 
-            if (imagePreview.status === 'loaded') {
+            if (imagePreview.status === 'loaded' && props.workspaceScope) {
                 return (
-                    <View testID={blockTestId} style={[{ paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, gap: theme.space.s10 }, noOverflowAnchor]}>
-                        <HappierPressable
+                    <View testID={blockTestId} style={noOverflowAnchor}>
+                        <ReviewImageCompare
+                            scope={props.workspaceScope}
+                            filePath={filePath}
+                            viewer={fileViewer}
+                            compare={props.imageCompare ?? null}
+                            after={imagePreviewInput}
+                            signature={snapshotSignature}
                             testID="scm-review-image-preview"
-                            accessibilityRole="button"
-                            accessibilityLabel={`${t('common.open')}: ${filePath}`}
-                            onPress={async () => {
-                                const { AttachmentImagePreviewModal } = await import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal');
-                                Modal.show({
-                                    component: AttachmentImagePreviewModal,
-                                    props: { images: [{ kind: 'session-image', sessionId, workspaceScope: props.workspaceScope, filePath, title: filePath }] },
-                                });
-                            }}
-                            style={{
-                                width: '100%',
-                                maxWidth: 860,
-                                height: 280,
-                                borderRadius: 12,
-                                overflow: 'hidden',
-                                borderWidth: 1,
-                                borderColor: theme.colors.border.default,
-                                backgroundColor: theme.colors.surface.inset ?? theme.colors.surface.base,
-                            }}
-                        >
-                            <Image
-                                source={{ uri: imagePreview.uri }}
-                                resizeMode="contain"
-                                style={{ width: '100%', height: '100%' }}
-                                accessibilityLabel={t('files.binaryFile')}
-                            />
-                        </HappierPressable>
-                        <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
-                            {t('files.binaryFile')}
-                        </Text>
+                        />
                     </View>
                 );
             }
@@ -393,6 +379,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     if (props.reviewCommentsEnabled) {
         return (
             <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 }, noOverflowAnchor, noteColumnStyle]}>
+            {svgPictures}
                 <DiffReviewCommentsViewer
                     findActive={props.findActive}
                     findRangesByLineId={findRangesByLineId}
@@ -418,6 +405,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
 
     return (
             <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 }, noOverflowAnchor, noteColumnStyle]}>
+            {svgPictures}
             <View style={[props.flat ? FLAT_DIFF_FRAME_STYLE : { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border.default }, diffContainerStyle]}>
                 <DiffViewer
                     findActive={props.findActive}
