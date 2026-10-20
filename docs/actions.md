@@ -10,6 +10,44 @@ This page describes the platform's owners and its admission vocabulary. The publ
 contract lives in [api.md](api.md#external-action-api-developer-preview-source-contract); the CLI
 host is in [cli-architecture.md](cli-architecture.md#action-derived-command-arguments).
 
+The unreleased Files & Editor work adds workspace replace preview/apply and SCM
+blame intents through this same catalog. Preview and blame are safe reads;
+replace is a danger Action with the normal agent approval default. A present
+user applying the reviewed replacement uses `uiConfirmation: 'direct'` with
+present-user confirmation. Result custody remains distinct from prompting.
+The replace Action accepts a matcher and reviewed file hashes; it exposes no
+restore operation. Undo is the UI's hash-guarded RPC affordance, with exact
+inverse-text validation. The generated Action reference owns the exact schemas
+and surface inventory; this development contract does not imply release or
+completed surface validation.
+
+The same unreleased review work extends `scm.diffSummary.reviewed.mark` and
+`scm.diffSummary.reviewed.unmark` with live source/content-key selectors; Keep
+only changes the Account's reviewed marks, never the index. Captured occurrence
+selectors remain accepted and resolve through the same content identity owner.
+`scm.change.discard` is the existing danger Action, not a separate hunk Action;
+its comparison arm supplies guarded per-change or whole-file restoration and
+Undo data. A present person's reversible Discard uses direct confirmation while
+automated callers retain normal approval. Selection Ask reuses the existing
+composer transaction and Run draft owners; it seeds a draft, never sends a
+question automatically. See [SCM comparison ownership](scm-diff-summary.md) for
+scope, result deletion and mark persistence. Rendered integration and generated
+surface projections are separate from these development-source contracts.
+
+The unreleased 0.3 editor work adds `file.editor.save` and
+`file.editor.resolve` through the existing scope Action family. They address the
+answering client's mounted editor, optionally by `tabId`; an absent owner is
+`unavailable`, not a request to open or load a file. Save reports `saved`,
+`clean`, `conflict` or `unavailable`. Resolve accepts `useMine`, `useTheirs` or
+`discardDraft` and reports `resolved` or `unavailable`. Automated callers keep
+the normal approval default. The filesystem write Action remains a danger
+Action, with `uiConfirmation: 'direct'` for a present user's Save; explicit
+per-Action approval settings still apply. Inline and upload saves carry the same
+raw-byte `expectedHash` to the shared guarded replacement owner. Use mine writes
+against the shown disk hash and Undo is guarded too. These are development
+integration contracts, not a release or live-validation claim; [file editor
+ownership](file-editor.md) describes the state, draft and write boundaries.
+
 In 0.3 development source, Session-targeted Actions declare their operational
 operand and one/many cardinality through `sessionTarget`. The shared
 `sessionTargetV1` schema normalizes shorthand and object intent; the executor's
@@ -2222,7 +2260,10 @@ receipt.
 
 Create-directory, rename, delete and copy reuse the filesystem-policy and
 mutation owners; destructive effects retain configurable dangerous-Action
-approval (Ask first by default). Newer semantic RPC carriers refuse unsupported
+approval. Rename admits the present user's UI request directly, while Agent,
+MCP and CLI requests retain Ask first by default; an explicit Settings → Actions
+requirement still applies to the UI. Delete retains its confirmation.
+Newer semantic RPC carriers refuse unsupported
 older daemons instead of delivering rooted instructions to an older handler
 that ignores the root. Retained incumbent RPC names translate their released input
 at that same owner and still enforce its filesystem authority.
@@ -2248,6 +2289,13 @@ interpreted as permission to read or write a local filesystem path.
 Save As and clipboard placement remain client-local effects. The Action layer
 admits and references the existing transfer lifecycle, while the requester-owned
 driver keeps byte custody, destination finalization and cleanup.
+
+The File page's **Open in default app** is also a present-user, client-local
+effect and is deliberately excluded from Actions. It hands a downloaded file to
+the person's operating-system handler, which can execute that file; an agent
+has no default application on that device. This exclusion does not change
+`daemon.filesystem.download` admission or expose an Action for launching the
+operating-system handler.
 
 Target copy addresses both exact Homes, Machines and roots. The original
 Account-client driver admits source and destination independently with their
@@ -2582,6 +2630,21 @@ shortcuts. Set, step and close use public editor actions. Its read projection
 returns the last host-known query/options with `status: 'unavailable'` and
 `unavailable: 'engineOwned'` for counts; native widget edits and counters are not
 available through Monaco's public API.
+
+### Code navigation (0.3 development source)
+
+`code.definition.get` and `code.references.list` are safe, read-only navigation
+Actions in unreleased 0.3 source, using the existing workspace content-search owner.
+Definition lookup searches declaration forms for the symbol's name; references
+are text matches of that name. These results are search candidates, not
+compiler-resolved definitions or semantic references. They inherit workspace
+search's authorization, exclusions, partial coverage and unavailable outcomes.
+
+The fallback has no language-server process to install or restart. It adds no
+semantic hover, diagnostics or Problems Action. The active-file syntax outline
+is a separate client-side search source; it does not establish semantic symbol
+identity. See [Search](search.md#code-navigation-and-document-symbols-03-development-source)
+for the shared search path and its limits.
 
 ### Next pending request (development)
 
@@ -3320,6 +3383,16 @@ cannot authorize an identical-tree skip; the factual reviewed fingerprint remain
 available in the reviewer result.
 
 ## Client configuration controls (0.3 development source)
+
+`shell.column.get/set` operate on the answering client's mounted column owners. The optional
+`column` selects `navigation` (the existing default), `main` or `side`. Main visibility is the
+inverse of the scope's persisted `mainHidden`; a host must supply its main-column descriptor to
+offer this control. A side-panel set can also supply a registered `tab` id, including plugin tabs,
+which selects and opens that panel. Missing mounted owners and unavailable controls retain their
+typed unavailable results. The family remains a reversible view operation with its existing
+default approval policy; user Action settings can still require approval. Arrangement is the
+declared `appearance.paneArrangement` setting through `settings.get/set`, not another Action family.
+See [App shell panes](app-shell-panes.md) for visibility and layout ownership.
 
 Client-placed Actions operate on the answering client's current owners, not an
 arbitrary remote window. In 0.3 development, an admitted Agent, MCP or other
@@ -4153,7 +4226,9 @@ the Session's machine, named by its chip; a request that names another machine o
 refusal (`computer_machine_mismatch`) and there is no cross-machine path in the UI. The computer
 owner refuses a different machine id (`computer_machine_mismatch`). `daemon.computer.actions.execute`
 remains person-side only; it has no agent variant.
-The registry permits only one Session to own an exact physical native target at a time.
+The registry permits only one Session to own overlapping native input targets at a time:
+a display conflicts with windows on that display, while distinct background windows
+can remain independently selected.
 Another Session's selection returns `computer_target_in_use`, including while the previous
 owner drains. Confirmed close releases ownership; an unconfirmed close remains quarantined.
 Consent and model media remain Session-scoped rather than shared across those Sessions.
@@ -4192,7 +4267,7 @@ Window listing reports the pinned driver's app display name. Present-user listin
 also include a Session-free PNG thumbnail; agent listing never captures or returns preview
 pixels. The development driver also lists the native logical primary desktop when
 `get_screen_size` returns validated dimensions, reporting `displays: { status: 'available' }`.
-This is not a physical-monitor catalog: pinned native 0.31.0 supplies no additional display
+This is not a physical-monitor catalog: the pinned native driver supplies no additional display
 identities or negative-origin display geometry. An unavailable producer retains
 `display_enumeration_unsupported`. Enumeration never selects a source. Whole-desktop
 selection uses the existing see/use approval policy; its presentation must disclose
@@ -4204,6 +4279,11 @@ shape and label redaction. Input results carry the same `targetLabel` when known
 typed text nor accessibility values supply presentation labels. The pinned Linux driver
 does not identify the focused accessibility node, so keyboard activity omits a target
 name and cursor rather than guessing from a preceding click.
+The status Action also reads current OS grants from the retained native driver;
+ordinary control refresh does not request thumbnails. An uncertain, quarantined
+source still reports its control status without claiming a fresh grant read.
+Capture-permission loss disables viewing and input but preserves the selected
+share and Stop sharing until the daemon confirms retirement.
 
 The first consequential action follows the ordinary approval owner's policy, including its
 bypass semantics. Selecting a target is independent of approval: bypass without a selection
@@ -4236,7 +4316,7 @@ a dangerous physical mutation. Hand back is safe too, and never relaxes fresh ob
 `computer.permissions.openSettings` is a present-user machine action: on macOS the daemon
 launches the relevant Screen Recording or Accessibility Privacy pane, returning `dispatched`
 only after the OS launch succeeds. This neither grants permission nor proves the pane is
-visible. The development executor uses the same installed native 0.31.0 driver for
+visible. The development executor uses the same installed pinned native driver for
 Linux/X11 windows and the logical primary desktop, with macOS codecs beneath that owner.
 macOS Screen Recording and Accessibility are checked independently; capture-only window
 capture omits the Accessibility tree, does not grant input, and denied/unknown grants
@@ -4247,11 +4327,15 @@ viewer frames use the existing separate read-only native process and cannot repl
 model binding. Unknown physical completion remains quarantined, never retried.
 An explicit target reselection retires that source only after the old native
 process has actually exited, then acquires a new source and requires its fresh
-observation; it does not replay the unknown input. Window clicks use the same
-host-side origin and dimension currentness checks as keyboard input. This is
-not an atomic native origin guarantee. The pinned native pre-effect
-`capture_target_mismatch` refusal remains known; generic tool failures do not
-prove nondelivery.
+observation; it does not replay the unknown input. Window clicks retain host-side
+origin and dimension currentness checks. Viewer keys and text use the same input
+controller and exact-target native delivery without a screenshot/accessibility
+observation per key; they do not replace the model's capture binding. Hand-back
+still requires a fresh agent observation. Pointer checks are not an atomic native
+origin guarantee. Proven native capture-admission refusals retain their typed
+reason and allow a fresh observation without retiring the source. The pinned
+`browser_field_needs_keystrokes` refusal likewise remains known; it does not
+authorize foreground escalation. Generic tool failures do not prove nondelivery.
 Physical macOS permission/input certification and loaded picker/disclosure UI validation
 remain separate evidence. Windows and Wayland executors remain unsupported.
 The native contract does not establish exact confidential focus/field delivery:
