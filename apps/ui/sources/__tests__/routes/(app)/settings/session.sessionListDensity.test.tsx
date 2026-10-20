@@ -143,6 +143,21 @@ afterEach(async () => {
 });
 
 describe('Session settings session list density', () => {
+    it('persists all background-work attention choices through the declared setting', async () => {
+        const mod = await import('../../../../app/(app)/settings/session');
+        const screen = await renderSettingsView(React.createElement(mod.default));
+        const dropdown = () => screen.findAllByType(DropdownMenu).find(node =>
+            node.props.itemTrigger?.itemProps?.testID === 'settings-session-backgroundWorkAttentionMode-trigger');
+        expect(dropdown()).toBeTruthy();
+        expect(dropdown()!.props.selectedId).toBe('keepWorking');
+        expect(dropdown()!.props.items.map((item: { id: string }) => item.id)).toEqual(['keepWorking', 'keepWorkingUnread', 'showUnread']);
+        for (const value of ['keepWorkingUnread', 'showUnread', 'keepWorking'] as const) {
+            await act(async () => { dropdown()!.props.onSelect(value); });
+            await expectPersistedSettings({ sessionListBackgroundWorkAttentionModeV1: value });
+            expect(dropdown()!.props.selectedId).toBe(value);
+        }
+    });
+
     it('defaults to the narrow density option and updates only the canonical density setting', async () => {
         const mod = await import('../../../../app/(app)/settings/session');
         const SessionSettingsScreen = mod.default;

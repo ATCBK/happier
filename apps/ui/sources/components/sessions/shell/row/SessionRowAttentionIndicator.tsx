@@ -15,12 +15,17 @@ import type {
 /** Fills the indicator's 16 px slot, so the working mark reads at the scale of the row's agent icons. */
 const WORKING_SPINNER_SIZE = 16;
 
-const stylesheet = StyleSheet.create(() => ({
+const stylesheet = StyleSheet.create((theme) => ({
     container: {
         width: 16,
         height: 16,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    unreadMarker: {
+        position: 'absolute',
+        top: -theme.space.s2,
+        right: -theme.space.s2,
     },
     stateContainer: {
         width: 16,
@@ -53,6 +58,7 @@ export const SessionRowAttentionIndicator = React.memo(function SessionRowAttent
     indicator: SessionRowAttentionIndicatorKind;
     sessionId: string;
     attentionState: SessionRowAttentionState;
+    hasUnreadMessages?: boolean;
     workingMode?: 'spinner' | 'pulse';
     animationEnabled?: boolean;
 }>) {
@@ -100,6 +106,17 @@ export const SessionRowAttentionIndicator = React.memo(function SessionRowAttent
                     />
                 )}
             </View>
+            {props.indicator === 'working' && props.hasUnreadMessages === true ? (
+                <View style={stylesheet.unreadMarker}>
+                    <StatusDot
+                        testID={`session-row-unread-indicator-${props.sessionId}`}
+                        color={workStatusGlyphColor(theme.colors, INDICATOR_TONE.unread)}
+                        size={6}
+                        isPulsing={false}
+                        animationEnabled={false}
+                    />
+                </View>
+            ) : null}
         </View>
     );
 });

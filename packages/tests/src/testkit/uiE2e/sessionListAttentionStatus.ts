@@ -31,7 +31,8 @@ export const sessionListAttentionTestIds = {
   workingPlacementModeTrigger: 'settings-session-workingPlacementMode-trigger',
   workingStatusAnimatedTextToggle: 'settings-session-workingStatusAnimatedText-toggle',
   densityOption: (density: 'narrow' | 'cozy') => `dropdown-option-${density}`,
-  placementOption: (placement: 'global') => `dropdown-option-${placement}`,
+  settingOption: (option: string) => `dropdown-option-${option}`,
+  backgroundWorkAttentionModeTrigger: 'settings-session-backgroundWorkAttentionMode-trigger',
 } as const;
 
 export type SeededAttentionSession = Readonly<{
@@ -244,15 +245,16 @@ export async function chooseSessionListDensity(params: Readonly<{
   await params.page.getByTestId(sessionListAttentionTestIds.densityOption(params.density)).click();
 }
 
-export async function chooseSessionListPlacementMode(params: Readonly<{
+export async function chooseSessionListSettingOption(params: Readonly<{
   page: Page;
   baseUrl: string;
   triggerTestId: string;
+  option?: 'global' | 'keepWorking' | 'keepWorkingUnread' | 'showUnread';
 }>): Promise<void> {
   await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/settings/session?happier_hmr=0`, 180_000);
   await expect(params.page.getByTestId(params.triggerTestId)).toHaveCount(1, { timeout: 60_000 });
   await params.page.getByTestId(params.triggerTestId).click();
-  await params.page.getByTestId(sessionListAttentionTestIds.placementOption('global')).click();
+  await params.page.getByTestId(sessionListAttentionTestIds.settingOption(params.option ?? 'global')).click();
 }
 
 async function readToggleChecked(page: Page, testId: string): Promise<boolean> {
@@ -351,4 +353,27 @@ export async function expectRowNotInSection(params: Readonly<{
     }),
     { timeout: 60_000 },
   ).toBe(true);
+}
+
+export async function publishRuntimeActivity(params: Readonly<{
+  socket: SocketCollector;
+  sessionId: string;
+  snapshot: Readonly<{ state: 'active' | 'idle'; activeCount: number }>;
+}>): Promise<void> {
+  const ack = await params.socket.emitWithAck<{ status?: string }>('session-runtime-activity-snapshot', {
+    sessionId: params.sessionId,
+    mutationId: `runtime-activity-${randomUUID()}`,
+    snapshot: params.snapshot,
+  });
+  if (ack?.status !== 'applied' && ack?.status !== 'unchanged') {
+    throw new Error(`Runtime activity snapshot was not applied (status=${String(ack?.status)})`);
+  }
+}
+
+
+export function startPresenceKeepAlive(socket: SocketCollector, sessionId: string): () => void {
+  const timer = setInterval(() => {
+    socket.emit('session-alive', { sid: sessionId, time: Date.now(), thinking: false });
+  }, 10_000);
+  return () => clearInterval(timer);
 }

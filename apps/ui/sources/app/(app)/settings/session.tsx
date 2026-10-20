@@ -27,6 +27,7 @@ import {
 } from '@/components/sessions/shell/sessionListViewOptionsPresentation';
 import { useSessionListViewOptionWriter } from '@/components/sessions/shell/useSessionListViewOptionWriter';
 import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { normalizeSessionListBackgroundWorkAttentionMode } from '@/sync/domains/session/listing/sessionListBackgroundWorkAttention';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSessionListLayoutChoice } from '@/hooks/session/sessionListLayoutIntent';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -51,6 +52,7 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
     const [sessionHeaderIdentityDisplay, setSessionHeaderIdentityDisplay] = useSettingMutable('sessionHeaderIdentityDisplay');
     const [sessionListActiveColorMode, setSessionListActiveColorMode] = useSettingMutable('sessionListActiveColorModeV1');
     const [sessionListAttentionPromotionMode] = useSettingMutable('sessionListAttentionPromotionModeV1');
+    const [sessionListBackgroundWorkAttentionMode] = useSettingMutable('sessionListBackgroundWorkAttentionModeV1');
     const [sessionReminderAutoClearOnOpen, setSessionReminderAutoClearOnOpen] = useSettingMutable('sessionReminderAutoClearOnOpen');
     const [sessionListAttentionStandingDefault, setSessionListAttentionStandingDefault] = useSettingMutable('sessionListAttentionStandingDefaultV1');
     const [sessionListWorkingPlacementMode] = useSettingMutable('sessionListWorkingPlacementModeV1');
@@ -80,6 +82,7 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
     const [openSessionHeaderIdentityDisplayMenu, setOpenSessionHeaderIdentityDisplayMenu] = React.useState(false);
     const [openSessionListActiveColorModeMenu, setOpenSessionListActiveColorModeMenu] = React.useState(false);
     const [openSessionListAttentionPromotionModeMenu, setOpenSessionListAttentionPromotionModeMenu] = React.useState(false);
+    const [openSessionListBackgroundWorkAttentionModeMenu, setOpenSessionListBackgroundWorkAttentionModeMenu] = React.useState(false);
     const [openSessionListWorkingPlacementModeMenu, setOpenSessionListWorkingPlacementModeMenu] = React.useState(false);
     const [openSessionListOrderingModeMenu, setOpenSessionListOrderingModeMenu] = React.useState(false);
     const [openSessionFolderDisplayMenu, setOpenSessionFolderDisplayMenu] = React.useState(false);
@@ -261,6 +264,28 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
     const handleSessionListAttentionPromotionModeSelect = React.useCallback((itemId: string) => {
         applySessionListViewOption(itemId);
     }, [applySessionListViewOption]);
+
+    const normalizedSessionListBackgroundWorkAttentionMode = normalizeSessionListBackgroundWorkAttentionMode(sessionListBackgroundWorkAttentionMode);
+    const sessionListBackgroundWorkAttentionModeItems = React.useMemo(() => [
+        {
+            id: 'keepWorking',
+            title: t('settingsSession.sessionList.backgroundWorkAttentionKeepWorkingTitle'),
+            subtitle: t('settingsSession.sessionList.backgroundWorkAttentionKeepWorkingSubtitle'),
+        },
+        {
+            id: 'keepWorkingUnread',
+            title: t('settingsSession.sessionList.backgroundWorkAttentionKeepWorkingUnreadTitle'),
+            subtitle: t('settingsSession.sessionList.backgroundWorkAttentionKeepWorkingUnreadSubtitle'),
+        },
+        {
+            id: 'showUnread',
+            title: t('settingsSession.sessionList.backgroundWorkAttentionShowUnreadTitle'),
+            subtitle: t('settingsSession.sessionList.backgroundWorkAttentionShowUnreadSubtitle'),
+        },
+    ], [preferredLanguage]);
+    const handleSessionListBackgroundWorkAttentionModeSelect = React.useCallback((itemId: string) => {
+        void setSetting(SESSION_SETTINGS.settings.backgroundWorkAttention, normalizeSessionListBackgroundWorkAttentionMode(itemId));
+    }, [setSetting]);
 
     const sessionListWorkingPlacementModeItems = sessionListViewOptions.workingItems;
     const normalizedSessionListWorkingPlacementMode = sessionListViewOptions.selectedWorkingPlacement;
@@ -767,6 +792,28 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
                         }}
                         items={sessionListAttentionPromotionModeItems}
                         onSelect={handleSessionListAttentionPromotionModeSelect}
+                    />
+                </SettingAnchor>
+                <SettingAnchor setting={SESSION_SETTINGS.settings.backgroundWorkAttention}>
+                    <DropdownMenu
+                        open={openSessionListBackgroundWorkAttentionModeMenu}
+                        onOpenChange={setOpenSessionListBackgroundWorkAttentionModeMenu}
+                        variant="selectable"
+                        search={false}
+                        selectedId={normalizedSessionListBackgroundWorkAttentionMode}
+                        showCategoryTitles={false}
+                        matchTriggerWidth={true}
+                        connectToTrigger={true}
+                        rowKind="item"
+                        popoverBoundaryRef={popoverBoundaryRef}
+                        itemTrigger={{
+                            title: t(SESSION_SETTINGS.settings.backgroundWorkAttention.titleKey),
+                            subtitle: t('settingsSession.sessionList.backgroundWorkAttentionModeSubtitle'),
+                            showSelectedSubtitle: false,
+                            itemProps: { testID: 'settings-session-backgroundWorkAttentionMode-trigger' },
+                        }}
+                        items={sessionListBackgroundWorkAttentionModeItems}
+                        onSelect={handleSessionListBackgroundWorkAttentionModeSelect}
                     />
                 </SettingAnchor>
                 <SettingAnchor setting={SESSION_SETTINGS.settings.reminderAutoClearOnOpen}>

@@ -1,3 +1,5 @@
+import type { SocketCollector } from '../../src/testkit/socketClient';
+import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 import { expect, test } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 
@@ -8,10 +10,12 @@ import { createRunDirs } from '../../src/testkit/runDir';
 import {
   anySessionAttentionIndicator,
   chooseSessionListDensity,
-  chooseSessionListPlacementMode,
+  chooseSessionListSettingOption,
   connectAuthenticatedSessionPublisher,
   expectRowInSection,
   expectRowNotInSection,
+  publishRuntimeActivity,
+  startPresenceKeepAlive,
   seedAttentionSession,
   seedReadyMarker,
   sessionListAttentionTestIds,
@@ -200,8 +204,8 @@ test.describe('ui e2e: session list attention status', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
     await waitForInitialAppUi({ page, timeoutMs: 180_000 });
-    await chooseSessionListPlacementMode({ page, baseUrl: uiBaseUrl, triggerTestId: sessionListAttentionTestIds.attentionPromotionModeTrigger });
-    await chooseSessionListPlacementMode({ page, baseUrl: uiBaseUrl, triggerTestId: sessionListAttentionTestIds.workingPlacementModeTrigger });
+    await chooseSessionListSettingOption({ page, baseUrl: uiBaseUrl, triggerTestId: sessionListAttentionTestIds.attentionPromotionModeTrigger });
+    await chooseSessionListSettingOption({ page, baseUrl: uiBaseUrl, triggerTestId: sessionListAttentionTestIds.workingPlacementModeTrigger });
     await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'narrow' });
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
 
@@ -238,4 +242,96 @@ test.describe('ui e2e: session list attention status', () => {
       livePublisher.close();
     }
   });
+  test('presents background replies through all three attention modes and returns to Working once read', async ({ page }) => {
+    test.setTimeout(240_000);
+    if (!server || !token || !uiBaseUrl) throw new Error('missing session list attention fixtures');
+
+    const session = await seedAttentionSession({
+      baseUrl: server.baseUrl,
+      token,
+      title: 'Background reply attention modes',
+    });
+    const browserDiagnostics = collectBrowserDiagnostics({ page });
+    let publisher: SocketCollector | null = null;
+    let stopKeepAlive: (() => void) | null = null;
+    try {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
+      await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+      await chooseSessionListSettingOption({
+        page,
+        baseUrl: uiBaseUrl,
+        triggerTestId: sessionListAttentionTestIds.attentionPromotionModeTrigger,
+        option: 'global',
+      });
+      await chooseSessionListSettingOption({
+        page,
+        baseUrl: uiBaseUrl,
+        triggerTestId: sessionListAttentionTestIds.workingPlacementModeTrigger,
+        option: 'global',
+      });
+      await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'cozy' });
+      await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+      await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+      await expect(sessionRow(page, session.id)).toHaveCount(1, { timeout: 120_000 });
+
+      publisher = await connectAuthenticatedSessionPublisher({
+        baseUrl: server.baseUrl,
+        token,
+        sessionId: session.id,
+        thinking: false,
+      });
+      stopKeepAlive = startPresenceKeepAlive(publisher, session.id);
+      await publishRuntimeActivity({ socket: publisher, sessionId: session.id, snapshot: { state: 'active', activeCount: 1 } });
+      await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: session.id });
+      await updateSessionRuntimeStatus({
+        baseUrl: server.baseUrl,
+        token,
+        sessionId: session.id,
+        latestTurnStatus: 'completed',
+      });
+
+      for (const mode of ['keepWorking', 'keepWorkingUnread', 'showUnread'] as const) {
+        await chooseSessionListSettingOption({
+          page, baseUrl: uiBaseUrl,
+          triggerTestId: sessionListAttentionTestIds.backgroundWorkAttentionModeTrigger,
+          option: mode,
+        });
+        await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+        await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: session.id });
+        await expectRowInSection({
+          page,
+          headerTestId: mode === 'showUnread' ? sessionListAttentionTestIds.attentionHeader : sessionListAttentionTestIds.workingHeader,
+          sessionId: session.id,
+        });
+        await expect(page.getByTestId(sessionListAttentionTestIds.secondaryReadyIndicator(session.id))).toHaveCount(0);
+        const spinner = page.getByTestId(`session-row-attention-indicator-spinner-${session.id}-secondary`);
+        if (mode === 'keepWorking') {
+          await expect(spinner).toHaveCount(1);
+          await expect(page.getByTestId(`session-row-unread-indicator-${session.id}-secondary`)).toHaveCount(1);
+        } else {
+          await expect(spinner).toHaveCount(0);
+          await expect(page.getByTestId(`session-list-attention-indicator-${session.id}-secondary-unread`)).toHaveCount(1);
+        }
+        await sessionRow(page, session.id).click();
+        await expectRowInSection({ page, headerTestId: sessionListAttentionTestIds.workingHeader, sessionId: session.id });
+        await expect(spinner).toHaveCount(1);
+        await expect(page.getByTestId(`session-row-unread-indicator-${session.id}-secondary`)).toHaveCount(0);
+      }
+      // A new unread completed reply becomes ready only after reported work settles.
+      await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+      await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: session.id });
+      await publishRuntimeActivity({ socket: publisher, sessionId: session.id, snapshot: { state: 'idle', activeCount: 0 } });
+      await expectRowInSection({ page, headerTestId: sessionListAttentionTestIds.attentionHeader, sessionId: session.id });
+      await expect(page.getByTestId(sessionListAttentionTestIds.secondaryReadyIndicator(session.id))).toHaveCount(1);
+
+    } catch (error) {
+      throw appendBrowserDiagnostics(error, browserDiagnostics().replaceAll(token, '[redacted]'));
+    } finally {
+      stopKeepAlive?.();
+      publisher?.close();
+    }
+  });
+
+
 });

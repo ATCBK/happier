@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { createSessionItemRowViewModel } from './sessionItemRowViewModelTestFixture';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
@@ -12,6 +12,7 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 
 const NOW_MS = 1_700_000_000_000;
 const routerPush = vi.hoisted(() => vi.fn());
+const rowPreferences = vi.hoisted(() => ({ backgroundWorkAttentionMode: 'keepWorking' as 'keepWorking' | 'keepWorkingUnread' | 'showUnread' }));
 
 /**
  * The row's state vocabulary, as the reader hears it. Keyed exactly as the canonical `status`
@@ -72,8 +73,9 @@ installSessionShellCommonModuleMocks({
         });
     },
     storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        const { createStorageModuleStub, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
+            useSetting: createUseSettingMock({ fallback: (key) => key === 'sessionListBackgroundWorkAttentionModeV1' ? rowPreferences.backgroundWorkAttentionMode : undefined }),
             useHasUnreadMessages: () => false,
             useSession: () => null,
             useLocalSetting: ((_key: string) => null) as never,
@@ -188,7 +190,87 @@ describe('SessionItem outer row accessible semantics', () => {
     afterEach(() => {
         vi.useRealTimers();
         routerPush.mockReset();
+        rowPreferences.backgroundWorkAttentionMode = 'keepWorking';
         standardCleanup();
+    });
+
+    it.each(['default', 'minimal'] as const)('shows and announces background work plus unread across every preference in %s density', async (density) => {
+        for (const mode of ['keepWorking', 'keepWorkingUnread', 'showUnread'] as const) {
+            rowPreferences.backgroundWorkAttentionMode = mode;
+            const id = `background-unread-${mode}-${density}`;
+            const { screen } = await renderRow({
+                testCase: { label: 'background unread', session: {
+                    latestTurnStatus: 'completed', latestTurnStatusObservedAt: NOW_MS,
+                    runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+                    runtimeActivityObservedAt: NOW_MS, runtimeActivityRevision: 1,
+                }, hasUnreadMessages: true, spoken: null },
+                id, density, secondaryLineMode: 'status',
+            });
+            const row = readOuterRow(screen, id);
+            expect(String(row.props.accessibilityLabel)).toContain('Unread');
+            expect(String(row.props.accessibilityLabel)).toMatch(/background/i);
+            expect(String(row.props.accessibilityLabel)).not.toMatch(/ready for review/i);
+            expect(row.props.accessibilityState.busy).toBe(true);
+            const suffix = density === 'minimal' ? 'trailing' : 'secondary';
+            if (mode === 'keepWorking') {
+                expect(screen.findByTestId(`session-row-attention-indicator-spinner-${id}-${suffix}`)).toBeTruthy();
+                expect(screen.findByTestId(`session-row-unread-indicator-${id}-${suffix}`)).toBeTruthy();
+            } else {
+                expect(screen.findByTestId(`session-row-attention-indicator-dot-${id}-${suffix}`)).toBeTruthy();
+            }
+            standardCleanup();
+        }
+    });
+
+    it.each(['keepWorking', 'keepWorkingUnread', 'showUnread'] as const)('preserves a modern viewer unseen reply cue with raw unread false in %s until read', async (mode) => {
+        rowPreferences.backgroundWorkAttentionMode = mode;
+        const { getSessionStatus } = await import('@/utils/sessions/sessionUtils');
+        const viewer = createSessionViewerFixture({
+            readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
+            attention: { needsAttention: true, reasons: ['ready_after_read'], primary: 'ready_after_read', presentation: 'full' },
+        });
+        const id = `modern-reply-${mode}`;
+        const session = createRowSession({ viewer, latestTurnStatus: 'completed', latestTurnStatusObservedAt: NOW_MS,
+            latestReadyEventSeq: 4, runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+            runtimeActivityObservedAt: NOW_MS, runtimeActivityRevision: 1 }, id);
+        const element = (current: Session) => <SessionItem session={current} compact compactMinimal
+            rowViewModel={createSessionItemRowViewModel({ session: current, overrides: {
+                sessionStatus: getSessionStatus(current, NOW_MS, { workingTextMode: 'static' }),
+                hasUnreadMessages: false, secondaryLineMode: 'status',
+            } })} />;
+        const screen = await renderScreen(element(session));
+        expect(readOuterRow(screen, id).props.accessibilityLabel).toContain('Unread');
+        expect(readOuterRow(screen, id).props.accessibilityLabel).toMatch(/background/i);
+        expect(readOuterRow(screen, id).props.accessibilityLabel).not.toMatch(/ready for review/i);
+        if (mode === 'keepWorking') {
+            expect(screen.findByTestId(`session-row-unread-indicator-${id}-trailing`)).toBeTruthy();
+            expect(screen.findByTestId(`session-row-attention-indicator-spinner-${id}-trailing`)).toBeTruthy();
+        } else {
+            expect(screen.findByTestId(`session-row-attention-indicator-dot-${id}-trailing`)).toBeTruthy();
+        }
+        const readViewer = createSessionViewerFixture({
+            readState: { state: 'tracking', lastViewedSessionSeq: 4, unreadSince: null },
+        });
+        await screen.update(element({ ...session, seq: 4, viewer: readViewer }));
+        expect(readOuterRow(screen, id).props.accessibilityLabel).not.toContain('Unread');
+        expect(readOuterRow(screen, id).props.accessibilityLabel).toMatch(/background/i);
+        expect(screen.findByTestId(`session-row-unread-indicator-${id}-trailing`)).toBeNull();
+        expect(screen.findByTestId(`session-row-attention-indicator-spinner-${id}-trailing`)).toBeTruthy();
+        expect(session.viewer).toBe(viewer);
+        expect(viewer.attention.primary).toBe('ready_after_read');
+    });
+
+    it('keeps the modern viewer ready label when no background work remains', async () => {
+        const { screen } = await renderRow({ id: 'modern-ready-settled', density: 'minimal', secondaryLineMode: 'status',
+            testCase: { label: 'ready', spoken: null, hasUnreadMessages: false, session: {
+                latestTurnStatus: 'completed', latestTurnStatusObservedAt: NOW_MS, latestReadyEventSeq: 4,
+                runtimeActivityState: 'idle', runtimeActivityActiveCount: 0,
+                viewer: createSessionViewerFixture({ readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
+                    attention: { needsAttention: true, reasons: ['ready_after_read'], primary: 'ready_after_read', presentation: 'full' } }),
+            } },
+        });
+        expect(readOuterRow(screen, 'modern-ready-settled').props.accessibilityLabel).toContain('ready for review');
+        expect(screen.findByTestId('session-row-unread-indicator-modern-ready-settled-trailing')).toBeNull();
     });
 
     it('keeps reports disclosure independent of Session navigation', async () => {

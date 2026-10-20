@@ -24,6 +24,29 @@ For linked **Direct** sessions, Happier can also use provider-observed direct-se
 
 Unread state appears in the session list, Inbox, and other attention surfaces.
 
+## Unread replies while work continues
+
+In 0.3 development source, sessions with continuing background work stay **Working** by default, even
+when the foreground turn has ended with an unread reply. The row keeps an unread indication alongside
+its working status. Reading the reply clears that indication without moving the session between
+Working and Needs attention.
+
+**Settings → Session → Unread replies during background work** offers three choices:
+
+- **Keep working status**: keep the working indicator and show a separate unread mark.
+- **Show unread status in Working**: keep the session in Working, with unread as its main indicator
+  until you read it.
+- **Move unread sessions to Needs attention**: temporarily promote the session until you read it,
+  then return it to Working if background work continues.
+
+None of these choices labels continuing background work Ready for review. This preference follows
+your account across devices.
+
+Permission requests, requests for your input, and failures retain their attention treatment in every
+mode. **Ready for review** becomes available after a completed turn has no remaining reported
+background work; it does not certify that the requested changes are correct or complete.
+
+
 ## Where to find the actions
 
 You can change a session's read state from the same places you manage other session actions:

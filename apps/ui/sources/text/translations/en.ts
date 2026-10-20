@@ -14093,6 +14093,14 @@ const enSettingsSession = {
       'Allow folders and sessions to keep an exact shared order.',
     folderSortModeMixedDisabledInDateModeSubtitle:
       'Mixed folder order is available in Custom order.',
+    backgroundWorkAttentionModeTitle: "Unread replies during background work",
+    backgroundWorkAttentionModeSubtitle: "Choose where unread replies appear while background work continues. Requests for you still need attention.",
+    backgroundWorkAttentionKeepWorkingTitle: "Keep working status",
+    backgroundWorkAttentionKeepWorkingSubtitle: "Keep the working status and a separate unread mark while background work continues",
+    backgroundWorkAttentionKeepWorkingUnreadTitle: "Show unread status in Working",
+    backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Keep sessions in Working and show unread status until you read the reply",
+    backgroundWorkAttentionShowUnreadTitle: "Move unread sessions to Needs attention",
+    backgroundWorkAttentionShowUnreadSubtitle: "Move sessions with unread replies to Needs attention while background work continues",
     attentionPromotionModeTitle: 'Sessions needing attention',
     attentionPromotionModeSubtitle:
       'Choose where sessions waiting for you or ready to review appear',

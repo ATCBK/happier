@@ -46,6 +46,7 @@ import { useWorkspaceOpenActions } from '@/components/appShell/workspace/useWork
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { t } from '@/text';
+import { hasSessionListUnreadAttention, normalizeSessionListBackgroundWorkAttentionMode } from '@/sync/domains/session/listing/sessionListBackgroundWorkAttention';
 import {
     resolveSessionListAttentionState,
     type SessionListSecondaryLineMode,
@@ -123,6 +124,7 @@ import {
 import {
     storage,
     useLocalSetting,
+    useSetting,
 } from '@/sync/domains/state/storage';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
@@ -1306,6 +1308,12 @@ const SessionItemContent = React.memo(
             setContextMenuOpen(true);
         }, [clearContextMenuPressInTimer, enableLongPressContextMenu, setContextMenuOpen]);
 
+        const backgroundWorkAttentionMode = normalizeSessionListBackgroundWorkAttentionMode(useSetting('sessionListBackgroundWorkAttentionModeV1'));
+        const rowHasBackgroundWork = sessionStatus.state === 'background_active';
+        const rowHasUnreadAttention = hasUnreadMessages || (rowHasBackgroundWork && hasSessionListUnreadAttention({
+            hasUnreadMessages,
+            personalAttentionReason: resolvedSession.viewer?.attention.primary,
+        }));
         const pendingCount = resolvedSession.pendingCount ?? 0;
         const pendingBlockedCount = resolvedSession.pendingBlockedCount ?? 0;
         const pendingBadge = formatPendingCountBadge(pendingCount);
@@ -1321,6 +1329,8 @@ const SessionItemContent = React.memo(
             operational: sessionStatus.awareness.operational.primary,
             hasUnreadMessages,
             personalAttentionReason: resolvedSession.viewer?.attention.primary ?? null,
+            backgroundActive: rowHasBackgroundWork,
+            backgroundWorkAttentionMode,
         }));
         // Retention controls placement only. It cannot turn quiet, unread, or pending facts into
         // semantic work after the canonical awareness owner stopped reporting work.
@@ -1336,7 +1346,7 @@ const SessionItemContent = React.memo(
             requestedSecondaryLineMode,
             hasPathSubtitle: Boolean(rowContextSubtitle),
             standing: attentionStanding === true,
-            backgroundActive: sessionStatus.state === 'background_active',
+            backgroundActive: rowHasBackgroundWork,
         });
         const statusAttentionState = rowAttentionState;
         const statusAttentionIndicator = rowPresentation.attentionIndicator;
@@ -1391,7 +1401,7 @@ const SessionItemContent = React.memo(
         // from accessibility, so whenever the row draws a state without writing a sentence for it
         // — every minimal row, and unread/queued-input rows in any density — the canonical row
         // presentation owner supplies the words instead of this component inferring them.
-        const rowAttentionAccessibilityLabel = workflowLifecycle !== undefined && !statusAvailabilityNeedsExplanation
+        const primaryAttentionAccessibilityLabel = workflowLifecycle !== undefined && !statusAvailabilityNeedsExplanation
             ? statusLineText
             : statusAvailabilityNeedsExplanation
             ? statusLineText
@@ -1406,6 +1416,10 @@ const SessionItemContent = React.memo(
                         : rowPresentation.accessibilityStatusTextKey
                             ? t(rowPresentation.accessibilityStatusTextKey)
                             : undefined;
+        const rowAttentionAccessibilityLabel = rowHasBackgroundWork && rowHasUnreadAttention
+            ? `${statusLineText}, ${t(rowAttentionState === 'mentioned' ? 'status.mentioned' : 'status.unread')}`
+            : primaryAttentionAccessibilityLabel;
+        const rowIsWorking = statusAttentionState === 'working' || rowHasBackgroundWork;
         const normalizedReportsDepth = Math.min(Math.max(Math.trunc(reportsDepth ?? 0), 0), 3);
         const reportsCollapsed = reportsDisclosure === 'collapsed';
         const liveReportCount = readSessionLiveManagedSessionCountV1(resolvedSession.managedSessions);
@@ -1557,10 +1571,10 @@ const SessionItemContent = React.memo(
                         accessibilityLabel={rowAccessibilityLabel}
                         accessibilityState={{
                             selected: Boolean(selected || rowSelection.isSelected),
-                            busy: statusAttentionState === 'working',
+                            busy: rowIsWorking,
                         }}
                         aria-pressed={Platform.OS === 'web' ? Boolean(selected || rowSelection.isSelected) : undefined}
-                        aria-busy={Platform.OS === 'web' ? statusAttentionState === 'working' : undefined}
+                        aria-busy={Platform.OS === 'web' ? rowIsWorking : undefined}
                         accessibilityActions={rowAccessibilityActions}
                         onAccessibilityAction={rowAccessibilityActions.length > 0 ? handleRowAccessibilityAction : undefined}
                         android_ripple={Platform.OS === 'android' ? {
@@ -1716,6 +1730,7 @@ const SessionItemContent = React.memo(
                                             indicator={statusAttentionIndicator}
                                             sessionId={`${resolvedSession.id}-secondary`}
                                             attentionState={statusAttentionState}
+                                            hasUnreadMessages={rowHasUnreadAttention}
                                             workingMode={workingIndicatorMode}
                                             animationEnabled={attentionIndicatorAnimationEnabled}
                                         />
@@ -1906,6 +1921,7 @@ const SessionItemContent = React.memo(
                                     indicator={trailingAttentionIndicator}
                                     sessionId={`${resolvedSession.id}-trailing`}
                                     attentionState={statusAttentionState}
+                                    hasUnreadMessages={rowHasUnreadAttention}
                                     workingMode={workingIndicatorMode}
                                     animationEnabled={attentionIndicatorAnimationEnabled}
                                 />

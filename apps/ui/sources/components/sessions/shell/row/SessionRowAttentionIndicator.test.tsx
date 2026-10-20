@@ -41,6 +41,14 @@ describe('SessionRowAttentionIndicator', () => {
         expect(screen.findByTestId('session-row-attention-indicator-spinner-sess_working')).toBeTruthy();
     });
 
+    it('keeps unread visible beside the working marker without a second accessible element', async () => {
+        const screen = await renderScreen(<SessionRowAttentionIndicator indicator="working" attentionState="working"
+            sessionId="background-unread" hasUnreadMessages animationEnabled={false} />);
+        expect(screen.findByTestId('session-row-attention-indicator-spinner-background-unread')).toBeTruthy();
+        expect(screen.findByTestId('session-row-unread-indicator-background-unread')).toBeTruthy();
+        expect(screen.findByTestId('session-row-attention-indicator-background-unread')?.props.accessible).toBe(false);
+    });
+
     it('draws the working spinner at 16 px so it reads beside the row\'s agent icons', async () => {
         const screen = await renderScreen(
             <SessionRowAttentionIndicator

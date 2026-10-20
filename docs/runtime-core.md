@@ -11,6 +11,17 @@ existing source-timestamp and Message revision owner. It does not reopen the
 completed turn or admit another input. Unknown calls, foreign threads and
 duplicate completions cannot introduce another tool effect.
 
+Session awareness keeps a completed foreground Turn separate from continuing background work.
+`projectSessionAwarenessOperationalV1` suppresses operational readiness while the runtime still
+reports background activity; `readSessionAwarenessWorkStatusV1` maps that activity to Working.
+The Session-list presentation owner composes these facts with the Account's
+`sessionListBackgroundWorkAttentionModeV1`: keep the working indicator with an unread mark
+(default), show unread status within Working, or temporarily move unread replies to Needs
+attention. Reading returns the latter two to working presentation while work continues.
+This preference never changes the Protocol-owned personal attention, read cursor, Follow or
+access facts. Legacy owner rows translate their existing completion/read evidence before
+using the same presentation policy.
+
 Session capability edits converge through the host's
 [`capabilitySelectionSynchronizer`](../apps/cli/src/agent/runtime/capabilitySelectionSynchronizer.ts).
 It observes the canonical desired selection and applied metadata baselines plus
