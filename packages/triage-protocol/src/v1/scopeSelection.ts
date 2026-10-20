@@ -11,9 +11,9 @@ import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 } from './bounds.js';
 import { TriageSourceFailureV1Schema } from './diagnostics.js';
 import { TriageCollisionScopeV1ProtocolSchema, TriageTextV1ProtocolSchema } from './identity.js';
 import {
-    TriageSourceInstanceDraftV1Schema,
-    TriageSourceConnectedAccountInstanceDraftV1Schema,
-    TriageSourceCredentialInstanceDraftV1Schema,
+    TriageSourceScopeContextV1Schema,
+    TriageSourceConnectedAccountScopeContextV1Schema,
+    TriageSourceCredentialScopeContextV1Schema,
 } from './instances.js';
 import { TriageScanContinuationV1Schema } from './observations.js';
 import { defineTriageSingleLineStringV1 } from './strings.js';
@@ -58,9 +58,9 @@ function listScopeUnitsInput<I, O>(draft: ProtocolComposableSchema<I, O>) {
     }, { policy: 'closed' });
 }
 
-export const TriageListScopeUnitsInputV1Schema = listScopeUnitsInput(TriageSourceInstanceDraftV1Schema);
-export const TriageListScopeUnitsConnectedAccountInputV1Schema = listScopeUnitsInput(TriageSourceConnectedAccountInstanceDraftV1Schema);
-export const TriageListScopeUnitsCredentialInputV1Schema = listScopeUnitsInput(TriageSourceCredentialInstanceDraftV1Schema);
+export const TriageListScopeUnitsInputV1Schema = listScopeUnitsInput(TriageSourceScopeContextV1Schema);
+export const TriageListScopeUnitsConnectedAccountInputV1Schema = listScopeUnitsInput(TriageSourceConnectedAccountScopeContextV1Schema);
+export const TriageListScopeUnitsCredentialInputV1Schema = listScopeUnitsInput(TriageSourceCredentialScopeContextV1Schema);
 export type TriageListScopeUnitsInputV1 = ReturnType<typeof TriageListScopeUnitsInputV1Schema.parse>;
 
 const pageFields = {

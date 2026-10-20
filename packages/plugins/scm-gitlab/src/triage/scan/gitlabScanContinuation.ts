@@ -35,6 +35,8 @@ import {
   type GitlabStickyWalkReason,
 } from '../mapping/gitlabInvolvement.js';
 import type { GitlabConfiguredOrigin } from '../origin.js';
+import { buildGitlabApiUrl } from '../http/gitlabClient.js';
+import { isGitlabPageWithinResource } from '../http/gitlabLink.js';
 import { deriveGitlabNativePageSize } from './gitlabScanFrontier.js';
 import type { GitlabLaneFrontier, GitlabScanFrontier } from './gitlabScanFrontier.js';
 
@@ -211,13 +213,14 @@ function readLanes(
     // `Link` header would be. A token is untrusted input: without this it could aim
     // the binding's credential at another host and answer the user's list from it.
     const nextUrl = admitForgeRequestUrl(record.nextUrl, input.origin.normalized);
-    if (nextUrl === null) return null;
+    const resourceUrl = buildGitlabApiUrl(input.origin, request.path);
+    if (nextUrl === null || !isGitlabPageWithinResource(nextUrl, resourceUrl)) return null;
     const rawProbe = readRecord(record.cycleProbe);
     if (rawProbe === null || !hasExactKeys(rawProbe, CYCLE_PROBE_KEYS)) return null;
     const cycleProbe = readCursorCycleProbeV1(rawProbe);
     if (cycleProbe === null) return null;
     const admittedProbeCursor = admitForgeRequestUrl(cycleProbe.cursor, input.origin.normalized);
-    if (admittedProbeCursor === null) return null;
+    if (admittedProbeCursor === null || !isGitlabPageWithinResource(admittedProbeCursor, resourceUrl)) return null;
     lanes.push({
       request,
       nextUrl,

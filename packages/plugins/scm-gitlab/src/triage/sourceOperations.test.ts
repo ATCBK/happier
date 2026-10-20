@@ -1,5 +1,6 @@
 import {
   TriageGetResultV1Schema,
+  TriageListScopeUnitsResultV1Schema,
   TriageScanResultV1Schema,
   type TriageConfiguredSourceInstanceV1,
   type TriageEntryLocatorV1,
@@ -123,6 +124,44 @@ function harness(
 
 type ScanSeam = ReturnType<typeof harness>;
 
+it('searches projects on the exact self-managed base and keeps pagination bound to that directory', async () => {
+  const seam = harness({});
+  const requested: string[] = [];
+  const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+    connectedAccounts: seam.connectedAccounts,
+    http: { request: async ({ url }) => {
+      requested.push(url);
+      const parsed = new URL(url);
+      expect(parsed.pathname).toBe('/Corp/GitLab/api/v4/projects');
+      expect(parsed.searchParams.get('search')).toBe('platform');
+      const second = parsed.searchParams.get('page') === '2';
+      const next = new URL(parsed); next.searchParams.set('page', '2');
+      const headers: Readonly<Record<string, string>> = second ? {} : { link: `<${next}>; rel="next"` };
+      return { status: 200, headers, body: new TextEncoder().encode(JSON.stringify([
+        { id: second ? 22 : 11, path_with_namespace: second ? 'platform/api' : 'platform/app', name: second ? 'API' : 'App' },
+      ])) };
+    } },
+  } });
+  const draft = { v: 1, binding: { purpose: GITLAB_CONNECTED_ACCOUNT_PURPOSE, account: ACCOUNT },
+    localInstanceKey: SELF_MANAGED_BASE, keyStability: 'locatorDerived',
+    configuration: { v: 1, token: '{"v":1}' }, locator: { v: 1, displayLabel: 'Self-managed account' } };
+  try {
+    const first = TriageListScopeUnitsResultV1Schema.parse(await plugin.invokeAction('triage/list-gitlab-scope-units', {
+      v: 1, draft, query: 'platform',
+    }, { surface: 'agent', sessionId: 'directory-session' }));
+    expect(first).toMatchObject({ kind: 'page', status: 'partial', units: [{ id: '11', label: 'platform/app' }] });
+    if (first.kind !== 'page' || first.status !== 'partial' || first.nextCursor === undefined) throw new Error('Expected directory continuation');
+    expect(await plugin.invokeAction('triage/list-gitlab-scope-units', {
+      v: 1, draft, query: 'platform', cursor: first.nextCursor,
+    }, { surface: 'agent', sessionId: 'directory-session' })).toMatchObject({ kind: 'page', status: 'complete', units: [{ id: '22' }] });
+    const count = requested.length;
+    expect(await plugin.invokeAction('triage/list-gitlab-scope-units', {
+      v: 1, draft, query: 'different query', cursor: first.nextCursor,
+    }, { surface: 'agent', sessionId: 'directory-session' })).toMatchObject({ kind: 'failed', failure: { class: 'unsupportedContract' } });
+    expect(requested).toHaveLength(count);
+  } finally { await plugin.dispose(); }
+});
+
 it('projects configured GitLab projects through its admitted Action without credential or provider reads', async () => {
   const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
   const selection = { kind: 'selected', unitIds: ['11', '22'] };
@@ -149,7 +188,7 @@ it('scans every selected GitLab project through project-scoped provider lanes', 
   } });
   let page: TriageScanInputV1['page'] = { kind: 'initial', limit: 64 };
   for (let step = 0; step < 4; step += 1) {
-    const result = TriageScanResultV1Schema.parse(await scanGitlabTriageSource({
+    const result: TriageScanResultV1 = TriageScanResultV1Schema.parse(await scanGitlabTriageSource({
       scan: { v: 1, instance, page }, connectedAccounts: seam.connectedAccounts,
       fetcher: seam.fetcher, signal: new AbortController().signal, nowMs: NOW_MS,
     }));

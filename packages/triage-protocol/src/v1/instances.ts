@@ -159,13 +159,22 @@ export const TriageSourceInstanceDraftV1Schema = defineProtocolObject({
     ...triageSourceInstanceDraftFieldsV1,
     binding: TriageSourceAccountBindingV1Schema,
 }, { policy: 'closed' });
-/** Credential specializations for the source's read-only scope listing Action. */
-export const TriageSourceConnectedAccountInstanceDraftV1Schema = defineProtocolObject({
+/** A read-only listing needs retained authority/configuration, not discovery metadata. */
+const triageSourceScopeContextFieldsV1 = {
     ...triageSourceInstanceDraftFieldsV1,
+    keyStability: TriageSourceInstanceKeyStabilityV1ProtocolSchema.optional(),
+    locator: TriageSourceInstanceLocatorV1Schema.optional(),
+};
+export const TriageSourceScopeContextV1Schema = defineProtocolObject({
+    ...triageSourceScopeContextFieldsV1,
+    binding: TriageSourceAccountBindingV1Schema,
+}, { policy: 'closed' });
+export const TriageSourceConnectedAccountScopeContextV1Schema = defineProtocolObject({
+    ...triageSourceScopeContextFieldsV1,
     binding: TriageSourceConnectedAccountBindingV1Schema,
 }, { policy: 'closed' });
-export const TriageSourceCredentialInstanceDraftV1Schema = defineProtocolObject({
-    ...triageSourceInstanceDraftFieldsV1,
+export const TriageSourceCredentialScopeContextV1Schema = defineProtocolObject({
+    ...triageSourceScopeContextFieldsV1,
     binding: TriageSourceCredentialBindingV1Schema,
 }, { policy: 'closed' });
 export type TriageSourceInstanceDraftV1 = ReturnType<

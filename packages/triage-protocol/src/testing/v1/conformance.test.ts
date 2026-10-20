@@ -1,4 +1,5 @@
 import { definePlugin } from '@happier-dev/plugin-sdk';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import type { ProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
 import { describe, expect, it } from 'vitest';
 
@@ -8,6 +9,7 @@ import {
     TriageListInstancesResultV1Schema,
     TriageScanInputV1Schema,
     TriageGetInputV1Schema,
+    TriageListScopeUnitsResultV1Schema,
 } from '../../v1/index.js';
 import {
     assertTriageSourceContributionV1,
@@ -71,7 +73,7 @@ function declareAction(
     };
 }
 
-function createExternalSourceManifest(listInstancesResult: ProtocolJsonValue = fixture.listInstancesResult) {
+function createExternalSourceDefinition(listInstancesResult: ProtocolJsonValue = fixture.listInstancesResult) {
     return definePlugin({
         id: 'example.forge-source',
         version: '1.0.0',
@@ -118,7 +120,11 @@ function createExternalSourceManifest(listInstancesResult: ProtocolJsonValue = f
                 },
             },
         },
-    }).manifest;
+    });
+}
+
+function createExternalSourceManifest(listInstancesResult: ProtocolJsonValue = fixture.listInstancesResult) {
+    return createExternalSourceDefinition(listInstancesResult).manifest;
 }
 
 function mutableManifest(): MutableSourceManifest {
@@ -126,6 +132,17 @@ function mutableManifest(): MutableSourceManifest {
 }
 
 describe('Triage sources V1 contribution conformance', () => {
+    it('invokes a separately authored scope-listing Action through real public registration and agent admission', async () => {
+        const definition = createExternalSourceDefinition();
+        const plugin = await createPluginTestkit({ manifest: definition.manifest, module: { activate: definition.activate } });
+        try {
+            const result = TriageListScopeUnitsResultV1Schema.parse(await plugin.invokeAction(ACTION_IDS.listScopeUnits, {
+                v: 1, draft: fixture.listInstancesResult.candidates[0], mode: 'configured',
+            }, { surface: 'agent', sessionId: 'external-source-selection' }));
+            expect(result).toMatchObject({ kind: 'page', status: 'complete', selection: { kind: 'all' },
+                units: [{ id: 'project-1', label: 'Project one' }] });
+        } finally { await plugin.dispose(); }
+    });
     it('accepts a public, external-style source with arbitrary local Action ids', () => {
         expect(() => assertTriageSourceContributionV1(createExternalSourceManifest())).not.toThrow();
     });

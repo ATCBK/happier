@@ -38,6 +38,16 @@ export type GitlabNextPageSelection =
   /** GitLab issued a `next` this invocation may not follow, so the lane stops unfinished. */
   | Readonly<{ kind: 'refused' }>;
 
+/** A native page may advance inside its resource, never into another project. */
+export function isGitlabPageWithinResource(candidate: string, resourceUrl: string): boolean {
+  try {
+    const url = new URL(candidate);
+    const resource = new URL(resourceUrl);
+    return url.origin === resource.origin && url.pathname === resource.pathname
+      && url.username === '' && url.password === '' && url.hash === '';
+  } catch { return false; }
+}
+
 /**
  * Returns the provider-issued next-page URL, verbatim, only when it addresses the
  * exact origin this invocation was authorized against. A cross-origin `Link` is

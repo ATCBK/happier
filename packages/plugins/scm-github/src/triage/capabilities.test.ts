@@ -5,6 +5,7 @@ import { projectGithubRepositoryCapabilities } from './capabilities.js';
 const readable = {
   kind: 'readable' as const,
   repositoryId: '4210',
+  repositoryKey: 'octo-org/example-app',
   mergeSettings: { merge: true, squash: false, rebase: null },
   archived: false,
   hasIssues: true,

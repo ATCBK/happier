@@ -83,10 +83,14 @@ describe('the mounted GitHub PRs & Issues settings page', () => {
     });
     const units = [{ id: '11', label: 'org/app', collisionScope: 'github:11' }, { id: '22', label: 'org/api', collisionScope: 'github:22' }];
     let saved = draft;
+    let directoryAvailable = true;
     const administrations: unknown[] = [];
     const handler = async ({ action, input }: Readonly<{ action: unknown; input: unknown }>): Promise<JsonValue> => {
       const ref = action as Readonly<{ localId?: string }>;
       if (ref.localId === GITHUB_TRIAGE_ACTION_IDS_V1.listInstances) return { kind: 'complete', candidates: [draft], failures: [] };
+      if (ref.localId === GITHUB_TRIAGE_ACTION_IDS_V1.listScopeUnits && !directoryAvailable) return {
+        kind: 'failed', failure: { class: 'authentication', code: 'login-unavailable' },
+      };
       if (ref.localId === GITHUB_TRIAGE_ACTION_IDS_V1.listScopeUnits) return {
         kind: 'page', status: 'complete', selection: { kind: 'all' }, units,
       };
@@ -117,13 +121,14 @@ describe('the mounted GitHub PRs & Issues settings page', () => {
       ok: true, configuration: { v: 1, selection: { kind: 'selected', unitIds: ['11', '22'] }, units },
     });
     await page.dispose(); mounted.splice(mounted.indexOf(page), 1);
+    directoryAvailable = false;
     page = await mountSettings(handler);
     await press('Update Use this machine’s GitHub CLI login from the provider');
     await press('Save selection');
     expect(administrations).toHaveLength(2);
     expect(saved.binding).toEqual(draft.binding);
-    expect(decodeGithubTriageConfiguration(saved.configuration.token)).toMatchObject({
-      ok: true, configuration: { selection: { kind: 'selected', unitIds: ['11', '22'] } },
+    expect(decodeGithubTriageConfiguration(saved.configuration.token)).toEqual({
+      ok: true, configuration: { v: 1, selection: { kind: 'selected', unitIds: ['11', '22'] }, units },
     });
   });
 

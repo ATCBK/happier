@@ -103,7 +103,11 @@ failure; a failed read never becomes an empty complete page. Configuration-only
 mode decodes the retained token and returns its selection and selected unit
 metadata without materializing credentials or reading the provider. This lets
 filters obtain configured units before entries load without a provider-specific
-parser in the aggregate. New source token writers retain the selected units'
+token parser. The listing input's `draft` requires only `v`, `binding`,
+`localInstanceKey` and `configuration`; discovery-only `locator` and
+`keyStability` are optional here. A full discovery draft remains accepted.
+Consumers of retained configurations must not fabricate missing discovery facts.
+New source token writers retain the selected units'
 labels and known collision scopes; a legacy token can lack that identity fact.
 
 Source Settings declares `scopeSelection` on the existing shared surface
@@ -269,18 +273,16 @@ write/recovery certification remain release checks, not a claim of loaded Jira
 validation. The implementing owners are [Jira's source package](../packages/plugins/jira/src/manifest.ts)
 and the shared [write settlement](../packages/triage-sources/src/invocation/writeSettlement.ts).
 
-In 0.3 development, GitHub Settings supplies a source-native draft editor through
-the shared page's public `DraftEditor` seam. Add, Update and Restore let the user
-choose all reachable repositories or one `owner/repository`; Save normalizes and
-encodes that choice through GitHub's existing configuration owner. The editor
-changes only `draft.configuration`, preserving the discovered binding, instance
-key, key stability and locator. The shared page still submits the caller-bound
-administration Action and owns settlement; canceling the editor writes nothing.
-Update and Restore seed the source editor from its stored opaque configuration,
-combined with the current discovered binding and locator. The shared row
-projection retains configuration after confirmed writes, and switching rows
-resets unsaved editor inputs. GitHub repository scope and PostHog environment
-and window choices therefore survive reopening and remounting the editor.
+In unreleased 0.3 development source, GitHub repositories and GitLab projects
+use the shared `scopeSelection` control described above. Add, Update and Restore
+choose All or a non-empty selected set. Sources translate their own opaque tokens;
+the shared page submits the caller-bound administration Action and owns settlement.
+Cancel writes nothing. Update and Restore seed the editor from stored configuration
+and current discovery location; switching rows resets unsaved inputs.
+GitHub retains one instance per credential binding, GitLab one per deployment
+and binding. Neither selection changes entry identity or exact-item write routing.
+Selected scans traverse each unit through the existing native scan owner, carrying
+only its current native frontier; All delegates to the original account/deployment scan.
 
 GitHub also declares its existing deployment-derived instance-key stability to
 the shared page. When discovery cannot reach a configured login, Update uses
@@ -325,7 +327,7 @@ For agent-authored repository scope, use `action.invoke` with Action reference
 and input `{ v: 1 }`. Retain
 the chosen candidate's binding, local instance key, stability and locator, and
 replace only its configuration. GitHub's current source-owned token is the JSON
-encoding of `{ v: 1, scope: { kind: 'repository', repositoryKey: 'owner/repository' } }`;
+encoding of `{ v: 1, selection: { kind: 'selected', unitIds: ['123'] }, units: [{ id: '123', label: 'owner/repository', collisionScope: 'github:123' }] }`;
 the outer configuration remains `{ v: 1, token }`. Submit the resulting draft to
 the Action reference `{ pluginId: 'happier.triage', localId: 'sources/administer-v1' }`
 with `kind: 'create'` and source
@@ -333,6 +335,13 @@ with `kind: 'create'` and source
 uses the same draft and its existing `sourceInstanceId`. The Settings editor and
 agent inputs share GitHub's [configuration encoder/decoder](../packages/plugins/scm-github/src/triage/configuration.ts);
 this is a development source shape, not a generic host repository-scope schema.
+Call `triage/list-github-scope-units` with `{ v: 1, draft, query?, cursor? }`
+to obtain immutable repository ids and display metadata. GitLab's corresponding
+Action is `triage/list-gitlab-scope-units`, with numeric project ids and the same
+public input/result contract. Both are ordinary safe agent/UI/plugin/MCP/CLI reads.
+`mode: 'configured'` projects retained selection metadata without provider access.
+Historical GitHub account/repository tokens map to All/one selected path; historical
+GitLab `{ v: 1 }` maps to All. New encoders always write the selected-set shape.
 
 ## Linear source (0.3 development)
 

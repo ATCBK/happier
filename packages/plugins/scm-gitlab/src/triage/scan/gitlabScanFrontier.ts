@@ -30,7 +30,7 @@ import type {
   GitlabAuthorizedInvocation,
   GitlabHttpFetcher,
 } from '../http/gitlabClient.js';
-import { selectGitlabNextPageUrl } from '../http/gitlabLink.js';
+import { selectGitlabNextPageUrl, isGitlabPageWithinResource } from '../http/gitlabLink.js';
 import { decodeGitlabPage } from '../mapping/gitlabEntry.js';
 import type {
   GitlabLaneId,
@@ -252,7 +252,7 @@ export async function runGitlabScan(input: GitlabScanInput): Promise<GitlabScanR
       result.response.headers,
       input.invocation.origin.normalized,
     );
-    const advanced = selection.kind === 'next'
+    const advanced = selection.kind === 'next' && isGitlabPageWithinResource(selection.url, lane.nextUrl)
       ? advanceCursorCycleWalkV1(
         { cursor: lane.nextUrl, probe: lane.cycleProbe },
         selection.url,

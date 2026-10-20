@@ -102,9 +102,10 @@ export async function createGithubIssueAction(input: unknown, context: PluginInv
   if (scopeId === undefined) return { kind: 'refused', reason: 'scope_required' };
   const opened = await openGithubTriageClient(request.instance, context);
   if (!opened.ok) return failed(opened.failure);
-  const repository = await resolveGithubSelectedRepository(scopeId, createGithubRepositoryReader({ client: opened.client, now: Date.now }));
+  const repositories = createGithubRepositoryReader({ client: opened.client, now: Date.now });
+  const repository = await resolveGithubSelectedRepository(scopeId, repositories);
   if (repository.kind === 'failed') return failed(toTriageFailure(repository.failure));
-  return createGithubIssue({ route: repository.route, fields: request.fields }, { client: opened.client, now: Date.now, signal: context.signal });
+  return createGithubIssue({ route: repository.route, fields: request.fields }, { client: opened.client, now: Date.now, signal: context.signal, repositories });
 }
 
 export async function editGithubIssueAction(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {

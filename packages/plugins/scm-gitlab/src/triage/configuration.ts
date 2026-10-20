@@ -4,12 +4,12 @@
  * GitLab's configured deployment origin is the source-native instance scope and
  * therefore travels as `localInstanceKey`; the source contract forbids a token
  * that duplicates a configured origin, so it is deliberately absent here. What
- * remains is a strict versioned envelope: this source mints it, this source is
+ * remains is the project selection in a versioned envelope: this source mints it, this source is
  * the only decoder. Retained tokens ignore retired fields; another version,
  * malformed known facts or an oversize string remain rejected.
  *
- * The envelope is the seam a genuinely per-instance GitLab fact would land in.
- * Nothing is placed in it speculatively, and it can never carry a credential,
+ * Retained empty V1 envelopes mean All; new writes use the shared selection.
+ * The token can never carry a credential,
  * a header, an account ref, a filesystem path, or a target timestamp.
  */
 

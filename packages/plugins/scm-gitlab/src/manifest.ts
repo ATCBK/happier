@@ -40,6 +40,7 @@ import {
   GITLAB_TRIAGE_SETTINGS_RENDERER_ID,
 } from './triage/contribution.js';
 import { GITLAB_PUBLIC_ORIGIN } from './triage/origin.js';
+import { listGitlabScopeUnitsAction } from './triage/sourceScopeUnits.js';
 import {
   listGitlabActivityEvents,
   listGitlabChanges,
@@ -227,6 +228,10 @@ export const GITLAB_PLUGIN = definePlugin({
     },
   },
   actions: {
+    [GITLAB_TRIAGE_ACTION_IDS.listScopeUnits]: {
+      ...readGitlabActionDeclaration(GITLAB_TRIAGE_ACTION_IDS.listScopeUnits),
+      run: listGitlabScopeUnitsAction,
+    },
     [GITLAB_TRIAGE_ACTION_IDS.listInstances]: {
       ...readGitlabActionDeclaration(GITLAB_TRIAGE_ACTION_IDS.listInstances),
       run: listGitlabInstancesAction,

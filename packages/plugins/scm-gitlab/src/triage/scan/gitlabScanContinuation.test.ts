@@ -27,6 +27,16 @@ function frontierOf(laneRequests: readonly GitlabLaneRequest[] = lanes()) {
 }
 
 describe('the GitLab scan continuation codec', () => {
+  it('refuses a same-deployment continuation that escapes the selected project resource', () => {
+    const selected = lanes().map((lane) => ({ ...lane, path: `/projects/11${lane.path}` }));
+    const frontier = frontierOf(selected);
+    const first = frontier.lanes[0];
+    if (first === undefined) throw new Error('Expected a selected project lane');
+    first.nextUrl = first.nextUrl.replace('/projects/11/', '/projects/22/');
+    const continuation = encodeGitlabScanContinuation(frontier, PROVENANCE);
+    if (continuation === null) throw new Error('Expected an encodable frontier');
+    expect(decodeGitlabScanContinuation({ continuation, origin: GITLAB_COM, lanes: selected, provenance: PROVENANCE })).toBeNull();
+  });
   it('carries the rotation, geometry, sticky reasons and transient loop evidence', () => {
     const frontier = frontierOf();
     frontier.nextLaneIndex = 2;

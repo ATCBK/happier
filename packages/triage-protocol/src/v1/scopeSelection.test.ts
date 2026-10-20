@@ -25,6 +25,10 @@ describe('shared source scope selection', () => {
         const draft = fixture.listInstancesResult.candidates[0]!;
         expect(TriageListScopeUnitsInputV1Schema.parse({ v: 1, draft, mode: 'configured' }))
             .toMatchObject({ draft, mode: 'configured' });
+        const retained = fixture.configuredInstance;
+        const context = { v: 1, binding: retained.binding, localInstanceKey: retained.localInstanceKey, configuration: retained.configuration };
+        expect(TriageListScopeUnitsInputV1Schema.parse({ v: 1, draft: context, mode: 'configured' }))
+            .toMatchObject({ draft: context, mode: 'configured' });
         const page = TriageListScopeUnitsResultV1Schema.parse({
             kind: 'page', status: 'partial', selection: { kind: 'selected', unitIds: ['11'] },
             units: [{ id: '11', label: 'Selected project', secondaryText: 'Workspace', collisionScope: fixture.getInput.localRef.collisionScope }],

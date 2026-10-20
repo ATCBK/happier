@@ -165,11 +165,8 @@ async function scanGitlabScope(
   const requests: GitlabLaneRequest[] = [];
   const unavailableLanes: GitlabUnavailableLane[] = [];
   for (const kindId of GITLAB_TRIAGE_KIND_IDS) {
-    const lanes = buildGitlabScanLanes({ kindId, viewerUserId });
-    requests.push(...lanes.requests.map((request) => projectId === null ? request : {
-      ...request,
-      path: `/projects/${projectId}${request.path}`,
-    }));
+    const lanes = buildGitlabScanLanes({ kindId, viewerUserId, ...(projectId === null ? {} : { projectId }) });
+    requests.push(...lanes.requests);
     unavailableLanes.push(...lanes.unavailable);
   }
 

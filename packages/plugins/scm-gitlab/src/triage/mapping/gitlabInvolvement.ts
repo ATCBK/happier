@@ -53,6 +53,8 @@ export const GITLAB_APPROVED_ROW_FACT: GitlabRowFact = Object.freeze({
 
 export type GitlabLaneSelection = Readonly<{
   kindId: GitlabKindId;
+  /** Omitted for the existing deployment-wide walk; native project id otherwise. */
+  projectId?: string;
   /**
    * The authenticated account's numeric GitLab user id, when the invocation observed
    * one. `approved_by_ids[]` needs it; nothing else does.
@@ -68,7 +70,7 @@ export function buildGitlabScanLanes(selection: GitlabLaneSelection): GitlabScan
   const requests: GitlabLaneRequest[] = [];
   const unavailable: GitlabUnavailableLane[] = [];
   const kindId = selection.kindId;
-  const path = kindId === 'merge-request' ? '/merge_requests' : '/issues';
+  const path = `${selection.projectId === undefined ? '' : `/projects/${selection.projectId}`}${kindId === 'merge-request' ? '/merge_requests' : '/issues'}`;
 
   requests.push({
     laneId: 'authored',

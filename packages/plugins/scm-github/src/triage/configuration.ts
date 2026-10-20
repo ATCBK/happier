@@ -24,9 +24,10 @@ import type { GithubTriageFailureV1 } from './types.js';
 
 /**
  * GitHub's only admitted deployment today is `github.com`, so a configured GitHub
- * instance is either the account's whole reachable surface or one repository inside
- * it. The repository arm holds the mutable locator half (`owner/name`) because that
- * is what a lane query and a `get` route need; it is never an identity component.
+ * instance includes all reachable repositories or a selected set. The retired
+ * single-scope type remains an encoder ingress for historical callers: writes
+ * normalize to the shared selection shape. Retained repository paths stay
+ * locator-shaped inputs, never immutable entry identity.
  */
 export type GithubTriageInstanceScopeV1 =
   | Readonly<{ kind: 'account' }>

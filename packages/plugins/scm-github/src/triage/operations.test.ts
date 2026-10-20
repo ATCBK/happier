@@ -2,10 +2,12 @@ import type { ConnectedAccountRef } from '@happier-dev/plugin-sdk/connected-acco
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
   TriageGetResultV1Schema,
+  TriageListScopeUnitsResultV1Schema,
   TriagePrepareReviewWorkspaceResultV1Schema,
   TriageScanResultV1Schema,
   TriageVerifyReviewWorkspaceResultV1Schema,
   type TriageConfiguredSourceInstanceV1,
+  type TriageScanResultV1,
 } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -50,6 +52,41 @@ import {
 const REPOSITORY_KEY = `${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`.toLowerCase();
 
 describe('registered GitHub REST → Triage source contract', () => {
+  it('searches and pages selectable repositories under the exact account and refuses a foreign directory continuation', async () => {
+    const transport = createStubGithubTransport({ respond: (request): StubHttpResponse | undefined => {
+      const url = new URL(request.url);
+      if (url.pathname !== '/search/repositories') return undefined;
+      expect(url.searchParams.get('q')).toBe('org:octo-org app');
+      const second = url.searchParams.get('page') === '2';
+      const next = new URL(url); next.searchParams.set('page', '2');
+      return { status: 200, headers: second ? {} : { link: `<${next}>; rel="next"` }, body: {
+        total_count: 2, incomplete_results: false, items: [{ id: second ? 22 : 11, full_name: second ? 'octo-org/api' : 'octo-org/app' }],
+      } };
+    } });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
+    } });
+    const configured = configuredInstance({ scope: 'account' });
+    const draft = { v: 1, binding: configured.binding, localInstanceKey: configured.localInstanceKey,
+      keyStability: 'locatorDerived', configuration: configured.configuration, locator: { v: 1, displayLabel: 'Account' } };
+    try {
+      const first = TriageListScopeUnitsResultV1Schema.parse(await plugin.invokeAction('triage/list-github-scope-units', {
+        v: 1, draft, query: 'org:octo-org app',
+      }, { surface: 'agent', sessionId: 'directory-session' }));
+      expect(first).toMatchObject({ kind: 'page', status: 'partial', units: [{ id: '11', label: 'octo-org/app', collisionScope: 'github:11' }] });
+      if (first.kind !== 'page' || first.status !== 'partial' || first.nextCursor === undefined) throw new Error('Expected a directory continuation');
+      const second = await plugin.invokeAction('triage/list-github-scope-units', {
+        v: 1, draft, query: 'org:octo-org app', cursor: first.nextCursor,
+      }, { surface: 'agent', sessionId: 'directory-session' });
+      expect(second).toMatchObject({ kind: 'page', status: 'complete', units: [{ id: '22', label: 'octo-org/api' }] });
+      const requested = transport.requests.length;
+      const foreign = await plugin.invokeAction('triage/list-github-scope-units', {
+        v: 1, draft: { ...draft, localInstanceKey: 'another-boundary' }, query: 'org:octo-org app', cursor: first.nextCursor,
+      }, { surface: 'agent', sessionId: 'directory-session' });
+      expect(foreign).toMatchObject({ kind: 'failed', failure: { class: 'unsupportedContract' } });
+      expect(transport.requests).toHaveLength(requested);
+    } finally { await plugin.dispose(); }
+  });
   it('projects configured repository selection for filters through a registered safe Action without provider reads', async () => {
     const transport = createStubGithubTransport({ respond: () => { throw new Error('Configured projection must not read GitHub'); } });
     const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
@@ -80,7 +117,7 @@ describe('registered GitHub REST → Triage source contract', () => {
     try {
       let page: import('@happier-dev/triage-protocol/v1').TriageScanInputV1['page'] = { kind: 'initial', limit: 64 };
       for (let step = 0; step < 4; step += 1) {
-        const result = TriageScanResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.scan,
+        const result: TriageScanResultV1 = TriageScanResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.scan,
           { v: 1, instance, page }, { surface: 'plugin' }));
         expect(result.kind).not.toBe('failed');
         if (result.kind !== 'page') break;
@@ -838,7 +875,7 @@ describe('GitHub Triage source operations', () => {
     // never a resume point this source will honour.
     expect(result).toEqual({
       kind: 'failed',
-      failure: { class: 'unsupportedContract', code: 'github_scan_continuation_unrecognized' },
+      failure: { class: 'unsupportedContract', code: 'triage_scope_continuation_invalid' },
     });
     expect(stub.requests).toHaveLength(0);
   });
