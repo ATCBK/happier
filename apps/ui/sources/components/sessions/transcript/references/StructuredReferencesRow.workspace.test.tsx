@@ -7,6 +7,7 @@ import { createTestSessionTranscriptSource, installBrowserStorageLockBoundary, r
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+import { parseSessionFileDeepLinkAnchor } from '@/utils/url/sessionFileDeepLink';
 
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -78,9 +79,13 @@ it('opens a transcript file through the canonical Action into the qualified sess
         throw new Error('File references must use the workspace Action, not source navigation');
     } });
     const rawPaths = ['src/100%25.ts', 'src/query?.ts', 'src/name#L4', ' leading /LICENSE ', ' '];
+    const relativePaths = [
+        { path: 'src\\windows.ts', expected: 'src/windows.ts' },
+        { path: './src/dot.ts', expected: 'src/dot.ts' },
+    ];
     const screen = await renderWithSessionTranscriptSource(<AppPaneProvider><WorkspaceProvider enabled catalog={catalog}>
         {owner => { navigation = owner; return <><HookProbe /><StructuredReferencesRow sessionId="s1" serverId={targetServerId}
-            references={['src/a.ts', ...rawPaths].map(path => ({ kind: 'file' as const, path }))} fileOpenEnabled />
+            references={['src/a.ts', ...rawPaths, ...relativePaths.map(entry => entry.path)].map(path => ({ kind: 'file' as const, path }))} fileOpenEnabled />
             <TranscriptTurnChangesCard sessionId="s1" serverId={targetServerId} turnId="turn-4" fileOpenEnabled
                 files={[scmFileStatusFromChange({ path: 'src/turn.ts', changeKind: 'modified', added: 1, removed: 1 })]}
                 firstHunkAnchors={{ 'src/turn.ts': { kind: 'diffLine', side: 'after', startLine: 40, newLine: 40, oldLine: null } }} />
@@ -104,6 +109,15 @@ it('opens a transcript file through the canonical Action into the qualified sess
                 } });
             });
         }
+        for (const { path, expected } of relativePaths) {
+            await screen.pressByTestIdAsync(`linked-workspace-file:${path}`);
+            await vi.waitFor(() => {
+                const group = navigation.state.groups[navigation.state.focusedGroupId];
+                expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
+                    serverId: targetServerId, path: expected, fileView: 'view',
+                } });
+            });
+        }
         await act(async () => { expect(links.openPath('/repo/src/absolute%25?name#L2.ts')).toBe(true); });
         await vi.waitFor(() => {
             const group = navigation.state.groups[navigation.state.focusedGroupId];
@@ -118,9 +132,12 @@ it('opens a transcript file through the canonical Action into the qualified sess
         await act(async () => { expect(links.onMarkdownLinkPress('src/100%2525.ts#L7')).toBe(true); });
         await vi.waitFor(() => {
             const group = navigation.state.groups[navigation.state.focusedGroupId];
-            expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
-                serverId: targetServerId, path: 'src/100%25.ts', source: 'file', line: '7',
+            const target = navigation.state.tabs[group.activeTabId].target;
+            expect(target).toMatchObject({ kind: 'session', params: {
+                serverId: targetServerId, path: 'src/100%25.ts',
             } });
+            expect(parseSessionFileDeepLinkAnchor(target.params)).toEqual({ source: 'file',
+                anchor: { kind: 'line', filePath: 'src/100%25.ts', line: 7 } });
         });
         await act(async () => { expect(links.onMarkdownLinkPress('src/range.ts:5-8')).toBe(true); });
         await vi.waitFor(() => {
