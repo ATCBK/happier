@@ -3,9 +3,8 @@ import net from 'node:net';
 import test from 'node:test';
 
 import { startTcpForwarder, startTcpForwarderGroup, stopTcpForwarder } from './tcp_forward.mjs';
-import { observeTcpPortAvailability } from './ports.mjs';
 
-async function startEchoServer(label) {
+async function startEchoServer(label, port = 0) {
   const sockets = new Set();
   const server = net.createServer((socket) => {
     sockets.add(socket);
@@ -14,7 +13,7 @@ async function startEchoServer(label) {
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen({ host: '127.0.0.1', port: 0 }, resolve);
+    server.listen({ host: '127.0.0.1', port }, resolve);
   });
   return {
     port: server.address().port,
@@ -59,7 +58,8 @@ test('forwarder stop confirms listener close before reporting stopped', async ()
   try {
     await stopTcpForwarder(forwarder.server, 'tcp-forward-stop-test');
     assert.equal(closed, true, 'stop must await the actual listener close, not only listening=false');
-    assert.equal((await observeTcpPortAvailability(forwarder.port)).status, 'free');
+    const rebound = await startEchoServer('rebound', forwarder.port);
+    await rebound.stop();
   } finally {
     await stopTcpForwarder(forwarder.server, 'tcp-forward-stop-test');
     await upstream.stop();
@@ -171,6 +171,12 @@ test('forwarder group owns multiple listeners in one lifecycle', { timeout: 5000
     sockets.push(first, second);
     assert.equal(await writeRead(first, 'one'), 'first:one');
     assert.equal(await writeRead(second, 'two'), 'second:two');
+    await group.stop();
+    await Promise.all(sockets.map(waitClosed));
+    for (const forwarder of group.forwarders) {
+      const rebound = await startEchoServer('rebound', forwarder.port);
+      await rebound.stop();
+    }
   } finally {
     for (const socket of sockets) socket.destroy();
     await group?.stop();
