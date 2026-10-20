@@ -15,6 +15,13 @@ import type { AtmosphereEditor } from './atmosphereEditor';
 import { LookPanel } from './LookPanel';
 import { PictureControls } from './LookControls';
 
+// This suite includes the browser Look contract. The default Node platform has no blur control.
+// Substitute only the platform boundary; the shared glass controls and capability owner stay real.
+vi.mock('react-native', async () => {
+  const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+  return createReactNativeWebMock();
+});
+
 // The device picture store's storage boundary: the browser store over fake IndexedDB (as the Settings Action tests do).
 vi.mock(
   '@/components/atmosphere/pictureStore',
