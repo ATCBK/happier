@@ -1,7 +1,7 @@
-import { definePlugin, type JsonValue, type PluginServices } from '@happier-dev/plugin-sdk';
+import { definePlugin, type JsonValue, type PluginInvocationContext, type PluginServices } from '@happier-dev/plugin-sdk';
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
-import { ConversationProviderObservationIngestInputV1Schema } from '@happier-dev/channels-protocol/v1';
+import { ConversationProviderObservationIngestInputV1Schema, ConversationTransportFactReportInputV1Schema } from '@happier-dev/channels-protocol/v1';
 import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF, PLUGIN_MANIFEST } from '../manifest.js';
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../collections.js';
 import { runConversationCheckpointedPollForInvocation, runConversationIngressRetentionForInvocation,
@@ -39,6 +39,17 @@ export async function createChannelsJourneyFixture(input: Readonly<{
     throw new Error(`Unexpected Channels collection ${definition.id}`);
   } } } as unknown as PluginServices['storage'];
   let kit: PluginTestkit;
+  function withProviderCaller(context: PluginInvocationContext): PluginInvocationContext {
+    const entry = kit.readTargetedContributionFixture(CHANNELS_PROVIDER_POINT_REF).contributions[0];
+    if (!entry) throw new Error('The activated provider contribution is absent');
+    const executionOrigin = PluginMachineExecutionOriginV1Schema.parse(input.resolveCurrentProviderExecutionOrigin?.());
+    // Caller identity is stamped at the host boundary, never from provider input.
+    return { ...context, caller: { kind: 'plugin', pluginId: entry.contributor.pluginId,
+      contribution: { id: 'poll', qualifiedId: `${entry.contributor.pluginId}/actions/poll` },
+      occurrenceId: entry.contributor.occurrenceId, sourceCustody: entry.contributor.sourceCustody,
+      ...('materializationRef' in executionOrigin ? { materialization: executionOrigin.materializationRef } : {}),
+      executionOrigin } };
+  }
   let attempt = 0;
   const pollResults: ConversationCheckpointedPollRunResult[] = [];
   const driver = definePlugin({ id: 'happier.channels', version: '0.0.0', actions: {
@@ -77,17 +88,15 @@ export async function createChannelsJourneyFixture(input: Readonly<{
       resultSchema: { type: 'null' }, async run(request, context) {
         const handler = kit.registration('actions', 'provider/observation-ingest-v1');
         if (!handler) throw new Error('The activated provider ingress handler is absent');
-        const entry = kit.readTargetedContributionFixture(CHANNELS_PROVIDER_POINT_REF).contributions[0];
-        if (!entry) throw new Error('The activated provider contribution is absent');
-        const executionOrigin = PluginMachineExecutionOriginV1Schema.parse(input.resolveCurrentProviderExecutionOrigin?.());
-        // The test host stamps a caller from the actual provider occurrence,
-        // source custody and materialization. No provider-supplied ingress
-        // field can assert these facts, matching the production host boundary.
-        await handler(request, { ...context, caller: { kind: 'plugin', pluginId: entry.contributor.pluginId,
-          contribution: { id: 'poll', qualifiedId: `${entry.contributor.pluginId}/actions/poll` },
-          occurrenceId: entry.contributor.occurrenceId, sourceCustody: entry.contributor.sourceCustody,
-          ...('materializationRef' in executionOrigin ? { materialization: executionOrigin.materializationRef } : {}),
-          executionOrigin } });
+        await handler(request, withProviderCaller(context));
+        return null;
+      } },
+    'journey/transport-fact': { title: 'Invoke the activated transport fact registration', surfaces: ['plugin'], dangerLevel: 'safe',
+      hostAccess: ['account-storage'], inputSchema: ConversationTransportFactReportInputV1Schema,
+      resultSchema: { type: 'null' }, async run(request, context) {
+        const handler = kit.registration('actions', 'provider/transport-fact-report-v1');
+        if (!handler) throw new Error('The activated transport fact handler is absent');
+        await handler(request, withProviderCaller(context));
         return null;
       } },
   } });

@@ -14,6 +14,10 @@ const repoRoot = resolve(packageRoot, '../../..');
 
 const workspacePackages: readonly WorkspacePackageSpec[] = [
   {
+    packageName: '@happier-dev/email-transports-protocol',
+    packageSourceRoot: resolve(repoRoot, 'packages/email-transports-protocol/src'),
+  },
+  {
     packageName: '@happier-dev/channels-protocol',
     packageSourceRoot: resolve(repoRoot, 'packages/channels-protocol/src'),
   },
