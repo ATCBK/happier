@@ -2,16 +2,24 @@ import * as React from 'react';
 import type { View, ViewStyle } from 'react-native';
 import Animated, {
     Easing,
+    cancelAnimation,
     runOnJS,
-    type SharedValue,
     useAnimatedStyle,
+    useDerivedValue,
     useSharedValue,
     withSequence,
+    withSpring,
     withTiming,
 } from 'react-native-reanimated';
 
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+
 import { motionTokens } from './motionTokens';
 import { reanimatedMotionTokens } from './reanimatedMotionTokens';
+import { interpolateRectFlip, rectFlipFrame, rectFlipLegProgress, type RectFlipFrame, type RectFlipOrigin, type WindowFlightRect } from './rectFlipGeometry';
+
+export { coverRectFlipOrigin, interpolateRectFlip } from './rectFlipGeometry';
+export type { RectFlipFrame, RectFlipOrigin, WindowFlightRect } from './rectFlipGeometry';
 
 /** A rectangle in a container's coordinates. */
 export type FlightRect = Readonly<{ x: number; y: number; w: number; h: number }>;
@@ -122,12 +130,119 @@ export function RectFlightLayer(props: Readonly<{ style: ReturnType<typeof useRe
     );
 }
 
-/** A rectangle in window coordinates (`measureInWindow`). */
-export type WindowFlightRect = Readonly<{ x: number; y: number; width: number; height: number }>;
-
 /** The enter's timing (MPG-32): the travel, then the trailing content's fade over its last part. */
 export const ENTER_FROM_RECT_MS = 320;
 export const ENTER_FROM_RECT_CONTENT_FADE_MS = 140;
+
+const IDENTITY_FLIP_RECT: WindowFlightRect = { x: 0, y: 0, width: 1, height: 1 };
+
+/**
+ * One reversible FLIP clock: progress is also the stage's backdrop opacity. `style` transforms a
+ * destination-positioned image. For a cover-cropped origin, use `clipStyle` on the outer layer and
+ * `clippedImageStyle` on its image (sized to target.width/height); both layers use transform only.
+ */
+export function useRectFlip(options: Readonly<{ reducedMotion?: boolean; initialProgress?: 0 | 1 }> = {}) {
+    const preferredReducedMotion = useReducedMotionPreference();
+    const reducedMotion = options.reducedMotion ?? preferredReducedMotion;
+    const progress = useSharedValue<number>(options.initialProgress ?? 1);
+    const from = useSharedValue<RectFlipFrame>(rectFlipFrame(IDENTITY_FLIP_RECT));
+    const to = useSharedValue<RectFlipFrame>(rectFlipFrame(IDENTITY_FLIP_RECT));
+    const target = useSharedValue(IDENTITY_FLIP_RECT);
+    const closing = useSharedValue(false);
+    const backdropFrom = useSharedValue(1);
+    const fades = useSharedValue(reducedMotion);
+
+    const openFrom = React.useCallback((origin: RectFlipOrigin | null, destination: WindowFlightRect, onComplete?: () => void) => {
+        cancelAnimation(progress);
+        target.value = destination;
+        from.value = rectFlipFrame(reducedMotion || origin === null ? destination : origin);
+        to.value = rectFlipFrame(destination);
+        closing.value = false;
+        fades.value = reducedMotion || origin === null;
+        progress.value = 0;
+        progress.value = withTiming(1, {
+            duration: reducedMotion ? motionTokens.successMoment.reducedCrossFadeMs : origin === null ? motionTokens.overlay.modal.enterMs : ENTER_FROM_RECT_MS,
+            easing: reanimatedMotionTokens.easing.stageCamera,
+        }, (finished) => {
+            'worklet';
+            if (finished && onComplete) runOnJS(onComplete)();
+        });
+    }, [closing, fades, from, progress, reducedMotion, target, to]);
+
+    const closeTo = React.useCallback((origin: RectFlipOrigin | null, closeOptions: Readonly<{ velocityY?: number; onComplete?: () => void }> = {}) => {
+        cancelAnimation(progress);
+        const current = interpolateRectFlip(from.value, to.value, rectFlipLegProgress(progress.value, closing.value, backdropFrom.value));
+        const currentProgress = progress.value;
+        const image = current.imageRect;
+        const fallbackScale = 0.96;
+        const fallbackImage = { x: image.x + image.width * (1 - fallbackScale) / 2, y: image.y + image.height * (1 - fallbackScale) / 2, width: image.width * fallbackScale, height: image.height * fallbackScale };
+        const destination = origin === null ? {
+            imageRect: fallbackImage,
+            clipRect: {
+                x: fallbackImage.x + (current.clipRect.x - image.x) * fallbackScale,
+                y: fallbackImage.y + (current.clipRect.y - image.y) * fallbackScale,
+                width: current.clipRect.width * fallbackScale,
+                height: current.clipRect.height * fallbackScale,
+            },
+        } : rectFlipFrame(origin);
+        from.value = current;
+        to.value = reducedMotion ? current : destination;
+        closing.value = true;
+        backdropFrom.value = currentProgress;
+        fades.value = reducedMotion || origin === null;
+        const complete = closeOptions.onComplete;
+        const done = (finished?: boolean) => {
+            'worklet';
+            if (finished && complete) runOnJS(complete)();
+        };
+        if (!reducedMotion && closeOptions.velocityY !== undefined) {
+            const distance = to.value.imageRect.y - image.y;
+            progress.value = withSpring(0, {
+                ...reanimatedMotionTokens.spring.travel,
+                velocity: distance === 0 ? 0 : -closeOptions.velocityY * currentProgress / distance,
+            }, done);
+        } else {
+            progress.value = withTiming(0, {
+                duration: reducedMotion ? motionTokens.successMoment.reducedCrossFadeMs : origin === null ? motionTokens.overlay.modal.exitMs : ENTER_FROM_RECT_MS,
+                easing: reanimatedMotionTokens.easing.stageCamera,
+            }, done);
+        }
+    }, [backdropFrom, closing, fades, from, progress, reducedMotion, to]);
+
+    const frame = useDerivedValue(() => interpolateRectFlip(from.value, to.value, rectFlipLegProgress(progress.value, closing.value, backdropFrom.value)));
+    const style = useAnimatedStyle<ViewStyle>(() => ({
+        opacity: fades.value ? progress.value : 1,
+        transformOrigin: 'left top',
+        transform: [
+            { translateX: frame.value.imageRect.x - target.value.x },
+            { translateY: frame.value.imageRect.y - target.value.y },
+            { scaleX: frame.value.imageRect.width / target.value.width },
+            { scaleY: frame.value.imageRect.height / target.value.height },
+        ],
+    }));
+    const clipStyle = useAnimatedStyle<ViewStyle>(() => ({
+        position: 'absolute', left: target.value.x, top: target.value.y,
+        width: target.value.width, height: target.value.height, overflow: 'hidden',
+        opacity: fades.value ? progress.value : 1,
+        transformOrigin: 'left top',
+        transform: [
+            { translateX: frame.value.clipRect.x - target.value.x },
+            { translateY: frame.value.clipRect.y - target.value.y },
+            { scaleX: frame.value.clipRect.width / target.value.width },
+            { scaleY: frame.value.clipRect.height / target.value.height },
+        ],
+    }));
+    const clippedImageStyle = useAnimatedStyle<ViewStyle>(() => ({
+        transformOrigin: 'left top',
+        transform: [
+            { translateX: (frame.value.imageRect.x - frame.value.clipRect.x) * target.value.width / frame.value.clipRect.width },
+            { translateY: (frame.value.imageRect.y - frame.value.clipRect.y) * target.value.height / frame.value.clipRect.height },
+            { scaleX: frame.value.imageRect.width / frame.value.clipRect.width },
+            { scaleY: frame.value.imageRect.height / frame.value.clipRect.height },
+        ],
+    }));
+    return { progress, style, clipStyle, clippedImageStyle, frame, openFrom, closeTo, from, to, backdropFrom };
+}
 
 /**
  * A destination that enters from where its origin was (a popover row → the machine page's header, lab
@@ -144,18 +259,14 @@ export function useEnterFromRect(origin: WindowFlightRect | null, options: Reado
     ready: boolean;
 }> {
     const travels = origin !== null && !options.reducedMotion;
-    const progress = useSharedValue(travels ? 0 : 1);
-    const fade = useSharedValue(origin !== null && options.reducedMotion ? 0 : 1);
-    const dx = useSharedValue(0);
-    const dy = useSharedValue(0);
-    const scale = useSharedValue(1);
+    const { progress, style, openFrom } = useRectFlip({ ...options, initialProgress: origin !== null ? 0 : 1 });
     const [ready, setReady] = React.useState(!travels);
     const started = React.useRef(false);
     React.useEffect(() => {
         if (origin === null || !options.reducedMotion || started.current) return;
         started.current = true;
-        fade.value = withTiming(1, { duration: motionTokens.successMoment.reducedCrossFadeMs });
-    }, [fade, options.reducedMotion, origin]);
+        openFrom(IDENTITY_FLIP_RECT, IDENTITY_FLIP_RECT);
+    }, [openFrom, options.reducedMotion, origin]);
     const onTarget = React.useCallback((target: WindowFlightRect | null) => {
         if (!travels || started.current) return;
         started.current = true;
@@ -164,40 +275,15 @@ export function useEnterFromRect(origin: WindowFlightRect | null, options: Reado
             setReady(true);
             return;
         }
-        startEnter({ origin: origin!, target, progress, dx, dy, scale });
+        // The header's established contract scales uniformly by height; media flights use both axes.
+        openFrom({ ...origin!, width: target.width * origin!.height / target.height }, target);
         setReady(true);
-    }, [dx, dy, origin, progress, scale, travels]);
-    const style = useAnimatedStyle<ViewStyle>(() => {
-        const remaining = 1 - progress.value;
-        return {
-            opacity: fade.value,
-            transform: [
-                { translateX: dx.value * remaining },
-                { translateY: dy.value * remaining },
-                { scale: 1 + (scale.value - 1) * remaining },
-            ],
-            transformOrigin: 'left top',
-        };
-    });
+    }, [openFrom, progress, origin, travels]);
+    const reducedMotion = options.reducedMotion;
     const contentStyle = useAnimatedStyle<ViewStyle>(() => {
         const fadeFrom = 1 - ENTER_FROM_RECT_CONTENT_FADE_MS / ENTER_FROM_RECT_MS;
-        return { opacity: fade.value * Math.max(0, Math.min(1, (progress.value - fadeFrom) / (1 - fadeFrom))) };
+        return { opacity: reducedMotion ? progress.value : Math.max(0, Math.min(1, (progress.value - fadeFrom) / (1 - fadeFrom))) };
     });
     return { style, contentStyle, onTarget, ready };
-}
-
-function startEnter(input: Readonly<{
-    origin: WindowFlightRect;
-    target: WindowFlightRect;
-    progress: SharedValue<number>;
-    dx: SharedValue<number>;
-    dy: SharedValue<number>;
-    scale: SharedValue<number>;
-}>): void {
-    input.dx.value = input.origin.x - input.target.x;
-    input.dy.value = input.origin.y - input.target.y;
-    input.scale.value = input.origin.height / input.target.height;
-    input.progress.value = 0;
-    input.progress.value = withTiming(1, { duration: ENTER_FROM_RECT_MS, easing: reanimatedMotionTokens.easing.stageCamera });
 }
 

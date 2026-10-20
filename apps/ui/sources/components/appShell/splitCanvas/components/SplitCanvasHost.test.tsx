@@ -510,6 +510,8 @@ describe('SplitCanvasHost', () => {
                 clampedSizePx: 700,
                 exceededMinPx: false,
                 exceededMaxPx: false,
+                overshootPx: 0,
+                collapseArmed: false,
             });
         });
 
@@ -558,77 +560,6 @@ describe('SplitCanvasHost', () => {
         });
     });
 
-    it('coalesces live divider ratio updates into animation frames when resizing on web', async () => {
-        const dispatch = vi.fn();
-        const rafCallbacks: FrameRequestCallback[] = [];
-        const requestAnimationFrameSpy = vi.fn((callback: FrameRequestCallback) => {
-            rafCallbacks.push(callback);
-            return rafCallbacks.length;
-        });
-        const cancelAnimationFrameSpy = vi.fn();
-        vi.stubGlobal('requestAnimationFrame', requestAnimationFrameSpy);
-        vi.stubGlobal('cancelAnimationFrame', cancelAnimationFrameSpy);
-
-        const { SplitCanvasHost } = await import('./SplitCanvasHost');
-
-        const state: SplitCanvasState<string> = {
-            root: {
-                id: 'split-root',
-                kind: 'split',
-                axis: 'row',
-                ratio: 0.5,
-                first: createLeaf('leaf-a'),
-                second: createLeaf('leaf-b'),
-            } satisfies SplitCanvasNode<string>,
-            focusedLeafId: 'leaf-a',
-            maximizedLeafId: null,
-        };
-
-        const screen = await renderScreen(
-            <SplitCanvasHost
-                state={state}
-                dispatch={dispatch}
-                renderLeaf={({ leaf }) => React.createElement('LeafContent', { leafId: leaf.id })}
-            />,
-        );
-
-        const divider = findDivider(screen, 'split-root');
-
-        await act(async () => {
-            divider.props.onDragRatio?.(0.6, null);
-            divider.props.onDragRatio?.(0.7, null);
-        });
-
-        expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(1);
-        expect(screen.findByTestId('split-canvas-pane-first-split-root')?.props.style).toEqual(
-            expect.objectContaining({ flex: 0.5 }),
-        );
-
-        await act(async () => {
-            rafCallbacks.shift()?.(16);
-        });
-
-        expect(screen.findByTestId('split-canvas-pane-first-split-root')?.props.style).toEqual(
-            expect.objectContaining({ flex: 0.7 }),
-        );
-
-        await act(async () => {
-            divider.props.onDragRatio?.(0.72, null);
-            divider.props.onCommitRatio?.(0.75, {
-                attemptedSizePx: 750,
-                clampedSizePx: 750,
-                exceededMinPx: false,
-                exceededMaxPx: false,
-            });
-        });
-
-        expect(cancelAnimationFrameSpy).toHaveBeenCalled();
-        expect(dispatch).toHaveBeenCalledWith({
-            type: 'setSplitRatio',
-            splitId: 'split-root',
-            ratio: 0.75,
-        });
-    });
 
 
 

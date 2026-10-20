@@ -128,6 +128,10 @@ export const motionTokens = {
         markerRiseMs: 200,
         markerRisePx: 6,
     },
+    /** One file publication's changed-line tint; subsequent publications redirect the fade. */
+    liveEdit: {
+        flashMs: 1200,
+    },
     /**
      * A carried object (a Board card picked up on the Canvas): it grows by `liftScale` as it leaves the
      * surface, on the travel spring, and sinks back as it lands. Reduced motion: no scale; the shadow

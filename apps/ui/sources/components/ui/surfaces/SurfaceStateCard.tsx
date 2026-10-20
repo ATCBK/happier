@@ -14,6 +14,7 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { t } from '@/text';
 
 import { useSurfaceStateCardSize } from './surfaceStateSize';
+import { useSurfaceStateElapsedSeconds } from './useSurfaceStateElapsedSeconds';
 
 export type SurfaceStateKind = HappierSurfaceStateKind;
 /**
@@ -378,17 +379,12 @@ function SurfaceStateStillWaiting(props: Readonly<{
     size: HappierStateSize;
     bindings: HappierSurfaceStateBindings;
 }>): React.ReactElement | null {
-    const [elapsedMs, setElapsedMs] = React.useState(0);
-    React.useEffect(() => {
-        const startedAt = Date.now();
-        const interval = setInterval(() => setElapsedMs(Date.now() - startedAt), 1_000);
-        return () => clearInterval(interval);
-    }, []);
-    if (elapsedMs < STILL_WAITING_AFTER_MS) return null;
+    const elapsedSeconds = useSurfaceStateElapsedSeconds();
+    if (elapsedSeconds < STILL_WAITING_AFTER_MS / 1_000) return null;
     return (
         <HappierSurfaceStateLiveLine
             testID={props.testID}
-            live={{ text: t('surfaceState.stillWaiting', { seconds: Math.floor(elapsedMs / 1_000) }) }}
+            live={{ text: t('surfaceState.stillWaiting', { seconds: elapsedSeconds }) }}
             metrics={resolveHappierSurfaceStateQuiet(props.size).metrics}
             bindings={props.bindings}
         />

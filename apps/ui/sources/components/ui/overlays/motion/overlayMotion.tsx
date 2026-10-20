@@ -154,6 +154,7 @@ export function useOverlayPresence(visible: boolean, exitMs: number): Readonly<{
 
 export function useOverlayMotionAnimation(params: Readonly<{
     visible: boolean;
+    disabled?: boolean;
     preset: OverlayMotionPreset;
     /** Web frames animate as a whole; one holding material paint moves by transform, and on exit fades its paint and content, never the frame. */
     elementRef?: React.RefObject<unknown>;
@@ -170,6 +171,10 @@ export function useOverlayMotionAnimation(params: Readonly<{
 
     // Each change animates from where the overlay is now, so a reversal mid-way turns around in place.
     React.useLayoutEffect(() => {
+        if (params.disabled) {
+            progress.setValue(params.visible ? 1 : 0);
+            return;
+        }
         if (webElementMotion) return;
         Animated.timing(progress, {
             toValue: params.visible ? 1 : 0,
@@ -179,7 +184,7 @@ export function useOverlayMotionAnimation(params: Readonly<{
             easing: motionTokens.easing.standard,
             useNativeDriver: Platform.OS !== 'web',
         }).start();
-    }, [params.preset.enterMs, params.preset.exitMs, params.visible, progress, reducedMotion, reducedMs, webElementMotion]);
+    }, [params.disabled, params.preset.enterMs, params.preset.exitMs, params.visible, progress, reducedMotion, reducedMs, webElementMotion]);
 
     const opacity = progress.interpolate({
         inputRange: [0, 1],
@@ -200,7 +205,7 @@ export function useOverlayMotionAnimation(params: Readonly<{
 
     const fadeOnly = reducedMotion && reducedMs > 0;
     return {
-        exitMs: reducedMotion ? reducedMs : params.preset.exitMs,
+        exitMs: params.disabled ? 0 : reducedMotion ? reducedMs : params.preset.exitMs,
         progress,
         style: webElementMotion
             ? {}
@@ -276,6 +281,7 @@ type WebContentMotionTarget = {
 
 function useWebOverlayContentMotion(params: Readonly<{
     visible: boolean;
+    disabled?: boolean;
     preset: OverlayMotionPreset;
     elementRef?: React.RefObject<unknown>;
 }>, reducedMotion: boolean): void {
@@ -284,7 +290,7 @@ function useWebOverlayContentMotion(params: Readonly<{
     const presetRef = React.useRef(params.preset);
     presetRef.current = params.preset;
     React.useLayoutEffect(() => {
-        if (Platform.OS !== 'web') return;
+        if (Platform.OS !== 'web' || params.disabled) return;
         const element = params.elementRef?.current;
         if (!element || typeof HTMLElement === 'undefined' || !(element instanceof HTMLElement)) return;
         const preset = presetRef.current;
@@ -328,7 +334,7 @@ function useWebOverlayContentMotion(params: Readonly<{
             }
         }
         if (hasMaterial) fadeMaterialLayers(element, fadesRef.current, params.visible, duration);
-    }, [params.elementRef, params.visible, reducedMotion]);
+    }, [params.disabled, params.elementRef, params.visible, reducedMotion]);
     React.useEffect(() => () => {
         for (const fade of fadesRef.current.values()) fade.animation.cancel();
         fadesRef.current.clear();

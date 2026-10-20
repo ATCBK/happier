@@ -573,8 +573,6 @@ function SplitNodeRenderer<TLeafPayload>(props: Readonly<{
 }>) {
     const [containerSize, setContainerSize] = React.useState({ width: 0, height: 0 });
     const [dragRatio, setDragRatio] = React.useState<number | null>(null);
-    const pendingDragRatioRef = React.useRef<number | null>(null);
-    const dragRatioFrameRef = React.useRef<number | null>(null);
     const firstVisible = !props.maximizedLeafId || splitCanvasSubtreeContainsLeaf(props.node.first, props.maximizedLeafId);
     const secondVisible = !props.maximizedLeafId || splitCanvasSubtreeContainsLeaf(props.node.second, props.maximizedLeafId);
     const {
@@ -603,44 +601,12 @@ function SplitNodeRenderer<TLeafPayload>(props: Readonly<{
         });
     }, []);
 
-    const cancelDragRatioFrame = React.useCallback(() => {
-        const frame = dragRatioFrameRef.current;
-        if (frame != null && typeof globalThis.cancelAnimationFrame === 'function') {
-            globalThis.cancelAnimationFrame(frame);
-        }
-        dragRatioFrameRef.current = null;
-    }, []);
-
-    const flushPendingDragRatio = React.useCallback(() => {
-        dragRatioFrameRef.current = null;
-        const nextRatio = pendingDragRatioRef.current;
-        setDragRatio((current) => (current === nextRatio ? current : nextRatio));
-    }, []);
-
     const handleDragRatio = React.useCallback((ratio: number | null) => {
-        pendingDragRatioRef.current = ratio;
-
-        if (ratio == null) {
-            cancelDragRatioFrame();
-            setDragRatio((current) => (current === null ? current : null));
-            return;
-        }
-
-        if (typeof globalThis.requestAnimationFrame !== 'function') {
-            setDragRatio((current) => (current === ratio ? current : ratio));
-            return;
-        }
-
-        if (dragRatioFrameRef.current != null) {
-            return;
-        }
-
-        dragRatioFrameRef.current = globalThis.requestAnimationFrame(flushPendingDragRatio);
-    }, [cancelDragRatioFrame, flushPendingDragRatio]);
+        // The shared resize owner already publishes once per animation frame.
+        setDragRatio(current => current === ratio ? current : ratio);
+    }, []);
 
     const handleCommitRatio = React.useCallback((ratio: number) => {
-        pendingDragRatioRef.current = null;
-        cancelDragRatioFrame();
         setDragRatio(null);
         props.dispatch({
             type: 'setSplitRatio',
@@ -648,14 +614,13 @@ function SplitNodeRenderer<TLeafPayload>(props: Readonly<{
             ratio,
             ...(hasMeasuredMinimums ? { availableSizePx, minimumFirstSizePx, minimumSecondSizePx } : {}),
         });
-    }, [availableSizePx, cancelDragRatioFrame, hasMeasuredMinimums, minimumFirstSizePx, minimumSecondSizePx, props.dispatch, props.node.id]);
+    }, [availableSizePx, hasMeasuredMinimums, minimumFirstSizePx, minimumSecondSizePx, props.dispatch, props.node.id]);
     React.useLayoutEffect(() => props.registerResize(props.node.id, (ratio) => {
         if (props.maximizedLeafId || !hasMeasuredMinimums || minimumFirstSizePx + minimumSecondSizePx > availableSizePx) return false;
         handleCommitRatio(ratio);
         return true;
     }), [availableSizePx, handleCommitRatio, hasMeasuredMinimums, minimumFirstSizePx, minimumSecondSizePx, props.maximizedLeafId, props.node.id, props.registerResize]);
 
-    React.useEffect(() => cancelDragRatioFrame, [cancelDragRatioFrame]);
 
     return (
         <View
