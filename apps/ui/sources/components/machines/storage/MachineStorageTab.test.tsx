@@ -13,6 +13,7 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createSessionFixture, renderScreen } from '@/dev/testkit';
+import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -417,7 +418,7 @@ describe('MachineStorageTab', () => {
     it('renders scan progress and completion while revision watches advance during a pending scan read', async () => {
         const folder = '/home/happier/dz3-leeroy/qa8-owned-fixtures';
         const running: DiskScanStateV1 = { scanId: 'folder-scan', target: { folderPath: folder }, status: 'running', startedAt: 3,
-            progress: { sizedBytes: 0, usedBytes: 266240, items: 0 },
+            progress: { sizedBytes: 0, usedBytes: 0, items: 0 },
             unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } };
         let summary = { ...SUMMARY, wholeDisk: { enabled: true, scans: [] as DiskScanStateV1[] } };
@@ -451,6 +452,10 @@ describe('MachineStorageTab', () => {
         await act(async () => { watches.at(-1)!.resolve({ changed: true, summary }); });
         await act(async () => { pages[0]!.resolve({ state: progress, nodes: [node], coverage: [], indexedAt: 4 }); await vi.waitFor(() => expect(pages).toHaveLength(2)); });
         expect(screen.findByTestId(`machine-storage-disk-row-${folder}/file`)).not.toBeNull();
+        // A folder scan has no total to divide by: it stays indeterminate and never shows a made-up share.
+        expect(screen.findByTestId('machine-storage-disk-progress')?.props.accessibilityValue).toBeUndefined();
+        expect(screen.getTextContent()).toContain(t('machineStorage.disk.progressMetaOpen', { sized: formatMachineBytes(131072, 'storage'), items: '1' }));
+        expect(screen.getTextContent()).not.toMatch(/\d+\s?%/);
         const complete: DiskScanStateV1 = { ...running, status: 'complete', finishedAt: 5, progress: { sizedBytes: 266240, usedBytes: 266240, items: 3 } };
         summary = { ...summary, revision: 4, wholeDisk: { enabled: true, scans: [complete] } };
         await act(async () => { watches.at(-1)!.resolve({ changed: true, summary }); });

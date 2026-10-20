@@ -1,5 +1,7 @@
 import type { DiskNodeV1, StorageItemV1, StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
 
+import { HAPPIER_SUNBURST_SMALLER_SUFFIX, HAPPIER_TREEMAP_SMALLER_SUFFIX } from '@happier-dev/plugin-ui/presentation';
+
 import { t } from '@/text';
 
 import {
@@ -73,6 +75,29 @@ const TRAILING: ReadonlySet<DiskNodeV1['kind']> = new Set([
  */
 export function storageDiskNodeName(node: DiskNodeV1): string {
   return node.kind === 'small-items' ? t('machineStorage.disk.smallItems', { count: node.items }) : node.name;
+}
+
+/** Opening it lists its children: a folder, a package or a cloud-only folder, never a file or another disk's mount. */
+export function isStorageDiskNodeDrillable(node: DiskNodeV1): boolean {
+  return node.kind === 'folder' || node.kind === 'package' || node.kind === 'cloud-only';
+}
+
+/**
+ * What a chart activation opens, at any ring or tile depth: the activated folder itself, or, for a
+ * smaller-items group (whose key is its parent's key plus the layout suffix), the folder that holds
+ * those items. The level's top group has no deeper folder (the list already shows every item), and a
+ * file or another disk opens nothing, exactly as in the list.
+ */
+export function resolveStorageDiskOpenTarget(
+  key: string,
+  rows: ReadonlyMap<string, StorageDiskRow>,
+  chartNodes: ReadonlyMap<string, StorageDiskChartNode>,
+): string | null {
+  const suffix = [HAPPIER_SUNBURST_SMALLER_SUFFIX, HAPPIER_TREEMAP_SMALLER_SUFFIX].find((candidate) => key.endsWith(candidate));
+  const target = suffix ? key.slice(0, -suffix.length) : key;
+  if (target === '') return null;
+  const node = rows.get(target)?.node ?? chartNodes.get(target)?.node;
+  return node && isStorageDiskNodeDrillable(node) ? target : null;
 }
 
 export function describeStorageDiskMark(node: DiskNodeV1): StorageDiskMark {
@@ -201,11 +226,7 @@ export function buildStorageDiskLevel(
       node,
       collect: describeStorageDiskCollect(node, input.pile),
       mark,
-      drillable:
-        (node.kind === 'folder' ||
-          node.kind === 'package' ||
-          node.kind === 'cloud-only') &&
-        mark !== 'mount',
+      drillable: isStorageDiskNodeDrillable(node),
     };
   });
   // Charts always draw biggest first: arc and tile order is by size, not by the list's column sort.

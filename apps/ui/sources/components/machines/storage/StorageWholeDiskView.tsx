@@ -11,6 +11,7 @@ import {
   CapacityBar,
   HappierBreadcrumb,
   happierPageTextMetrics,
+  HappierProgress,
   Sunburst,
   Treemap,
   useHappierCollection,
@@ -70,6 +71,7 @@ import {
 } from './StorageCollectToggle';
 import {
   buildStorageDiskLevel,
+  resolveStorageDiskOpenTarget,
   type StorageDiskChartNode,
   type StorageDiskMark,
   type StorageDiskRow,
@@ -386,11 +388,16 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
         lead={volume ? t('machineStorage.sentence.free', { free: formatMachineBytes(volume.freeBytes, 'storage') }) : null}
         text={[
           running
-            ? t('machineStorage.disk.scanningSentence', {
-                volume: targetName,
-                sized: formatMachineBytes(scan.progress.sizedBytes, 'storage'),
-                used: formatMachineBytes(scan.progress.usedBytes, 'storage'),
-              })
+            ? scan.progress.usedBytes > 0
+              ? t('machineStorage.disk.scanningSentence', {
+                  volume: targetName,
+                  sized: formatMachineBytes(scan.progress.sizedBytes, 'storage'),
+                  used: formatMachineBytes(scan.progress.usedBytes, 'storage'),
+                })
+              : t('machineStorage.disk.scanningSentenceOpen', {
+                  volume: targetName,
+                  sized: formatMachineBytes(scan.progress.sizedBytes, 'storage'),
+                })
             : stopped
               ? t('machineStorage.disk.stoppedSentence')
               : unreadable > 0
@@ -435,15 +442,16 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
           <SurfaceStateCard
             testID="machine-storage-disk-stopped"
             kind="error"
-            title={t('machineStorage.disk.stoppedTitle', {
-              percent:
-                scan.progress.usedBytes > 0
-                  ? Math.round(
+            title={
+              scan.progress.usedBytes > 0
+                ? t('machineStorage.disk.stoppedTitle', {
+                    percent: Math.round(
                       (scan.progress.sizedBytes / scan.progress.usedBytes) *
                         100,
-                    )
-                  : 0,
-            })}
+                    ),
+                  })
+                : t('machineStorage.disk.stoppedTitleOpen')
+            }
             reason={t('machineStorage.disk.stoppedBody', {
               sized: formatMachineBytes(scan.progress.sizedBytes, 'storage'),
             })}
@@ -635,13 +643,14 @@ function ScanProgress(
   const { theme } = useUnistyles();
   const pluginTheme = usePluginUiTheme(theme);
   const { progress } = props.scan;
+  // A folder scan has no total to divide by (the machine reports 0): the bar stays indeterminate, never a made-up share.
   const percent =
     progress.usedBytes > 0
       ? Math.min(
           100,
           Math.round((progress.sizedBytes / progress.usedBytes) * 100),
         )
-      : 0;
+      : null;
   return (
     <>
       <ItemGroup header="none">
@@ -649,17 +658,22 @@ function ScanProgress(
           testID="machine-storage-disk-progress"
           style={styles.progress}
           accessibilityRole="progressbar"
-          accessibilityValue={{ min: 0, max: 100, now: percent }}
+          accessibilityValue={percent === null ? undefined : { min: 0, max: 100, now: percent }}
         >
           <View style={styles.progressHead}>
             <ActivitySpinner size="small" color={theme.colors.text.secondary} />
-            <Text style={styles.progressPercent}>{`${percent}%`}</Text>
+            {percent === null ? null : <Text style={styles.progressPercent}>{`${percent}%`}</Text>}
             <Text style={styles.progressMeta}>
-              {t('machineStorage.disk.progressMeta', {
-                sized: formatMachineBytes(progress.sizedBytes, 'storage'),
-                used: formatMachineBytes(progress.usedBytes, 'storage'),
-                items: progress.items.toLocaleString(getPreferredLanguage()),
-              })}
+              {percent === null
+                ? t('machineStorage.disk.progressMetaOpen', {
+                    sized: formatMachineBytes(progress.sizedBytes, 'storage'),
+                    items: progress.items.toLocaleString(getPreferredLanguage()),
+                  })
+                : t('machineStorage.disk.progressMeta', {
+                    sized: formatMachineBytes(progress.sizedBytes, 'storage'),
+                    used: formatMachineBytes(progress.usedBytes, 'storage'),
+                    items: progress.items.toLocaleString(getPreferredLanguage()),
+                  })}
             </Text>
             <View style={styles.grow} />
             <RoundButton
@@ -670,16 +684,27 @@ function ScanProgress(
               onPress={props.onCancel}
             />
           </View>
-          <CapacityBar
-            theme={pluginTheme}
-            label={t('machineStorage.disk.progressLabel')}
-            value={progress.sizedBytes}
-            capacity={Math.max(1, progress.usedBytes)}
-            size="inline"
-            showCaption={false}
-            color={pluginTheme.colors.accent}
-            trackColor={theme.colors.border.default}
-          />
+          {percent === null ? (
+            <HappierProgress
+              theme={pluginTheme}
+              semantics="none"
+              label={t('machineStorage.disk.progressLabel')}
+              height={4}
+              fillColor={pluginTheme.colors.accent}
+              trackColor={theme.colors.border.default}
+            />
+          ) : (
+            <CapacityBar
+              theme={pluginTheme}
+              label={t('machineStorage.disk.progressLabel')}
+              value={progress.sizedBytes}
+              capacity={Math.max(1, progress.usedBytes)}
+              size="inline"
+              showCaption={false}
+              color={pluginTheme.colors.accent}
+              trackColor={theme.colors.border.default}
+            />
+          )}
           {progress.currentPath ? (
             <View style={styles.current}>
               <Text style={styles.progressMeta}>
@@ -943,13 +968,8 @@ function DiskChart(
     { folder: centre },
   );
   const open = (key: string) => {
-    if (
-      rows.get(key)?.drillable ||
-      props.level.chart.some((node) =>
-        node.children.some((kid) => kid.key === key),
-      )
-    )
-      props.onOpen(key);
+    const target = resolveStorageDiskOpenTarget(key, rows, chartNodes);
+    if (target !== null) props.onOpen(target);
   };
   // Nothing drawn yet (the first read of a level): no chart until there is something to draw.
   if (props.level.chart.length === 0) return null;

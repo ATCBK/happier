@@ -4,7 +4,7 @@ import type {
   PileItemRefV1,
 } from '@happier-dev/protocol/storage/storageV1';
 
-import { buildStorageDiskLevel, storageDiskNodeName, toStorageDiskCollectRow } from './storageDiskModel';
+import { buildStorageDiskLevel, resolveStorageDiskOpenTarget, storageDiskNodeName, toStorageDiskCollectRow } from './storageDiskModel';
 
 const node = (
   nodeId: string,
@@ -203,6 +203,34 @@ describe('one whole-disk view model for List, Map and Rings (plan 40 §4.11)', (
     });
     expect(level.root).toBeNull();
     expect(level.rows[0]!.key).toBe(`${ROOT}/Development`);
+  });
+});
+
+describe('what a chart activation opens', () => {
+  const nodes = [
+    node(ROOT, '/Users', 300),
+    node(`${ROOT}/Development`, ROOT, 200, { childCount: 2 }),
+    node(`${ROOT}/Development/happier`, `${ROOT}/Development`, 150, { childCount: 2 }),
+    node(`${ROOT}/Development/happier/src`, `${ROOT}/Development/happier`, 100),
+    node(`${ROOT}/Development/happier/debug.log`, `${ROOT}/Development/happier`, 30, { kind: 'file' }),
+  ];
+  const level = buildStorageDiskLevel({ nodes, rootId: ROOT, pile: [], sort: { by: 'size', direction: 'desc' } });
+  const rows = new Map(level.rows.map((row) => [row.key, row]));
+  const chartNodes = new Map<string, (typeof level.chart)[number]>();
+  const visit = (list: typeof level.chart) => { for (const entry of list) { chartNodes.set(entry.key, entry); visit(entry.children); } };
+  visit(level.chart);
+  const open = (key: string) => resolveStorageDiskOpenTarget(key, rows, chartNodes);
+
+  it('opens a folder on the third ring like one on the first, and a file or the level’s own smaller group nowhere', () => {
+    expect(open(`${ROOT}/Development`)).toBe(`${ROOT}/Development`);
+    expect(open(`${ROOT}/Development/happier/src`)).toBe(`${ROOT}/Development/happier/src`);
+    expect(open(`${ROOT}/Development/happier/debug.log`)).toBeNull();
+    expect(open('\u0000smaller')).toBeNull();
+  });
+
+  it('opens the folder that holds a smaller-items group, whichever layout drew it', () => {
+    expect(open(`${ROOT}/Development/happier\u0000smaller`)).toBe(`${ROOT}/Development/happier`);
+    expect(open(`${ROOT}/Development/happier/debug.log\u0000smaller`)).toBeNull();
   });
 });
 
