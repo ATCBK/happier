@@ -467,9 +467,9 @@ describe('TranscriptEventRow', () => {
                 errorCode: 'restart_disallowed_by_execution_policy',
             }} />,
         );
-        expect(JSON.stringify(screen.tree.toJSON())).toContain(
-            t('connectedServices.authSwitch.errors.restartDisallowedByExecutionPolicy'),
-        );
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(serialized).not.toContain(t('connectedServices.authSwitch.switchFailed'));
+        expect(serialized).toContain('restart_disallowed_by_execution_policy');
     });
 
     it('O1: renders connected-service-account-switch-attempt events without falling back to Unknown event', async () => {
