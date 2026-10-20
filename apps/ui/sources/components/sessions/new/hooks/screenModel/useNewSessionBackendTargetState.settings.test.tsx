@@ -30,12 +30,13 @@ const entries: ReadonlyArray<ResolvedBackendCatalogEntry> = (['codex', 'claude']
 beforeEach(() => {
     network.resetRequests();
     storage.setState(storage.getInitialState(), true);
-    storage.setState({ settings: { ...settingsDefaults, lastUsedAgent: 'codex', lastUsedBackendTarget: codexTarget } });
+    storage.setState({ settings: { ...settingsDefaults, lastUsedAgent: 'codex', lastUsedBackendTarget: codexTarget,
+        actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } });
 });
 afterEach(() => standardCleanup());
 afterAll(() => network.dispose());
 
-describe('New Session last-used target intent', () => {
+describe('New Session last-used target memory with Settings writes Off', () => {
     it('observes current remembered defaults until the user authors a selection', async () => {
         const subject = await renderHook(() => {
             return useNewSessionBackendTargetState({ entries: [], projectionPhase: 'ready' });

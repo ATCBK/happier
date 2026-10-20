@@ -51,6 +51,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     agentInventoryDemanded?: boolean;
     /** Embedded composers read cached availability until the person reaches for them. */
     machineProbesEnabled?: boolean;
+    windowsTerminalRequested?: boolean;
     capabilityServerId: string;
     externalSessionsFeatureEnabled: boolean;
     settings: Parameters<typeof resolveTerminalHost>[0]['settings'] & Pick<Settings, 'backendEnabledByTargetKey'>;
@@ -102,10 +103,28 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     const machineAgentsById = React.useMemo(() => Object.fromEntries(machineAgents.agents.map((agent) => [buildMachineAgentInventoryKey(agent), agent])), [machineAgents.agents]);
     const getBackendEntryMachineAgent = React.useCallback((entry: ResolvedBackendCatalogEntry) =>
         findMachineAgentForBackendTarget(machineAgents.agents, entry.backendTarget), [machineAgents.agents]);
+    const tmuxRequested = resolveTerminalHost({ settings: params.settings, machineId: params.selectedMachineId }) === 'tmux';
+    const relevantInstallableDepKeys = useSettingsSelector(React.useCallback((settings) => {
+        if (!params.selectedMachineId || !behaviorAgentId) return [];
+
+        const experiments = getAgentResumeExperimentsFromSettings(behaviorAgentId, settings, params.selectedMachineId, params.pluginSettings);
+        return getNewSessionRelevantInstallableDepKeys({
+            agentId: behaviorAgentId,
+            settings,
+            experiments,
+            pluginSettings: params.pluginSettings,
+            resumeSessionId: params.resumeSessionId ?? '',
+            machineId: params.selectedMachineId,
+        });
+    }, [behaviorAgentId, params.pluginSettings, params.pluginProjectionV2, params.resumeSessionId, params.selectedMachineId]));
+    const selectedInstallables = React.useMemo(() => relevantInstallableDepKeys.length === 0 ? []
+        : getInstallablesRegistryEntries({ pluginProjection: params.pluginProjectionV2 ?? undefined })
+            .filter((entry) => relevantInstallableDepKeys.includes(entry.key)), [params.pluginProjectionV2, relevantInstallableDepKeys]);
     const systemRequest = React.useMemo(() => ({ requests: [
-        { id: 'tool.tmux' as const }, { id: 'tool.windowsTerminal' as const },
-        ...getInstallablesRegistryEntries({ pluginProjection: params.pluginProjectionV2 ?? undefined }).map((entry) => ({ id: entry.capabilityId })),
-    ] }), [params.pluginProjectionV2]);
+        ...(tmuxRequested ? [{ id: 'tool.tmux' as const }] : []),
+        ...(params.windowsTerminalRequested ? [{ id: 'tool.windowsTerminal' as const }] : []),
+        ...selectedInstallables.map((entry) => ({ id: entry.capabilityId })),
+    ] }), [params.windowsTerminalRequested, selectedInstallables, tmuxRequested]);
     const { state: selectedMachineCapabilities, refresh: refreshSelectedMachineCapabilities, cacheKeySalt } = useDaemonScopedMachineCapabilitiesCache({
         machineId: params.selectedMachineId,
         serverId: params.capabilityServerId,
@@ -127,13 +146,6 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         systemToolCapabilities: selectedMachineCapabilitiesSnapshot?.response,
     }), [machineAgents, selectedMachineCapabilitiesSnapshot]);
 
-    const tmuxRequested = React.useMemo(() => {
-        return resolveTerminalHost({
-            settings: params.settings,
-            machineId: params.selectedMachineId,
-        }) === 'tmux';
-    }, [params.selectedMachineId, params.settings]);
-
     // The Agent this picker describes is the OPERATIONAL runtime carrier, not
     // the bundled catalog id. `staticAgentId` is null for every installed
     // Agent, and `canAgentResume`'s non-bundled branch additionally needs the
@@ -154,34 +166,15 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         return resumeAgentId !== null && canAgentResume(resumeAgentId, resumeCapabilityOptionsResolved);
     }, [resumeAgentId, resumeCapabilityOptionsResolved]);
 
-    const relevantInstallableDepKeys = useSettingsSelector(React.useCallback((settings) => {
-        if (!params.selectedMachineId || !behaviorAgentId) return [];
-
-        const experiments = getAgentResumeExperimentsFromSettings(behaviorAgentId, settings, params.selectedMachineId, params.pluginSettings);
-        return getNewSessionRelevantInstallableDepKeys({
-            agentId: behaviorAgentId,
-            settings,
-            experiments,
-            pluginSettings: params.pluginSettings,
-            resumeSessionId: params.resumeSessionId ?? '',
-            machineId: params.selectedMachineId,
-        });
-    }, [behaviorAgentId, params.pluginSettings, params.pluginProjectionV2, params.resumeSessionId, params.selectedMachineId]));
     const wizardInstallableDeps = React.useMemo(() => {
-        if (relevantInstallableDepKeys.length === 0) return [];
-
-        const entries = getInstallablesRegistryEntries({
-            pluginProjection: params.pluginProjectionV2 ?? undefined,
-        }).filter((entry) => relevantInstallableDepKeys.includes(entry.key));
         const results = selectedMachineCapabilitiesSnapshot?.response.results;
-        return entries.map((entry) => {
+        return selectedInstallables.map((entry) => {
             const depStatus = entry.getStatus(results);
             const detectResult = entry.getDetectResult(results);
             return { entry, depStatus, detectResult };
         });
     }, [
-        params.pluginProjectionV2,
-        relevantInstallableDepKeys,
+        selectedInstallables,
         selectedMachineCapabilitiesSnapshot,
     ]);
 
@@ -260,8 +253,8 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         const machineId = String(params.selectedMachineId ?? '').trim();
         if (!machineId) return null;
         const serverId = String(params.capabilityServerId ?? '').trim() || 'active';
-        return JSON.stringify([serverId, machineId, cacheKeySalt]);
-    }, [params.capabilityServerId, params.selectedMachineId, cacheKeySalt]);
+        return JSON.stringify([serverId, machineId, cacheKeySalt, systemRequest]);
+    }, [params.capabilityServerId, params.selectedMachineId, cacheKeySalt, systemRequest]);
 
     const initialRefreshHandledKeyRef = React.useRef<string | null>(null);
 
@@ -283,6 +276,11 @@ export function useNewSessionAvailabilityState(params: Readonly<{
             refreshSelectedMachineCapabilities();
         });
     }, [initialRefreshKey, machineProbesEnabled, refreshSelectedMachineCapabilities, selectedMachineOnline]);
+
+    const onWindowsTerminalIntent = React.useCallback(() => {
+        if (!machineProbesEnabled || !selectedMachineOnline) return;
+        refreshSelectedMachineCapabilities({ request: { requests: [{ id: 'tool.windowsTerminal' }] } });
+    }, [machineProbesEnabled, refreshSelectedMachineCapabilities, selectedMachineOnline]);
 
     const getCompatibleProfileBackendEntries = React.useCallback((profile: AIBackendProfile) => {
         // Fail closed: malformed/untyped projection entries must not crash profile availability resolution.
@@ -317,6 +315,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         cliAvailability,
         selectedMachineOnline,
         selectedMachineCapabilities,
+        capabilitiesCacheKeySalt: cacheKeySalt,
         selectedMachineCapabilitiesSnapshot,
         selectedMachineSpawnReadiness,
         selectedAgentSettingsReady,
@@ -333,5 +332,6 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         profileAvailabilityById,
         selectedMachineIsWindows,
         windowsTerminalAvailable,
+        onWindowsTerminalIntent,
     };
 }

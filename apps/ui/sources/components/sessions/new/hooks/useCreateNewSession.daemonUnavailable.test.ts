@@ -1549,8 +1549,10 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     }
   });
 
-  it('settles an accepted requester start without custodian-only operation pushes and ignores a mis-wired neighbor', async () => {
+  it.each(['succeeded', 'retired'] as const)('retains requester acceptance without custodian-only operation pushes through %s and ignores a mis-wired neighbor', async terminalState => {
     const context = await setupTaskHarness();
+    const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+    const { readManualSessionSpawnOperation } = await import('@/sync/domains/session/spawn/manualSessionSpawnOperation');
     const { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV2RequestSchema } = await import('@happier-dev/protocol/actions/operations/v1');
     const userAttemptId = 'requester-start-without-push';
     const result = { ...spawnSuccess('requester-start-session'), executionTarget: { serverId: context.scope.serverId, machineId: 'm1' } };
@@ -1580,13 +1582,28 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       allowedTargetServerIds: [context.scope.serverId], draftId: 'requester-start-draft', launchUserAttemptId: userAttemptId,
       promptStore: createNewSessionPromptStore('One requester prompt'), router,
     })));
+    let createPromise: Promise<void> | undefined;
     try {
       await act(async () => {
-        hook.getCurrent().handleCreateSession({ onAfterCreatedSettled: settlement });
+        createPromise = hook.getCurrent().handleCreateSession({ onAfterCreatedSettled: settlement });
         await flushHookEffects({ cycles: 8, turns: 4 });
       });
       await vi.waitFor(() => expect(waitingForTerminal).toBe(true));
       expect(settlement).not.toHaveBeenCalled();
+      if (terminalState === 'retired') {
+        await hook.unmount();
+        terminal.resolve({ kind: 'found', operation: { ...operation, state: 'succeeded', revision: 2, settledAt: 3, result } });
+        await createPromise;
+        expect(settlement).not.toHaveBeenCalled();
+        expect(router.replace).not.toHaveBeenCalled();
+        expect(router.push).not.toHaveBeenCalled();
+        expect(context.modalAlertSpy).not.toHaveBeenCalled();
+        expect(context.sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
+        expect(readManualSessionSpawnOperation(context.scope, userAttemptId)?.operationId).toBe(operation.operationId);
+        expect(Array.from(actionOperationStore.getSnapshot().operationsByKey.values())
+          .some(candidate => candidate.snapshot.operationId === 'neighbor')).toBe(false);
+        return;
+      }
       await act(async () => {
         context.storageState.applySessions([createSessionFixture({ id: result.sessionId, serverId: context.scope.serverId, encryptionMode: 'plain' })]);
         terminal.resolve({ kind: 'found', operation: { ...operation, state: 'succeeded', revision: 2, settledAt: 3, result } });
@@ -1597,6 +1614,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       expect(context.sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
     } finally {
       terminal.resolve({ kind: 'not_found' });
+      await createPromise;
       await hook.unmount();
     }
   });

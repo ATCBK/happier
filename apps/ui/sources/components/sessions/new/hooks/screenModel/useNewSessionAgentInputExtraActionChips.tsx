@@ -61,6 +61,7 @@ export function useNewSessionAgentInputExtraActionChips(params: Readonly<{
     selectedMachineIsWindows: boolean;
     windowsRemoteSessionLaunchMode: WindowsRemoteSessionLaunchMode | null;
     windowsTerminalAvailable: boolean;
+    onWindowsTerminalIntent?: () => void;
     onWindowsRemoteSessionLaunchModeChange: (next: WindowsRemoteSessionLaunchMode) => void;
     onActionShortcutPress: (actionId: ActionId) => void;
 }>): ReadonlyArray<AgentInputExtraActionChip> {
@@ -152,6 +153,7 @@ export function useNewSessionAgentInputExtraActionChips(params: Readonly<{
             chips.push(createWindowsRemoteSessionLaunchModeActionChip({
                 mode: params.windowsRemoteSessionLaunchMode,
                 windowsTerminalAvailable: params.windowsTerminalAvailable,
+                onIntent: params.onWindowsTerminalIntent,
                 onModeChange: params.onWindowsRemoteSessionLaunchModeChange,
             }));
         }
@@ -177,6 +179,7 @@ export function useNewSessionAgentInputExtraActionChips(params: Readonly<{
         params.showAutomationActionChips,
         params.windowsRemoteSessionLaunchMode,
         params.windowsTerminalAvailable,
+        params.onWindowsTerminalIntent,
         params.onWindowsRemoteSessionLaunchModeChange,
         automationActionChip,
         triggersActionChip,

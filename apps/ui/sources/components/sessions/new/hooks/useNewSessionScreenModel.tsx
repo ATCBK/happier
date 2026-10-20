@@ -216,7 +216,7 @@ import type { NewSessionLaunchAttempt } from '@/components/sessions/new/modules/
 import {
     projectAiLaunchProfileForLegacyUi,
 } from '@/sync/domains/profiles/aiLaunchProfileCollection';
-import { useApplySettings, useDeleteAiLaunchProfile, useProfileFavoriteIdsMutable } from '@/sync/store/settingsWriters';
+import { useDeleteAiLaunchProfile, useProfileFavoriteIdsMutable } from '@/sync/store/settingsWriters';
 import type { NewSessionAgentPickerViewV1 } from '@/sync/domains/settings/registry/account/accountSessionCreationSettingDefinitions';
 import { getMaterializedSavedSecrets, resolveSavedSecretReference as resolveScopedSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { prepareRunnerMcpMaterial } from '@/sync/domains/ephemeralRunner/prepareRunnerMcpMaterial';
@@ -865,10 +865,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const [favoriteProfileIds, setFavoriteProfileIds] = useProfileFavoriteIdsMutable();
     const [favoriteModelSelections, setFavoriteModelSelections] = useCurrentFavoriteModelSelectionsV1Mutable();
     const [favoriteBackendTargetKeys, setFavoriteBackendTargetKeys] = useSettingMutable('favoriteBackendTargetKeysV1');
-    const applySettings = useApplySettings();
     const setLastNewSessionAgentPickerView = React.useCallback((view: NewSessionAgentPickerViewV1) => {
-        applySettings({ lastNewSessionAgentPickerViewV1: view });
-    }, [applySettings]);
+        sync.applySettings({ lastNewSessionAgentPickerViewV1: view }, { expectedSettingsScope: accountSettingsScope, source: 'ui' });
+    }, [accountSettingsScope]);
     const rememberLastEngineSelections = useSetting('rememberLastEngineSelectionsV1') !== false;
     const [lastEngineSelectionsByScope, setLastEngineSelectionsByScope] = useCurrentRememberedEngineSelectionsByScopeV1Mutable();
 
@@ -1871,6 +1870,32 @@ export function useNewSessionScreenModel(input?: Readonly<{
             ? `route:new:${selectedMachineId ?? ''}:${selectedPath}`
             : null,
     });
+    const persistedWindowsRemoteSessionLaunchModeOverride = resolvePersistedWindowsLaunchOverrideForMachine(
+        persistedDraft,
+        selectedMachineId,
+    );
+    const [windowsRemoteSessionLaunchModeOverride, setWindowsRemoteSessionLaunchModeOverride] =
+        React.useState<WindowsRemoteSessionLaunchMode | null>(() => persistedWindowsRemoteSessionLaunchModeOverride);
+
+    const persistedWindowsRemoteSessionLaunchModeOverrideMachineId = persistedDraft?.windowsRemoteSessionLaunchModeOverride?.machineId ?? null;
+    const persistedWindowsRemoteSessionLaunchModeOverrideMode = persistedDraft?.windowsRemoteSessionLaunchModeOverride?.mode ?? null;
+    React.useEffect(() => {
+        setWindowsRemoteSessionLaunchModeOverride(
+            resolvePersistedWindowsLaunchOverrideForMachine(persistedDraft, selectedMachineId),
+        );
+    }, [
+        persistedDraft,
+        persistedWindowsRemoteSessionLaunchModeOverrideMachineId,
+        persistedWindowsRemoteSessionLaunchModeOverrideMode,
+        selectedMachineId,
+    ]);
+    const effectiveWindowsRemoteSessionLaunchMode = React.useMemo(() => {
+        return resolveEffectiveWindowsRemoteSessionLaunchMode({
+            machineMetadata: selectedMachine?.metadata,
+            settings: windowsLaunchSettings,
+            sessionOverride: windowsRemoteSessionLaunchModeOverride ?? undefined,
+        }).mode;
+    }, [selectedMachine?.metadata, windowsLaunchSettings, windowsRemoteSessionLaunchModeOverride]);
     const [agentInventoryDemanded, setAgentInventoryDemanded] = React.useState(false);
     const {
         machineAgents,
@@ -1878,6 +1903,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         getBackendEntryMachineAgent,
         cliAvailability,
         selectedMachineCapabilities,
+        capabilitiesCacheKeySalt,
         selectedMachineCapabilitiesSnapshot,
         tmuxRequested,
         showResumePicker,
@@ -1891,8 +1917,10 @@ export function useNewSessionScreenModel(input?: Readonly<{
         selectedMachineOnline,
         selectedMachineSpawnReadiness,
         windowsTerminalAvailable,
+        onWindowsTerminalIntent,
     } = useNewSessionAvailabilityState({
         agentInventoryDemanded,
+        windowsTerminalRequested: selectedMachine?.metadata?.platform === 'win32' && effectiveWindowsRemoteSessionLaunchMode === 'windows_terminal',
         machineProbesEnabled: hostDemanded,
         selectedMachineId,
         selectedMachine,
@@ -2277,32 +2305,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         return null;
     }, [profileEnabledById, selectedProfileId, profileMap]);
 
-    const persistedWindowsRemoteSessionLaunchModeOverride = resolvePersistedWindowsLaunchOverrideForMachine(
-        persistedDraft,
-        selectedMachineId,
-    );
-    const [windowsRemoteSessionLaunchModeOverride, setWindowsRemoteSessionLaunchModeOverride] =
-        React.useState<WindowsRemoteSessionLaunchMode | null>(() => persistedWindowsRemoteSessionLaunchModeOverride);
-
-    const persistedWindowsRemoteSessionLaunchModeOverrideMachineId = persistedDraft?.windowsRemoteSessionLaunchModeOverride?.machineId ?? null;
-    const persistedWindowsRemoteSessionLaunchModeOverrideMode = persistedDraft?.windowsRemoteSessionLaunchModeOverride?.mode ?? null;
-    React.useEffect(() => {
-        setWindowsRemoteSessionLaunchModeOverride(
-            resolvePersistedWindowsLaunchOverrideForMachine(persistedDraft, selectedMachineId),
-        );
-    }, [
-        persistedDraft,
-        persistedWindowsRemoteSessionLaunchModeOverrideMachineId,
-        persistedWindowsRemoteSessionLaunchModeOverrideMode,
-        selectedMachineId,
-    ]);
-    const effectiveWindowsRemoteSessionLaunchMode = React.useMemo(() => {
-        return resolveEffectiveWindowsRemoteSessionLaunchMode({
-            machineMetadata: selectedMachine?.metadata,
-            settings: windowsLaunchSettings,
-            sessionOverride: windowsRemoteSessionLaunchModeOverride ?? undefined,
-        }).mode;
-    }, [selectedMachine?.metadata, windowsLaunchSettings, windowsRemoteSessionLaunchModeOverride]);
     const { chip: capabilitiesChip, skillSource: newSessionSkillSource } = useNewSessionCapabilitiesChip({
         draft: {
             machineId: selectedMachineId,
@@ -4025,6 +4027,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         selectedMachineIsWindows,
         effectiveWindowsRemoteSessionLaunchMode,
         windowsTerminalAvailable,
+        onWindowsTerminalIntent,
         setWindowsRemoteSessionLaunchModeOverride,
         temporaryComputerTeamAccess: effectiveCurrentAuthoringDraft.executionTarget?.kind === 'temporary_computer'
             && existingTemporaryComputerActivationRef === null
@@ -4178,6 +4181,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         installables: {
             wizardInstallableDeps,
             selectedMachineCapabilities,
+            capabilitiesCacheKeySalt,
         },
         agent: {
             cliAvailability,

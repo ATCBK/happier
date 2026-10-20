@@ -50,7 +50,9 @@ import {
     setNewSessionOrdinaryEntryDraftId,
 } from '@/sync/domains/settings/localOnlyAccountSettings';
 import { useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useSetting } from '@/sync/store/hooks';
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import {
     getSessionDraftSnapshot,
     subscribeSessionDraft,
@@ -341,7 +343,7 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
     const { draftScope, onDraftIdentityResolved } = props;
     const draftAction = useMountedActionExecution(draftScope, { openOnRequest: true });
     const resolveOrdinaryEntry = useResolveNewSessionOrdinaryEntryRoute();
-    const applySettings = useApplySettings();
+    const expectedSettingsScope = useAccountSettingsScope();
     const draftIdentity = React.useMemo(() => {
         const explicitIdentity = resolveNewSessionDraftRouteIdentity({ routeDraftId });
         if (!explicitIdentity.shouldWriteRouteParam) {
@@ -382,10 +384,9 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         if (draftIdentity.draftOrigin !== 'ordinary' || exactDraft?.materialized !== true) return;
         const pointerDelta = setNewSessionOrdinaryEntryDraftId(draftIdentity.draftId);
         if (!pointerDelta) return;
-        applySettings(current => current.newSessionOrdinaryEntryDraftId !== pointerDelta.newSessionOrdinaryEntryDraftId
-            ? pointerDelta
-            : null);
-    }, [applySettings, draftIdentity.draftId, draftIdentity.draftOrigin, exactDraft?.materialized]);
+        if (getStorage().getState().settings.newSessionOrdinaryEntryDraftId === pointerDelta.newSessionOrdinaryEntryDraftId) return;
+        getSyncSingleton().applySettings(pointerDelta, { expectedSettingsScope, source: 'ui' });
+    }, [expectedSettingsScope, draftIdentity.draftId, draftIdentity.draftOrigin, exactDraft?.materialized]);
     const launchUserAttemptId = exactDraft?.localSupplement.launchUserAttemptId ?? null;
     const launchOperation = useActionOperationByRequestId(
         launchUserAttemptId,
@@ -406,10 +407,11 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         if (!outcome.ok || !draftAction.isCurrent()) return;
         const deleted = AppShellActionOutputSchemas['session.draft.delete'].safeParse(outcome.result);
         if (!deleted.success || deleted.data.status !== 'deleted') return;
-        applySettings(current => clearNewSessionOrdinaryEntryDraftIdExact(
-            current,
+        const pointerDelta = clearNewSessionOrdinaryEntryDraftIdExact(
+            getStorage().getState().settings,
             draftIdentity.draftId,
-        ));
+        );
+        if (pointerDelta) getSyncSingleton().applySettings(pointerDelta, { expectedSettingsScope, source: 'ui' });
         if (committedDraftIdRef.current === draftIdentity.draftId) {
             openDraft(resolveOrdinaryEntry({ forceFresh: true }));
         }
@@ -420,7 +422,7 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         draftScope,
         launchInCustody,
         openDraft,
-        applySettings,
+        expectedSettingsScope,
         resolveOrdinaryEntry,
     ]);
 

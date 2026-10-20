@@ -6,7 +6,9 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { isBundledAgentId, resolveBundledAgentIdFromContributionIdentity, type AgentId } from '@/agents/catalog/catalog';
 import { resolvePreferredBackendTarget } from '@/agents/backendCatalog/resolvePreferredBackendTarget';
 import { resolveCatalogAgentIdForBackendTarget, type ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { useSettingsSelector } from '@/sync/store/hooks';
 import { backendTargetKeysMatch, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildLastUsedBackendTargetSettings } from '@/agents/backendCatalog/buildLastUsedBackendTargetSettings';
@@ -55,7 +57,7 @@ export function useNewSessionBackendTargetState(params: Readonly<{
     selectedRuntimeCarrierAgentId: string | null;
     selectedUiAgentType: string;
 }> {
-    const applySettings = useApplySettings();
+    const expectedSettingsScope = useAccountSettingsScope();
     const [hasExplicitUserSelection, setHasExplicitUserSelection] = React.useState(false);
     const explicitRouteTarget = React.useMemo(() => {
         const parsed = PersistedBackendTargetRefV2Schema.safeParse(params.routeBackendTarget);
@@ -203,22 +205,21 @@ export function useNewSessionBackendTargetState(params: Readonly<{
         // `lastUsedBackendTarget` is the canonical selection (V2).
         // `lastUsedAgent` is V1 compatibility only and must not be rewritten for configured/plugin targets
         // (otherwise we manufacture legacy compat or other built-in placeholders as the "truth").
-        applySettings(current => {
-            const parsed = PersistedBackendTargetRefV2Schema.safeParse(current.lastUsedBackendTarget);
-            const currentLastUsedBackendTargetKey = parsed.success ? resolveBackendTargetKeyV2(parsed.data) : null;
-            const lastUsedBackendTargetChanged = currentLastUsedBackendTargetKey !== nextBackendTargetKey;
-            const hasLastUsedAgentWrite = Object.hasOwn(persistedSelection, 'lastUsedAgent');
-            const lastUsedAgentChanged = hasLastUsedAgentWrite
-                && current.lastUsedAgent !== persistedSelection.lastUsedAgent;
-            if (!lastUsedBackendTargetChanged && !lastUsedAgentChanged) return null;
-            return {
-                ...(lastUsedAgentChanged ? { lastUsedAgent: persistedSelection.lastUsedAgent } : {}),
-                ...(lastUsedBackendTargetChanged
-                    ? { lastUsedBackendTarget: persistedSelection.lastUsedBackendTarget }
-                    : {}),
-            };
-        });
-    }, [applySettings, backendTarget, configuredTargetUnavailable, hasExplicitUserSelection, selectedCatalogAgentId]);
+        const current = getStorage().getState().settings;
+        const parsed = PersistedBackendTargetRefV2Schema.safeParse(current.lastUsedBackendTarget);
+        const currentLastUsedBackendTargetKey = parsed.success ? resolveBackendTargetKeyV2(parsed.data) : null;
+        const lastUsedBackendTargetChanged = currentLastUsedBackendTargetKey !== nextBackendTargetKey;
+        const hasLastUsedAgentWrite = Object.hasOwn(persistedSelection, 'lastUsedAgent');
+        const lastUsedAgentChanged = hasLastUsedAgentWrite
+            && current.lastUsedAgent !== persistedSelection.lastUsedAgent;
+        if (!lastUsedBackendTargetChanged && !lastUsedAgentChanged) return;
+        getSyncSingleton().applySettings({
+            ...(lastUsedAgentChanged ? { lastUsedAgent: persistedSelection.lastUsedAgent } : {}),
+            ...(lastUsedBackendTargetChanged
+                ? { lastUsedBackendTarget: persistedSelection.lastUsedBackendTarget }
+                : {}),
+        }, { expectedSettingsScope, source: 'ui' });
+    }, [expectedSettingsScope, backendTarget, configuredTargetUnavailable, hasExplicitUserSelection, selectedCatalogAgentId]);
 
     return {
         backendTarget,

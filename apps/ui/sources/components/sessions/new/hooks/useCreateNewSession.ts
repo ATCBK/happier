@@ -10,7 +10,7 @@ import { machineCollectionHref } from '@/components/settings/machines/collection
 import { sync } from '@/sync/sync';
 import { actionOperationPresentationCoordinator } from '@/components/inbox/actionOperations/actionOperationPresentationRuntime';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
-import { useApplyAuthoringMemoryDelta, useApplySettings } from '@/sync/store/settingsWriters';
+import { useAccountSettingsScope, useApplyAuthoringMemoryDelta } from '@/sync/store/settingsWriters';
 import { storage } from '@/sync/domains/state/storage';
 import { resolveTerminalSpawnOptions } from '@/sync/domains/settings/terminalSettings';
 import { CREATED_SESSION_NOT_AVAILABLE_LOCALLY_ERROR } from '@/sync/runtime/sessionMessageDeliveryErrors';
@@ -161,12 +161,6 @@ import { SessionPromptStackV1Schema, writeSessionContextIntentV1ToMetadata, type
 import { buildSessionInstructionsContextIntentV1 } from '@happier-dev/protocol/actions/sessionStateFieldActions';
 import { readNewSessionDraftFromRepository, writeNewSessionInstructionsToRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
-import type { Settings } from '@/sync/domains/settings/settings';
-
-type MutableSettingsDelta = {
-    -readonly [TKey in keyof Settings]?: Settings[TKey];
-};
-
 export type CreatedSessionFollowUpContext = Readonly<{
     sessionId: string;
     /** Accepted creation follow-up borrows Account custody beyond route presentation. */
@@ -471,7 +465,7 @@ export function useCreateNewSession(params: Readonly<{
     const collaborationAvailabilityRef = React.useRef(collaborationAvailability);
     collaborationAvailabilityRef.current = collaborationAvailability;
     const mountedRef = useMountedRef();
-    const applySettings = useApplySettings();
+    const expectedSettingsScope = useAccountSettingsScope();
     const applyAuthoringMemory = useApplyAuthoringMemoryDelta();
     const [providerLaunchFailure, setProviderLaunchFailure] = React.useState<Readonly<{
         error: ProviderErrorV1;
@@ -1140,7 +1134,6 @@ export function useCreateNewSession(params: Readonly<{
             }
 
             const profilesActive = current.useProfiles;
-            const settingsUpdate: MutableSettingsDelta = {};
             // This history stores local Machine IDs, so its Account Settings
             // scope must be the Home where those IDs were selected.
             // A private folder is never a recent folder: only a chosen one is remembered.
@@ -1157,12 +1150,11 @@ export function useCreateNewSession(params: Readonly<{
                 fireAndForget(applyAuthoringMemory({ recentMachinePaths }), { tag: 'useCreateNewSession.recentPaths' });
             }
             if (current.backendTarget) {
-                Object.assign(settingsUpdate, buildLastUsedBackendTargetSettings({
+                sync.applySettings(buildLastUsedBackendTargetSettings({
                     backendTarget: current.backendTarget,
                     selectedBuiltInAgentId: staticAgentId,
-                }));
+                }), { expectedSettingsScope, source: 'ui' });
             }
-            if (Object.keys(settingsUpdate).length > 0) applySettings(settingsUpdate);
 
             const selectedBackendTarget: PersistedBackendTargetRefV2 = current.backendTarget ?? {
                 kind: 'backend',
@@ -2210,7 +2202,7 @@ export function useCreateNewSession(params: Readonly<{
             }
             createInFlightRef.current = false;
         }
-    }, [applyAuthoringMemory, applySettings, mountedRef, publishLaunchAttempt, managedApproval.requestApproval]);
+    }, [applyAuthoringMemory, expectedSettingsScope, mountedRef, publishLaunchAttempt, managedApproval.requestApproval]);
 
     const currentProviderLaunchErrorScopeKey = buildProviderLaunchErrorScopeKey(params);
     React.useEffect(() => {
