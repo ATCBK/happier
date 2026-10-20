@@ -252,6 +252,8 @@ export function createSessionProviderInputConsumer<Mode, Message>(
   };
   const readLiveWorkFacts = (input: SessionInputLiveWork['input']): SessionInputLiveWork => {
     const session = readSessionLiveState();
+    const nativeState = opts.session.readNativeRuntimeActivitySnapshot?.().state;
+    const nativeRuntimeActivity = nativeState === 'idle' ? 'settled' : nativeState ?? 'unknown';
     const metadata = opts.session.getMetadataSnapshot?.();
     const record = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
       ? metadata as Record<string, unknown> : null;
@@ -289,7 +291,7 @@ export function createSessionProviderInputConsumer<Mode, Message>(
       settledAt = undefined;
       observedUnsettled = true;
     }
-    return { session, input, agents, attention, agentsActiveCount, ...(settledAt !== undefined ? { settledAt } : {}) };
+    return { session, input, nativeRuntimeActivity, agents, attention, agentsActiveCount, ...(settledAt !== undefined ? { settledAt } : {}) };
   };
   const readLiveWorkNotificationSignature = (): string => {
     const pending = opts.session.getPendingQueueState?.();

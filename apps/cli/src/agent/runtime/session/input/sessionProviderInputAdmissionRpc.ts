@@ -173,6 +173,7 @@ export async function prepareSessionRunnerRestartAdmission(params: Readonly<{
 }
 
 export const SessionInputLiveWorkSchema = z.strictObject({
+  nativeRuntimeActivity: z.optional(z.enum(['active', 'settled', 'unknown'])),
   session: z.enum(['active', 'settled', 'unknown']),
   input: z.enum(['active', 'settled', 'unknown']),
   agents: z.optional(z.enum(['active', 'settled', 'unknown'])),

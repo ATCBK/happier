@@ -1,3 +1,4 @@
+import type { AgentSessionRuntimeEventV1 } from '@happier-dev/protocol/runtime';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -8805,6 +8806,35 @@ describe('runHostSessionRuntime', () => {
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
 
+  it('exposes native activity through the production input consumer and activity RPC independently of child runs', async () => {
+    const harness = createHarness();
+    harness.config.runtimeActivityApplicability = 'supported';
+    const handlers = new Set<(event: AgentSessionRuntimeEventV1) => void>();
+    harness.runtime.subscribeRuntimeEvents = vi.fn((handler: (event: AgentSessionRuntimeEventV1) => void) => {
+      handlers.add(handler);
+      return () => { handlers.delete(handler); };
+    });
+    harness.session.subscribeExecutionRunActivitySnapshots = (observe: (count: number) => void) => {
+      observe(3);
+      return () => undefined;
+    };
+    harness.deps.runPermissionModePromptLoopFn = async () => {
+      const read = async () => await harness.handlers.get(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION)!({ action: 'activity_read' });
+      await expect(read()).resolves.toMatchObject({ nativeRuntimeActivity: 'unknown' });
+      for (const handler of handlers) handler({ kind: 'runtime-activity-snapshot',
+        sessionId: 'session-1', sequence: 1, emittedAtMs: 1, state: 'active', activeCount: 1 });
+      await expect(read()).resolves.toMatchObject({ nativeRuntimeActivity: 'active' });
+      for (const handler of handlers) handler({ kind: 'runtime-activity-snapshot',
+        sessionId: 'session-1', sequence: 2, emittedAtMs: 2, state: 'idle', activeCount: 0 });
+      await expect(read()).resolves.toMatchObject({ nativeRuntimeActivity: 'settled' });
+      await vi.waitFor(() => expect(harness.session.enqueueRegisteredSessionStateFieldMutation)
+        .toHaveBeenLastCalledWith(expect.objectContaining({
+          op: { kind: 'set', value: { state: 'active', activeCount: 3 } },
+        })));
+    };
+    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+  });
+
   it('retains Activity slot truth across a same-session client swap', async () => {
     const harness = createHarness();
     harness.config.runtimeActivityApplicability = 'supported';
@@ -8894,18 +8924,19 @@ describe('runHostSessionRuntime', () => {
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
 
-  it('rebinds Activity across a different-session client swap and fences the retired subscriber', async () => {
+  it('rebinds Activity to a different session while retaining the native runtime source', async () => {
     const harness = createHarness();
     harness.config.runtimeActivityApplicability = 'supported';
     const initialSession = harness.session;
-    const replacement = harness.createSessionFixture('session-2').session;
+    const replacementFixture = harness.createSessionFixture('session-2');
+    const replacement = replacementFixture.session;
     const subscriptions: Array<{
       handler: (event: any) => void;
       unsubscribe: ReturnType<typeof vi.fn>;
     }> = [];
     harness.runtime.subscribeRuntimeEvents = vi.fn((handler: (event: any) => void) => {
-      // A retired subscriber can still deliver one in-flight event while it is
-      // being disposed; logical fencing, not disposal order, must drop it.
+      // The native runtime keeps its original source Session identity after
+      // the host swaps the destination Session client.
       const unsubscribe = vi.fn(() => {
         handler({
           kind: 'runtime-activity-snapshot',
@@ -8929,9 +8960,8 @@ describe('runHostSessionRuntime', () => {
         attachedToExistingSession: false,
       };
     };
-    // A real runtime fans every event out to all of its registered consumers
-    // (Activity, runtime publication, session loop), so the case drives whole
-    // registration generations instead of pinning one consumer's index.
+    // Fan events out as the retained native runtime does, without pinning
+    // the Activity consumer's position among the lifecycle subscribers.
     const emitToAll = (
       registrations: readonly Readonly<{ handler(event: any): void }>[],
       event: Readonly<Record<string, unknown>>,
@@ -8939,9 +8969,9 @@ describe('runHostSessionRuntime', () => {
       for (const registration of registrations) registration.handler(event);
     };
     harness.deps.runPermissionModePromptLoopFn = async () => {
-      const retiredGeneration = [...subscriptions];
-      expect(retiredGeneration.length).toBeGreaterThan(0);
-      emitToAll(retiredGeneration, {
+      const runtimeSubscribers = [...subscriptions];
+      expect(runtimeSubscribers.length).toBeGreaterThan(0);
+      emitToAll(runtimeSubscribers, {
         kind: 'runtime-activity-snapshot',
         sequence: 1,
         sessionId: 'session-1',
@@ -8954,10 +8984,13 @@ describe('runHostSessionRuntime', () => {
           op: { kind: 'set', value: { state: 'active', activeCount: 1 } },
         })));
 
+      await expect(harness.handlers.get(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION)!({ action: 'activity_read' }))
+        .resolves.toMatchObject({ nativeRuntimeActivity: 'active' });
       const initialCallsBeforeSwap = initialSession.enqueueRegisteredSessionStateFieldMutation.mock.calls.length;
       await swapSession?.(replacement);
-      const reboundGeneration = subscriptions.slice(retiredGeneration.length);
-      expect(reboundGeneration.length).toBeGreaterThan(0);
+      await expect(replacementFixture.handlers.get(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION)!({ action: 'activity_read' }))
+        .resolves.toMatchObject({ nativeRuntimeActivity: 'unknown' });
+      expect(subscriptions).toHaveLength(runtimeSubscribers.length);
       expect(initialSession.enqueueRegisteredSessionStateFieldMutation.mock.calls
         .slice(initialCallsBeforeSwap)).not.toContainEqual([
         expect.objectContaining({
@@ -8965,8 +8998,8 @@ describe('runHostSessionRuntime', () => {
         }),
       ]);
 
-      const callsBeforeLateOldCallback = replacement.enqueueRegisteredSessionStateFieldMutation.mock.calls.length;
-      emitToAll(retiredGeneration, {
+      const callsBeforeForeignSource = replacement.enqueueRegisteredSessionStateFieldMutation.mock.calls.length;
+      emitToAll(runtimeSubscribers, {
         kind: 'runtime-activity-snapshot',
         sequence: 2,
         sessionId: 'session-2',
@@ -8976,9 +9009,9 @@ describe('runHostSessionRuntime', () => {
       });
       await Promise.resolve();
       expect(replacement.enqueueRegisteredSessionStateFieldMutation)
-        .toHaveBeenCalledTimes(callsBeforeLateOldCallback);
+        .toHaveBeenCalledTimes(callsBeforeForeignSource);
 
-      emitToAll(reboundGeneration, {
+      emitToAll(runtimeSubscribers, {
         kind: 'runtime-activity-snapshot',
         sequence: 3,
         sessionId: 'session-1',
@@ -8986,6 +9019,8 @@ describe('runHostSessionRuntime', () => {
         state: 'active',
         activeCount: 2,
       });
+      await expect(replacementFixture.handlers.get(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION)!({ action: 'activity_read' }))
+        .resolves.toMatchObject({ nativeRuntimeActivity: 'active' });
       await vi.waitFor(() => expect(replacement.enqueueRegisteredSessionStateFieldMutation)
         .toHaveBeenLastCalledWith(expect.objectContaining({
           op: { kind: 'set', value: { state: 'active', activeCount: 2 } },
@@ -8993,7 +9028,6 @@ describe('runHostSessionRuntime', () => {
     };
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
-    expect(subscriptions.length).toBeGreaterThan(1);
     for (const registration of subscriptions) {
       expect(registration.unsubscribe).toHaveBeenCalledOnce();
     }

@@ -2416,7 +2416,10 @@ export async function runHostSessionRuntime(
   };
   inputConsumer = createSessionProviderInputConsumer({
     messageQueue,
-    session: createSessionProviderInputConsumerSessionAdapter(currentLifecycleSession),
+    session: createSessionProviderInputConsumerSessionAdapter(currentLifecycleSession, {
+      readNativeRuntimeActivitySnapshot: () => runtimeActivityProjection?.readAgentRuntimeSnapshot()
+        ?? { state: 'unknown', activeCount: 0 },
+    }),
     reconcileWhenEmpty: 'skip',
     pendingQueueDeliveryTiming,
     resolvePendingQueueDeliveryTiming: readPendingQueueDeliveryTiming,

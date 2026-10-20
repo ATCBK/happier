@@ -38,9 +38,11 @@ export async function waitForNextPermissionModeMessage<Mode, Message>(opts: {
 
 export function createSessionProviderInputConsumerSessionAdapter(
   session: ApiSessionClient,
+  options: Pick<SessionProviderInputConsumerSession, 'readNativeRuntimeActivitySnapshot'> = {},
 ): SessionProviderInputConsumerSession {
   const materializeNextPendingMessageSafely = session.materializeNextPendingMessageSafely;
   return {
+    ...options,
     waitForMetadataUpdate: (signal) => session.waitForMetadataUpdate(signal),
     ...(session.readRuntimeActivitySnapshotTail
       ? { readRuntimeActivitySnapshotTail: () => session.readRuntimeActivitySnapshotTail!() }
