@@ -14633,7 +14633,7 @@ const zhHans: WorkflowTriggersCopy = {
     section: {
         add: '添加触发器',
         emptyTitle: '没有触发器',
-        emptyBody: '添加一个，用于审查每一轮、持续推进目标或响应拉取请求。',
+        emptyBody: '添加一个，用于审查每一轮或持续推进目标。',
         loadFailed: '无法加载此会话的触发器。',
         accountLoadFailed: '无法加载你的触发器。',
         habitsHere: '此处的习惯',

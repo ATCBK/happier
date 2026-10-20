@@ -14143,7 +14143,7 @@ const de: WorkflowTriggersCopy = {
     section: {
         add: 'Auslöser hinzufügen',
         emptyTitle: 'Keine Auslöser',
-        emptyBody: 'Füge einen hinzu, um jeden Zug zu prüfen, auf ein Ziel hinzuarbeiten oder auf den Pull Request zu reagieren.',
+        emptyBody: 'Füge einen hinzu, um jeden Zug zu prüfen oder auf ein Ziel hinzuarbeiten.',
         loadFailed: 'Die Auslöser dieser Sitzung konnten nicht geladen werden.',
         accountLoadFailed: 'Deine Auslöser konnten nicht geladen werden.',
         habitsHere: 'Gewohnheiten hier',

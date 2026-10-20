@@ -14669,7 +14669,7 @@ const pl: WorkflowTriggersCopy = {
     section: {
         add: 'Dodaj wyzwalacz',
         emptyTitle: 'Brak wyzwalaczy',
-        emptyBody: 'Dodaj jeden, aby przeglądać każdą turę, dążyć do celu lub reagować na pull request.',
+        emptyBody: 'Dodaj jeden, aby przeglądać każdą turę lub dążyć do celu.',
         loadFailed: 'Nie udało się wczytać wyzwalaczy tej sesji.',
         accountLoadFailed: 'Nie udało się wczytać twoich wyzwalaczy.',
         habitsHere: 'Nawyki tutaj',

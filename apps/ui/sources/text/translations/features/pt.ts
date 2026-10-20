@@ -14650,7 +14650,7 @@ const pt: WorkflowTriggersCopy = {
     section: {
         add: 'Adicionar um gatilho',
         emptyTitle: 'Nenhum gatilho',
-        emptyBody: 'Adicione um para revisar cada turno, continuar em direção a um objetivo ou reagir ao pull request.',
+        emptyBody: 'Adicione um para revisar cada turno ou continuar em direção a um objetivo.',
         loadFailed: 'Não foi possível carregar os gatilhos desta sessão.',
         accountLoadFailed: 'Não foi possível carregar seus gatilhos.',
         habitsHere: 'Hábitos aqui',

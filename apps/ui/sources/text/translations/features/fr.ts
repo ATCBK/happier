@@ -14697,7 +14697,7 @@ const fr: WorkflowTriggersCopy = {
     section: {
         add: 'Ajouter un déclencheur',
         emptyTitle: 'Aucun déclencheur',
-        emptyBody: 'Ajoutes-en un pour relire chaque tour, avancer vers un objectif ou réagir à la pull request.',
+        emptyBody: 'Ajoutes-en un pour relire chaque tour ou avancer vers un objectif.',
         loadFailed: 'Impossible de charger les déclencheurs de cette session.',
         accountLoadFailed: 'Impossible de charger tes déclencheurs.',
         habitsHere: 'Habitudes ici',

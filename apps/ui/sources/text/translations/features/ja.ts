@@ -14637,7 +14637,7 @@ const ja: WorkflowTriggersCopy = {
     section: {
         add: 'トリガーを追加',
         emptyTitle: 'トリガーはありません',
-        emptyBody: '各ターンのレビュー、目標に向けた継続、プルリクエストへの反応のために追加しましょう。',
+        emptyBody: '各ターンのレビューや、目標に向けた継続のために追加しましょう。',
         loadFailed: 'このセッションのトリガーを読み込めませんでした。',
         accountLoadFailed: 'あなたのトリガーを読み込めませんでした。',
         habitsHere: 'ここでの習慣',

@@ -14650,7 +14650,7 @@ const it: WorkflowTriggersCopy = {
     section: {
         add: 'Aggiungi un trigger',
         emptyTitle: 'Nessun trigger',
-        emptyBody: 'Aggiungine uno per rivedere ogni turno, continuare verso un obiettivo o reagire alla pull request.',
+        emptyBody: 'Aggiungine uno per rivedere ogni turno o continuare verso un obiettivo.',
         loadFailed: 'Impossibile caricare i trigger di questa sessione.',
         accountLoadFailed: 'Impossibile caricare i tuoi trigger.',
         habitsHere: 'Abitudini qui',

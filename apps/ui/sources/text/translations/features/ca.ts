@@ -14673,7 +14673,7 @@ const ca: WorkflowTriggersCopy = {
     section: {
         add: 'Afegeix un activador',
         emptyTitle: 'Cap activador',
-        emptyBody: 'Afegeix-ne un per revisar cada torn, continuar cap a un objectiu o reaccionar a la pull request.',
+        emptyBody: 'Afegeix-ne un per revisar cada torn o continuar cap a un objectiu.',
         loadFailed: "No s'han pogut carregar els activadors d'aquesta sessió.",
         accountLoadFailed: "No s'han pogut carregar els teus activadors.",
         habitsHere: "Hàbits aquí",

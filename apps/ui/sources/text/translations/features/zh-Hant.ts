@@ -14633,7 +14633,7 @@ const zhHant: WorkflowTriggersCopy = {
     section: {
         add: '新增觸發器',
         emptyTitle: '沒有觸發器',
-        emptyBody: '新增一個，用於審查每一輪、持續推進目標或回應拉取請求。',
+        emptyBody: '新增一個，用於審查每一輪或持續推進目標。',
         loadFailed: '無法載入此工作階段的觸發器。',
         accountLoadFailed: '無法載入你的觸發器。',
         habitsHere: '此處的習慣',

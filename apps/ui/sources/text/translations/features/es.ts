@@ -14700,7 +14700,7 @@ const es: WorkflowTriggersCopy = {
     section: {
         add: 'Añadir un disparador',
         emptyTitle: 'Sin disparadores',
-        emptyBody: 'Añade uno para revisar cada turno, seguir hacia un objetivo o reaccionar al pull request.',
+        emptyBody: 'Añade uno para revisar cada turno o seguir hacia un objetivo.',
         loadFailed: 'No se pudieron cargar los disparadores de esta sesión.',
         accountLoadFailed: 'No se pudieron cargar tus disparadores.',
         habitsHere: 'Hábitos aquí',

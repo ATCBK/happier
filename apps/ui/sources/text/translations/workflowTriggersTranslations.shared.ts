@@ -71,7 +71,7 @@ export const en = {
     section: {
         add: 'Add a trigger',
         emptyTitle: 'No triggers',
-        emptyBody: 'Add one to review each turn, keep going toward a goal, or react to the pull request.',
+        emptyBody: 'Add one to review each turn or keep going toward a goal.',
         loadFailed: "Could not load this session's triggers.",
         accountLoadFailed: 'Could not load your triggers.',
         title: 'Triggers',
