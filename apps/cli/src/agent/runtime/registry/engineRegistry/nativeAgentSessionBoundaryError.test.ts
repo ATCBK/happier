@@ -7,6 +7,7 @@ import { createPluginActionHandlerNotStartedError } from '@happier-dev/plugin-sd
 import { describe, expect, it } from 'vitest';
 
 import { projectPluginFailureText } from '@/plugins/runtime/lifecycle/utils';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 
 import {
     classifyNativeAgentSessionEffectBoundaryError,
@@ -18,6 +19,22 @@ import {
 } from './nativeAgentSessionBoundaryError';
 
 describe('native Agent session boundary error sanitization', () => {
+    it('preserves only host-proven startup input refusal through forced sanitization', () => {
+        const refusal = new SessionStartupInputRefusalError({
+            code: 'native_agent_session_mode_unavailable', message: 'The selected native Agent mode is unavailable.',
+        });
+        const sanitized = sanitizeNativeAgentSessionBoundaryError(refusal, true);
+        expect(sanitized).toBeInstanceOf(SessionStartupInputRefusalError);
+        expect(isPluginError(sanitized)).toBe(true);
+        expect(sanitized).toMatchObject({ code: refusal.code, retryable: false });
+        // A plugin-supplied error, even with the same bytes, cannot assert the
+        // host's before-input proof or turn unrelated startup failures into a hold.
+        for (const code of [refusal.code, 'plugin_generation_stale', 'AGENT_RESUME_PROVIDER_STATE_MISSING']) {
+            const generic = new PluginError({ code, message: 'Startup failed', retryable: false });
+            expect(sanitizeNativeAgentSessionBoundaryError(generic, true)).not.toBeInstanceOf(SessionStartupInputRefusalError);
+        }
+    });
+
     it('distinguishes retryable pre-effect authority loss from non-replayable outcome ambiguity', () => {
         const unavailable = createNativeAgentSessionEffectBoundaryError(
             'authority_unavailable_before_effect',

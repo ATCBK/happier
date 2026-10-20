@@ -136,6 +136,7 @@ export function createApiSessionClientFixture(options?: {
 
     return {
         keepAlive() {},
+        prepareForClose() {},
         async enqueueAgentMessageCommitted() {
             return { persisted: true, delivered: false };
         },
@@ -266,6 +267,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             closed = true;
             events.emit('local-closed');
         },
+        prepareForClose() {},
         on(event: string, listener: (...args: unknown[]) => void) {
             return events.on(event, listener);
         },

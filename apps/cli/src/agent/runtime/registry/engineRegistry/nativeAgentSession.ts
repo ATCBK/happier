@@ -186,6 +186,7 @@ import {
 } from './nativeAgentSessionInteractions';
 import type { ExternalSessionHostOperationPort } from '@/session/external/hostOperationOwner';
 import type { RuntimeExactProviderInputOutcome } from '@/agent/runtime/session/input/providerInputOutcome';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import { createAgentSessionTurnInvariant } from '@/agent/runtime/session/turn/agentSessionTurnInvariant';
 import {
     normalizeAvailableCommands,
@@ -1654,10 +1655,9 @@ export function assertNativeAgentSessionModeAvailable(
     publications: NativeAgentSessionPublications | undefined,
 ): void {
     if (isNativeAgentSessionModeUnavailable(configuration, publications)) {
-        throw new PluginError({
+        throw new SessionStartupInputRefusalError({
             code: 'native_agent_session_mode_unavailable',
             message: 'The selected native Agent mode is not available in this Session.',
-            retryable: false,
         });
     }
 }

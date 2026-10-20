@@ -1299,6 +1299,7 @@ export async function blockPendingQueueV2Delivery(params: {
     sessionId: string;
     localId: string;
     reason: PendingQueueDeliveryBlockedReason;
+    signal?: AbortSignal;
 }): Promise<{
     pendingQueueState?: KnownPendingQueueState;
     usedLegacySteeringUnavailableFallback?: true;

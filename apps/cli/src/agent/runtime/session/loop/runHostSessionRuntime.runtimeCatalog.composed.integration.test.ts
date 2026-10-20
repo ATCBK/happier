@@ -7200,6 +7200,113 @@ describe('runHostSessionRuntime', () => {
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
 
+  it.each(['plugin_generation_stale', 'AGENT_RESUME_PROVIDER_STATE_MISSING', 'native_agent_session_mode_unavailable'])(
+    'preserves startup cleanup for a plugin error without host-proven input refusal (%s)', async code => {
+      const { PluginError } = await import('@happier-dev/plugin-sdk');
+      const harness = createHarness();
+      const failure = new PluginError({ code, message: 'Startup failed', retryable: false });
+      setSessionRuntimeFactory(harness.config, () => { throw failure; });
+      await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toBe(failure);
+      expect(harness.session.close).toHaveBeenCalledOnce();
+      expect(harness.session.observeProviderInputSettlement).not.toHaveBeenCalled();
+      expect(harness.metrics.defaultReadyCalls).toBe(0);
+    },
+  );
+
+  it('settles Stop while a typed native startup refusal is publishing', async () => {
+    const { SessionStartupInputRefusalError } = await import('@/agent/runtime/session/input/sessionStartupInputRefusal');
+    const harness = createHarness();
+    const publicationEntered = createDeferred<void>();
+    const releasePublication = createDeferred<void>();
+    let stop: (() => Promise<void>) | undefined;
+    harness.config.onRuntimeStopReady = value => { stop = value; };
+    harness.session.enqueueSessionTurnMutation = async (mutation: unknown) => {
+      if (SessionTurnMutationV1Schema.parse(mutation).action === 'fail') {
+        publicationEntered.resolve();
+        await releasePublication.promise;
+      }
+    };
+    setSessionRuntimeFactory(harness.config, () => {
+      throw new SessionStartupInputRefusalError({ code: 'native_agent_session_mode_unavailable', message: 'Mode unavailable' });
+    });
+    const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps).then(() => null, error => error);
+    await publicationEntered.promise;
+    const stopping = stop?.();
+    releasePublication.resolve();
+    await running;
+    expect(harness.session.endSessionAndClose).toHaveBeenCalledOnce();
+    await stopping;
+    expect(harness.metrics.defaultReadyCalls).toBe(0);
+  });
+
+  it('settles late originals after a typed native startup refusal without reporting Ready or dispatching them', async () => {
+    const harness = createHarness();
+    let contextReadyObservations = 0;
+    harness.session.waitForExecutionRunWorkerUpdateChange = async () => {
+      // A ready worker remains ready until taken. Fail promptly if the failed
+      // host repeats that readiness wake rather than serving Pending originals.
+      if (++contextReadyObservations > 1) throw new Error('Unconsumed worker readiness was observed again');
+      return true;
+    };
+    const [{ assertNativeAgentSessionModeAvailable }, { createNativeAgentSessionPublications }] = await Promise.all([
+      import('@/agent/runtime/registry/engineRegistry/nativeAgentSession'),
+      import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications'),
+    ]);
+    const startupFailed = createDeferred<void>();
+    let stop: (() => Promise<void>) | undefined;
+    harness.config.onRuntimeStopReady = value => { stop = value; };
+    const pending = new Set<string>();
+    harness.session.hasPendingProviderInput = (localId?: string) => localId === undefined ? pending.size > 0 : pending.has(localId);
+    const rejected: unknown[] = [];
+    harness.session.observeProviderInputSettlement = async (outcome: import('@/agent/runtime/session/input/providerInputOutcome').SessionProviderInputOutcome) => {
+      rejected.push(outcome);
+      if (outcome.kind === 'rejected_before_effect' && !outcome.retryable) pending.delete(outcome.localId);
+      return false;
+    };
+    harness.session.enqueueSessionTurnMutation = vi.fn(async (mutation: unknown) => {
+      const parsed = SessionTurnMutationV1Schema.parse(mutation);
+      if (parsed.action === 'fail') {
+        expect(parsed.issue.code).toBe('native_agent_session_mode_unavailable');
+        startupFailed.resolve();
+      }
+    });
+    setSessionRuntimeFactory(harness.config, () => {
+      const publications = createNativeAgentSessionPublications({ agentId: 'acme.external', session: null,
+        signal: new AbortController().signal, isCurrent: () => true, supportsInFlightSteer: false });
+      // The external Agent publishes its real catalog; the host owns refusal.
+      publications.services.modes.bind({ read: () => ({ modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build' }),
+        subscribe: () => ({ dispose() {} }) });
+      assertNativeAgentSessionModeAvailable({ mode: { value: 'default', updatedAtMs: 1 },
+        model: { value: null, updatedAtMs: 0 }, permissionIntent: { value: null, updatedAtMs: 0 }, options: {} }, publications);
+      throw new Error('Expected the real native mode refusal');
+    });
+    const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    // Observe early rejection without allowing an unhandled promise in RED.
+    let finished = false;
+    const result = running.then(() => { finished = true; return null; }, error => { finished = true; return error; });
+    try {
+      await Promise.race([startupFailed.promise, running]);
+      for (const localId of ['late-protected-original', 'another-protected-original']) {
+        pending.add(localId);
+        harness.queue.pushIsolate({ text: 'Must not execute', localId }, { permissionMode: 'default' });
+        await vi.waitFor(() => expect(rejected).toContainEqual(expect.objectContaining({
+          localId, kind: 'rejected_before_effect', retryable: false,
+          reason: 'provider_rejected_before_acceptance', diagnostic: { code: 'native_agent_session_mode_unavailable', severity: 'error' },
+        })));
+      }
+      expect(pending.size).toBe(0);
+      expect(harness.runtime.sendPrompt).not.toHaveBeenCalled();
+      expect(harness.metrics.defaultReadyCalls).toBe(0);
+      expect(harness.metrics.onAfterStartCalls).toBe(0);
+      expect(harness.session.close).not.toHaveBeenCalled();
+    } finally {
+      if (!finished) await stop?.();
+      await result;
+    }
+    expect(harness.session.endSessionAndClose).toHaveBeenCalledOnce();
+    expect(contextReadyObservations).toBe(0);
+  });
+
   it.each(['metadata', 'home-http'] as const)('retains initial input and publishes a retryable preparation issue when startup metadata cannot be confirmed (%s)', async source => {
     const harness = createHarness();
     const { createHttpStatusError } = await import('@/api/client/httpStatusError');

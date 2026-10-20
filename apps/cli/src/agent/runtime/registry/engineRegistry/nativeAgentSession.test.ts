@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createJiti } from 'jiti';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
 import { createWorkspaceWritesPolicyPreparation } from '@/session/roles/workspaceWritesPolicyPreparation';
 import { withHostSessionRuntimeIdentityPublication } from '@/agent/runtime/identity/publication/withHostSession';
@@ -6185,6 +6186,7 @@ describe('native Agent session host adapter', () => {
         } as never);
         if (!accepted) {
             await expect(admission).rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+            await expect(admission).rejects.toBeInstanceOf(SessionStartupInputRefusalError);
             expect(send).not.toHaveBeenCalled();
             expect(dispose).toHaveBeenCalledOnce();
             return;

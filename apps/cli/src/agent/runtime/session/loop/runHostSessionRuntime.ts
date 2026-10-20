@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import { createRepositoryCheckpointCodeRollback } from '@/agent/runtime/checkpoints/repositoryCheckpointPromptLifecycle';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
 import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
@@ -159,9 +160,10 @@ import type { ToolTraceProtocol } from '@/agent/tools/trace/toolTrace';
 import { resolveAttachedRunRuntimeContext } from '@/agent/runtime/resolveAttachedRunRuntimeContext';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
-import type {
-  PermissionModeQueuedPrompt,
-  PermissionModeQueuedPromptMode,
+import {
+  normalizePermissionModeQueuedPromptLocalIds,
+  type PermissionModeQueuedPrompt,
+  type PermissionModeQueuedPromptMode,
 } from '@/agent/runtime/permissions/queuedPrompt';
 import { subscribeSessionRuntimePublicationToMetadata } from '@/agent/runtime/identity/metadata/subscription';
 import { createCliRuntimeSessionStateBridge } from '@/agent/runtime/state/bridge';
@@ -1681,6 +1683,8 @@ export async function runHostSessionRuntime(
     | HostSessionRuntimeHookRuntime
     | null = null;
   let constructionFailureCleanupPromise: Promise<void> | null = null;
+  let nativeStartupRefusal: Readonly<{ code: string; severity: 'error' }> | null = null;
+  let serveRefusedStartupInputs: ((diagnostic: NonNullable<typeof nativeStartupRefusal>) => Promise<void>) | null = null;
   const cleanupFailedConstruction = (
     continuationUnreachable: boolean,
   ): Promise<void> => {
@@ -2421,9 +2425,9 @@ export async function runHostSessionRuntime(
       try {
         return await Promise.race([
           waitForSessionFollowWakeInvalidation(readSessionFollowWakeInvalidationGeneration(), controller.signal),
-          ...(currentLifecycleSession.waitForExecutionRunWorkerUpdateChange
+          ...(!nativeStartupRefusal && currentLifecycleSession.waitForExecutionRunWorkerUpdateChange
             ? [currentLifecycleSession.waitForExecutionRunWorkerUpdateChange(controller.signal)] : []),
-          ...(readWorkflowInputPort() ? [readWorkflowInputPort()!.waitForChange(controller.signal)] : []),
+          ...(!nativeStartupRefusal && readWorkflowInputPort() ? [readWorkflowInputPort()!.waitForChange(controller.signal)] : []),
         ]);
       } finally {
         controller.abort();
@@ -2431,6 +2435,7 @@ export async function runHostSessionRuntime(
       }
     },
     takeContextOnlyInput: async (signal) => {
+      if (nativeStartupRefusal) return null;
       const source = await readWorkflowInputPort()?.take(signal)
         ?? await currentLifecycleSession.takeExecutionRunWorkerUpdate?.(signal);
       if (signal.aborted) return null;
@@ -2491,6 +2496,28 @@ export async function runHostSessionRuntime(
       };
     },
   });
+  const startupInputConsumer = inputConsumer;
+  serveRefusedStartupInputs = async diagnostic => {
+    // Session creation is acknowledged before the caller offers its first input.
+    // Retain the failed host's existing input custody until Stop, so a later
+    // original receives the same terminal refusal instead of triggering respawn.
+    while (!startupRegistrationLifetime.signal.aborted) {
+      const batch = await startupInputConsumer.waitForNextInput({ abortSignal: startupRegistrationLifetime.signal });
+      if (!batch) return;
+      if (batch.message.hostContextOnly) {
+        startupInputConsumer.deferContextOnlyInput(batch);
+        startupInputConsumer.releaseInputBatch();
+        continue;
+      }
+      for (const localInputId of normalizePermissionModeQueuedPromptLocalIds(batch.message)) {
+        observeProviderInputOutcome({ type: 'input-rejected', localInputId,
+          userMessageSeq: batch.message.userMessageSeq ?? null,
+          ...(batch.message.userMessageSeqs ? { userMessageSeqs: batch.message.userMessageSeqs } : {}),
+          diagnostic, retryable: false });
+      }
+      startupInputConsumer.releaseInputBatch();
+    }
+  };
   let connectedServiceApplicationSettledHandler: ((request: Readonly<{
     serviceId: string;
     groupId: string;
@@ -2925,6 +2952,9 @@ export async function runHostSessionRuntime(
     createdRuntime = await config.createSessionRuntime(sessionRuntimeParams);
     recordStartupPhase('agent_runtime_open');
   } catch (error) {
+    if (error instanceof SessionStartupInputRefusalError) {
+      nativeStartupRefusal = { code: error.code, severity: 'error' };
+    }
     if (isAgentNativeResumeIdentityMismatchError(error)) {
       await invalidateTrackedNativeReturnIdentity(initialResumeId);
     }
@@ -3988,7 +4018,7 @@ export async function runHostSessionRuntime(
           ...readSessionPreparationFailureDiagnostic(error),
         });
         const startupIssue = !runtimeStopRequested ? classifyPrimarySessionRuntimeIssue({
-          cause: 'session_error', error, provider: policyAgentId,
+          cause: 'session_error', error: nativeStartupRefusal ?? error, provider: policyAgentId,
         }) : null;
         if (startupIssue) {
           // Construction failures happen after Session custody but before the live
@@ -4001,6 +4031,28 @@ export async function runHostSessionRuntime(
           });
           preparationFailurePublished = startupIssue.code === 'preparation_pending'
             && startupIssue.source === 'dependency_failure';
+        }
+        if (nativeStartupRefusal && await terminalizeBeforeAgentAdmission()) return;
+        if (nativeStartupRefusal && serveRefusedStartupInputs && !runtimeStopRequested) {
+          const serving = serveRefusedStartupInputs(nativeStartupRefusal);
+          runtimeStopDelegate = async () => {
+            startupRegistrationLifetime.abort();
+            session.prepareForClose();
+            try { await serving; }
+            finally {
+              await session.endSessionAndClose();
+              await cleanupFailedConstruction(false);
+            }
+          };
+          dispatchRuntimeStop();
+          try { await serving; }
+          finally {
+            if (runtimeStopRequested) await runtimeStopDispatchPromise;
+            else await cleanupFailedConstruction(false);
+          }
+          if (runtimeStopRequested) {
+            return;
+          }
         }
         await cleanupFailedConstruction(
           isAgentSessionContinuationUnreachableError(error),

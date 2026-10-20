@@ -997,6 +997,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   let closeFailedSession = false;
   const cleanupOnce = (): Promise<void> => {
     cleanupPromise ??= (async () => {
+      if (closeFailedSession) params.session.prepareForClose();
       unsubscribeRuntimeEventsOnce();
       await drainRuntimeTranscriptProjections();
       // Normal completion retains accepted marker custody until it drains.
@@ -1050,6 +1051,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
             disposeRuntime: disposeRuntimeOnce,
             reason: runtimeDisposeReason,
           });
+          params.session.prepareForClose();
           unsubscribeRuntimeEventsOnce();
           await drainRuntimeTranscriptProjections();
           sessionTurnLifecycle.retireAcceptedLifecyclePublication();
