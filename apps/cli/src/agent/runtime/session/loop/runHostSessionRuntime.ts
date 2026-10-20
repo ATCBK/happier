@@ -2961,10 +2961,6 @@ export async function runHostSessionRuntime(
   if (!config.createSessionRuntime) {
     throw new Error('Host session runtime config must define createSessionRuntime');
   }
-  // Only a genuine same-machine native return removes its old projection while
-  // the provider decides whether it can accept that exact id. Other resumes
-  // retain their durable identity and log-path metadata unchanged.
-  await clearTrackedNativeReturnIdentity();
   if (await terminalizeBeforeAgentAdmission()) return;
   try {
     createdRuntime = await config.createSessionRuntime(sessionRuntimeParams);

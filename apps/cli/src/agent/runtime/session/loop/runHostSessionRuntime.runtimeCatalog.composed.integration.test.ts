@@ -5618,6 +5618,43 @@ describe('runHostSessionRuntime', () => {
     }
   });
 
+  it.each(['generic', 'identity_mismatch'] as const)('changes tracked native return identity only for proven resume failure (%s)', async failureKind => {
+    const harness = createHarness();
+    const home = await mkdtemp(join(tmpdir(), 'native-return-startup-failure-'));
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    const resumeId = 'native-return-startup-failure';
+    const failure = Object.assign(new Error('Native startup failed'),
+      failureKind === 'identity_mismatch' ? { happierNativeResumeIdentityMismatch: true } : {});
+    harness.config.flavor = 'claude';
+    harness.config.policyAgentId = 'claude';
+    harness.config.providerSessionMetadataKey = 'claudeSessionId';
+    harness.opts.resume = resumeId;
+    setSessionRuntimeFactory(harness.config, () => { throw failure; });
+    try {
+      envScope.patch({ HAPPIER_HOME_DIR: home });
+      reloadConfiguration();
+      const { createLocalAgentNativeResumeRecordStore } = await import('@/session/agentTransition/agentNativeReturn');
+      const { resolveVendorResumeIdForExistingSession } = await import('@/daemon/spawn/resolveVendorResumeIdForExistingSession');
+      const store = createLocalAgentNativeResumeRecordStore();
+      const key = { happierSessionId: harness.session.sessionId, agentId: 'claude' as const };
+      const record = { identity: { v: 1 as const, vendorResumeId: resumeId }, departureSeqInclusive: 12 };
+      await store.writeAgentNativeResumeRecord({ ...key, ...record });
+      await harness.session.updateMetadata((metadata: Metadata) => ({ ...metadata, flavor: 'claude', claudeSessionId: resumeId }));
+      await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toBe(failure);
+      const expectedIdentity = failureKind === 'identity_mismatch' ? null : resumeId;
+      expect(harness.session.getMetadataSnapshot().claudeSessionId ?? null).toBe(expectedIdentity);
+      expect(resolveVendorResumeIdForExistingSession({ agent: 'claude', credentials: null,
+        rawSession: {}, metadataRecord: harness.session.getMetadataSnapshot() })).toBe(expectedIdentity);
+      await expect(store.readAgentNativeResumeRecord(key)).resolves.toEqual(
+        failureKind === 'identity_mismatch' ? null : record,
+      );
+    } finally {
+      envScope.restore();
+      reloadConfiguration();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('releases pre-runtime durable custody when the provider runtime factory fails', async () => {
     loggerDebugMock.mockClear();
     const harness = createHarness();
