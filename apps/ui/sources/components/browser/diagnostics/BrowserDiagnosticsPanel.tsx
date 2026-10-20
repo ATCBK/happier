@@ -256,7 +256,7 @@ function BrowserHostDiagnosticsPanel(props: Readonly<{
                     </Text>
                 )}
                 {!unavailable && !props.diagnostics.trusted ? (
-                    <Text testID={`${props.testID}-untrusted`} style={stylesheet.warning}>
+                    <Text testID={`${props.testID}-untrusted`} style={stylesheet.subtitle}>
                         {t('browserDiagnostics.host.untrustedNotice')}
                     </Text>
                 ) : null}

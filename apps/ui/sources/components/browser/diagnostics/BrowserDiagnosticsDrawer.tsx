@@ -312,11 +312,11 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
 
     const persistenceKey = React.useMemo(() => diagnosticsViewKey(props.diagnostics), [props.diagnostics]);
     const persistedState = drawerStateByDiagnosticsViewKey.get(persistenceKey);
-    // Opens COLLAPSED. A devtools drawer that takes 45% of the surface the instant a page loads is
-    // a drawer the user closes before reading anything; the peek says "there is something here"
-    // without deciding for them.
+    // Opens CLOSED: the page is the hero (browser lab Q). The closed bar still says the diagnostics
+    // are here; a peek of the drawer on every page load took a quarter of the page before the person
+    // asked for it. Opening it is remembered per view.
     const [drawerState, setDrawerState] = React.useState<DrawerState>(
-        persistedState?.drawerState ?? 'collapsed',
+        persistedState?.drawerState ?? 'closed',
     );
     const [activeSection, setActiveSection] = React.useState<SectionKey | null>(
         persistedState?.activeSection && sections.includes(persistedState.activeSection)
