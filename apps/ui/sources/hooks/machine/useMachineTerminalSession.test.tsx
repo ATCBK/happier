@@ -235,9 +235,16 @@ describe('useMachineTerminalSession', () => {
         await servedHomes.dispose();
     });
 
-    it.each([0, 17])('renders a finished worker Script and its native exit %s through the real output pane', async (exitCode) => {
+    it.each([
+        { exitCode: 0, signal: null, outcome: 'Exit code: 0' },
+        { exitCode: 17, signal: null, outcome: 'Exit code: 17' },
+        { exitCode: 0, signal: 0, outcome: 'Exit code: 0' },
+        { exitCode: 0, signal: 15, outcome: 'Stopped' },
+        { exitCode: null, signal: 15, outcome: 'Stopped' },
+        { exitCode: null, signal: null, outcome: null },
+    ])('renders a finished worker Script with native outcome $exitCode / $signal through the real output pane', async ({ exitCode, signal, outcome }) => {
         vi.useRealTimers();
-        const terminalId = `finished-worker-${exitCode}`;
+        const terminalId = `finished-worker-${exitCode}-${signal}`;
         const { storage } = await import('@/sync/domains/state/storage');
         storage.getState().applyMachines([createMachineFixture({ id: 'machine', activeAt: Date.now() })]);
         storage.setState({ projectAccountRows: {
@@ -255,11 +262,12 @@ describe('useMachineTerminalSession', () => {
             domainRef: { kind: 'projectCommand', purpose: 'script', serverId: homeIds.primary,
                 machineId: 'machine', workspaceRefId: 'worker-checkout', cwd: '/worker/repo', terminalId,
                 sourceWorkspace: { serverId: homeIds.primary, machineId: 'source-machine', workspaceId: 'source-checkout', rootPath: '/source/repo' },
-                script: { name: 'fail', source: { kind: 'command', command: `printf QA_FAIL; exit ${exitCode}` } }, exitCode },
+                script: { name: 'fail', source: { kind: 'command', command: 'printf QA_FAIL' } },
+                ...(exitCode === null ? {} : { exitCode }) },
         });
         terminalOps.streamReadBytes.mockResolvedValue(TerminalStreamReadResponseSchema.parse({ ok: true, terminalId, frames: [
             { t: 'bytes', terminalId, seq: 1, byteOffset: 0, byteLength: 9, encoding: 'base64', data: 'UUFfRkFJTA0K' },
-            { t: 'exit', terminalId, byteOffset: 9, exitCode, signal: null },
+            { t: 'exit', terminalId, byteOffset: 9, exitCode, signal },
         ], nextByteOffset: 9, availableByteOffset: 9, droppedBeforeByteOffset: 0, done: true }));
         const { ProjectCommandOutputPane } = await import('@/components/inbox/actionOperations/ProjectCommandOutputPane');
         const React = await import('react');
@@ -268,7 +276,8 @@ describe('useMachineTerminalSession', () => {
         }));
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('QA_FAIL'));
         expect(screen.findByTestId('workspace-embedded-terminal-state-card')).toBeNull();
-        expect(screen.getTextContent()).toContain(`Exit code: ${exitCode}`);
+        if (outcome) expect(screen.getTextContent()).toContain(outcome);
+        if (exitCode === null || signal) expect(screen.getTextContent()).not.toContain('Exit code:');
         expect(terminalOps.streamReadBytes).toHaveBeenCalledWith('machine', expect.objectContaining({ terminalId }), expect.objectContaining({ serverId: homeIds.primary }));
         await screen.unmount();
         expect(terminalOps.ensure).not.toHaveBeenCalled();

@@ -66,8 +66,12 @@ function resolveTerminalFrameState(props: EmbeddedTerminalPaneFrameProps): Termi
         case 'connecting': return { kind: 'line', reason: t('terminalWorkspace.states.connecting'), busy: true };
         case 'exited': return {
             kind: 'line',
-            reason: joinHappierFacts(t('terminalWorkspace.states.exited', { title: props.title }),
-                controller.exitCode == null ? null : `${t('tools.structuredResult.exit')}: ${controller.exitCode}`),
+            // Native PTYs may pair a signal with a placeholder zero exit code. A signal
+            // establishes termination; it must not be presented as a successful exit.
+            reason: controller.exitSignal != null && controller.exitSignal !== 0
+                ? joinHappierFacts(props.title, t('localServices.rowStatus.stopped'))
+                : joinHappierFacts(t('terminalWorkspace.states.exited', { title: props.title }),
+                    controller.exitCode == null ? null : `${t('tools.structuredResult.exit')}: ${controller.exitCode}`),
             // A borrowed view cannot restart a process it does not own.
             ...(controller.readOnly ? {} : { action: { label: t('terminalWorkspace.states.restart'), onPress: () => controller.requestRestart() } }),
         };

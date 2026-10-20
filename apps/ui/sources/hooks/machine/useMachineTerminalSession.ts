@@ -117,6 +117,7 @@ export function useMachineTerminalSession(params: Readonly<{
     const [status, setStatus] = React.useState<TerminalStatus>(() => params.attachedTerminalId !== undefined || initialSurfaceState.terminalId ? 'connecting' : 'not-open');
     const [error, setError] = React.useState<string | null>(null);
     const [exitCode, setExitCode] = React.useState<number | null>(null);
+    const [exitSignal, setExitSignal] = React.useState<number | null>(null);
     // A terminal that streamed once and then failed lost its connection; it did not fail to start.
     const everConnectedRef = React.useRef(false);
     const [terminalTitle, setTerminalTitle] = React.useState<string | null>(null);
@@ -522,6 +523,7 @@ export function useMachineTerminalSession(params: Readonly<{
             }
             setStatus('connected');
             setExitCode(null);
+            setExitSignal(null);
             everConnectedRef.current = true;
 
             const carrier = createMachineRpcTerminalStreamCarrier({
@@ -604,6 +606,7 @@ export function useMachineTerminalSession(params: Readonly<{
                     writeDecodedStreamProjection(terminalPreviewDecoderRef.current.flush());
                     terminalStreamDoneRef.current = true;
                     setExitCode(event.exitCode);
+                    setExitSignal(event.signal);
                     setStatus('exited');
                 },
             });
@@ -975,6 +978,7 @@ export function useMachineTerminalSession(params: Readonly<{
         terminalId: terminalIdRef.current,
         error,
         exitCode,
+        exitSignal,
         connectionLost: status === 'error' && everConnectedRef.current,
         detectedUrl,
         onInput,

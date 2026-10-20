@@ -16,6 +16,8 @@ export type EmbeddedTerminalPaneController = Readonly<{
     error: string | null;
     /** Native exit observed from the terminal's retained stream. */
     exitCode?: number | null;
+    /** Native termination signal; zero means the process was not signalled. */
+    exitSignal?: number | null;
     /** `error` that followed a connected stream: the terminal started, then its connection dropped. */
     connectionLost?: boolean;
     detectedUrl: EmbeddedTerminalDetectedUrl;
