@@ -769,6 +769,14 @@ V1 `{ v: 1, scopeId, reviewedChangeKeys }` and
 or RPC. Native UI Keep writes the keys of displayed evidence through the same
 Account-mode-admitted KV port, independently of Machine reachability.
 
+Retained bare-turn capture and saved-result comparisons are qualified on read
+from their stored Session/turn/receipt metadata by the capture source owner.
+This is a projection, not a database or Account-KV backfill; comparison and
+occurrence IDs remain unchanged. Ambiguous old bare-turn mark records are not
+guessed into new scopes or deleted. PR witness refresh currently changes the
+reviewed scope key; endpoint-independent PR marks remain an unresolved
+development contract, not a completed compatibility guarantee.
+
 V2 is an explicit operation epoch because the captured selector is an
 authority-bearing input, not an ignorable optional field. A terminal supporting
 only the strict saved-result form rejects V2 before an Account write; unaffected

@@ -363,6 +363,12 @@ verified Session authority through the existing `session.write` RPC proof;
 caller-supplied Session and root selectors never grant access. The fixed Run
 profile scope enforces the same rule: detached intent input cannot open a
 private capture or saved result by naming its Session.
+For raw SCM calls, the canonical RPC authorization map keeps Session-scoped
+Discard at `submitAgentInput` authority and private branch/PR evidence at
+`readTranscript`. Machine-only workspace admission remains independent. Ordinary
+local callers carrying Session proof use verified Home/Machine ingress rather
+than dropping that proof through the in-process adapter; already-admitted
+host-private requester custody stays with its installed owner.
 In the Project Changes destination, Session choices come from the canonical
 admitted Project Sessions roster, narrowed to the displayed Machine and checkout.
 The optional `evidenceSessionId` travels with the review target and URL; it is a
@@ -608,27 +614,33 @@ uses its observed current-byte hash or absent-file expectation, preserving a
 concurrent edit instead of overwriting it.
 
 The File-review facade offers one sticky, hash-guarded Undo, retired by dismissal
-or the next review action. Unit inverses retain only changed text; whole-file
-preimages use inline bytes or the existing prepared export. Exported preimages
+or the next review action. Small unit inverses retain only changed text; whole-file
+preimages use inline bytes or the existing prepared export. When an inverse would
+exceed the actual aggregate routed response budget, the same result instead
+contains its exact preimage export. Export preparation precedes every entry's
+write; there is no truncation or file-size cap. Exported preimages
 are downloaded and verified before ready Undo is offered, released through that
 transfer owner, and held only in the result/notice closure until retirement.
 A failed preimage download reports the completed mutation with unavailable Undo;
 it never repeats the mutation. The rendered File-page integration remains a
 separate presentation handoff, not a completed flow established by this helper.
 
-Two no-cap Undo outcomes remain `AMENDMENT_REQUIRED`: an inverse containing a
-large changed run can itself exceed the routed response budget, and the ordinary
-local Session executor has no preimage-export publisher. Both refuse before
-filesystem mutation when Undo cannot be delivered. The proposed oversized-unit
-resolution is the existing previous-byte export, not truncation or a file-size
-cap. A local Session remains usable without requiring a daemon; introducing a
-publisher there or requiring a different transport needs an explicit decision.
+Small local Session inverses remain usable without a daemon. Only when the
+canonical all-entry preflight proves that Undo needs an export does that caller
+delegate the unchanged request to its selected Machine's existing SCM transport.
+The Machine revalidates and owns the mutation and note; no local entry is written
+first. A proven unavailable transport refuses before mutation. A lost
+acknowledgement remains an unknown outcome, never an automatic local retry.
+This uses the existing daemon export lifecycle, without introducing a Session
+publisher, listener or preimage store.
 
 The executor emits one `file_review_note.v1` item per successful Discard/Restore
 Action and receiving Session for all callers. The UI emits only a successful
 Undo's note. Keep, refusal and `kept_edited` emit none. These are explicit
 `next_turn` inputs and do not wake an idle Session. Note-delivery failure is
 reported separately from a completed filesystem mutation and never replays it.
+Only run-key selections carry a numeric change count; captured Git-hunk refs and
+HEAD selections omit it rather than treating a hunk as one review run.
 
 ## Saved edits, personal marks and offline access
 
@@ -679,7 +691,10 @@ over manual edits or refreshing unrelated pending inputs.
 Results survive Run termination/cache eviction until explicit deletion. Personal
 marks use `workspace:scm-reviewed:scope:<encoded scopeId>` with
 `{ v: 1, scopeId, reviewedChangeKeys }`. The scope identifies the repository root
-and source selector, independently of captured endpoint revisions. Each change
+and source selector. Working-tree, Session and qualified-turn scopes do not
+depend on captured endpoint revisions. The current PR arm still includes request
+witnesses in its scope key, so a PR witness refresh can lose the visible marks;
+that endpoint-independence gap remains unresolved in this development work. Each change
 key identifies path, layer and exact removed/added line content, with an ordinal
 for identical runs. `buildReviewUnits`, `buildScmFileReviewUnits` and
 `buildScmChangeKeys` in Protocol's occurrence owner supply that identity to the
@@ -691,6 +706,17 @@ The UI subscribes through the existing
 `subscribeKvPrefixChanges`, scoped to captured Home/Account credentials. Account
 JSON transport owns plain/encrypted envelope admission: plain Accounts need no
 fabricated E2EE keys and unreadable/mismatched encrypted data fails closed.
+
+Metadata-only marks use path, previous path and change kind, not blob content.
+A binary replacement with that same metadata identity therefore retains its
+metadata-stop mark; it does not have the textual run's content invalidation.
+
+The capture owner publishes resolved Session/turn/receipt selectors rather than
+a contextual bare turn selector. Its retained-capture and saved-result readers
+(including revision Undo) project those selectors from authoritative stored
+metadata without changing comparison IDs, occurrence IDs or inventory. Earlier
+ambiguous bare-turn Account mark records are left untouched; readers do not
+guess which turn should inherit their marks.
 
 An unrelated edit or line shift can change the comparison identity without
 dropping marks for unchanged content. Rewriting the run makes it unreviewed;
