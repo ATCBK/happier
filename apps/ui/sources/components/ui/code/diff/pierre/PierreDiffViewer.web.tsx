@@ -6,8 +6,8 @@ import { useUnistyles } from 'react-native-unistyles';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 import { createTwoFilesPatch } from 'diff';
 
-import { parseDiffFromFile, parsePatchFiles, Virtualizer as PierreVirtualizer } from '@pierre/diffs';
-import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, OnDiffLineClickProps } from '@pierre/diffs';
+import { parseDiffFromFile, parsePatchFiles, VirtualizedFileDiff, Virtualizer as PierreVirtualizer } from '@pierre/diffs';
+import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, OnDiffLineClickProps, FileDiff as PierreFileDiffInstance, SelectedLineRange } from '@pierre/diffs';
 import { FileDiff, Virtualizer, VirtualizerContext, WorkerPoolContext, useVirtualizer } from '@pierre/diffs/react';
 import { usePierreScrollRootVirtualizer } from './PierreScrollRootVirtualizerProvider.web';
 
@@ -19,11 +19,17 @@ import { extractUnifiedDiffForSingleFile } from '@/scm/diff/extractUnifiedDiffFo
 
 import type { DiffViewerProps } from '../diffViewerTypes';
 import { ensureHappierPierreThemeRegistered, resolveHappierPierreThemeIds } from './pierreThemeRegistry.web';
-import { getPierreDiffWorkerPool } from './pierreWorkerPool.web';
+import { getPierreDiffWorkerPool, getPierreDiffWorkerPoolFailed, subscribePierreDiffWorkerPool } from './pierreWorkerPool.web';
 import { buildPierreDiffOptionsBase } from './buildPierreDiffOptionsBase.web';
 import { resolvePierreLanguageOverride } from './resolvePierreLanguageOverride.web';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
+import { buildCodeLinesFromTextDiff } from '@/components/ui/code/model/buildCodeLinesFromTextDiff';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
+import { codeLineScrollTargetKey } from '@/components/ui/code/model/codeLineScrollTargetKey';
+import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
+import { PIERRE_FIND_HIGHLIGHT_CSS, pierreCodeLineSelector, registerPierreFindHighlights } from './pierreFindHighlights.web';
+import { HappierUnifiedDiffViewer } from '../happier/HappierUnifiedDiffViewer';
+import { HappierTextDiffViewer } from '../happier/HappierTextDiffViewer';
 import { HAPPIER_UI_FONT_SCALE_CSS_VAR } from '@/components/ui/text/webUnistylesFontOverrides';
 import { getDefaultFont } from '@/constants/Typography';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -39,6 +45,24 @@ import {
 
 const HAPPIER_PIERRE_LINE_CLICK_HANDLED_KEY = '__happierPierreLineClickHandled';
 
+type PierrePaint = Readonly<{
+    node: HTMLElement;
+    instance: PierreFileDiffInstance<React.ReactNode, undefined>;
+    virtualizer: PierreVirtualizer | undefined;
+}>;
+
+function PierreFileDiffBody(props: React.ComponentProps<typeof FileDiff<React.ReactNode, undefined>> & Readonly<{
+    onPaint: (paint: PierrePaint) => void;
+}>) {
+    const virtualizer = useVirtualizer();
+    const { onPaint, ...fileProps } = props;
+    const options = React.useMemo(() => ({
+        ...props.options,
+        onPostRender: (node: HTMLElement, instance: PierreFileDiffInstance<React.ReactNode, undefined>) => onPaint({ node, instance, virtualizer }),
+    }), [onPaint, props.options, virtualizer]);
+    return <FileDiff {...fileProps} options={options} />;
+}
+
 // Pierre supplies its pre/code backing from the syntax theme. Its public CSS adapter
 // keeps that backing under the same content coat as the app's other code renderer.
 const PIERRE_MATERIAL_UNSAFE_CSS = `
@@ -50,14 +74,14 @@ pre, code, [data-diffs-header], [data-diff], [data-file], [data-error-wrapper], 
 // The patched library retains its original number/dataset for interactions. Desktop exposes both
 // source coordinates; the compact phone gutter keeps the library's useful single coordinate.
 const PIERRE_UNIFIED_GUTTER_UNSAFE_CSS = `
-[data-line-number-side] { display: none; }
 [data-separator-content] { display: flex; align-items: center; gap: 1ch; }
 [data-hunk-context] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
 @media (min-width: 521px) {
   [data-unified] [data-gutter] { min-width: 8ch; }
-  [data-column-number]:has([data-line-number-side]) { display: flex; gap: 1ch; justify-content: flex-end; }
-  [data-column-number]:has([data-line-number-side]) [data-line-number-content] { display: none; }
-  [data-line-number-side] { display: inline-block; width: 3ch; text-align: right; }
+  [data-unified] [data-column-number] { display: flex; gap: 1ch; justify-content: flex-end; }
+  [data-unified] [data-column-number]::before { content: attr(data-old-line-number); display: inline-block; width: 3ch; text-align: right; }
+  [data-unified] [data-line-number-content] { display: inline-block; width: 3ch; text-align: right; }
+  [data-unified] [data-column-number][data-line-type='change-deletion'] [data-line-number-content] { visibility: hidden; }
 }
 `;
 
@@ -67,7 +91,7 @@ const PIERRE_REVIEW_COMMENT_HOVER_SLOT_UNSAFE_CSS = `
   padding-left: calc(var(--happier-review-comment-affordance-width) + 2ch);
 }
 
-[data-hover-slot] {
+[data-gutter-utility-slot] {
   left: 0;
   right: auto;
   width: var(--happier-review-comment-affordance-width);
@@ -471,9 +495,14 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     const scopedVirtualizer = usePierreScrollRootVirtualizer(() => new PierreVirtualizer());
     const sharedVirtualizer = scopedVirtualizer ?? inheritedVirtualizer;
     const containerRef = React.useRef<HTMLDivElement | null>(null);
-    const lastScrolledLineIdRef = React.useRef<{ lineId: string; filePath: string | null | undefined } | null>(null);
+    const lastScrolledLineIdRef = React.useRef<{ key: string; filePath: string | null | undefined } | null>(null);
     const typographyStyle = React.useMemo(() => resolvePierreTypographyStyle(), []);
-    const selectionStyle = React.useMemo(() => resolvePierreSelectionStyle(theme), [theme]);
+    const selectionStyle = React.useMemo(() => ({
+        ...resolvePierreSelectionStyle(theme),
+        '--happier-find-match': theme.colors.find.matchAll,
+        '--happier-find-current': theme.colors.find.matchCurrent,
+        '--happier-find-current-foreground': theme.colors.find.matchCurrentForeground,
+    }), [theme]);
 
     const tokenizeMaxLineLengthSetting = useSetting('filesDiffTokenizationMaxLineLength');
     const intraLineDiffEnabledSetting = useSetting('filesDiffIntraLineWordDiffEnabled');
@@ -507,7 +536,9 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         const fileName = props.filePath ?? 'diff';
         const contextLines = props.contextLines ?? 3;
         return buildPatchFromOldNew({ fileName, oldText: props.oldText, newText: props.newText, contextLines });
-    }, [props]);
+    }, [props.mode, props.filePath, props.mode === 'unified' ? props.unifiedDiff : null,
+        props.mode === 'text' ? props.oldText : null, props.mode === 'text' ? props.newText : null,
+        props.mode === 'text' ? props.contextLines : null]);
 
     const sanitizedPatch = React.useMemo(() => {
         if (props.mode !== 'unified') return patch;
@@ -532,6 +563,9 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         return sanitizeUnifiedPatchForPierre(candidate);
     }, [patch, props.filePath, props.mode]);
 
+    const subscribePool = React.useCallback((listener: () => void) => subscribePierreDiffWorkerPool(diffStyle, listener), [diffStyle]);
+    const getPoolFailed = React.useCallback(() => getPierreDiffWorkerPoolFailed(diffStyle), [diffStyle]);
+    const poolFailed = React.useSyncExternalStore(subscribePool, getPoolFailed, () => false);
     const pool = getPierreDiffWorkerPool({ style: diffStyle, themeIds: pierreThemeIds });
 
     const parsedPatch = React.useMemo(() => {
@@ -555,6 +589,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
 
     const needsCodeLines = Boolean(
         props.onPressLine
+        || props.onPressLineRange
         || props.onPressAddComment
         || props.isCommentActive
         || props.renderAfterLine
@@ -562,15 +597,22 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         || props.scrollToLineId
         || props.highlightLineId
         || (props.highlightLineIds && props.highlightLineIds.size > 0)
+        || props.findRangesByLineId?.size
     );
 
     const codeLines: readonly CodeLine[] | null = React.useMemo(() => {
         if (!needsCodeLines) return null;
+        if (props.mode === 'text') return buildCodeLinesFromTextDiff({
+            oldText: props.oldText,
+            newText: props.newText,
+            contextLines: props.contextLines ?? 3,
+        });
         return buildCodeLinesFromUnifiedDiff({
             unifiedDiff: sanitizedPatch,
             hideFilePrelude: true,
         });
-    }, [needsCodeLines, sanitizedPatch]);
+    }, [needsCodeLines, sanitizedPatch, props.mode, props.mode === 'text' ? props.oldText : null,
+        props.mode === 'text' ? props.newText : null, props.mode === 'text' ? props.contextLines : null]);
 
     const codeLinesByAdditionLine = React.useMemo(() => {
         if (!codeLines) return null;
@@ -621,25 +663,64 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         return codeLinesByAdditionLine?.get(lineNumber) ?? null;
     }, [codeLinesByAdditionLine, codeLinesByDeletionLine]);
 
+    const rangeSelectionEnabled = (props.interactionMode ?? 'read') !== 'read' && Boolean(props.onPressLineRange);
+    const selectedLines = React.useMemo<SelectedLineRange | null>(() => {
+        const selected = codeLines?.filter(line => !line.renderIsHeaderLine && props.selectedLineIds?.has(line.id));
+        const first = selected?.[0];
+        const last = selected?.at(-1);
+        if (!first || !last) return null;
+        const span = resolveCodeLineRangeSelection({ lines: codeLines ?? [], startLineId: first.id, endLineId: last.id });
+        // Pierre controls one contiguous gesture; disconnected committed selections retain the row CSS marks.
+        if (span.some(line => !props.selectedLineIds?.has(line.id))) return null;
+        const side = first.kind === 'remove' ? 'deletions' : 'additions';
+        const endSide = last.kind === 'remove' ? 'deletions' : 'additions';
+        const start = side === 'deletions' ? first.oldLine : first.newLine;
+        const end = endSide === 'deletions' ? last.oldLine : last.newLine;
+        return start != null && end != null ? { start, side, end, endSide } : null;
+    }, [codeLines, props.selectedLineIds]);
+
+    const onLineSelected = React.useCallback((range: SelectedLineRange | null) => {
+        if (!range || !codeLines || !rangeSelectionEnabled) return;
+        const start = mapPierreDiffLineToCodeLine({ lineNumber: range.start, annotationSide: range.side ?? 'additions' });
+        const end = mapPierreDiffLineToCodeLine({ lineNumber: range.end, annotationSide: range.endSide ?? range.side ?? 'additions' });
+        if (!start || !end) return;
+        const lines = resolveCodeLineRangeSelection({ lines: codeLines, startLineId: start.id, endLineId: end.id });
+        if (lines.length) props.onPressLineRange?.(lines);
+    }, [codeLines, mapPierreDiffLineToCodeLine, props.onPressLineRange, rangeSelectionEnabled]);
+
     const lineAnnotations: DiffLineAnnotation<React.ReactNode>[] | undefined = React.useMemo(() => {
         if (!codeLines) return undefined;
         if (!props.renderAfterLine) return undefined;
 
-        const out: DiffLineAnnotation<React.ReactNode>[] = [];
+        const out = new Map<string, DiffLineAnnotation<React.ReactNode>>();
+        const fileAnnotationSide = codeLines.some((line) => line.newLine !== null) ? 'additions' : 'deletions';
+        const append = (side: DiffLineAnnotation<React.ReactNode>['side'], lineNumber: number, node: React.ReactNode) => {
+            const key = `${side}:${lineNumber}`;
+            const previous = out.get(key);
+            out.set(key, { side, lineNumber, metadata: previous ? <>{previous.metadata}{node}</> : node });
+        };
+        let previousContentLine: CodeLine | null = null;
         for (const line of codeLines) {
-            if (line.renderIsHeaderLine) continue;
+            const anchor = line.renderIsHeaderLine ? previousContentLine : line;
+            if (!line.renderIsHeaderLine && (line.oldLine !== null || line.newLine !== null)) previousContentLine = line;
             const node = props.renderAfterLine(line);
             if (!node) continue;
 
-            const side = line.kind === 'remove' ? 'deletions' : 'additions';
-            const lineNumber = side === 'deletions' ? line.oldLine : line.newLine;
+            if (line.renderIsHeaderLine && line.hunkIndex === 0) {
+                // Pierre's public zero-line annotation sits above the first hunk/separator.
+                append(fileAnnotationSide, 0, node);
+                continue;
+            }
+            if (!anchor) continue;
+            const side = anchor.kind === 'remove' ? 'deletions' : 'additions';
+            const lineNumber = side === 'deletions' ? anchor.oldLine : anchor.newLine;
             if (typeof lineNumber !== 'number' || lineNumber <= 0) continue;
 
-            out.push({ side, lineNumber, metadata: node });
+            append(side, lineNumber, node);
         }
 
-        return out.length > 0 ? out : undefined;
-    }, [codeLines, props]);
+        return out.size > 0 ? [...out.values()] : undefined;
+    }, [codeLines, props.renderAfterLine]);
 
     const renderAnnotation = React.useCallback((annotation: DiffLineAnnotation<React.ReactNode>) => {
         return annotation.metadata ?? null;
@@ -679,7 +760,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         virtualized: props.virtualized === true,
     });
 
-    const baseOptions = React.useMemo<FileDiffOptions<React.ReactNode>>(() => {
+    const baseOptions = React.useMemo<FileDiffOptions<React.ReactNode, undefined>>(() => {
         return buildPierreDiffOptionsBase({
             isDark,
             diffStyle,
@@ -754,8 +835,8 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             const lineNumber = lineType === 'change-deletion' ? target.oldLine : target.newLine;
             if (typeof lineNumber !== 'number' || lineNumber <= 0) continue;
 
-            lineSelectors.push(`[data-line-type='${lineType}'][data-line='${lineNumber}']`);
-            numberSelectors.push(`[data-line-type='${lineType}'][data-column-number='${lineNumber}']`);
+            lineSelectors.push(pierreCodeLineSelector(target));
+            numberSelectors.push(pierreCodeLineSelector(target, 'data-column-number'));
         }
         if (lineSelectors.length === 0 && numberSelectors.length === 0) return '';
 
@@ -767,10 +848,10 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         : '';
 
     const composedUnsafeCSS = React.useMemo(() => {
-        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS].filter(Boolean).join('\n');
+        return [PIERRE_MATERIAL_UNSAFE_CSS, PIERRE_UNIFIED_GUTTER_UNSAFE_CSS, PIERRE_FIND_HIGHLIGHT_CSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS, highlightLineUnsafeCSS].filter(Boolean).join('\n');
     }, [highlightLineUnsafeCSS, reviewCommentHoverSlotUnsafeCSS, selectedLineUnsafeCSS]);
 
-    const options = React.useMemo<FileDiffOptions<React.ReactNode>>(() => {
+    const options = React.useMemo<FileDiffOptions<React.ReactNode, undefined>>(() => {
         return {
             ...baseOptions,
             unsafeCSS: composedUnsafeCSS,
@@ -790,22 +871,27 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         if (pierreLineClickWasHandled(event)) return;
         const eventTarget = resolvePierreDiffLineFromPressEvent(event);
         if (!eventTarget) return;
+        if (rangeSelectionEnabled && eventTarget.numberElement) return;
         const mapped = mapPierreDiffLineToCodeLine(eventTarget);
         if (!mapped) return;
         if (mapped.renderIsHeaderLine) return;
         markPierreLineClickHandled(event);
         props.onPressLine(mapped);
-    }, [mapPierreDiffLineToCodeLine, props.onPressLine]);
+    }, [mapPierreDiffLineToCodeLine, props.onPressLine, rangeSelectionEnabled]);
 
     const interactiveOptions = React.useMemo(() => {
         if (!needsCodeLines) return null;
 
-        const withClicks: FileDiffOptions<React.ReactNode> = {
+        const withClicks: FileDiffOptions<React.ReactNode, undefined> = {
             ...options,
-            enableHoverUtility: Boolean(props.onPressAddComment),
+            enableGutterUtility: Boolean(props.onPressAddComment),
+            enableLineSelection: rangeSelectionEnabled,
+            controlledSelection: rangeSelectionEnabled,
+            onLineSelected,
             lineHoverHighlight: props.onPressAddComment ? 'line' : options.lineHoverHighlight,
             onLineClick: props.onPressLine
-                ? (ev: any) => {
+                ? (ev) => {
+                    if (rangeSelectionEnabled && ev.numberColumn) return;
                     if (pierreLineClickWasHandled(ev)) return;
                     markPierreLineClickHandled(ev);
                     const mapped = mapPierreDiffLineToCodeLine(ev);
@@ -813,17 +899,17 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                     props.onPressLine?.(mapped);
                 }
                 : undefined,
-            onLineNumberClick: props.onPressAddComment
-                ? (ev: any) => {
+            onLineNumberClick: props.onPressAddComment && !rangeSelectionEnabled
+                ? (ev) => {
                     pressAddCommentForPierreLine(ev);
                 }
                 : undefined,
         };
 
         return withClicks;
-    }, [mapPierreDiffLineToCodeLine, needsCodeLines, options, pressAddCommentForPierreLine, props.onPressAddComment, props.onPressLine]);
+    }, [mapPierreDiffLineToCodeLine, needsCodeLines, onLineSelected, options, pressAddCommentForPierreLine, props.onPressAddComment, props.onPressLine, rangeSelectionEnabled]);
 
-    const renderHoverUtility = React.useCallback((getHoveredLine: () => { lineNumber: number; side: 'additions' | 'deletions' } | undefined) => {
+    const renderGutterUtility = React.useCallback((getHoveredLine: () => { lineNumber: number; side: 'additions' | 'deletions' } | undefined) => {
         if (!props.onPressAddComment) return null;
         const hovered = getHoveredLine?.() ?? undefined;
         const mapped = hovered
@@ -850,45 +936,67 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 }}
             />
         );
-    }, [mapPierreDiffLineToCodeLine, pressAddCommentForPierreLine, props, theme]);
+    }, [mapPierreDiffLineToCodeLine, pressAddCommentForPierreLine, props.isCommentActive, props.onPressAddComment, theme.colors.text.secondary]);
 
-    React.useEffect(() => {
+    const paintRef = React.useRef<PierrePaint | null>(null);
+    const scrollTargetKey = codeLineScrollTargetKey(props.scrollToLineId, props.scrollToLineId ? props.findRangesByLineId?.get(props.scrollToLineId) : undefined);
+    const stopFindRef = React.useRef<() => void>(() => {});
+    const refreshFind = React.useCallback((paint: PierrePaint) => {
+        stopFindRef.current();
+        stopFindRef.current = registerPierreFindHighlights(paint.node.shadowRoot ?? paint.node, codeLines ?? [], props.findRangesByLineId);
+    }, [codeLines, props.findRangesByLineId]);
+
+    const revealScrollTarget = React.useCallback((paint: PierrePaint) => {
         const scrollId = props.scrollToLineId ?? null;
         if (!scrollId) {
             lastScrolledLineIdRef.current = null;
             return;
         }
-        if (lastScrolledLineIdRef.current?.lineId === scrollId && lastScrolledLineIdRef.current.filePath === props.filePath) return;
+        const targetKey = scrollTargetKey;
+        if (!targetKey) return;
+        if (lastScrolledLineIdRef.current?.key === targetKey && lastScrolledLineIdRef.current.filePath === props.filePath) return;
         if (!codeLines) return;
 
         const target = codeLines.find((l) => l.id === scrollId) ?? null;
         if (!target || target.renderIsHeaderLine) return;
 
-        const lineType = target.kind === 'remove'
-            ? 'change-deletion'
-            : target.kind === 'add'
-                ? 'change-addition'
-                : 'context';
-        const lineNumber = lineType === 'change-deletion' ? target.oldLine : target.newLine;
+        const side = target.kind === 'remove' ? 'deletions' : 'additions';
+        const lineNumber = side === 'deletions' ? target.oldLine : target.newLine;
         if (typeof lineNumber !== 'number' || lineNumber <= 0) return;
-
-        const root = containerRef.current;
-        if (!root) return;
-
-        const host = root.querySelector('diffs-container') as any;
-        const shadowRoot = host?.shadowRoot ?? null;
-        const queryRoot: ParentNode = shadowRoot ?? root;
-
-        const selector = `[data-line-type='${lineType}'][data-line='${lineNumber}']`;
-        const el = (queryRoot as any)?.querySelector?.(selector) as any;
-        if (!el || typeof el.scrollIntoView !== 'function') return;
-        try {
+        // revealLine uses additions coordinates. A deletion is already inside a rendered hunk.
+        if (side === 'additions' && paint.instance.revealLine(lineNumber)) return;
+        const queryRoot = paint.node.shadowRoot ?? paint.node;
+        const el = queryRoot.querySelector<HTMLElement>(pierreCodeLineSelector(target));
+        if (paint.virtualizer && paint.instance instanceof VirtualizedFileDiff) {
+            const position = paint.instance.getLinePosition(lineNumber, side);
+            if (!position) return;
+            paint.virtualizer.scrollTo({ top: paint.virtualizer.getOffsetInScrollContainer(paint.node) + position.top });
+            // A virtualized target may mount on the next paint. Keep that landing pending.
+            if (!el) return;
+        } else {
+            if (!el || typeof el.scrollIntoView !== 'function') return;
             el.scrollIntoView({ block: 'center' });
-            lastScrolledLineIdRef.current = { lineId: scrollId, filePath: props.filePath };
-        } catch {
-            // ignore
         }
-    }, [codeLines, props.filePath, props.scrollToLineId]);
+        lastScrolledLineIdRef.current = { key: targetKey, filePath: props.filePath };
+    }, [codeLines, props.filePath, props.scrollToLineId, scrollTargetKey]);
+
+    const onPaint = React.useCallback((paint: PierrePaint) => {
+        paintRef.current = paint;
+        revealScrollTarget(paint);
+        refreshFind(paint);
+    }, [refreshFind, revealScrollTarget]);
+
+    React.useEffect(() => {
+        if (poolFailed || initialPresentationForceFallback) {
+            paintRef.current = null;
+            stopFindRef.current();
+            return;
+        }
+        if (paintRef.current) onPaint(paintRef.current);
+        return () => {
+            stopFindRef.current();
+        };
+    }, [initialPresentationForceFallback, onPaint, poolFailed]);
 
     if (!parsedPatch) {
         if (props.errorFallback !== undefined) return <>{props.errorFallback}</>;
@@ -941,24 +1049,28 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         <Virtualizer
             style={{ flex: 1, minHeight: 0, maxHeight: 'inherit', overflowY: 'auto' }}
         >
-            <FileDiff
+            <PierreFileDiffBody
                 key={fileDiff.cacheKey}
                 fileDiff={fileDiff}
-                options={(interactiveOptions ?? options) as any}
-                lineAnnotations={lineAnnotations as any}
-                renderAnnotation={lineAnnotations ? (renderAnnotation as any) : undefined}
-                renderHoverUtility={props.onPressAddComment ? (renderHoverUtility as any) : undefined}
+                onPaint={onPaint}
+                selectedLines={selectedLines}
+                options={interactiveOptions ?? options}
+                lineAnnotations={lineAnnotations}
+                renderAnnotation={lineAnnotations ? renderAnnotation : undefined}
+                renderGutterUtility={props.onPressAddComment ? renderGutterUtility : undefined}
                 style={{ display: 'block', width: '100%' }}
             />
         </Virtualizer>
     ) : (
-        <FileDiff
+        <PierreFileDiffBody
             key={fileDiff.cacheKey}
             fileDiff={fileDiff}
-            options={(interactiveOptions ?? options) as any}
-            lineAnnotations={lineAnnotations as any}
-            renderAnnotation={lineAnnotations ? (renderAnnotation as any) : undefined}
-            renderHoverUtility={props.onPressAddComment ? (renderHoverUtility as any) : undefined}
+            onPaint={onPaint}
+            selectedLines={selectedLines}
+            options={interactiveOptions ?? options}
+            lineAnnotations={lineAnnotations}
+            renderAnnotation={lineAnnotations ? renderAnnotation : undefined}
+            renderGutterUtility={props.onPressAddComment ? renderGutterUtility : undefined}
             style={{ display: 'block', width: '100%' }}
         />
     );
@@ -975,7 +1087,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         } as React.CSSProperties)
         : ({ ...typographyStyle, ...selectionStyle } as React.CSSProperties);
 
-    if (initialPresentationForceFallback) {
+    if (poolFailed || initialPresentationForceFallback) {
         return (
             <div
                 ref={containerRef}
@@ -983,7 +1095,10 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 className="happier-pierre-diff-wrapper"
                 style={wrapperStyle}
             >
-                {fallbackNode}
+                {poolFailed ? props.mode === 'unified'
+                    ? <HappierUnifiedDiffViewer {...props} />
+                    : <HappierTextDiffViewer {...props} />
+                    : fallbackNode}
             </div>
         );
     }
@@ -999,7 +1114,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             <VirtualizerContext.Provider value={sharedVirtualizer}>
                 <WorkerPoolContext.Provider value={pool ?? undefined}>
                     <PierreDiffErrorBoundary resetKey={sanitizedPatch} fallback={fallbackNode}>
-                        <PierreDiffScrollAnchor patch={sanitizedPatch} filePath={props.filePath} scrollToLineId={props.scrollToLineId} containerRef={containerRef}>
+                        <PierreDiffScrollAnchor patch={sanitizedPatch} filePath={props.filePath} scrollTargetKey={scrollTargetKey ?? undefined} containerRef={containerRef}>
                             {body}
                         </PierreDiffScrollAnchor>
                     </PierreDiffErrorBoundary>

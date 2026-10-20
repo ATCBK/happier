@@ -2,6 +2,7 @@ import React from 'react';
 import { FlatList, Platform, View } from 'react-native';
 
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
+import { codeLineScrollTargetKey } from '@/components/ui/code/model/codeLineScrollTargetKey';
 import type { CodeLinesSyntaxHighlightingConfig } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
 import {
     resolveCodeLineRangeSelection,
@@ -12,6 +13,8 @@ import { CodeLineRow, CODE_LINE_BASE_HEIGHT, type CodeLinePressEvent } from './C
 import { resolveEffectiveSyntaxHighlighting } from './resolveEffectiveSyntaxHighlighting';
 import { CodeLinesReadingAnchor, type NativeCodeReadingAnchor } from './CodeLinesReadingAnchor';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
+import type { EditorDecoration } from '../editor/codeEditorTypes';
+import { CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
 
 export type CodeLinesExternalScrollView = Readonly<{
     scrollRef: React.RefObject<{ scrollTo: (options: { y: number; animated: boolean }) => void } | null>;
@@ -54,6 +57,8 @@ export type CodeLinesViewProps = {
     wrapLines?: boolean;
     virtualized?: boolean;
     showLineNumbers?: boolean;
+    lineNumberDigits?: number;
+    reviewLaneWidth?: number;
     showPrefix?: boolean;
     syntaxHighlighting?: CodeLinesSyntaxHighlightingConfig;
     scrollToLineId?: string;
@@ -63,6 +68,11 @@ export type CodeLinesViewProps = {
     highlightLineId?: string;
     highlightLineIds?: ReadonlySet<string>;
     findRangesByLineId?: ReadonlyMap<string, readonly FindTextRange[]>;
+    intelligence?: Readonly<{
+        onPointerToken: (lineId: string, offset16: number) => void;
+        onActivateToken: (lineId: string, offset16: number) => void;
+        markersByLineId?: ReadonlyMap<string, readonly EditorDecoration[]>;
+    }>;
     testID?: string;
     onLayout?: (e: any) => void;
     onContentSizeChange?: (width: number, height: number) => void;
@@ -79,6 +89,42 @@ type PreventableEvent = Readonly<{
 const EMPTY_LINE_ID_SET: ReadonlySet<string> = new Set();
 const VIRTUALIZED_LIST_STYLE = { flex: 1, minHeight: 0 } as const;
 const LIST_FOOTER_STYLE = { height: 16 } as const;
+
+type CodePointerEvent = Readonly<{
+    target?: unknown;
+    clientX?: number;
+    clientY?: number;
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    pointerType?: string;
+    nativeEvent?: Readonly<{ clientX?: number; clientY?: number; metaKey?: boolean; ctrlKey?: boolean; pointerType?: string }>;
+}>;
+
+function resolvePointerToken(event: CodePointerEvent, lines: ReadonlyMap<string, CodeLine>) {
+    if (typeof document === 'undefined') return null;
+    const target = event.target;
+    if (!target || typeof target !== 'object' || !('closest' in target) || typeof target.closest !== 'function') return null;
+    const code = target.closest('[data-code-text]') as Element | null;
+    const id = code?.getAttribute('data-code-text');
+    const line = id ? lines.get(id) : null;
+    if (!code || !line || line.renderIsHeaderLine || line.newLine === null || line.kind === 'remove') return null;
+    const x = event.clientX ?? event.nativeEvent?.clientX;
+    const y = event.clientY ?? event.nativeEvent?.clientY;
+    if (typeof x !== 'number' || typeof y !== 'number') return null;
+    const caretDocument = document as Document & {
+        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const position = caretDocument.caretPositionFromPoint?.(x, y);
+    const caretRange = position ? null : caretDocument.caretRangeFromPoint?.(x, y);
+    const node = position?.offsetNode ?? caretRange?.startContainer;
+    const offset = position?.offset ?? caretRange?.startOffset;
+    if (!node || offset === undefined || !code.contains(node)) return null;
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    range.setEnd(node, offset);
+    return { lineId: line.id, offset16: Math.min(line.renderCodeText.length, range.toString().length) };
+}
 
 function preventNativeTextSelection(event?: PreventableEvent): void {
     event?.preventDefault?.();
@@ -138,6 +184,13 @@ export function CodeLinesViewCore(
     const wrapLines = props.wrapLines ?? true;
     const virtualized = props.virtualized ?? true;
     const showLineNumbers = props.showLineNumbers ?? true;
+    const lineNumberDigits = React.useMemo(() => Math.max(props.lineNumberDigits ?? 1, props.lines.reduce(
+        (digits, line) => Math.max(digits, String(Math.max(line.oldLine ?? 0, line.newLine ?? 0)).length), 1,
+    )), [props.lineNumberDigits, props.lines]);
+    const reviewLaneWidth = React.useMemo(() => props.reviewLaneWidth ?? (
+        props.onPressAddComment && (props.showInactiveCommentAffordance !== false || props.lines.some(line => props.isCommentActive?.(line)))
+            ? CODE_GUTTER_METRICS.reviewLaneWidth : 0
+    ), [props.reviewLaneWidth, props.onPressAddComment, props.showInactiveCommentAffordance, props.lines, props.isCommentActive]);
     const showPrefix = props.showPrefix ?? true;
     const advancedTokensRevision = props.advancedTokensRevision ?? 0;
     const interactionMode = props.interactionMode ?? 'read';
@@ -145,6 +198,28 @@ export function CodeLinesViewCore(
     const onPressLineRange = props.onPressLineRange;
     const rangeSelectionActive = props.rangeSelectionActive;
     const rangeGesturesEnabled = interactionMode !== 'read' && typeof onPressLineRange === 'function';
+    const intelligenceEnabled = props.intelligence !== undefined;
+    const intelligenceLines = React.useMemo(() => intelligenceEnabled
+        ? new Map(props.lines.map((line) => [line.id, line])) : null, [intelligenceEnabled, props.lines]);
+    const onPointerToken = props.intelligence?.onPointerToken;
+    const onActivateToken = props.intelligence?.onActivateToken;
+    const handlePointerMove = React.useCallback((event: CodePointerEvent) => {
+        const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
+        if (token) onPointerToken?.(token.lineId, token.offset16);
+    }, [intelligenceLines, onPointerToken]);
+    const handleTokenClick = React.useCallback((event: CodePointerEvent) => {
+        if (!(event.metaKey || event.ctrlKey || event.nativeEvent?.metaKey || event.nativeEvent?.ctrlKey)) return;
+        const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
+        if (token) onActivateToken?.(token.lineId, token.offset16);
+    }, [intelligenceLines, onActivateToken]);
+    const handleTokenTouch = React.useCallback((event: CodePointerEvent) => {
+        if ((event.pointerType ?? event.nativeEvent?.pointerType) !== 'touch' || rangeGesturesEnabled) return;
+        if (typeof window !== 'undefined' && window.getSelection?.()?.isCollapsed === false) return;
+        const token = intelligenceLines ? resolvePointerToken(event, intelligenceLines) : null;
+        if (token) onActivateToken?.(token.lineId, token.offset16);
+    }, [intelligenceLines, onActivateToken, rangeGesturesEnabled]);
+    const intelligenceEvents = Platform.OS === 'web' && props.intelligence
+        ? { onPointerMove: handlePointerMove, onPointerUp: handleTokenTouch, onClick: handleTokenClick } : {};
     const lastPressedLineIdRef = React.useRef<string | null>(null);
     const explicitRangeStartLineIdRef = React.useRef<string | null>(null);
     const dragStartLineIdRef = React.useRef<string | null>(null);
@@ -242,9 +317,12 @@ export function CodeLinesViewCore(
         >
             <CodeLineRow
                 line={item}
+                lineNumberDigits={lineNumberDigits}
+                reviewLaneWidth={reviewLaneWidth}
                 selected={selected.has(item.id)}
                 highlighted={isHighlighted(item.id)}
                 findRanges={props.findRangesByLineId?.get(item.id)}
+                onActivateToken={rangeGesturesEnabled ? undefined : onActivateToken}
                 onPressLine={handlePressLine}
                 onPressInLine={rangeGesturesEnabled && Platform.OS === 'web' ? handlePressInLine : undefined}
                 onHoverLine={rangeGesturesEnabled && Platform.OS === 'web' ? handleHoverLine : undefined}
@@ -262,10 +340,13 @@ export function CodeLinesViewCore(
             {props.renderAfterLine ? props.renderAfterLine(item) : null}
         </View>
     ), [
+        lineNumberDigits,
+        reviewLaneWidth,
         lineNativeIdPrefix,
         measureExternalRow,
         props.externalScrollView,
         props.findRangesByLineId,
+        onActivateToken,
         effectiveSyntaxHighlighting,
         handleHoverLine,
         handlePressInLine,
@@ -305,14 +386,9 @@ export function CodeLinesViewCore(
     }, [props.lines, props.scrollToLineId]);
 
     const estimatedRowHeight = CODE_LINE_BASE_HEIGHT;
-    const currentFindRange = props.scrollToLineId
-        ? props.findRangesByLineId?.get(props.scrollToLineId)?.find((range) => range.current)
-        : undefined;
     // Two occurrences can share a line. Their range is the navigation identity, while equivalent
     // decoration refreshes retain the completed target and leave manual reading scroll untouched.
-    const scrollTargetKey = props.scrollToLineId
-        ? JSON.stringify([props.scrollToLineId, currentFindRange?.start ?? null, currentFindRange?.end ?? null])
-        : null;
+    const scrollTargetKey = codeLineScrollTargetKey(props.scrollToLineId, props.scrollToLineId ? props.findRangesByLineId?.get(props.scrollToLineId) : undefined);
 
     const getItemLayout = React.useCallback((_: unknown, index: number) => {
         // A best-effort constant-height layout to make scroll-to-index reliable on React Native Web.
@@ -448,6 +524,8 @@ export function CodeLinesViewCore(
     // FlatList is a PureComponent: when behavior depends on props outside `data`, we must provide `extraData`
     // to ensure rows get re-rendered. This matters for "selected" state and inline review-comment composers.
     const listExtraData = React.useMemo(() => ({
+        lineNumberDigits,
+        reviewLaneWidth,
         selectedLineIds: props.selectedLineIds,
         renderAfterLine: props.renderAfterLine,
         onPressLine: handlePressLine,
@@ -470,6 +548,8 @@ export function CodeLinesViewCore(
         findRangesByLineId: props.findRangesByLineId,
         advancedTokensRevision,
     } as const), [
+        lineNumberDigits,
+        reviewLaneWidth,
         effectiveSyntaxHighlighting,
         advancedTokensRevision,
         handleHoverLine,
@@ -551,7 +631,7 @@ export function CodeLinesViewCore(
 
     if (!virtualized) {
         return preserveReadingAnchor(
-            <View ref={contentRef} style={{ paddingHorizontal, paddingVertical }}>
+            <View ref={contentRef} style={{ paddingHorizontal, paddingVertical }} {...intelligenceEvents}>
                 {props.lines.map((line, index) => (
                     <React.Fragment key={line.id}>
                         {renderLine(line, index)}
@@ -564,6 +644,7 @@ export function CodeLinesViewCore(
 
     return preserveReadingAnchor(
         <FlatList
+            {...intelligenceEvents}
             ref={(node) => {
                 // react-test-renderer does not provide a stable ref object; we store it manually.
                 listRef.current = node as any;

@@ -1,8 +1,40 @@
-import { DiffHunksRenderer, getSingularPatch, parseDiffFromFile } from '@pierre/diffs';
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+
+import { DiffHunksRenderer, FileDiff, getSingularPatch, parseDiffFromFile } from '@pierre/diffs';
+import { describe, expect, it, vi } from 'vitest';
 import { buildPierreDiffOptionsBase } from './buildPierreDiffOptionsBase.web';
 
 describe('Pierre unified old/new gutter', () => {
+    it('renders the custom gutter utility slot in the real shadow DOM', async () => {
+        const fileDiff = getSingularPatch('--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after\n');
+        if (!fileDiff) throw new Error('Expected a parsed patch');
+        // JSDOM omits constructed stylesheets and ResizeObserver; only these browser ports are replaced.
+        const replaceSync = Object.getOwnPropertyDescriptor(CSSStyleSheet.prototype, 'replaceSync');
+        Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', { configurable: true, value() {} });
+        vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+        const host = document.createElement('diffs-container');
+        document.body.append(host);
+        let rendered: () => void = () => {};
+        const ready = new Promise<void>(resolve => { rendered = resolve; });
+        const viewer = new FileDiff({
+            theme: 'pierre-light', diffStyle: 'unified', disableFileHeader: true,
+            enableGutterUtility: true,
+            renderGutterUtility: () => document.createElement('button'),
+            onPostRender: node => { if (node.shadowRoot?.querySelector('[data-line]')) rendered(); },
+        });
+        try {
+            viewer.hydrate({ fileDiff, fileContainer: host });
+            await ready;
+            viewer.setSelectedLines({ start: 1, end: 1, side: 'additions' });
+            expect(host.shadowRoot?.querySelector('[data-gutter-utility-slot]')).toBeTruthy();
+        } finally {
+            viewer.cleanUp();
+            host.remove();
+            if (replaceSync) Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', replaceSync);
+            else Reflect.deleteProperty(CSSStyleSheet.prototype, 'replaceSync');
+            vi.unstubAllGlobals();
+        }
+    });
     it('renders genuine context expansion when both complete sources are available', async () => {
         const contents = Array.from({ length: 40 }, (_, index) => `line ${index}`).join('\n');
         const fileDiff = parseDiffFromFile({ name: 'a.txt', contents }, { name: 'a.txt', contents: contents.replace('line 20', 'changed 20') }, { context: 3 });

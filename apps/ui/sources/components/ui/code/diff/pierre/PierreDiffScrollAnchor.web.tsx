@@ -7,7 +7,7 @@ import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 type Props = Readonly<{
     patch: string;
     filePath?: string | null;
-    scrollToLineId?: string;
+    scrollTargetKey?: string;
     containerRef: React.RefObject<HTMLDivElement | null>;
     children: React.ReactNode;
 }>;
@@ -42,7 +42,7 @@ export class PierreDiffScrollAnchor extends React.Component<Props, Record<string
     private restorePending: (() => void) | null = null;
 
     override getSnapshotBeforeUpdate(previous: Props): Snapshot | null {
-        if (previous.filePath !== this.props.filePath || previous.scrollToLineId !== this.props.scrollToLineId) {
+        if (previous.filePath !== this.props.filePath || previous.scrollTargetKey !== this.props.scrollTargetKey) {
             this.stopRestoring?.();
             return null;
         }

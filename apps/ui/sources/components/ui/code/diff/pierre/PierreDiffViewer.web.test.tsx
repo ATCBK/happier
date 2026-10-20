@@ -8,40 +8,30 @@ import { installCodeDiffCommonModuleMocks } from '../codeDiffTestHelpers';
 import { InitialPresentationReadinessProvider } from '@/components/ui/presentation/InitialPresentationReadinessContext';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
+import { storage } from '@/sync/domains/state/storageStore';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const fileDiffSpy = vi.fn();
 const virtualizerSpy = vi.fn();
-const settingValues: Record<string, unknown> = {};
 const pierreWorkerPoolMock = vi.hoisted(() => ({
     current: null as any,
 }));
 
 function resetSettingValues() {
-    settingValues.filesDiffTokenizationMaxLineLength = 1234;
-    settingValues.filesDiffIntraLineWordDiffEnabled = true;
-    settingValues.filesDiffIntraLineWordDiffMaxPatchLines = 3;
-    settingValues.filesDiffIntraLineWordDiffMaxLineLength = 987;
-    settingValues.filesDiffPresentationStyle = 'split';
+    storage.setState({ settings: { ...storage.getState().settings,
+        filesDiffTokenizationMaxLineLength: 1234,
+        filesDiffIntraLineWordDiffEnabled: true,
+        filesDiffIntraLineWordDiffMaxPatchLines: 3,
+        filesDiffIntraLineWordDiffMaxLineLength: 987,
+        filesDiffPresentationStyle: 'split',
+    } });
 }
 
 resetSettingValues();
 
-installCodeDiffCommonModuleMocks({
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {
-            useSetting: (key: string) => {
-                if (Object.prototype.hasOwnProperty.call(settingValues, key)) {
-                    return (settingValues as any)[key];
-                }
-                return null;
-            },
-        });
-    },
-});
+installCodeDiffCommonModuleMocks();
 
 vi.mock('./pierreThemeRegistry.web', () => ({
     ensureHappierPierreThemesRegistered: () => {},
@@ -50,7 +40,8 @@ vi.mock('./pierreThemeRegistry.web', () => ({
     HAPPIER_PIERRE_THEME_IDS: { light: 'light', dark: 'dark' },
 }));
 
-vi.mock('./pierreWorkerPool.web', () => ({
+vi.mock('./pierreWorkerPool.web', async importOriginal => ({
+    ...await importOriginal<typeof import('./pierreWorkerPool.web')>(),
     getPierreDiffWorkerPool: () => pierreWorkerPoolMock.current,
 }));
 
@@ -121,16 +112,47 @@ async function findPierreHoverUtilityButtonProps(utility: any): Promise<any> {
 await import('./PierreDiffViewer.web');
 
 describe('PierreDiffViewer (web)', () => {
+    it('reveals an offscreen line through the plain virtualizer using the file offset', async () => {
+        fileDiffSpy.mockClear();
+        const { VirtualizedFileDiff, Virtualizer } = await import('@pierre/diffs');
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const patch = '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after\n';
+        const target = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true }).find(line => line.kind === 'add')!;
+        const virtualizer = new Virtualizer();
+        const instance = new VirtualizedFileDiff<React.ReactNode, undefined>({}, virtualizer);
+        // Geometry/reveal methods are the external renderer's DOM boundary.
+        const reveal = vi.spyOn(instance, 'revealLine').mockReturnValueOnce(true).mockReturnValue(false);
+        vi.spyOn(instance, 'getLinePosition').mockReturnValue({ top: 400, height: 20 });
+        vi.spyOn(virtualizer, 'getOffsetInScrollContainer').mockReturnValue(120);
+        const scroll = vi.spyOn(virtualizer, 'scrollTo').mockImplementation(() => {});
+        const screen = await renderScreen(<PierreDiffViewer mode="unified" unifiedDiff={patch} scrollToLineId={target.id} />);
+        const body = screen.findAllByType('FileDiff')[0];
+        const host = document.createElement('div');
+        const root = host.attachShadow({ mode: 'open' });
+        await renderer.act(async () => { body.props.options.onPostRender(host, instance); });
+        expect(reveal).toHaveBeenCalledWith(1);
+        expect(scroll).not.toHaveBeenCalled();
+        // The renderer owns the virtualizer context; feed its real context at the paint boundary.
+        const context = (await import('@pierre/diffs/react')).VirtualizerContext;
+        await screen.update(<context.Provider value={virtualizer}><PierreDiffViewer mode="unified" unifiedDiff={patch} scrollToLineId={target.id} /></context.Provider>);
+        const updated = screen.findAllByType('FileDiff')[0];
+        root.innerHTML = '<code data-unified><div data-line-type="change-addition" data-line="1">after</div></code>';
+        await renderer.act(async () => { updated.props.options.onPostRender(host, instance); });
+        expect(scroll).toHaveBeenCalledWith({ top: 520 });
+        instance.cleanUp();
+        virtualizer.cleanUp();
+    });
     it('maps a reversed cross-side range through the same row selection as the Happier renderer', async () => {
         fileDiffSpy.mockClear();
         const onPressLineRange = vi.fn();
+        const onPressLine = vi.fn();
         const patch = '--- a/a.ts\n+++ b/a.ts\n@@ -4,3 +9,3 @@\n context\n-before\n+after\n tail\n';
         const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true });
         const before = lines.find(line => line.kind === 'remove')!;
         const after = lines.find(line => line.kind === 'add')!;
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
-        await renderScreen(<PierreDiffViewer mode="unified" unifiedDiff={patch} interactionMode="commitSelection"
-            selectedLineIds={new Set([before.id, after.id])} onPressLineRange={onPressLineRange} />);
+        const screen = await renderScreen(<PierreDiffViewer mode="unified" unifiedDiff={patch} interactionMode="commitSelection"
+            selectedLineIds={new Set([before.id, after.id])} onPressLineRange={onPressLineRange} onPressLine={onPressLine} />);
         const call = fileDiffSpy.mock.calls.at(-1)?.[0];
         expect(call.options.enableLineSelection).toBe(true);
         expect(call.options.controlledSelection).toBe(true);
@@ -143,6 +165,12 @@ describe('PierreDiffViewer (web)', () => {
         }));
         await renderer.act(async () => { call.options.onLineSelected(null); });
         expect(onPressLineRange).toHaveBeenCalledTimes(1);
+        call.options.onLineClick({ annotationSide: 'additions', lineNumber: 10, lineType: 'change-addition', numberColumn: true });
+        expect(onPressLine).not.toHaveBeenCalled();
+        const contexts = lines.filter(line => line.kind === 'context');
+        await screen.update(<PierreDiffViewer mode="unified" unifiedDiff={patch} interactionMode="commitSelection"
+            selectedLineIds={new Set(contexts.map(line => line.id))} onPressLineRange={onPressLineRange} />);
+        expect(fileDiffSpy.mock.calls.at(-1)?.[0].selectedLines).toBeNull();
     });
     it('uses the surface evidence fallback if the external renderer fails', async () => {
         fileDiffSpy.mockImplementation(() => { throw new Error('renderer failed'); });
@@ -447,9 +475,9 @@ describe('PierreDiffViewer (web)', () => {
         expect(options?.maxLineDiffLength).toBe(987);
     });
 
-    it('defaults diffStyle to unified when filesDiffPresentationStyle is unset', async () => {
+    it('uses the shared diff presentation preference', async () => {
         fileDiffSpy.mockClear();
-        settingValues.filesDiffPresentationStyle = undefined;
+        storage.setState({ settings: { ...storage.getState().settings, filesDiffPresentationStyle: 'unified' } });
 
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
 
@@ -472,7 +500,7 @@ describe('PierreDiffViewer (web)', () => {
 
     it('honors presentationStyleOverride over the global filesDiffPresentationStyle setting', async () => {
         fileDiffSpy.mockClear();
-        settingValues.filesDiffPresentationStyle = 'split';
+        storage.setState({ settings: { ...storage.getState().settings, filesDiffPresentationStyle: 'split' } });
 
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
 
@@ -602,19 +630,31 @@ describe('PierreDiffViewer (web)', () => {
 
     it('does not reapply a consumed jump target on a patch refresh', async () => {
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const { FileDiff: VanillaFileDiff } = await import('@pierre/diffs');
+        const instance = new VanillaFileDiff<React.ReactNode, undefined>();
         const root = document.createElement('div');
+        const code = document.createElement('code');
+        code.dataset.unified = '';
+        root.append(code);
         const target = document.createElement('div');
         target.dataset.lineType = 'change-addition';
         target.dataset.line = '1';
         target.scrollIntoView = () => { root.scrollTop = 100; };
-        root.append(target);
+        code.append(target);
         const patch = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-foo\n+bar\n';
-        const view = (unifiedDiff: string) => <PierreDiffViewer mode="unified" filePath="a.ts" unifiedDiff={unifiedDiff} scrollToLineId="a:5" />;
+        const view = (unifiedDiff: string, start = 0) => <PierreDiffViewer mode="unified" filePath="a.ts" unifiedDiff={unifiedDiff} scrollToLineId="a:5"
+            findRangesByLineId={new Map([['a:5', [{ start, end: start + 1, current: true }]]])} />;
         const screen = await renderScreen(view(patch), { createNodeMock: () => root });
+        await renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(root, instance); });
         expect(root.scrollTop).toBe(100);
         root.scrollTop = 600;
         await screen.update(view(patch.replace('+bar', '+updated')));
+        await renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(root, instance); });
         expect(root.scrollTop).toBe(600);
+        await screen.update(view(patch.replace('+bar', '+updated'), 1));
+        await renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(root, instance); });
+        expect(root.scrollTop).toBe(100);
+        instance.cleanUp();
     });
 
     it('does not render an inner Virtualizer when a shared virtualizer context is already present', async () => {
