@@ -128,10 +128,16 @@ export function applySessionFollowContextBudgetV1(input: Readonly<{
   const keptBySource = new Map<string, readonly number[]>();
   const truncatedBySource = new Map<string, boolean>();
   const omittedSources: string[] = [];
+  const deferredOriginalSources = new Set<string>();
   let used = 0;
 
   for (const candidate of ordered) {
     const candidateId = candidate.candidateId ?? candidate.sourceSessionId;
+    if (candidate.sourceOriginalSeq !== undefined && deferredOriginalSources.has(candidate.sourceSessionId)) {
+      omittedSources.push(candidateId);
+      truncatedBySource.set(candidateId, true);
+      continue;
+    }
     const ascending = [...candidate.recentMessages].sort((a, b) => a.seq - b.seq);
     const allSeqs = Object.freeze(ascending.map((message) => message.seq));
     const completeCost = measure(candidate.render({
@@ -170,11 +176,18 @@ export function applySessionFollowContextBudgetV1(input: Readonly<{
     if (used + renderedCost > budget) {
       omittedSources.push(candidateId);
       truncatedBySource.set(candidateId, true);
+      if (candidate.sourceOriginalSeq !== undefined) deferredOriginalSources.add(candidate.sourceSessionId);
       continue;
     }
     used += renderedCost;
     keptBySource.set(candidateId, normalizedSeqs);
     if (sourceTruncated) truncatedBySource.set(candidateId, true);
+    // Distinct Pending originals share one source cursor. Once an original is
+    // only partially represented, its later originals must stay pending too;
+    // their smaller blocks cannot spend the remaining allowance out of order.
+    if (candidate.sourceOriginalSeq !== undefined && normalizedSeqs.length !== allSeqs.length) {
+      deferredOriginalSources.add(candidate.sourceSessionId);
+    }
   }
 
   return { keptBySource, truncatedBySource, omittedSources: Object.freeze(omittedSources) };

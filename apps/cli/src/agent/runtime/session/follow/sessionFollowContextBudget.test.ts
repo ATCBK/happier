@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { renderWorkerUpdatePromptBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 
 import {
   applySessionFollowContextBudgetV1,
@@ -153,6 +154,43 @@ describe('Session Follow UTF-8 budget', () => {
 
     expect(decision.keptBySource.get('source')).toEqual([2]);
     expect(decision.truncatedBySource.get('source')).toBe(true);
+  });
+
+  it('defers later originals of the same source after one original exceeds the remaining allowance', () => {
+    const originals = [
+      { seq: 7, text: 'Quiet' },
+      { seq: 8, text: 'a'.repeat(2479) },
+      { seq: 9, text: 'b'.repeat(2479) },
+      { seq: 10, text: 'Report A: artifact reference' },
+      { seq: 11, text: 'Report B' },
+    ];
+    const candidates = originals.map(message => ({
+      ...candidate({ sourceSessionId: 'worker', sourceRecencyMs: 1, recentMessages: [message] }),
+      candidateId: `original-${message.seq}`, sourceOriginalSeq: message.seq,
+    }));
+    const decision = applySessionFollowContextBudgetV1({
+      candidates: [...candidates, candidate({ sourceSessionId: 'other-worker', sourceRecencyMs: 0,
+        recentMessages: [{ seq: 1, text: 'Other worker' }] })],
+      maxUtf8Bytes: 4096,
+    });
+    expect([...decision.keptBySource.keys()]).toEqual(['original-7', 'original-8', 'original-9', 'other-worker']);
+    // The partial candidate represents no original at seq 9. A shorter later
+    // report must not consume its place, even when that report would fit.
+    expect(decision.keptBySource.get('original-9')).toEqual([]);
+    expect(decision.omittedSources).toEqual(['original-10', 'original-11']);
+    const recovered = applySessionFollowContextBudgetV1({ candidates: candidates.slice(2), maxUtf8Bytes: 4096 });
+    expect([...recovered.keptBySource.keys()]).toEqual(['original-9', 'original-10', 'original-11']);
+    expect(recovered.omittedSources).toEqual([]);
+    // Published WorkerUpdates have no snippet rows to shrink. Exercise the
+    // complete-block omission arm as well as the partial transcript arm above.
+    const reports = candidates.map((entry, index) => ({ ...entry, recentMessages: [],
+      render: () => renderWorkerUpdatePromptBlockV1({ v: 1, workerKind: 'session', workerId: 'worker',
+        ownerState: 'published', wake: 'published', headline: 'Worker report', result: originals[index]!.text,
+        transcriptPointer: { kind: 'session', sessionId: 'worker', seq: originals[index]!.seq }, canInspect: true }),
+    }));
+    const reportDecision = applySessionFollowContextBudgetV1({ candidates: reports, maxUtf8Bytes: 4096 });
+    expect([...reportDecision.keptBySource.keys()]).toEqual(['original-7', 'original-8']);
+    expect(reportDecision.omittedSources).toEqual(['original-9', 'original-10', 'original-11']);
   });
 
   it('keeps the latest contiguous complete suffix for a current snapshot', () => {

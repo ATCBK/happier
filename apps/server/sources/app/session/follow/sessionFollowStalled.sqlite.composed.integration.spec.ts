@@ -322,13 +322,18 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             const dispatchPending = async () => dispatcher.dispatchReceiverRange({
                 observations: (await observe()).observations, destinationSessionId: destination.id,
             });
-            const prepare = async (intent: 'natural' | 'wake', maxFollowContextUtf8Bytes?: number) => {
+            const prepare = async (intent: 'natural' | 'wake', maxFollowContextUtf8Bytes?: number, collectRetainedContext = false) => {
                 await dispatchPending();
-                {
+                for (;;) {
+                    const retained = collectRetainedContext ? await db.sessionPendingMessage.findMany({
+                        where: { sessionId: destination.id, localId: { in: deliveries.map(row => row.localInputId) } },
+                        select: { localId: true },
+                    }) : [];
                     const materialized = await materializeNextPendingMessage({ actorUserId: account.id, sessionId: destination.id,
                         publisherAuthority: { accountId: account.id, sessionId: destination.id, machineId: machine.id,
                             committedFence: (await db.session.findUniqueOrThrow({ where: { id: destination.id } })).lastActiveAt },
-                        deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' });
+                        deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready',
+                        ...(retained.length ? { retainedContext: { localIds: retained.map(row => row.localId) } } : {}) });
                     expect(materialized).toMatchObject({ ok: true });
                     if (materialized.ok && materialized.didMaterialize) {
                         const message = materialized.message;
@@ -336,8 +341,9 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                         if (!receipt?.followDeliveryV1 || !message.localId) throw new Error('Expected admitted original custody');
                         if (!deliveries.some(row => row.localInputId === message.localId)) {
                             deliveries.push({ delivery: receipt.followDeliveryV1, localInputId: message.localId, userMessageSeq: message.seq });
-                        }
+                        } else break;
                     }
+                    if (!collectRetainedContext || !materialized.ok || !materialized.didMaterialize) break;
                 }
                 const unsettled = [];
                 for (const delivery of deliveries) {
@@ -408,13 +414,13 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             await db.session.update({ where: { id: source.id }, data: { seq, latestTurnId: turnId, latestTurnStatus: 'completed' } });
             return seq;
         };
-        const appendReport = async (summary: string) => {
+        const appendReport = async (summary: string, deliverables?: WorkerUpdateV1['deliverables']) => {
             const seq = (await db.session.findUniqueOrThrow({ where: { id: source.id } })).seq + 1;
             const localId = randomUUID();
             await db.sessionMessage.create({ data: { sessionId: source.id, seq, localId, messageRole: 'event',
                 content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: localId,
                     data: TranscriptRawAgentEventV1Schema.parse({ type: 'worker-report', summary,
-                        deliverables: [{ kind: 'workspace_file', sessionId: source.id, path: `report-${seq}.md` }] }) } } },
+                        deliverables: deliverables ?? [{ kind: 'workspace_file', sessionId: source.id, path: `report-${seq}.md` }] }) } } },
                 transcriptObservationProvenance: { kind: 'non_dependent', source: 'external' } } });
             await db.session.update({ where: { id: source.id }, data: { seq } });
             return seq;
@@ -780,6 +786,54 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         await original.accept(second!);
         expect(f.acceptedPrompts.map(prompt => [prompt.includes('Held reverseA'), prompt.includes('Held reverseB')]))
             .toEqual([[true, false], [false, true]]);
+        expect((await f.observe()).observations).toEqual([]);
+    });
+
+    it('preserves the CONT14 originals 7–11 and private deliverable across held publisher replacement and bounded intake', async () => {
+        const f = await fixture('in_progress', { preset: 'important' });
+        for (let index = 0; index < 5; index++) await f.appendTurnInput(`earlier-turn-${index}`);
+        await f.follow({ preset: 'quiet' });
+        const original = await f.originals(true);
+        const receiver = await db.session.findUniqueOrThrow({ where: { id: f.destination.id } });
+        const held = writeSessionExplicitStopV1ToMetadata(JSON.parse(receiver.metadata), {
+            v: 1, cause: 'explicit_stop', requestId: 'cont14-person-stop', requestedAtMs: 1,
+        });
+        await db.session.update({ where: { id: f.destination.id }, data: { active: false, metadata: JSON.stringify(held) } });
+        const artifactId = randomUUID();
+        const summaries = ['Quiet', 'A'.repeat(2479), 'B'.repeat(2479), 'Report A', 'Report B'];
+        const seqs: number[] = [];
+        for (const [index, summary] of summaries.entries()) seqs.push(await f.appendReport(summary,
+            index === 3 ? [{ kind: 'artifact', artifactId }] : []));
+        expect(seqs).toEqual([7, 8, 9, 10, 11]);
+        await original.dispatchPending();
+        expect(f.acceptedPrompts).toEqual([]);
+        expect(f.acknowledgements).toEqual([]);
+        await db.session.update({ where: { id: f.destination.id }, data: { active: true,
+            metadata: JSON.stringify(clearSessionExplicitStopV1FromMetadata(held, 'cont14-person-stop')) } });
+        await original.replacePublisher();
+        original.restart();
+        const prefix = await original.prepare('natural', 4096, true);
+        expect(original.deliveries).toHaveLength(5);
+        expect(prefix?.workerUpdates?.map(update => update.transcriptPointer?.kind === 'session' ? update.transcriptPointer.seq : null))
+            .toEqual([7, 8]);
+        await original.accept(prefix!);
+        expect(f.acceptedPrompts[0]).not.toContain('Report B');
+        expect(f.acceptedPrompts[0]).not.toContain(artifactId);
+        expect(await Promise.all(f.acknowledgements)).toEqual([
+            expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq: 7 }) }),
+            expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq: 8 }) }),
+        ]);
+        const suffixIds = original.deliveries.slice(2).map(row => row.localInputId);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id, localId: { in: suffixIds } } })).toBe(3);
+        const suffix = await original.prepare('natural', 8192, true);
+        expect(suffix?.representedFollowLocalInputIds).toEqual(suffixIds);
+        expect(suffix?.workerUpdates?.map(update => update.transcriptPointer?.kind === 'session' ? update.transcriptPointer.seq : null))
+            .toEqual([9, 10, 11]);
+        expect(suffix?.workerUpdates?.[1]?.deliverables).toEqual([{ kind: 'artifact', artifactId }]);
+        await original.accept(suffix!);
+        expect(f.acceptedPrompts[1]!.indexOf('Report A')).toBeLessThan(f.acceptedPrompts[1]!.indexOf('Report B'));
+        expect(f.acceptedPrompts[1]).toContain(artifactId);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
         expect((await f.observe()).observations).toEqual([]);
     });
 
