@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ConversationProviderObservationIngestInputV1Schema } from '@happier-dev/channels-protocol/v1';
 
 import { createDiscordIdentifyConcurrency } from './discordGatewayIdentifyConcurrency.js';
+import { createDiscordBotApi } from './discordApi.js';
 import { DISCORD_BASE_GATEWAY_INTENTS, DISCORD_MESSAGE_CONTENT_INTENT } from './discordSetup.js';
 import { startDiscordGatewayWorker } from './discordGatewayWorker.js';
 
@@ -95,6 +96,93 @@ function sentGatewayOpcodeCount(
 }
 
 describe('Discord Gateway worker', () => {
+  it.each(['channel', 'role'] as const)('retries an HTTP 429 %s lookup after the provider delay within the retained admission', async lookup => {
+    vi.useFakeTimers();
+    try {
+      let lookupCount = 0;
+      const socket = socketUntilClosed([
+        { op: 10, d: { heartbeat_interval: 60_000 } },
+        { op: 0, s: 1, t: 'READY', d: { session_id: 'rate-limit', resume_gateway_url: 'wss://gateway.discord.gg' } },
+        { op: 0, s: 2, t: 'MESSAGE_CREATE', d: { id: 'message-1', channel_id: 'channel-1', guild_id: 'guild-1',
+          timestamp: '2024-01-01T00:00:00.000Z', type: 0, content: 'reply after rate limit',
+          author: { id: 'human-1', bot: false }, mention_roles: ['role-1'], attachments: [], embeds: [] } },
+      ]);
+      const request = vi.fn(async ({ url }: Readonly<{ url: string }>) => {
+        const limited = lookup === 'channel' ? url.endsWith('/channels/channel-1') : url.endsWith('/members/bot-1');
+        const rateLimited = limited && ++lookupCount === 1;
+        const value = rateLimited ? { message: 'Rate limited', retry_after: 1.25 }
+          : url.endsWith('/gateway/bot') ? { url: 'wss://gateway.discord.gg',
+            session_start_limit: { total: 1000, remaining: 1000, reset_after: 86400000, max_concurrency: 1 } }
+          : url.endsWith('/channels/channel-1') ? { id: 'channel-1', type: 0, guild_id: 'guild-1' }
+          : { user: { id: 'bot-1' }, roles: ['role-1'] };
+        return { status: rateLimited ? 429 : 200, finalUrl: url, headers: { 'content-type': 'application/json' },
+          body: new TextEncoder().encode(JSON.stringify(value)) };
+      });
+      const admitObservation = vi.fn(async () => undefined);
+      const worker = startDiscordGatewayWorker({
+        connection: { connectionId: 'rate-limit', authorityEpoch: 8, applicationId: 'application-1', botUserId: 'bot-1',
+          token: 'bot-token', runtime: { requiresFullSharedMessageContent: true },
+          applicationMessageContentIntentPermission: { kind: 'enabled', source: 'flags' } },
+        api: createDiscordBotApi({ token: 'bot-token', http: { request } }),
+        webSockets: { openWebSocket: async () => socket }, admitObservation, signal: new AbortController().signal,
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(lookupCount).toBe(1);
+        expect(admitObservation).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1249);
+        expect(lookupCount).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(lookupCount).toBe(2);
+        expect(admitObservation).toHaveBeenCalledWith(expect.objectContaining({ entry: expect.objectContaining({
+          observation: expect.objectContaining({ observation: expect.objectContaining({
+            message: expect.objectContaining({ text: 'reply after rate limit', addressingEvidence: 'integrationRoleMention' }),
+          }) }),
+        }) }), expect.anything());
+      } finally { worker.stop(); }
+      await expect(worker.result).resolves.toEqual({ kind: 'stopped', unprovenContinuity: true });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['cancel', 'stop'] as const)('ends a rate-limited HTTP lookup wait on %s and reports the lost admission', async stop => {
+    vi.useFakeTimers();
+    try {
+      const parent = new AbortController();
+      let channelReads = 0;
+      const socket = socketUntilClosed([
+        { op: 10, d: { heartbeat_interval: 60_000 } },
+        { op: 0, s: 1, t: 'READY', d: { session_id: 'cancel-rate-limit', resume_gateway_url: 'wss://gateway.discord.gg' } },
+        { op: 0, s: 2, t: 'MESSAGE_CREATE', d: { id: 'message-1', channel_id: 'channel-1',
+          timestamp: '2024-01-01T00:00:00.000Z', type: 0, content: 'retired work', author: { id: 'human-1', bot: false } } },
+      ]);
+      const request = vi.fn(async ({ url }: Readonly<{ url: string }>) => {
+        const rateLimited = url.endsWith('/channels/channel-1');
+        if (rateLimited) channelReads += 1;
+        return { status: rateLimited ? 429 : 200, finalUrl: url, headers: { 'content-type': 'application/json' },
+          body: new TextEncoder().encode(JSON.stringify(rateLimited ? { retry_after: 3600 }
+            : { url: 'wss://gateway.discord.gg', session_start_limit: { total: 1000, remaining: 1000, reset_after: 86400000, max_concurrency: 1 } })) };
+      });
+      const admitObservation = vi.fn(async () => undefined);
+      const worker = startDiscordGatewayWorker({
+        connection: { connectionId: 'cancel-rate-limit', authorityEpoch: 8, applicationId: 'application-1', botUserId: 'bot-1',
+          token: 'bot-token', runtime: { requiresFullSharedMessageContent: false },
+          applicationMessageContentIntentPermission: { kind: 'disabled', source: 'flags' } },
+        api: createDiscordBotApi({ token: 'bot-token', http: { request } }),
+        webSockets: { openWebSocket: async () => socket }, admitObservation, signal: parent.signal,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(channelReads).toBe(1);
+      if (stop === 'cancel') parent.abort(new Error('Provider generation retired'));
+      else worker.stop();
+      // Parent cancellation reaches receive through the host socket boundary.
+      socket.close();
+      await expect(worker.result).resolves.toEqual({ kind: 'historyGap', reason: 'applicationAdmissionLost' });
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(channelReads).toBe(1);
+      expect(admitObservation).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('keeps an attempted pre-READY Identify inside Discord\'s five-second window when the host socket records the payload then rejects', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -769,11 +857,10 @@ describe('Discord Gateway worker', () => {
   it('returns each current role-lookup failure without treating it as an absent bot role set', async () => {
     const failures = [
       {
-        name: 'rate limit',
+        name: 'rate limit without a provider retry hint',
         failure: {
           kind: 'notReady' as const,
           reason: 'rateLimited' as const,
-          retryAfterMs: 1_250,
           diagnostic: 'You are being rate limited.',
         },
       },
