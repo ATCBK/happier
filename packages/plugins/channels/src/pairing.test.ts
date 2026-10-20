@@ -147,6 +147,9 @@ describe('Channels pre-binding pairing', () => {
       contentProvenance: 'original' as const,
       command: classifyConversationCommand(`/pair ${challenge.manualToken}`),
     };
+    expect(manager.preparePreBindingMessage({
+      ...input, censusId: 'shared-typo', command: classifyConversationCommand('/pair 00000002'),
+    })).toEqual({ kind: 'silent', ownerReason: 'tokenMismatch', attemptsRemaining: 4 });
     const wrongEndpoints: ConversationResolvedEndpointV1[] = [
       directEndpoint, sharedParent, { ...sharedProof, id: 'topic-b' },
       { ...sharedProof, parentId: 'forum-2' }, { ...sharedProof, audience: 'direct' },
@@ -282,7 +285,7 @@ describe('Channels pre-binding pairing', () => {
     expect(written).toMatchObject({ executionOrigin });
   });
 
-  it('keeps a valid pairing challenge intact until its exact census is durable, then rejoins that census', () => {
+  it.each([undefined, sharedProof])('keeps a valid pairing challenge intact until its exact census is durable, then rejoins that census (proof=%j)', (proofEndpoint) => {
     const now = { value: 1_000 };
     const manager = createManager(now);
     const challenge = manager.createChallenge({
@@ -291,14 +294,15 @@ describe('Channels pre-binding pairing', () => {
       pairingRequestId: 'pairing-request-1',
       executionOrigin,
       destinationLabel: 'Telegram bot',
-      endpoint: directEndpoint,
+      endpoint: proofEndpoint ?? directEndpoint,
+      ...(proofEndpoint === undefined ? {} : { proofEndpoint }),
       target: sessionTarget,
     });
     const input = {
       censusId: 'census-1',
       connectionId: 'connection-1',
       executionOrigin,
-      endpoint: directEndpoint,
+      endpoint: proofEndpoint ?? directEndpoint,
       actor: { principalId: 'person-1', kind: 'human' as const, isIntegrationSelf: false },
       contentProvenance: 'original' as const,
       command: classifyConversationCommand(`/pair ${challenge.manualToken}`),
@@ -378,6 +382,8 @@ describe('Channels pre-binding pairing', () => {
         expectedConnectionRevision: 1,
         expiresAt: 601_000,
         endpointLabel: 'Alice',
+        proofEndpoint: directEndpoint,
+        principalId: 'person-1',
         state: 'proposed',
       }],
     });
@@ -691,7 +697,7 @@ describe('Channels pre-binding pairing', () => {
     expect(redeem(executionOrigin)).toMatchObject({ kind: 'matched' });
   });
 
-  it('types expiry and restart for the authenticated owner while external callers stay non-oracular', () => {
+  it.each([undefined, sharedProof])('types expiry and restart for the authenticated owner while external callers stay non-oracular (proof=%j)', (proofEndpoint) => {
     const now = { value: 1_000 };
     const manager = createManager(now);
     const challenge = manager.createChallenge({
@@ -700,10 +706,33 @@ describe('Channels pre-binding pairing', () => {
       pairingRequestId: 'pairing-request-1',
       executionOrigin,
       destinationLabel: 'Telegram bot',
-      endpoint: directEndpoint,
+      endpoint: proofEndpoint ?? directEndpoint,
+      ...(proofEndpoint === undefined ? {} : { proofEndpoint }),
       target: sessionTarget,
     });
+    const reservation = manager.preparePreBindingMessage({
+      censusId: 'expiry-census', connectionId: 'connection-1', executionOrigin,
+      endpoint: proofEndpoint ?? directEndpoint,
+      actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
+      contentProvenance: 'original', command: classifyConversationCommand(`/pair ${challenge.manualToken}`),
+    });
+    if (reservation.kind !== 'reserved') throw new Error('Expected pre-expiry reservation.');
+    const restartedManager = createConversationPairingManager({
+      generationId: 'generation-2', now: () => now.value,
+      randomBytes: () => Uint8Array.from([0, 0, 0, 0, 2]), createId: sequenceIds(),
+    });
+    expect(restartedManager.readChallenge({
+      generationId: challenge.generationId, challengeId: challenge.challengeId,
+    })).toEqual({ kind: 'restarted' });
+    expect(restartedManager.commitPreBindingMessage(reservation)).toEqual({
+      kind: 'silent', ownerReason: 'reservationUnavailable',
+    });
+    expect(restartedManager.readManagementProjection()).toMatchObject({ challenges: [], proposals: [] });
     now.value = challenge.expiresAt;
+
+    expect(manager.commitPreBindingMessage(reservation)).toEqual({
+      kind: 'silent', ownerReason: 'reservationUnavailable',
+    });
 
     expect(manager.readChallenge({
       generationId: challenge.generationId,
@@ -716,7 +745,7 @@ describe('Channels pre-binding pairing', () => {
     expect(completePreBindingMessage(manager, {
       connectionId: 'connection-1',
       executionOrigin,
-      endpoint: directEndpoint,
+      endpoint: proofEndpoint ?? directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
       command: classifyConversationCommand('/pair 00000001'),
@@ -762,7 +791,7 @@ describe('Channels pre-binding pairing', () => {
     expect(written).not.toHaveProperty('completion');
   });
 
-  it('creates or rejoins one paused binding with a stable finalize key after response loss', async () => {
+  it.each([undefined, sharedProof])('creates or rejoins one paused binding with a stable finalize key after response loss (proof=%j)', async (proofEndpoint) => {
     const now = { value: 1_000 };
     const manager = createManager(now);
     const challenge = manager.createChallenge({
@@ -771,13 +800,14 @@ describe('Channels pre-binding pairing', () => {
       pairingRequestId: 'pairing-request-1',
       executionOrigin,
       destinationLabel: 'Telegram bot',
-      endpoint: directEndpoint,
+      endpoint: proofEndpoint ?? directEndpoint,
+      ...(proofEndpoint === undefined ? {} : { proofEndpoint }),
       target: sessionTarget,
     });
     const match = completePreBindingMessage(manager, {
       connectionId: 'connection-1',
       executionOrigin,
-      endpoint: directEndpoint,
+      endpoint: proofEndpoint ?? directEndpoint,
       actor: { principalId: 'person-1', kind: 'human', isIntegrationSelf: false },
       contentProvenance: 'original',
       command: classifyConversationCommand(`/pair ${challenge.manualToken}`),
