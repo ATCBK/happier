@@ -135,6 +135,12 @@ content cannot. A UTF-8 BOM is remembered and restored on Save. LF and CRLF file
 keep their ending style; mixed endings normalize to the dominant style with a
 quiet note before Save. Shared byte fixtures protect the hash basis.
 
+Encoding metadata belongs to the editor's base (`Base.encoding`), not a mutable
+draft intent. The editor offers no encoding or BOM control: Save preserves the
+base format, and draft Discard restores text only. A draft whose only difference
+is BOM metadata is therefore not a reachable user state. The persisted draft
+keeps its four fields; no encoding field or second metadata owner is needed.
+
 The inline size threshold chooses the transfer path, not editing eligibility.
 Larger guarded saves carry the same `expectedHash` through upload finalization.
 The removed editor-size setting imposes no replacement cap. Existing read and
