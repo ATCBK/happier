@@ -144,6 +144,25 @@ afterEach(async () => {
 });
 
 describe('shared workspace filesystem Action admission', () => {
+    it.each([3, 300_000])('reads a requested range of %i bytes inline and retains total size and EOF through Action admission', async length => {
+        const content = Buffer.alloc(length, 0xa5).toString('base64');
+        filesystem.response = { success: true, content, sizeBytes: 38_000_000, eof: false };
+        expect(await workspaceReadFile(target, 'large.log', { range: { offset: 17, length }, ...(length === 3 ? { maxBytes: 2_500_000 } : {}) }))
+            .toEqual({ success: true, content, sizeBytes: 38_000_000, eof: false });
+        expect(filesystem.calls).toContainEqual(expect.objectContaining({ method: 'daemon.filesystem.readFile',
+            payload: { rootPath: '/repo', path: '/repo/large.log', offset: 17, length } }));
+        expect(filesystem.calls).not.toContainEqual(expect.objectContaining({ method: 'statFile' }));
+    });
+
+    it('rejects a short ranged response unless the daemon reports EOF', async () => {
+        filesystem.response = { success: true, content: 'YQ==', sizeBytes: 10, eof: false };
+        expect(await workspaceReadFile(target, 'large.log', { range: { offset: 2, length: 3 } }))
+            .toMatchObject({ success: false });
+        filesystem.response = { success: true, content: 'YQ==', sizeBytes: 10, eof: true };
+        expect(await workspaceReadFile(target, 'large.log', { range: { offset: 9, length: 3 } }))
+            .toEqual({ success: true, content: 'YQ==', sizeBytes: 10, eof: true });
+    });
+
     it.each(['unmount', 'replace'] as const)('retires a Project README read without an unhandled AbortError on %s', async retirement => {
         const { useCodeTextFile } = await import('@/components/projects/files/code/useCodeTextFile');
         filesystem.fileBytes = new TextEncoder().encode('A project README');

@@ -92,6 +92,16 @@ describe('transcriptJumpHighlightStore', () => {
         expect(store.readActiveTranscriptJumpHighlight()?.token).toBe(2);
     });
 
+    it('returns attention to the originating file chip without highlighting its sibling chips or whole message', async () => {
+        const store = await importStore();
+        const chip = { sessionAddress: { serverId: 'home-a', sessionId: 's1' }, routeMessageId: 'local:m-1', filePath: 'src/a.ts' };
+        store.setTranscriptJumpHighlight(chip);
+        const active = store.readActiveTranscriptJumpHighlight()!;
+        expect(store.isTranscriptJumpHighlightActiveForRow(active, chip)).toBe(true);
+        expect(store.isTranscriptJumpHighlightActiveForRow(active, { ...chip, filePath: 'src/b.ts' })).toBe(false);
+        expect(store.isTranscriptJumpHighlightActiveForRow(active, { sessionAddress: chip.sessionAddress, routeMessageId: chip.routeMessageId })).toBe(false);
+    });
+
     it('does not highlight the same session and message in another Home', async () => {
         const store = await importStore();
         const target = {

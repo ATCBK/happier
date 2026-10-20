@@ -33,6 +33,57 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
         return await renderHook(() => useWorkspaceFileTransfers({ workspaceScope: harness.scope }));
     }
 
+    it('downloads held complete bytes while the Machine is unavailable without opening a transfer', async () => {
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:cached-file');
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const hook = await renderHook(() => useWorkspaceFileTransfers({ workspaceScope: null }));
+        await act(async () => {
+            await expect(hook.getCurrent().startDownload({ path: 'report.txt', asZip: false,
+                cachedContent: { bytes: new Uint8Array([97, 98]), fileName: 'report.txt', mimeType: 'text/plain' },
+            })).resolves.toEqual({ ok: true });
+        });
+        expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+        expect(click).toHaveBeenCalled();
+        expect(harness.rpcRequests).toHaveLength(0);
+    });
+
+    it('streams a Tauri open into the app-owned temp sink and hands its path to the scoped opener', async () => {
+        const bytes: number[] = [];
+        const path = '/tmp/happier-downloads/file-123/report.txt';
+        const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
+            if (command === 'desktop_download_cache_create') return path;
+            if (command === 'desktop_download_cache_write') bytes.push(...args!.bytes as number[]);
+        });
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke });
+        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const hook = await renderTransfers();
+        await act(async () => {
+            await expect(hook.getCurrent().startDownload({ path: 'report.txt', asZip: false, action: 'open' }))
+                .resolves.toEqual({ ok: true });
+        });
+        expect(bytes).toEqual([1, 2, 3, 4]);
+        expect(invoke).toHaveBeenCalledWith('plugin:opener|open_path', { path });
+        expect(invoke).not.toHaveBeenCalledWith('desktop_download_cache_remove', expect.anything());
+        expect(click).not.toHaveBeenCalled();
+    });
+
+    it('removes the Tauri temp file when its default handler fails', async () => {
+        const path = '/tmp/happier-downloads/file-456/report.txt';
+        const invoke = vi.fn(async (command: string) => {
+            if (command === 'desktop_download_cache_create') return path;
+            if (command === 'plugin:opener|open_path') throw new Error('No handler');
+        });
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke });
+        vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const hook = await renderTransfers();
+        await act(async () => {
+            await expect(hook.getCurrent().startDownload({ path: 'report.txt', asZip: false, action: 'open' }))
+                .resolves.toEqual({ ok: false, error: 'No handler' });
+        });
+        expect(invoke).toHaveBeenCalledWith('desktop_download_cache_remove', { path });
+    });
+
     it('streams into OPFS and delays disk-backed URL cleanup until after the download is triggered', async () => {
         const diskFile = new File([new Uint8Array([1, 2, 3, 4])], 'report.txt');
         const write = vi.fn(async (_bytes: Uint8Array) => {});

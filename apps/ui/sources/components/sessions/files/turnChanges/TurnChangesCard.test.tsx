@@ -104,6 +104,21 @@ function isInside(node: { parent: unknown } | null, ancestor: unknown): boolean 
 }
 
 describe('TurnChangesCard (WT9 variant R)', () => {
+    it('opens a turn file in Changes on the card turn rather than the latest working copy', async () => {
+        const navigate = vi.fn();
+        const source = createTestSessionTranscriptSource({ sessionId: 's1', serverId: 'home-a', workspacePath: '/repo', navigate });
+        const screen = await renderWithSessionTranscriptSource(
+            <TranscriptTurnChangesCard sessionId="s1" serverId="home-a" turnId="turn-4" files={FOUR} onOpenFile={vi.fn()} />, source,
+        );
+        await screen.pressByTestIdAsync('turn-changes-card:turn-4-toggle');
+        const path = FOUR[0]!.fullPath;
+        await act(async () => screen.findAllByType('ScmChangeRow' as never)[0]!.props.onPress());
+        const href = new URL(navigate.mock.calls[0]![0], 'https://happier.test');
+        expect(href.searchParams.get('details')).toBe('file');
+        expect(href.searchParams.get('path')).toBe(path);
+        expect(href.searchParams.get('comparison')).toBe('turnCheckpoint');
+        expect(href.searchParams.get('turnId')).toBe('turn-4');
+    });
     it('opens a transcript walkthrough on its own turn and Home, including after later turn data arrives', async () => {
         const navigate = vi.fn();
         const source = createTestSessionTranscriptSource({ sessionId: 's1', serverId: 'home-a', workspacePath: '/repo', navigate });
