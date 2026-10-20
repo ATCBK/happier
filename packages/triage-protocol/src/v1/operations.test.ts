@@ -20,6 +20,16 @@ const fixture = createTriageSourceV1Fixture();
 const instance = fixture.configuredInstance;
 const present = fixture.getResult;
 
+it('carries an explicit task-kind completion window on initial and continued scans', () => {
+    const completed = { kindIds: ['issue'], sinceMs: Date.parse('2026-10-19T00:00:00Z') };
+    for (const page of [{ kind: 'initial', limit: 20 }, { kind: 'continuation', continuation: { v: 1, token: 'source-private' } }]) {
+        for (const schema of [TriageScanInputV1Schema, TriageSourceConnectedAccountInputsV1.scan, TriageSourceCredentialInputsV1.scan]) {
+            expect(schema.parse({ v: 1, instance, page, completed })).toMatchObject({ completed });
+            expect(schema.safeParse({ v: 1, instance, page, completed: { ...completed, sinceMs: NaN } }).success).toBe(false);
+        }
+    }
+});
+
 it('keeps complete editable values on the exact read, separate from bounded scan snapshots', () => {
     const fields = { title: '界'.repeat(1000), body: 'Full Markdown\n\nwith trailing whitespace  \n', labelIds: [] };
     expect(TriageGetResultV1Schema.safeParse({ ...present, taskFields: fields }).success).toBe(true);

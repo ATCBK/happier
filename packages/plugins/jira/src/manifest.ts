@@ -135,7 +135,7 @@ export const JIRA_PLUGIN = definePlugin({
             descriptor: { v: 1, purpose: JIRA_ACCOUNT_PURPOSE, displayName: 'Jira', settingsPageId: 'jira-sources',
                 scopeUnit: { singularLabel: 'Project', pluralLabel: 'Projects' },
                 kinds: [{ id: 'issue', workflowSubject: 'issue', displayName: 'Issue', pluralDisplayName: 'Issues',
-                    task: true, taskCapabilities: { createFields: JIRA_TASK_FIELDS, editFields: JIRA_TASK_FIELDS },
+                    task: true, taskCapabilities: { completedScan: true, createFields: JIRA_TASK_FIELDS, editFields: JIRA_TASK_FIELDS },
                     detailTabs: [{ kind: 'shared', id: 'overview' }] }] },
             operations: { listInstances: sources.operations.listInstances.bind(JIRA_ACTIONS.listInstances),
                 listScopeUnits: sources.operations.listScopeUnits.bind(JIRA_ACTIONS.listScopeUnits),

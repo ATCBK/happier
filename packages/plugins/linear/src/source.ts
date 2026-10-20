@@ -186,7 +186,9 @@ export async function scanLinearSource(input: unknown, context: PluginInvocation
     const { account, configuration } = admitLinearInstance(parsed.instance);
     const digest = deriveTriageConfiguredSourceInstanceDigestV1(parsed.instance);
     const continuation = parsed.page.kind === 'continuation' ? LinearContinuationSchema.parse(JSON.parse(parsed.page.continuation.token)) : undefined;
+    const completedSinceMs = parsed.completed?.kindIds.includes('issue') ? parsed.completed.sinceMs : undefined;
     if (continuation && continuation.digest !== digest) throw linearFailure('continuationChanged');
+    if (continuation && continuation.completedSinceMs !== completedSinceMs) throw linearFailure('continuationChanged');
     const viewer = continuation?.viewerId ?? await viewerId(context, account);
     const limit = continuation?.limit ?? (parsed.page.kind === 'initial' ? parsed.page.limit : 1);
     const data = await requestLinearGraphql({ context, account, operationName: 'LinearIssues',
@@ -194,7 +196,10 @@ export async function scanLinearSource(input: unknown, context: PluginInvocation
         issues(filter: $filter, first: $first, after: $after, orderBy: createdAt) { nodes { ${LINEAR_ISSUE_FIELDS} } ${LINEAR_PAGE_INFO} }
       }`, variables: { filter: { ...(configuration.teams.kind === 'all' ? {} : { team: { id: configuration.teams.unitIds.length === 1
         ? { eq: configuration.teams.unitIds[0] } : { in: configuration.teams.unitIds } } }),
-        ...involvementFilter(configuration.involvement, viewer) }, after: continuation?.after, first: Math.min(limit, LINEAR_PAGE_SIZE), viewerId: viewer } });
+        ...(completedSinceMs === undefined ? involvementFilter(configuration.involvement, viewer) : { and: [
+          involvementFilter(configuration.involvement, viewer),
+          { or: [{ state: { type: { neq: 'completed' } } }, { completedAt: { gte: new Date(completedSinceMs).toISOString() } }] },
+        ] }) }, after: continuation?.after, first: Math.min(limit, LINEAR_PAGE_SIZE), viewerId: viewer } });
     const page = connection(data.issues);
     const observations = [];
     let omitted = 0;
@@ -208,7 +213,8 @@ export async function scanLinearSource(input: unknown, context: PluginInvocation
       : page.after !== undefined ? { kind: 'partial', reason: 'linear/pageContinues' } : { kind: 'walkFinished' };
     if (page.after !== undefined) {
       if (page.after === continuation?.after) throw linearFailure('cursorNotAdvancing');
-      return TriageScanResultV1Schema.parse({ kind: 'page', observations, evidence, continuation: { v: 1, token: JSON.stringify({ v: 1, digest, after: page.after, viewerId: viewer, limit }) } });
+      return TriageScanResultV1Schema.parse({ kind: 'page', observations, evidence, continuation: { v: 1, token: JSON.stringify({ v: 1, digest, after: page.after, viewerId: viewer, limit,
+        ...(completedSinceMs === undefined ? {} : { completedSinceMs }) }) } });
     }
     return TriageScanResultV1Schema.parse({ kind: 'complete', observations, evidence });
   } catch (error) { return { kind: 'failed', failure: failureFrom(error, context.signal) }; }

@@ -182,6 +182,7 @@ export function toTriageSnapshot(
     ...(snapshot.authorLabel === undefined ? {} : { authorLabel: snapshot.authorLabel }),
     ...(snapshot.designation === undefined ? {} : { designation: snapshot.designation }),
     ...(isEmittableInstant(snapshot.createdAtMs) ? { createdAtMs: snapshot.createdAtMs } : {}),
+    ...(snapshot.completedAtMs === undefined ? {} : { completedAtMs: snapshot.completedAtMs }),
     state: Object.freeze({
       presentation: snapshot.state.presentation,
       ...(snapshot.state.stage === undefined ? {} : { stage: snapshot.state.stage }),

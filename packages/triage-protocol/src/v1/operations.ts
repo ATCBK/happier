@@ -1,5 +1,6 @@
 import {
     defineProtocolLiteral,
+    defineProtocolArray,
     defineProtocolNumber,
     defineProtocolObject,
     defineProtocolUnion,
@@ -11,6 +12,7 @@ import { TriageSourceFailureV1Schema } from './diagnostics.js';
 import { TriageTaskFieldsV1Schema } from './tasks.js';
 import {
     TriageEntryLocatorV1Schema,
+    TriageIdentifierV1ProtocolSchema,
     TriageSourceEntryLocalRefV1Schema,
 } from './identity.js';
 import {
@@ -38,10 +40,17 @@ import {
  * unrepresentable (`CONTRACT.md` §5.1).
  */
 function defineTriageScanInputV1<TInput, TOutput>(instance: ProtocolComposableSchema<TInput, TOutput>) {
+    // A completion window selects current task membership, never a change watermark.
+    const completed = defineProtocolObject({
+        kindIds: defineProtocolArray(TriageIdentifierV1ProtocolSchema, { minItems: 1 }),
+        // ECMAScript Date's representable positive range; sources format this instant for native queries.
+        sinceMs: defineProtocolNumber({ integer: true, minimum: 0, maximum: 8640000000000000 }),
+    }, { policy: 'closed' }).optional();
     return defineProtocolUnion([
         defineProtocolObject({
             v: defineProtocolLiteral(1),
             instance,
+            completed,
             page: defineProtocolObject({
                 kind: defineProtocolLiteral('initial'),
                 limit: defineProtocolNumber({
@@ -53,6 +62,7 @@ function defineTriageScanInputV1<TInput, TOutput>(instance: ProtocolComposableSc
         defineProtocolObject({
             v: defineProtocolLiteral(1),
             instance,
+            completed,
             page: defineProtocolObject({
                 kind: defineProtocolLiteral('continuation'),
                 continuation: TriageScanContinuationV1Schema,

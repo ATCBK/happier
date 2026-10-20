@@ -71,6 +71,7 @@ export type GithubScanResumeV1 = Readonly<{
  */
 export function encodeGithubScanContinuation(
   frontier: GithubScanInvocationFrontierV1,
+  completedSinceMs?: number,
 ): string | null {
   const lanes: LaneRecord[] = frontier.lanes.map((lane) => ({
     laneId: lane.laneId,
@@ -80,6 +81,7 @@ export function encodeGithubScanContinuation(
   }));
   return encodeTriagePagingTokenV1({
     v: CONTINUATION_VERSION,
+    ...(completedSinceMs === undefined ? {} : { completedSinceMs }),
     scanLimit: frontier.scanLimit,
     nativePageSize: frontier.nativePageSize,
     nextLaneIndex: frontier.nextLaneIndex,
@@ -102,10 +104,12 @@ export function decodeGithubScanContinuation(
   token: string,
   expected: Readonly<{
     buildLaneQuery: (laneId: GithubScanLaneIdV1) => string;
+    completedSinceMs?: number;
   }>,
 ): GithubScanResumeV1 | null {
   const record = decodeTriagePagingTokenV1(token);
   if (record === null || record.v !== CONTINUATION_VERSION) return null;
+  if (record.completedSinceMs !== expected.completedSinceMs) return null;
 
   const scanLimit = readCount(record.scanLimit, 1);
   if (scanLimit === null) return null;

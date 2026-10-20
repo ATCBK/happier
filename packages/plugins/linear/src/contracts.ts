@@ -91,6 +91,7 @@ export const LinearTeamCursorSchema = defineProtocolObject({
 export const LinearContinuationSchema = defineProtocolObject({
   v: defineProtocolLiteral(1), digest: id, after: id, viewerId: id,
   limit: defineProtocolNumber({ integer: true, minimum: 1 }),
+  completedSinceMs: defineProtocolNumber({ integer: true }).optional(),
 }, { policy: 'closed' });
 
 export const LINEAR_DETAIL_SECTIONS = ['overview', 'labels', 'children', 'blocks', 'blockedBy', 'comments', 'transitions'] as const;

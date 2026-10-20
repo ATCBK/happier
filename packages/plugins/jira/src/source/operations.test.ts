@@ -69,6 +69,24 @@ export function host(respond: (url: URL, body: unknown) => { status?: number; bo
 }
 
 describe('Jira source through provider HTTP', () => {
+    it('bounds completed task reads through native JQL while retaining project, involvement and provider paging', async () => {
+        const sinceMs = Date.parse('2026-10-19T00:00:00Z');
+        const completed = { kindIds: ['issue'], sinceMs };
+        const h = host((url, body) => {
+            if (url.pathname === '/rest/api/3/myself') return { body: { accountId: 'person-1' } };
+            expect(body).toMatchObject({ jql: `project IN (10000) AND (assignee = currentUser() OR creator = currentUser() OR watcher = currentUser()) AND (statusCategory != Done OR resolved >= ${sinceMs}) ORDER BY updated DESC, id DESC` });
+            const continued = typeof body === 'object' && body !== null && 'nextPageToken' in body;
+            return { body: { isLast: continued, ...(continued ? {} : { nextPageToken: 'next' }), issues: [{ ...issue, fields: { ...issue.fields,
+                resolutiondate: '2026-10-20T10:30:00Z', status: { name: 'Done', statusCategory: { key: 'done' } } } }] } };
+        });
+        const first = await scanJiraSource({ v: 1, instance, completed, page: { kind: 'initial', limit: 20 } }, h.context);
+        expect(first).toMatchObject({ kind: 'page', observations: [{ snapshot: { completedAtMs: Date.parse('2026-10-20T10:30:00Z') } }] });
+        if (first.kind !== 'page') throw new Error('Expected provider continuation');
+        expect(await scanJiraSource({ v: 1, instance, completed, page: { kind: 'continuation', continuation: first.continuation } }, h.context))
+            .toMatchObject({ kind: 'complete' });
+        expect(await scanJiraSource({ v: 1, instance, completed: { ...completed, sinceMs: sinceMs + 1 },
+            page: { kind: 'continuation', continuation: first.continuation } }, h.context)).toMatchObject({ kind: 'failed' });
+    });
     it('projects due and resolved dates from provider fields into the shared scan snapshot', async () => {
         const h = host((url, body) => {
             if (url.pathname === '/rest/api/3/myself') return { body: { accountId: 'person-1' } };

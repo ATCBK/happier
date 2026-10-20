@@ -67,8 +67,10 @@ export function mapGithubLaneToInvolvement(
 export function buildGithubLaneQuery(input: Readonly<{
   laneId: GithubScanLaneIdV1;
   repositoryKey: string | null;
+  completedSinceMs?: number;
 }>): string {
-  const qualifiers = ['is:open', 'archived:false'];
+  const qualifiers = [input.completedSinceMs === undefined ? 'is:open'
+    : `(is:open OR (is:issue is:closed closed:>=${new Date(input.completedSinceMs).toISOString()}))`, 'archived:false'];
   if (input.repositoryKey !== null) qualifiers.push(`repo:${input.repositoryKey}`);
   qualifiers.push(LANE_QUALIFIERS[input.laneId]);
   return qualifiers.join(' ');

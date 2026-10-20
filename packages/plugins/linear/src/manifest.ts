@@ -129,7 +129,7 @@ export const LINEAR_PLUGIN = definePlugin({
       descriptor: { v: 1, purpose: LINEAR_PURPOSE, displayName: 'Linear', settingsPageId: 'triage-sources',
         scopeUnit: { singularLabel: 'Team', pluralLabel: 'Teams' },
         kinds: [{ id: 'issue', workflowSubject: 'issue', displayName: 'Issue', pluralDisplayName: 'Issues', task: true,
-          taskCapabilities: { createFields: LINEAR_CREATE_FIELDS, editFields: LINEAR_EDIT_FIELDS },
+          taskCapabilities: { completedScan: true, createFields: LINEAR_CREATE_FIELDS, editFields: LINEAR_EDIT_FIELDS },
           detailTabs: [
             { kind: 'shared', id: 'overview' }, { kind: 'shared', id: 'activity' },
             ...LINEAR_DETAIL_SECTIONS.filter((section) => section !== 'overview' && section !== 'comments').map((section) => ({

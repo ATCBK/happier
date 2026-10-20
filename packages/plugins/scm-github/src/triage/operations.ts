@@ -503,6 +503,7 @@ export async function scanGithubTriageSource(
         page: page.kind === 'initial' ? { kind: 'initial', limit: page.limit }
           : { kind: 'continuation', token: page.continuation.token },
         repositoryKey,
+        ...(scanInput.completed?.kindIds.includes('issue') ? { completedSinceMs: scanInput.completed.sinceMs } : {}),
       }, { client: opened.client, now, signal: context.signal, repositories });
       if (result.kind === 'failed') return { kind: 'failed', failure: toTriageFailure(result.failure) };
       const observations = result.observations.map(toTriageScanObservation);

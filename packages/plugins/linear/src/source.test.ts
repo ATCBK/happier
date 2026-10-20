@@ -9,6 +9,25 @@ const workspaceInstance = (teams: unknown) => ({ ...instance, localInstanceKey: 
   configuration: { v: 1 as const, token: JSON.stringify({ v: 1, teams, involvement: 'everyone' }) } });
 
 describe('Linear source through provider HTTP', () => {
+  it('bounds completed task reads at the provider without replacing the involvement union and keeps it on the next page', async () => {
+    const sinceMs = Date.parse('2026-10-19T00:00:00Z');
+    const h = host(({ operationName, variables }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      expect(variables.filter).toMatchObject({ and: [
+        { or: expect.arrayContaining([{ assignee: { id: { eq: 'viewer-1' } } }]) },
+        { or: [{ state: { type: { neq: 'completed' } } }, { completedAt: { gte: new Date(sinceMs).toISOString() } }] },
+      ] });
+      return { issues: page([{ ...issue, state: { id: 'done', name: 'Done', type: 'completed' }, completedAt: '2026-10-20T09:00:00Z' }], !variables.after, variables.after ? null : 'page-2') };
+    });
+    const completed = { kindIds: ['issue'], sinceMs };
+    const first = await scanLinearSource({ v: 1, instance, completed, page: { kind: 'initial', limit: 20 } }, h.context);
+    expect(first).toMatchObject({ kind: 'page', observations: [{ snapshot: { completedAtMs: Date.parse('2026-10-20T09:00:00Z') } }] });
+    if (first.kind !== 'page') throw new Error('Expected provider continuation');
+    expect(await scanLinearSource({ v: 1, instance, completed, page: { kind: 'continuation', continuation: first.continuation } }, h.context))
+      .toMatchObject({ kind: 'complete' });
+    expect(await scanLinearSource({ v: 1, instance, completed: { ...completed, sinceMs: sinceMs + 1 },
+      page: { kind: 'continuation', continuation: first.continuation } }, h.context)).toMatchObject({ kind: 'failed' });
+  });
   it('projects a due date and provider completion time through the scan snapshot', async () => {
     const h = host(({ operationName, query }) => {
       if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };

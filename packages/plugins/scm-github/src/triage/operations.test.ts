@@ -52,6 +52,44 @@ import {
 const REPOSITORY_KEY = `${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`.toLowerCase();
 
 describe('registered GitHub REST → Triage source contract', () => {
+  it('reads open work and recently closed task kinds through registered HTTP paging while ordinary scans stay open-only', async () => {
+    const sinceMs = Date.parse('2026-10-19T00:00:00Z');
+    const transport = createStubGithubTransport({ respond: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname !== '/search/issues') return undefined;
+      const query = url.searchParams.get('q') ?? '';
+      return { status: 200, body: githubSearchResponse({ items: query.includes('closed:>=2026-10-19') && query.includes('assignee:@me')
+        ? [{ ...GITHUB_ISSUE_RESPONSE, state: 'closed', state_reason: 'completed', closed_at: '2026-10-20T09:00:00Z',
+          repository_url: `https://api.github.com/repos/${REPOSITORY_KEY}` }] : [] }) };
+    } });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
+    } });
+    const instance = configuredInstance({ scope: 'repository' });
+    try {
+      const ordinary = TriageScanResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.scan,
+        { v: 1, instance, page: { kind: 'initial', limit: 64 } }, { surface: 'agent', sessionId: 'fx70' }));
+      expect(ordinary).toMatchObject({ kind: 'complete', observations: [] });
+      const completed = { kindIds: ['issue'], sinceMs };
+      const first = TriageScanResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.scan,
+        { v: 1, instance, completed, page: { kind: 'initial', limit: 1 } }, { surface: 'agent', sessionId: 'fx70' }));
+      expect(first.kind).toBe('page');
+      if (first.kind !== 'page') throw new Error('Expected the existing scan continuation');
+      expect(first.observations).toMatchObject([{ kind: 'present', localRef: { kindId: 'issue' }, snapshot: {
+        state: { completionReason: 'completed' }, completedAtMs: Date.parse('2026-10-20T09:00:00Z'),
+      } }]);
+      expect(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.scan,
+        { v: 1, instance, completed: { ...completed, sinceMs: sinceMs + 1 }, page: { kind: 'continuation', continuation: first.continuation } },
+        { surface: 'agent', sessionId: 'fx70' })).toMatchObject({ kind: 'failed' });
+      const next = await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.scan,
+        { v: 1, instance, completed, page: { kind: 'continuation', continuation: first.continuation } }, { surface: 'agent', sessionId: 'fx70' });
+      expect(TriageScanResultV1Schema.safeParse(next).success).toBe(true);
+      const queries = transport.requests.filter(request => new URL(request.url).pathname === '/search/issues')
+        .map(request => new URL(request.url).searchParams.get('q') ?? '');
+      expect(queries.filter(query => query.includes('closed:>=')).every(query => query.includes('is:issue is:closed'))).toBe(true);
+      expect(queries.slice(0, 5).every(query => query.startsWith('is:open '))).toBe(true);
+    } finally { await plugin.dispose(); }
+  });
   it('keeps a retained repository selection and the current directory on one native unit id', async () => {
     const transport = createStubGithubTransport({ respond: (request) => new URL(request.url).pathname === '/user/repos'
       ? { status: 200, body: [{ id: 11, full_name: 'org/app' }] } : undefined });

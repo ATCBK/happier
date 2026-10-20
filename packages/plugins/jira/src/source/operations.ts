@@ -123,15 +123,19 @@ export async function jiraViewer(client: JiraClient): Promise<string> {
 }
 const SCAN_FIELDS = ['summary', 'project', 'status', 'issuetype', 'priority', 'creator', 'assignee', 'watches', 'created', 'updated', 'duedate', 'resolutiondate', 'parent', 'subtasks', 'issuelinks'];
 
-function jql(configuration: JiraConfiguration): string {
+function jql(configuration: JiraConfiguration, completedSinceMs?: number): string {
     const clauses = { assignee: 'assignee = currentUser()', author: 'creator = currentUser()', subscribed: 'watcher = currentUser()',
         mine: '(assignee = currentUser() OR creator = currentUser() OR watcher = currentUser())', all: '' };
     const project = configuration.scope.kind === 'selected' ? `project IN (${configuration.scope.unitIds.join(',')})` : '';
-    return `${[project, clauses[configuration.involvement]].filter(Boolean).join(' AND ')}${project || clauses[configuration.involvement] ? ' ' : ''}ORDER BY updated DESC, id DESC`;
+    // Numeric Jira dates are epoch milliseconds, avoiding the provider viewer's timezone.
+    const completion = completedSinceMs === undefined ? '' : `(statusCategory != Done OR resolved >= ${completedSinceMs})`;
+    const selected = [project, clauses[configuration.involvement], completion].filter(Boolean).join(' AND ');
+    return `${selected}${selected ? ' ' : ''}ORDER BY updated DESC, id DESC`;
 }
 
 export async function scanJiraSource(raw: unknown, context: PluginInvocationContext): Promise<TriageScanResultV1> {
     const input = TriageScanInputV1Schema.parse(raw);
+    const completedSinceMs = input.completed?.kindIds.includes('issue') ? input.completed.sinceMs : undefined;
     try {
         const { client, configuration } = await openJiraInstance(input.instance, context);
         let limit: number;
@@ -140,11 +144,12 @@ export async function scanJiraSource(raw: unknown, context: PluginInvocationCont
         else {
             const cursor = object(JSON.parse(input.page.continuation.token));
             if (cursor.v !== 1 || cursor.instance !== input.instance.localInstanceKey || cursor.configuration !== input.instance.configuration.token
+                || cursor.completedSinceMs !== completedSinceMs
                 || !Number.isSafeInteger(cursor.limit) || Number(cursor.limit) < 1 || !string(cursor.nextPageToken)) throw invalidJira('jira/continuationInvalid');
             limit = Number(cursor.limit); nextPageToken = String(cursor.nextPageToken);
         }
         const viewer = await jiraViewer(client);
-        const page = object(await client.request('/rest/api/3/search/jql', 'POST', { jql: jql(configuration), fields: SCAN_FIELDS,
+        const page = object(await client.request('/rest/api/3/search/jql', 'POST', { jql: jql(configuration, completedSinceMs), fields: SCAN_FIELDS,
             maxResults: limit, ...(nextPageToken === undefined ? {} : { nextPageToken }) }));
         if (!Array.isArray(page.issues) || typeof page.isLast !== 'boolean' || page.issues.length > limit) throw invalidJira();
         const observations: Extract<TriageScanResultV1, { kind: 'complete' }>['observations'][number][] = [];
@@ -159,7 +164,8 @@ export async function scanJiraSource(raw: unknown, context: PluginInvocationCont
         const next = string(page.nextPageToken);
         if (next === undefined || next === nextPageToken) throw invalidJira('jira/searchPageInvalid');
         const continuation = TriageScanContinuationV1Schema.parse({ v: 1, token: JSON.stringify({ v: 1,
-            instance: input.instance.localInstanceKey, configuration: input.instance.configuration.token, limit, nextPageToken: next }) });
+            instance: input.instance.localInstanceKey, configuration: input.instance.configuration.token, limit, nextPageToken: next,
+            ...(completedSinceMs === undefined ? {} : { completedSinceMs }) }) });
         return { kind: 'page', observations, evidence: omitted > 0 ? evidence : { kind: 'partial', reason: 'jira/providerContinuation' }, continuation };
     } catch (error) { return { kind: 'failed', failure: jiraFailure(error) }; }
 }

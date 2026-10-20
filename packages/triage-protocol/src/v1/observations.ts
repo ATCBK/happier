@@ -171,6 +171,8 @@ export const TriageTaskTransitionV1Schema = defineProtocolObject({
     state: TriageEntryStateV1ProtocolSchema,
 }, { policy: 'closed' });
 export const TriageTaskCapabilitiesV1Schema = defineProtocolObject({
+    /** The scan role honours completion windows for this task kind. Omission means unknown coverage. */
+    completedScan: defineProtocolLiteral(true).optional(),
     createFields: defineProtocolUniqueArray(TriageTaskFieldV1Schema).optional(),
     editFields: defineProtocolUniqueArray(TriageTaskFieldV1Schema).optional(),
     transitions: defineProtocolArray(TriageTaskTransitionV1Schema).optional(),

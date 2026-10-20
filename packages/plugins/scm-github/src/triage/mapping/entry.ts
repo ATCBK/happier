@@ -341,6 +341,7 @@ export function projectGithubEntry(
   const state = view.kindId === 'pull-request'
     ? mapGithubPullRequestState(view.state)
     : mapGithubIssueState(view.state);
+  const completedAtMs = state.completionReason === 'completed' ? readEpochMs(view.state.closed_at) : null;
   const childSummary = view.kindId === 'issue' && isRecord(view.state.sub_issues_summary)
     ? view.state.sub_issues_summary : null;
   const children = childSummary !== null
@@ -383,6 +384,7 @@ export function projectGithubEntry(
       webUrl: locator.webUrl,
       nameWithOwner: buildGithubNameWithOwner(view.owner, view.name),
       createdAtMs: view.createdAtMs,
+      ...(completedAtMs === null ? {} : { completedAtMs }),
       sourceUpdatedAtMs: view.updatedAtMs,
       nativeRevision: view.nativeRevision,
       state,

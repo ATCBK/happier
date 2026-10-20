@@ -74,6 +74,7 @@ export type GithubScanInputV1 = Readonly<{
   page: GithubScanPageRequestV1;
   /** `owner/name` when the configured instance is repository-scoped, else `null`. */
   repositoryKey: string | null;
+  completedSinceMs?: number;
 }>;
 
 export type GithubScanDependenciesV1 = Readonly<{
@@ -213,6 +214,7 @@ export async function runGithubTriageScan(
   const buildLaneQuery = (laneId: GithubScanLaneIdV1): string => buildGithubLaneQuery({
     laneId,
     repositoryKey: input.repositoryKey,
+    ...(input.completedSinceMs === undefined ? {} : { completedSinceMs: input.completedSinceMs }),
   });
 
   let frontier: GithubScanInvocationFrontierV1;
@@ -221,6 +223,7 @@ export async function runGithubTriageScan(
   } else {
     const resumed = decodeGithubScanContinuation(input.page.token, {
       buildLaneQuery,
+      ...(input.completedSinceMs === undefined ? {} : { completedSinceMs: input.completedSinceMs }),
     });
     if (resumed === null) {
       return Object.freeze({ kind: 'failed', failure: CONTINUATION_UNRECOGNIZED_FAILURE });
@@ -273,7 +276,7 @@ export async function runGithubTriageScan(
         ?? Object.freeze({ kind: 'walkFinished' as const });
       return Object.freeze({ kind: 'complete', ...base, evidence });
     }
-    const continuation = encodeGithubScanContinuation(frontier);
+    const continuation = encodeGithubScanContinuation(frontier, input.completedSinceMs);
     if (continuation === null) {
       // The walk cannot be resumed, so it ends here — and says so. A `complete` arm that
       // quietly dropped the rest of the walk would read as a finished one.

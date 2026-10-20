@@ -98,6 +98,7 @@ export type GithubTriageEntrySnapshotV1 = Readonly<{
    */
   nameWithOwner: string | null;
   createdAtMs: number;
+  completedAtMs?: number;
   sourceUpdatedAtMs: number;
   nativeRevision: string | null;
   /** Present only on an authoritative pull-request read with all three revisions. */

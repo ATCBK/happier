@@ -96,6 +96,17 @@ id within the configured source. This is essential when issue identity is
 site-, workspace- or organization-wide: Jira projects, Linear teams and Sentry
 projects must not change entry collision identity to become filterable.
 
+The aggregate list projects this configuration-only read into each configured
+source summary before entries load. Source filters name the configured instance,
+so two connections to one source remain separate choices. Scope filters combine
+the selected units (or an All placeholder) with the unfiltered window's seen
+units. Unit ids stay qualified by configured instance; an older entry without a
+unit fact can match only an explicit source-authored collision-scope join.
+These are display filters: materialization still scans every configured source.
+The same lens schema carries instance and unit choices through routes, saved
+views and list/mounted Actions. Retained contribution-wide source and
+collision-scope lenses remain readable and removable.
+
 The source keeps its token codec, authorization, provider paging and scan
 behavior. The shared configuration envelope remains opaque. Available-mode
 listing searches and pages the source's selectable units under its exact
@@ -193,7 +204,27 @@ personal tasks project their existing deadline as an ISO datetime. Optional
 Absent facts remain unknown. The Tasks row projection exposes both and accepts
 an explicit `completedSinceMs` calendar boundary for a recently completed band;
 entries without completion evidence cannot claim membership in that band.
-This projection does not expand a source's scan coverage.
+The Tasks lens supplies the local Monday boundary to the existing
+`tasks/list-v1` Action as `tasks.completedSinceMs`. The same scan/window owner
+requests `completed: { kindIds, sinceMs }` for task kinds whose declaration
+advertises `taskCapabilities.completedScan: true`
+on initial and continuation pages. This selects current completed membership;
+it is not an update watermark. Ordinary PRs & Issues scans omit the selection.
+GitHub extends its existing involvement queries with recently closed issues
+and projects `closed_at`; Linear filters `completedAt`, and Jira filters the
+native resolved date. Personal tasks read the existing Account list and its
+completion timestamps. Sources keep their scope, involvement, paging, failure
+and coverage owners. Changing the calendar boundary restarts the mounted walk
+through the existing coordinator. No completion timer, cache or store is added.
+
+This is an in-place change to the unreleased V1 development contract (package
+version `0.0.0`). The scan envelope and nested completion selection remain
+closed. Omitted `completedScan` leaves the ordinary source read available but
+keeps completion coverage partial; the aggregate never sends the selector to
+that kind or reports a complete empty completion window. The list Action and
+mounted projection use the same completion-membership predicate as pinned task
+rows. Omission of a completion timestamp remains unknown, never evidence of no
+completed work.
 
 A source can declare `taskCapabilities.completingTransitionId` to name an
 offered native completed transition for one-step completion. Dynamic sources use
@@ -277,9 +308,12 @@ entry attachment and Session orchestrator.
 The Jira source in 0.3 development uses the public Connected Accounts manual
 authentication lifecycle for one Jira Cloud site, account email and an unscoped
 personal API token. The host stores credentials; the source materializes them
-only for that exact site. Project discovery and the source-native draft editor
-use the shared settings owner. The editor chooses involvement and discovers the
-native issue type used for creation; it does not guess a type or persist issues.
+only for that exact site. One configured source covers the site, with All or a
+non-empty selected project set inside its private configuration. Historical
+per-project configurations remain readable and retain their instance keys when
+edited. The shared settings owner lists projects; source-native fields preserve
+involvement, the default create project and its discovered native issue type.
+Creation never guesses a project or type, and the editor does not persist issues.
 See Jira's [API-token authentication contract](https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/).
 
 Jira issue identity uses the numeric issue id, not the mutable issue key. Enhanced
@@ -305,6 +339,17 @@ GitHub retains one instance per credential binding, GitLab one per deployment
 and binding. Neither selection changes entry identity or exact-item write routing.
 Selected scans traverse each unit through the existing native scan owner, carrying
 only its current native frontier; All delegates to the original account/deployment scan.
+
+The same development-source control selects Jira projects, Linear teams, Sentry
+projects and PostHog environments inside one site, workspace or organization
+instance. Sentry sends the selected numeric projects through its existing
+organization scan. PostHog selects immutable environment UUIDs; numeric ids stay
+source-owned routing metadata, and All resolves the live environment directory
+rather than freezing the environments seen during setup. Historical Sentry All
+and PostHog environment-set tokens remain readable. These sources expose unit
+listing as a safe read Action, and configuration-only listing projects retained
+selection metadata without provider requests. Unit membership uses
+`snapshot.scopeUnitId` without changing existing entry collision identity.
 
 GitHub also declares its existing deployment-derived instance-key stability to
 the shared page. When discovery cannot reach a configured login, Update uses
@@ -373,10 +418,15 @@ GitLab `{ v: 1 }` maps to All. New encoders always write the selected-set shape.
 team issues through this same public source contract. Its Connected Account uses
 the host's manual personal-API-key mode and credential store. The key is sent only
 to Linear's fixed GraphQL origin, inside the executing source invocation;
-configuration contains an immutable team id and involvement selection.
+configuration contains All or a non-empty selected set of immutable team ids,
+alongside the involvement selection.
 
-Team discovery is read-only. The shared source Settings page configures a team
-for My issues, Assigned to me, Created by me, Subscribed, or All team issues.
+Team discovery is read-only. One configured source covers the workspace; the
+shared source Settings control chooses All or Selected teams, while source-native
+fields retain My issues, Assigned to me, Created by me, Subscribed, or All issues.
+Historical singleton team tokens and instance keys remain readable. Creating an
+issue requires an explicit team for All or multiple selected teams; a singleton
+selection supplies that target directly.
 The source maps those relationships onto the existing author/assignee/subscribed
 facts. Entry identity uses Linear's immutable issue id in its deployment scope;
 the mutable identifier, team name and account are not identity components.
