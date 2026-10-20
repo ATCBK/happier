@@ -6,9 +6,15 @@ import {
     classifyVoiceMachineError,
     createVoiceMachineError,
     isVoiceMachineErrorKind,
+    resolveVoiceMachineErrorKind,
 } from './voiceMachineError';
 
 describe('createVoiceMachineError', () => {
+    it.each(['VOICE_AGENT_TARGET_MACHINE_OFFLINE', 'daemon_streaming_stt_machine_unreachable'])(
+        'keeps the unavailable Machine remedy for %s instead of a generic provider retry', (reason) => {
+            expect(resolveVoiceMachineErrorKind(reason, 'provider_error')).toBe('execution_machine_unavailable');
+        },
+    );
     it('projects an installed-client setup refusal through the existing visible setup policy', () => {
         const error = Object.assign(new Error('voice_text_segmentation_unavailable'), { code: 'provider_setup_required' });
         expect(classifyVoiceMachineError(error)).toMatchObject({

@@ -28,6 +28,10 @@ export function resolveVoiceSurfaceState(input: Readonly<{
   if (input.presentationState === 'reconnecting') return 'reconnecting';
   if (input.presentationState === 'interrupted') return 'interrupted';
   if (input.errorPresentation === 'permission_required') return 'permission_required';
+  // A retryable terminal failure retains its notice and recovery in the
+  // lifecycle snapshot. Keep it visible after capture has disconnected.
+  if (input.status === 'disconnected'
+    && (input.errorPresentation === 'notice' || input.errorPresentation === 'error')) return 'error';
   if (input.status === 'error') return 'error';
   if (input.status === 'connecting') return 'connecting';
   if (input.status !== 'connected') return 'idle';

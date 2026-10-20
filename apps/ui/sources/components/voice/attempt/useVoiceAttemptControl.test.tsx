@@ -1160,6 +1160,21 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
         await hook.unmount();
     });
 
+    it('shows the retained startup failure with Retry and Dismiss after a recoverable disconnect', async () => {
+        const hook = await renderControl({
+            adapterId: 'local_conversation', sessionId: 'control-1', status: 'disconnected', mode: 'idle',
+            canStop: false, errorCode: 'provider_error', errorMessage: 'daemon_streaming_stt_model_not_installed',
+            errorPresentation: 'notice', errorRecoveryAction: 'retry',
+        });
+        expect(hook.getCurrent()).toMatchObject({
+            surfaceState: 'error',
+            captionLabel: t('settingsVoice.local.machineErrors.provider_error'),
+            recoveryAvailable: true, recoveryLabel: t('common.retry'),
+            canDismissFailedAttempt: true,
+        });
+        await hook.unmount();
+    });
+
     it('says the previous session could not stop, with Retry, instead of the generic service message', async () => {
         const hook = await renderControl({
             adapterId: 'local_conversation', sessionId: 'control-1', status: 'error', mode: 'idle',

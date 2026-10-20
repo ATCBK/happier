@@ -10,6 +10,7 @@ import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
 import { VoiceLocalSttSchema } from '@/sync/domains/settings/voiceLocalSttSettings';
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
+import { resolveVoiceSurfaceState } from '@/components/voice/surface/resolveVoiceSurfaceState';
 
 import {
   audioStreamStart,
@@ -105,10 +106,15 @@ describe('local voice engine local neural STT (streaming)', () => {
     expect(getLocalVoiceState(), JSON.stringify({ beforeCapture,
       afterCapture: await readLocalVoiceMachinePrerequisites(),
     })).toMatchObject({
-      status: 'idle',
+      status: 'error',
       sessionId: 's-web-daemon',
       error: 'daemon_streaming_stt_machine_unreachable',
     });
+    const { getVoiceAdapterRegistry } = await import('@/voice/session/voiceAdapterRegistry');
+    const snapshot = getVoiceAdapterRegistry().get('local_conversation')?.getSnapshot();
+    if (!snapshot) throw new Error('Missing Local Voice adapter');
+    expect(snapshot).toMatchObject({ errorCode: 'execution_machine_unavailable', errorRecoveryAction: 'select_execution_machine' });
+    expect(resolveVoiceSurfaceState(snapshot)).toBe('error');
   });
 
   it('keeps mic permission denial visible as a failed attempt instead of entering recording', async () => {

@@ -45,4 +45,11 @@ describe('resolveVoiceSurfaceState', () => {
     })).toBe('reconnecting');
     expect(resolveVoiceSurfaceState({ status: 'connecting', mode: 'idle' })).toBe('connecting');
   });
+
+  it('keeps a terminal retryable failure visible while clean ends and interruptions stay idle', () => {
+    expect(resolveVoiceSurfaceState({ status: 'disconnected', mode: 'idle', errorPresentation: 'notice' })).toBe('error');
+    expect(resolveVoiceSurfaceState({ status: 'disconnected', mode: 'idle' })).toBe('idle');
+    expect(resolveVoiceSurfaceState({ status: 'disconnected', mode: 'idle', errorPresentation: 'interrupted' })).toBe('idle');
+    expect(resolveVoiceSurfaceState({ status: 'connected', mode: 'listening', errorPresentation: 'notice' })).toBe('listening');
+  });
 });
