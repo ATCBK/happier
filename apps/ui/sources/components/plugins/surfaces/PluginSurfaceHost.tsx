@@ -362,7 +362,7 @@ const PluginHostApiProviderWithPrivateResourceBinding = PluginHostApiProvider as
 function createPluginUiPrivateResourceMountScope(input: Readonly<{
     pluginId: string;
     accountLifetime: ActiveServerAccountScopeLifetime | null;
-    mountLifetime: BoundPluginSurfaceMountLifetime;
+    mountLifetime: Pick<BoundPluginSurfaceMountLifetime, 'isCurrent'>;
     occurrenceId?: string;
 }>): DeclarativeDocumentSourceMountScope {
     const capturedLifetime = input.accountLifetime;
@@ -765,15 +765,25 @@ function DeclarativePluginSurfaceWithDocumentSource(
     React.useLayoutEffect(() => () => {
         hostApiAdapter?.dispose();
     }, [hostApiAdapter]);
+    // The document adapter keeps its adopted document for the same Account and
+    // occurrence. A replaced controller (new facts, reconnect) is therefore not
+    // a new scope: currentness follows the latest controller through this
+    // forwarder, while a retired controller with no successor still reads as
+    // not current.
+    const controllerRef = React.useRef(props.controller);
+    controllerRef.current = props.controller;
+    const latestControllerLifetime = React.useMemo(() => Object.freeze({
+        isCurrent: (): boolean => controllerRef.current.isCurrent(),
+    }), []);
     const documentMountScope = React.useMemo(() => occurrenceId
         ? createPluginUiPrivateResourceMountScope({
             pluginId: props.pluginId,
             accountLifetime: props.accountLifetime,
-            mountLifetime: props.controller,
+            mountLifetime: latestControllerLifetime,
             occurrenceId,
         })
         : null,
-    [occurrenceId, props.accountLifetime, props.controller, props.pluginId]);
+    [latestControllerLifetime, occurrenceId, props.accountLifetime, props.pluginId]);
     if (!hostApiAdapter || !documentMountScope) {
         return (
             <DeclarativePluginSurface

@@ -6,6 +6,7 @@ import { PluginAccountAvailabilityIntentReadResponseV1Schema } from '@happier-de
 import { installRealActionExecutorModuleLoader, serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { t } from '@/text';
+import { resolvePluginSurfaceStatePresentation } from '@/sync/domains/surfaces/copy/resolveReasonCopy';
 
 import type { BoundPluginSurfaceController } from './boundPluginSurfaceController';
 import type {
@@ -336,6 +337,40 @@ describe('DeclarativePluginSurface ordinary Settings', () => {
             screen.changeTextByTestId('plugin-declarative-field:root.children[0]', 'Source B draft');
         });
         expect(screen.findByTestId('plugin-declarative-field-save:root.children[0]')?.props.disabled).toBe(false);
+    });
+});
+
+describe('DeclarativePluginSurface document source feedback', () => {
+    const textModel = PluginDeclarativeProjectedModelV1Schema.parse({
+        visible: true,
+        requiredHostMethods: [],
+        identity: { pluginId: 'acme.counter', localId: 'count', qualifiedId: 'acme.counter/count', occurrenceId: 'counter-occurrence' },
+        declarativeInventory: { actions: [], destinations: [], settings: [], uiQueries: [] },
+        root: { kind: 'text', path: 'root', order: 0, text: 'Last value 3' },
+    });
+    const render = (state: 'refreshing' | 'stale') => renderScreen(
+        <DeclarativePluginSurface
+            pluginId="acme.counter"
+            model={textModel}
+            interactionEnabled={true}
+            daemonInteractionEnabled={false}
+            dispatchAction={dispatchAction}
+            actionAvailable={false}
+            openSurface={openSurface}
+            openSurfaceAvailable={false}
+            authorityGeneration={1}
+            accountLifetime={createAccountLifetime()}
+            documentSourcePresentation={{ presentation: resolvePluginSurfaceStatePresentation({ state, hasRetainedContent: true }) }}
+        />,
+    );
+
+    it('keeps the last body and says nothing while a refresh runs, but still reports a stale source', async () => {
+        const refreshing = await render('refreshing');
+        expect(refreshing.getTextContent()).toContain('Last value 3');
+        expect(refreshing.findByTestId('plugin-declarative-document-source-status:refreshing')).toBeNull();
+        const stale = await render('stale');
+        expect(stale.getTextContent()).toContain('Last value 3');
+        expect(stale.findByTestId('plugin-declarative-document-source-status:stale')).toBeTruthy();
     });
 });
 

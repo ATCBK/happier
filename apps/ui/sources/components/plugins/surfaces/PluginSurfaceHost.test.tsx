@@ -4067,6 +4067,70 @@ describe('PluginSurfacePlacementHost', () => {
         expect(managePlugin).toHaveBeenCalledOnce();
     });
 
+    it('keeps the rendered document, with no status line, while a replaced mount controller refreshes its Resource', async () => {
+        declarativeSettingsGetMock.mockResolvedValue({ supported: false, reason: 'error' });
+        const adopted = documentResourceRead(
+            { version: 1, root: { kind: 'text', text: 'Adopted dashboard' } },
+            DECLARATIVE_DOCUMENT_CONTENT_TYPE,
+            `sha256:${'b'.repeat(64)}`,
+        );
+        let releaseRefresh: (() => void) | null = null;
+        let holdReads = false;
+        realResourceTransport.request = async (method, payload) => {
+            if (method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ) {
+                const request = DaemonPluginUiResourceReadRequestSchema.parse(payload);
+                // Reads answer at once until the document is shown; the re-read after the controller changes stays in flight.
+                if (holdReads) await new Promise<void>((resolve) => { releaseRefresh = resolve; });
+                return { ...adopted.result, resource: request.resource, kind: 'asset' };
+            }
+            if (method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_OPEN) {
+                const request = DaemonPluginUiResourceWatchOpenRequestSchema.parse(payload);
+                return { ok: true, subscriptionId: request.subscriptionId, digest: adopted.result.digest };
+            }
+            if (method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_NEXT) {
+                return new Promise(() => {});
+            }
+            if (method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_WATCH_CLOSE) return { ok: true };
+            throw new Error(`Unexpected Resource daemon method: ${method}`);
+        };
+        await pluginSurfaceAccountLifetime.setScope({ serverId: 'server-a', accountId: 'account-a' });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.getState().applyMachines([createMachineFixture({
+            id: 'machine-1',
+            activeAt: Date.now(),
+        })], true, { sourceServerId: 'server-a' });
+        const projection = declarativeDocumentProjection();
+        const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const renderHost = (sessionId: string) => (
+            <PluginSurfacePlacementHost
+                placement={declarativeDocumentPlacement()}
+                machineId="machine-1"
+                serverId="server-a"
+                sessionId={sessionId}
+                pluginUiProjection={projection}
+                platform="web"
+            />
+        );
+        const screen = await renderScreen(renderHost('session-live-dashboard'));
+        try {
+            await vi.waitFor(() => {
+                expect(screen.getTextContent(), surfaceFixtureDiagnostics(screen, 'acme.live-dashboard')).toContain('Adopted dashboard');
+            });
+
+            holdReads = true;
+            // The bound controller is replaced for the same Account and occurrence while the refresh is still in flight.
+            await screen.update(renderHost('session-live-dashboard-2'));
+
+            expect(screen.getTextContent()).toContain('Adopted dashboard');
+            expect(screen.getTextContent()).not.toContain('Static dashboard');
+            expect(screen.findByTestId('plugin-declarative-document-source-status:loading')).toBeNull();
+            expect(screen.findByTestId('plugin-declarative-document-source-status:refreshing')).toBeNull();
+            await act(async () => { releaseRefresh?.(); });
+        } finally {
+            await screen.unmount();
+        }
+    });
+
     it('keeps a settings-less declarative surface interactive when the plugin has no settings service', async () => {
         // A plugin that contributes only actions and views has no settings service by
         // design (`availability('settings') === unavailable`), so `settings.get` fails.
