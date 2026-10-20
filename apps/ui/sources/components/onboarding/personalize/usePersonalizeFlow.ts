@@ -3,7 +3,8 @@ import * as React from 'react';
 import { previewThemeSelection, useApplyThemeSelection } from '@/components/settings/appearance/useApplyThemeSelection';
 import { useHomeSetupDismissals } from '@/components/hub/layout/useHomeSetupDismissals';
 import { storage, useLocalSetting } from '@/sync/domains/state/storage';
-import { useAccountSettingsScope, useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { DEFAULT_THEME_PROFILES_LOCAL_STATE } from '@/theme/profiles/themeProfilePersistence';
 
@@ -25,26 +26,24 @@ import {
 
 /** The flow's actions bound to the real writers: Account and device settings, the theme owner, Home setup. */
 export function usePersonalizeFlowActions(assertCurrent: () => void) {
-    const applySettings = useApplySettings();
-    const applyLocalSettings = useApplyLocalSettings();
+    const { setSetting } = useSettingActionFeedback({ beforeLocalCommit: assertCurrent });
     const applyThemeSelection = useApplyThemeSelection(assertCurrent);
     const { dismiss } = useHomeSetupDismissals();
     return React.useMemo(() => {
         const ports: PersonalizeFlowPorts = {
             readAccount: () => storage.getState().settings,
             readLocal: () => storage.getState().localSettings,
-            writeAccount: (delta) => { assertCurrent(); applySettings(delta); },
-            writeLocal: (delta) => { assertCurrent(); applyLocalSettings(delta); },
+            writeSetting: (write) => { assertCurrent(); return setSetting(write, write.value); },
             applyTheme: (mode) => applyThemeSelection(mode, storage.getState().localSettings.themeProfiles ?? DEFAULT_THEME_PROFILES_LOCAL_STATE),
             readProgress: () => normalizePersonalizeProgress(storage.getState().localSettings.personalizeProgressV1),
             writeProgress: (progress) => {
                 assertCurrent();
-                applyLocalSettings({ personalizeProgressV1: { savedSteps: [...progress.savedSteps], resumeAt: progress.resumeAt } });
+                storage.getState().applyLocalSettings({ personalizeProgressV1: { savedSteps: [...progress.savedSteps], resumeAt: progress.resumeAt } }, { source: 'ui' });
             },
             completeSetup: () => { assertCurrent(); dismiss(PERSONALIZE_SETUP_ENTRY_ID); },
         };
         return createPersonalizeFlowActions(ports);
-    }, [applyLocalSettings, applySettings, applyThemeSelection, assertCurrent, dismiss]);
+    }, [setSetting, applyThemeSelection, assertCurrent, dismiss]);
 }
 
 /** This device's visit memory for the Home card and the flow's resume page. */

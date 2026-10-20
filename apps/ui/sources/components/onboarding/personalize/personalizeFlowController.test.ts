@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { applySettings, settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { applyLocalSettings, localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
 
 import { createPersonalizeFlowActions } from './personalizeFlowController';
@@ -13,20 +13,16 @@ import {
 } from './personalizeFlowModel';
 
 /** Account, device and visit-memory storage are the persistence boundaries; the flow logic above them is real. */
-function createHarness(options: Readonly<{ failAccountWrites?: boolean; declineTheme?: boolean }> = {}) {
-    let account: Settings = settingsDefaults;
+function createHarness(options: Readonly<{ declineTheme?: boolean }> = {}) {
+    const account = settingsDefaults;
     let local: LocalSettings = localSettingsDefaults;
     let progress: PersonalizeProgress = EMPTY_PERSONALIZE_PROGRESS;
     const completed: string[] = [];
-    let failAccountWrites = options.failAccountWrites === true;
     const actions = createPersonalizeFlowActions({
         readAccount: () => account,
         readLocal: () => local,
-        writeAccount: (delta) => {
-            if (failAccountWrites) throw new Error('account_settings_scope_changed');
-            account = applySettings(account, delta);
-        },
-        writeLocal: (delta) => { local = applyLocalSettings(local, delta); },
+        // Preference mutations run through the real Action wiring in usePersonalizeFlow.test.tsx.
+        writeSetting: async () => { throw new Error('Unexpected preference write in a visit-memory test'); },
         applyTheme: (mode) => {
             if (options.declineTheme) return false;
             local = applyLocalSettings(local, { themePreference: mode });
@@ -42,7 +38,6 @@ function createHarness(options: Readonly<{ failAccountWrites?: boolean; declineT
         local: () => local,
         progress: () => progress,
         completed,
-        setFailAccountWrites: (value: boolean) => { failAccountWrites = value; },
     };
 }
 
@@ -55,19 +50,14 @@ describe('Personalize flow actions', () => {
         expect(flow.local().themePreference).toBe(before);
         expect(flow.progress()).toEqual(EMPTY_PERSONALIZE_PROGRESS);
     });
-    it('saves each step on Next through its writers and remembers where to resume', async () => {
+    it('saves a theme step and remembers where to resume', async () => {
         const flow = createHarness();
         const draft = readPersonalizeChoices(flow.account(), flow.local());
 
-        expect(await flow.actions.saveStep('look', { ...draft, theme: 'dark', glass: 'everywhere' })).toEqual({ ok: true });
+        expect(await flow.actions.saveStep('look', { ...draft, theme: 'dark' })).toEqual({ ok: true });
         expect(flow.local().themePreference).toBe('dark');
-        expect(flow.account().glassBlurEnabled).toBe(true);
-        expect(readPersonalizeChoices(flow.account(), flow.local()).glass).toBe('everywhere');
-
         flow.actions.skipPage('style');
-        expect(await flow.actions.saveStep('conversation', { ...draft, transcriptLayout: 'linear' })).toEqual({ ok: true });
-        expect(flow.account().transcriptGroupingMode).toBe('linear');
-        expect(flow.progress()).toEqual({ savedSteps: ['look', 'conversation'], resumeAt: 'tools' });
+        expect(flow.progress()).toEqual({ savedSteps: ['look'], resumeAt: 'conversation' });
     });
 
     it('keeps current values when a step is skipped', () => {
@@ -78,36 +68,16 @@ describe('Personalize flow actions', () => {
         expect(flow.progress()).toEqual({ savedSteps: [], resumeAt: 'work' });
     });
 
-    it('stays on a step whose save fails, keeping the choice and every step already saved', async () => {
-        const flow = createHarness();
-        const draft = readPersonalizeChoices(flow.account(), flow.local());
-        await flow.actions.saveStep('attention', { ...draft, attention: 'global' });
-        flow.setFailAccountWrites(true);
-
-        const result = await flow.actions.saveStep('work', { ...draft, listDensity: 'cozy' });
-        expect(result.ok).toBe(false);
-        expect(flow.account().sessionListDensity).toBe('narrow');
-        expect(flow.account().sessionListAttentionPromotionModeV1).toBe('global');
-        expect(flow.progress()).toEqual({ savedSteps: ['attention'], resumeAt: 'notifications' });
-
-        // Try again succeeds with the same draft.
-        flow.setFailAccountWrites(false);
-        expect(await flow.actions.saveStep('work', { ...draft, listDensity: 'cozy' })).toEqual({ ok: true });
-        expect(flow.account().sessionListDensity).toBe('cozy');
-    });
-
     it('finishing later keeps saved choices, and reopening resumes with them pre-selected', async () => {
         const flow = createHarness();
         const draft = readPersonalizeChoices(flow.account(), flow.local());
         await flow.actions.saveStep('look', { ...draft, theme: 'light' });
         flow.actions.skipPage('style');
-        await flow.actions.saveStep('conversation', { ...draft, thinking: 'hidden' });
-        await flow.actions.saveStep('tools', { ...draft, toolChrome: 'cards' });
         // "Finish later": nothing else happens; the card reads the visit memory.
 
-        expect(resolvePersonalizeResumePage(flow.progress())).toBe('work');
-        expect(resolvePersonalizeCardProgress(flow.progress())).toEqual({ started: true, savedCount: 3, nextStep: 'work' });
-        expect(flow.actions.readCurrentChoices()).toMatchObject({ theme: 'light', thinking: 'hidden', toolChrome: 'cards' });
+        expect(resolvePersonalizeResumePage(flow.progress())).toBe('conversation');
+        expect(resolvePersonalizeCardProgress(flow.progress())).toEqual({ started: true, savedCount: 1, nextStep: 'conversation' });
+        expect(flow.actions.readCurrentChoices()).toMatchObject({ theme: 'light' });
         expect(flow.completed).toEqual([]);
     });
 
