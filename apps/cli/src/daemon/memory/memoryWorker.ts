@@ -441,6 +441,9 @@ export async function startMemoryWorker(params: Readonly<{
     if (stopPromise) return stopPromise;
     stopPromise = (async () => {
       stopped = true;
+      // RPC settings acknowledgement may precede its queued reconciliation.
+      // Drain that existing owner before disposing its sources and indexes.
+      await settingsOperation;
       await stopLoop();
       await externalSources.dispose();
       for (const operation of activeIndexOperations) operation.controller.abort();

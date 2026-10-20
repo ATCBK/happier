@@ -16,6 +16,7 @@ import { resolveOperationalMemoryEmbeddingsSettings } from '@/daemon/memory/reso
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import type { MemoryWorkerHandle } from '@/daemon/memory/memoryWorker';
 import { getSqliteFootprintBytes } from '@/daemon/memory/sqliteFootprint';
+import { logger } from '@/ui/logger';
 
 const EnsureUpToDateParamsSchema = z.looseObject({
     sessionId: z.optional(z.string().check(z.minLength(1))),
@@ -207,7 +208,13 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
     if (!parsed.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     const next = await writeMemorySettingsToDisk(parsed.data);
-    await memoryWorker.reloadSettings();
+    // Persistence acknowledges the user's change. Native discovery, index
+    // reconciliation and draining stay serialized by the worker's lifecycle.
+    void memoryWorker.reloadSettings().catch((error: unknown) => {
+      logger.warn('[memoryWorker] Saved settings reconciliation failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
     return next;
   });
 

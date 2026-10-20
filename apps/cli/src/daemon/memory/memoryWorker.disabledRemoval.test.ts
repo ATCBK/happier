@@ -274,6 +274,84 @@ describe('memoryWorker retained removal while disabled', () => {
     expect(worker.getDeepDbPath()).toBeNull();
   });
 
+  it('acknowledges persisted RPC settings before reconciliation and drains the reload on stop', async () => {
+    const { worker } = await startSeededWorker();
+    const persistence = await import('@/persistence');
+    const readSettings = persistence.readSettings;
+    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+    const { RpcHandlerManager } = await import('@/api/rpc/RpcHandlerManager');
+    const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');
+    const manager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain', logger: () => {} });
+    registerMachineMemoryRpcHandlers({ rpcHandlerManager: manager, memoryWorker: worker });
+    const next = { ...worker.getSettings(), enabled: false };
+    let releaseRead!: () => void;
+    let enteredRead!: () => void;
+    const blocked = new Promise<void>(resolve => { releaseRead = resolve; });
+    const entered = new Promise<void>(resolve => { enteredRead = resolve; });
+    const readBoundary = vi.spyOn(persistence, 'readSettings');
+    // The RPC's persistence read stays real; only the following worker read
+    // waits on its filesystem boundary. Reconciliation and teardown stay real.
+    readBoundary.mockImplementationOnce(async () => {
+      const current = await readSettings();
+      readBoundary.mockImplementationOnce(async () => {
+        const saved = await readSettings();
+        enteredRead();
+        await blocked;
+        return saved;
+      });
+      return current;
+    });
+    let acknowledged = false;
+    let stopped = false;
+    const request = manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SETTINGS_SET}`, params: next })
+      .then(result => { acknowledged = true; return result; });
+    try {
+      await entered;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect.soft(acknowledged).toBe(true);
+      const saved = await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET}`, params: {} });
+      expect(saved).toMatchObject({ enabled: false });
+      const stopping = Promise.resolve(worker.stop()).then(() => { stopped = true; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect.soft(stopped).toBe(false);
+      releaseRead();
+      expect(await request).toEqual(saved);
+      await stopping;
+      expect(worker.getTier1DbPath()).toBeNull();
+      expect(worker.getDeepDbPath()).toBeNull();
+    } finally {
+      releaseRead();
+      await request;
+    }
+  });
+
+  it('retains saved RPC settings after a reconciliation failure and permits a later reload', async () => {
+    const { worker } = await startSeededWorker();
+    const persistence = await import('@/persistence');
+    const readSettings = persistence.readSettings;
+    const { logger } = await import('@/ui/logger');
+    const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+    const { RpcHandlerManager } = await import('@/api/rpc/RpcHandlerManager');
+    const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');
+    const manager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain', logger: () => {} });
+    registerMachineMemoryRpcHandlers({ rpcHandlerManager: manager, memoryWorker: worker });
+    vi.spyOn(persistence, 'readSettings')
+      .mockImplementationOnce(readSettings)
+      .mockRejectedValueOnce(new Error('settings_read_failed'));
+    let observedFailure!: () => void;
+    const failed = new Promise<void>(resolve => { observedFailure = resolve; });
+    vi.spyOn(logger, 'warn').mockImplementation(() => { observedFailure(); });
+    const saved = await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SETTINGS_SET}`,
+      params: { ...worker.getSettings(), enabled: false } });
+    expect(saved).toMatchObject({ enabled: false });
+    await failed;
+    await expect(manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET}`, params: {} }))
+      .resolves.toEqual(saved);
+    await worker.reloadSettings();
+    expect(worker.getSettings()).toEqual(saved);
+    expect(worker.getDeepDbPath()).toBeNull();
+  });
+
   it('keeps the external index available when Memory uses hints', async () => {
     const { worker, deepDbPath, writeMemorySettingsToDisk } = await startSeededWorker();
     const settings = worker.getSettings();
