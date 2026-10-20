@@ -1,4 +1,4 @@
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { realpath, stat } from 'node:fs/promises';
 import { canonicalizePath, resolveConfiguredNativeHomePath, resolveConfiguredPath, resolveHomeDirFromEnvironment } from '@happier-dev/plugin-sdk/fs';
 import { discoverAgentAccountingJsonlSource } from '@happier-dev/plugin-sdk/sessions/file-stores';
@@ -12,7 +12,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 export function isWithin(root: string, file: string): boolean {
   const path = relative(root, file);
-  return path !== '' && path !== '..' && !path.startsWith(`..${sep}`) && !path.startsWith(sep);
+  return path !== '' && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 export async function resolveCodeBuddySource(source: AgentExternalSessionSource, env: NodeJS.ProcessEnv) {
   if (source.kind !== 'codebuddyHome' || (source.homeDir != null && (typeof source.homeDir !== 'string' || !source.homeDir))
@@ -37,9 +37,12 @@ export async function resolveCodeBuddyFile(root: string, source: AgentExternalSe
   if (!id || /[/\\\0]/.test(id) || id === '.' || id === '..') throw new CodeBuddySourceError('source_invalid', 'Invalid CodeBuddy native session identity.');
   if (typeof source.sessionFile === 'string') {
     const lexical = resolve(source.sessionFile);
-    const physical = await realpath(lexical).catch(() => null);
-    if (!physical || physical !== lexical || !isWithin(root, physical) || relative(root, physical).split(sep).length !== 2
-      || basename(physical, '.jsonl') !== id || !physical.endsWith('.jsonl')) throw new CodeBuddySourceError('source_invalid', 'CodeBuddy session is outside its source.');
+    if (!isWithin(root, lexical) || relative(root, lexical).split(sep).length !== 2 || basename(lexical, '.jsonl') !== id || !lexical.endsWith('.jsonl')) throw new CodeBuddySourceError('source_invalid', 'CodeBuddy session is outside its source.');
+    const physical = await realpath(lexical).catch((error: unknown) => {
+      if (isRecord(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) throw new CodeBuddySourceError('source_unavailable', 'CodeBuddy transcript is unavailable.');
+      throw error;
+    });
+    if (physical !== lexical || !isWithin(root, physical)) throw new CodeBuddySourceError('source_invalid', 'CodeBuddy session is outside its source.');
     return physical;
   }
   const files = (await discoverCodeBuddyFiles(root, signal)).files.filter(file => basename(file, '.jsonl') === id);

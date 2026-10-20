@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { parseTimestampMs } from '@happier-dev/plugin-sdk';
 import { createExternalSessionUnsupportedTranscriptItem, readJsonlFileBackwardPage, readJsonlFileForwardLines } from '@happier-dev/plugin-sdk/sessions/file-stores';
-import type { AgentExternalSessionTranscriptItem } from '@happier-dev/plugin-sdk/sessions/external';
+import type { AgentExternalSessionTranscriptItem, AgentExternalSessionsReadAfterTranscriptResult } from '@happier-dev/plugin-sdk/sessions/external';
 import { CodeBuddySourceError, isRecord } from './source.js';
 
 // Pinned native CUSTOM_INPUT_ITEM_TYPES, plus its session-meta storage fact.
@@ -35,7 +35,10 @@ async function digestPrefix(file: string, size: number, signal: AbortSignal): Pr
 }
 async function stampFile(file: string, signal: AbortSignal, prior?: Stamp): Promise<Stamp> {
   signal.throwIfAborted();
-  const info = await stat(file, { bigint: true }).catch(() => null);
+  const info = await stat(file, { bigint: true }).catch((error: unknown) => {
+    if (isRecord(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return null;
+    throw error;
+  });
   if (!info?.isFile()) throw new CodeBuddySourceError('source_unavailable', 'CodeBuddy transcript is unavailable.');
   const identity = `${info.dev}:${info.ino}:${info.birthtimeNs}`;
   const revision = `${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
@@ -160,7 +163,7 @@ export async function pageCodeBuddyTranscript(params: { file: string; cursor?: s
   return { items: newest.reverse(), nextCursor: offset > 0 ? encodeCursor(state) : null, tailCursor, partial, ...(title ? { title } : {}), ...(cwd ? { cwd } : {}) };
 }
 
-export async function readAfterCodeBuddyTranscript(params: { file: string; cursor: string; maxItems: number; maxSerializedBytes: number; signal: AbortSignal }) {
+export async function readAfterCodeBuddyTranscript(params: { file: string; cursor: string; maxItems: number; maxSerializedBytes: number; signal: AbortSignal }): Promise<AgentExternalSessionsReadAfterTranscriptResult> {
   const previous = decodeCursor(params.cursor);
   if (previous.mode !== 'tail') throw new CodeBuddySourceError('invalid_request', 'Expected a CodeBuddy tail cursor.');
   try { await stampFile(params.file, params.signal, previous.stamp); } catch (error) {

@@ -1,4 +1,5 @@
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import * as nativeFileSystem from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,8 +7,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentExternalSessionTranscriptRawRecordSchema, type AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
 import { createCodeBuddyExternalSessionsContribution } from './contribution.js';
 
+// Permission failure is an OS boundary; admission, parsing and continuation stay real.
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, stat: vi.fn(actual.stat) };
+});
+
 const roots: string[] = [];
-afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.restoreAllMocks();
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(nativeFileSystem.stat).mockReset().mockImplementation(actual.stat);
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
 async function setup() {
   const home = await mkdtemp(join(tmpdir(), 'codebuddy-reader-')); roots.push(home);
   const project = join(home, 'projects', 'fixture-workspace'); await mkdir(project, { recursive: true });
@@ -155,5 +167,37 @@ describe('CodeBuddy native conversation reader', () => {
     if (!after.ok || after.value.outcome !== 'advanced') throw new Error('Missing append cursor');
     await appendFile(t.file, '{"type":"message","content":"incomplete');
     expect(await t.contribution.readAfterTranscript({ ...t.invocation, source: t.source, remoteSessionId: 'fixture-session', cursor: after.value.nextCursor, maxItems: 20 })).toMatchObject({ ok: true, value: { outcome: 'advanced', diagnostics: [{ severity: 'required' }] } });
+  });
+
+  it('projects native fractional filesystem timestamps to the host integer boundary', async () => {
+    const t = await setup();
+    await utimes(t.file, 1788851530.1255, 1788851530.1255);
+    const result = await t.list();
+    if (!result.ok || !result.value.candidates[0]) throw new Error('Missing native candidate');
+    expect(Number.isSafeInteger(result.value.candidates[0].updatedAtMs)).toBe(true);
+    expect(result.value.candidates[0].updatedAtMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('preserves a failed read when native storage becomes temporarily unreadable', async () => {
+    const t = await setup(); const page = await t.page(undefined, 20);
+    if (!page.ok || !page.value.tailCursor) throw new Error('Missing initial tail');
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    // Source-directory admission succeeds; the following transcript stat fails.
+    vi.mocked(nativeFileSystem.stat).mockResolvedValueOnce(await actual.stat(join(t.home, 'projects'), { bigint: true }))
+      .mockRejectedValueOnce(Object.assign(new Error('Permission denied'), { code: 'EACCES' }));
+    expect(await t.contribution.readAfterTranscript({ ...t.invocation,
+      source: { ...t.source, homeDir: t.home, sessionFile: t.file }, remoteSessionId: 'fixture-session', cursor: page.value.tailCursor, maxItems: 20 }))
+      .toMatchObject({ ok: false, code: 'agent_error' });
+  });
+
+  it('reports confirmed file removal without treating an unavailable source root as deletion', async () => {
+    const t = await setup(); const page = await t.page(undefined, 20);
+    if (!page.ok || !page.value.tailCursor) throw new Error('Missing initial tail');
+    const request = { ...t.invocation, source: { ...t.source, homeDir: t.home, sessionFile: t.file },
+      remoteSessionId: 'fixture-session', cursor: page.value.tailCursor, maxItems: 20 };
+    await rm(t.file);
+    expect(await t.contribution.readAfterTranscript(request)).toMatchObject({ ok: true, value: { outcome: 'source_unavailable' } });
+    await rm(join(t.home, 'projects'), { recursive: true });
+    expect(await t.contribution.readAfterTranscript(request)).toMatchObject({ ok: false, code: 'unavailable' });
   });
 });

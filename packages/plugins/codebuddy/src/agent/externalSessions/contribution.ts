@@ -58,10 +58,15 @@ export function createCodeBuddyExternalSessionsContribution(env: NodeJS.ProcessE
       const failure = getAgentExternalSessionsInvocationFailure(request); if (failure) return failure;
       return guarded(request, async () => {
         const resolved = await resolveCodeBuddySource(request.source, env);
-        const file = await resolveCodeBuddyFile(resolved.root, resolved.source, request.remoteSessionId, request.signal);
-        return readAfterCodeBuddyTranscript({ ...request, file });
+        try {
+          const file = await resolveCodeBuddyFile(resolved.root, resolved.source, request.remoteSessionId, request.signal);
+          return await readAfterCodeBuddyTranscript({ ...request, file });
+        } catch (error) {
+          if (error instanceof CodeBuddySourceError && error.code === 'source_unavailable') return { outcome: 'source_unavailable' as const };
+          throw error;
+        }
       });
     },
   };
 }
-export const codeBuddyExternalSessionsContribution = createCodeBuddyExternalSessionsContribution();
+export const codeBuddyExternalSessionsContribution: AgentExternalSessionsContribution = createCodeBuddyExternalSessionsContribution();
