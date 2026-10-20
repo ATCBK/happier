@@ -11,6 +11,7 @@ import { act } from 'react-test-renderer';
 import { createUsageSourcesController } from './usageSourcesController';
 import { useUsageSourcesController, type UsageSourcesHookOptions } from './useUsageSources';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 
 const source: UsageSourceV1 = {
     serverId: 'home', machineId: 'machine', sourceId: 'source',
@@ -58,6 +59,38 @@ function harness(rpc: Parameters<typeof createUsageSourceActionPort>[0]['rpc'], 
 }
 
 describe('Usage Sources consent controller', () => {
+    it('marks retained metadata unreadable after terminal HTTP failure and clears it on denial', async () => {
+        let status = 200;
+        const reading: UsageSourceV1 = { ...source, consent: 'enabled', status: 'reading', pendingCount: 7, asOfMs: 500 };
+        const boundary = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://source-retention.test', accountId: 'account' }],
+            route: request => request.path === '/test/sources' ? Response.json(status === 200 ? { sources: [reading] }
+                : { ok: false, errorCode: status === 403 ? 'forbidden' : 'usage_source_unavailable', error: 'read failed' }, { status }) : undefined });
+        const { controller } = harness(async () => {
+            const response = await boundary.fetch('https://source-retention.test/test/sources');
+            if (!response.ok) throw Object.assign(new Error('read failed'), { code: response.status === 403 ? 'forbidden' : 'unreachable' });
+            return response.json();
+        });
+        try {
+            await controller.discover();
+            const admitted = controller.getSnapshot().sources[0]!;
+            status = 503;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                await controller.refresh();
+                expect.soft(controller.getSnapshot()).toMatchObject({ sources: [{ ...reading, status: 'unavailable' }],
+                    pending: [], error: { errorCode: 'usage_source_unavailable' } });
+                expect(controller.getSnapshot().sources[0]?.root).toBe(admitted.root);
+            }
+            status = 200;
+            await controller.refresh();
+            expect(controller.getSnapshot()).toMatchObject({ sources: [reading], pending: [], error: null });
+            status = 403;
+            await controller.refresh();
+            expect.soft(controller.getSnapshot()).toMatchObject({ sources: [], loaded: false, pending: [], error: { errorCode: 'forbidden' } });
+            status = 503;
+            await controller.refresh();
+            expect.soft(controller.getSnapshot().sources).toEqual([]);
+        } finally { controller.dispose(); await boundary.dispose(); }
+    });
     it('keeps unchanged browse and root identities stable when only capture progress changes', async () => {
         let currentSource: UsageSourceV1 = { ...source, externalSessionSource: { kind: 'codexHome', home: 'user' } };
         const { controller } = harness(async () => ({ sources: [currentSource] }));
@@ -162,7 +195,8 @@ describe('Usage Sources consent controller', () => {
         offline = true;
         await controller.refresh();
         expect(controller.getSnapshot()).toMatchObject({ loaded: true, error: { errorCode: 'usage_source_unavailable' }, pending: [] });
-        expect(controller.getSnapshot().sources).toBe(rows);
+        expect(controller.getSnapshot().sources).toEqual([{ ...source, status: 'unavailable' }]);
+        expect(controller.getSnapshot().sources[0]?.root).toBe(rows[0]?.root);
         offline = false;
         await controller.refresh();
         expect(controller.getSnapshot()).toMatchObject({ error: null, sources: [source] });
@@ -175,7 +209,7 @@ describe('Usage Sources consent controller', () => {
         await controller.discover();
         foreign = true;
         await controller.refresh('source');
-        expect(controller.getSnapshot()).toMatchObject({ sources: [source], error: { errorCode: 'usage_source_response_invalid' } });
+        expect(controller.getSnapshot()).toMatchObject({ sources: [{ ...source, status: 'unavailable' }], error: { errorCode: 'usage_source_response_invalid' } });
         controller.dispose();
     });
 

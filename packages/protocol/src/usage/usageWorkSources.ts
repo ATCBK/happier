@@ -69,7 +69,11 @@ export async function collectUsageWorkSources(input: Readonly<{
             return { status: 'error', quarantine: true };
           }
         }));
-        if (states.some(source => source.quarantine)) return { status: 'error' };
+        // An explicit empty quarantine is an admission withdrawal. A failed
+        // replacement supplies no evidence at all, allowing the page's single
+        // retention owner to distinguish it from a refusal or real empty read.
+        if (states.some(source => source.quarantine)) return { status: 'error', evidence: [], branchEvidence: [] };
+        if (states.every(source => source.status === 'error')) return { status: 'error' };
         return { status: states.some(source => source.status === 'partial') ? 'partial' as const
             : states.some(source => source.status === 'error') ? 'error' as const : 'unsupported' as const,
             evidence: states.flatMap(source => source.evidence ?? []), branchEvidence: states.flatMap(source => source.branchEvidence ?? []) };
@@ -89,7 +93,8 @@ export async function collectUsageWorkSources(input: Readonly<{
             .filter(witness => turns.has(JSON.stringify([witness.sessionId, witness.turnId])));
         const branchEvidence = selected.flatMap(source => 'branchEvidence' in source ? source.branchEvidence ?? [] : [])
             .filter(witness => turns.has(JSON.stringify([witness.sessionId, witness.turnId])));
-        return { query, evidence, branchEvidence, status: selected.some(source => source.status === 'partial') ? 'partial'
+        const failedReplacement = selected.length > 0 && selected.every(source => source.status === 'error' && !('evidence' in source));
+        return { query, ...(failedReplacement ? {} : { evidence, branchEvidence }), status: selected.some(source => source.status === 'partial') ? 'partial'
             : selected.some(source => source.status === 'error') ? 'error' : selected.some(source => source.status === 'unsupported') ? 'unsupported' : 'unknown',
             ...(selected.some(source => source.status === 'error') ? { errorCode: 'work_evidence_failed' } : {}) };
     });

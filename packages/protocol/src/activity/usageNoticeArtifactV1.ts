@@ -47,6 +47,32 @@ export const AccountNoticeArtifactHeaderV1Schema = lazyZodSchema(() => z.strictO
   value.source.kind === 'host' ? value.notice?.topic === value.source.topic && value.page === undefined : value.notice === undefined)));
 export type AccountNoticeArtifactHeaderV1 = z.infer<typeof AccountNoticeArtifactHeaderV1Schema>;
 
+export type InboxItemTypeV1 = AccountNoticeArtifactHeaderV1['type'];
+export type InboxItemViewV1 = 'needs_you' | 'updates' | 'mentions';
+export function inboxItemViewV1(type: InboxItemTypeV1): InboxItemViewV1 {
+  return type === 'mention' ? 'mentions' : type === 'update' ? 'updates' : 'needs_you';
+}
+
+export function inboxNoticeFocusKeyV1(serverId: string, artifactId: string): string {
+  return `notice:${encodeURIComponent(serverId)}:${encodeURIComponent(artifactId)}`;
+}
+
+/** Shared transient notice row; source admission and page routing stay with their owners. */
+export function projectAccountNoticeInboxItemV1(input: Readonly<{
+  artifactId: string; serverId: string; createdAt: number; header: AccountNoticeArtifactHeaderV1;
+  pageRoute: string; pluginDisplayName?: string | null;
+}>) {
+  const { header, artifactId, serverId } = input;
+  if (header.status !== 'open' || header.resolved) return null;
+  return { key: `notice:${serverId}:${artifactId}`, producer: 'notice' as const, type: header.type,
+    view: inboxItemViewV1(header.type), title: header.title, context: header.body ?? null,
+    createdAt: input.createdAt, read: header.readAt !== undefined,
+    focus: { kind: 'notice' as const, id: artifactId, serverId }, pageRoute: input.pageRoute,
+    author: null, excerpt: header.body ?? header.excerpt ?? null,
+    source: { kind: 'account_notice', id: artifactId, serverId,
+      displayName: header.source.kind === 'plugin' ? input.pluginDisplayName ?? null : null } };
+}
+
 export function readAccountNoticeArtifactHeaderV1(raw: unknown): AccountNoticeArtifactHeaderV1 | null {
   const parsed = createStoredReadSchema(AccountNoticeArtifactHeaderV1Schema).safeParse(raw);
   return parsed.success ? parsed.data : null;
@@ -74,4 +100,30 @@ export function readUsageNoticeArtifactV1(input: Readonly<{ header: unknown; bod
     const body = createStoredReadSchema(UsageNoticeArtifactBodyV1Schema).safeParse(JSON.parse(input.body));
     return body.success && sameStrictJsonValue(body.data.notice, header.notice) ? header : null;
   } catch { return null; }
+}
+
+/** Authenticated Artifact facts, never a notice-supplied Account or audience. */
+export function readOwnedNoticeArtifactV1(artifact: Readonly<{
+  ownerAccountId?: string; access?: string; publicAudience?: string; header?: unknown; body?: unknown;
+}>, accountId: string | null | undefined): AccountNoticeArtifactHeaderV1 | UsageNoticeArtifactHeaderV1 | null {
+  if (!accountId || artifact.ownerAccountId !== accountId || artifact.access !== 'owner' || artifact.publicAudience !== 'none') return null;
+  const content = { header: artifact.header, body: artifact.body };
+  return readAccountNoticeArtifactV1(content) ?? readUsageNoticeArtifactV1(content);
+}
+
+/** Retained usage notices enter the same Inbox row model without rewriting storage. */
+export function normalizeAccountNoticeArtifactV1(notice: AccountNoticeArtifactHeaderV1 | UsageNoticeArtifactHeaderV1): AccountNoticeArtifactHeaderV1 {
+  return notice.kind === ACCOUNT_NOTICE_ARTIFACT_KIND_V1 ? notice : AccountNoticeArtifactHeaderV1Schema.parse({
+    v: 1, kind: ACCOUNT_NOTICE_ARTIFACT_KIND_V1, title: notice.title, status: notice.status,
+    type: 'update', resolved: false, source: { kind: 'host', topic: notice.notice.topic }, notice: notice.notice,
+    ...(notice.excerpt === undefined ? {} : { excerpt: notice.excerpt }),
+  });
+}
+
+/** Compatibility projection for the incumbent usage-notice Inbox field and detail adapter. */
+export function projectOpenUsageNoticeHeaderV1(header: AccountNoticeArtifactHeaderV1): UsageNoticeArtifactHeaderV1 | null {
+  return header.status === 'open' && !header.resolved && header.source.kind === 'host' && header.notice
+    && header.notice.topic !== 'follow_update'
+    ? { v: 1, kind: USAGE_NOTICE_ARTIFACT_KIND_V1, title: header.title, status: header.status, notice: header.notice,
+      ...(header.excerpt === undefined ? {} : { excerpt: header.excerpt }) } : null;
 }
