@@ -7,6 +7,7 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { PendingResetStartSetResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { ServerReachabilityWaitTimeoutError } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
@@ -4197,19 +4198,30 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
     });
 
-    it.each(['plain', 'e2ee', 'runner', 'metadata_rejected', 'retired', 'stale', 'automatic', 'shared_editor'] as const)(
+    it.each(['plain', 'e2ee', 'runner', 'metadata_rejected', 'retired', 'stale', 'automatic', 'manager', 'self', 'shared_editor'] as const)(
         'persists explicit UI Stop through the real owner tuple before physical Stop (%s)', async scenario => {
+        const bridge = await loadSyncSingletonForTests();
+        onTestFinished(() => bridge.dispose());
         const sessionId = `ui_explicit_stop_${scenario}`;
         const { sync } = await import('./sync');
         installAppliedAccountScope(sync, 'stop-owner');
         const scope = getActiveServerAccountScope()!;
         const secret = new Uint8Array(32).fill(9);
+        const encrypted = scenario === 'e2ee';
+        const credentials = { token: buildTokenWithSub(scope.accountId),
+            ...(encrypted ? { secret: encodeBase64(secret, 'base64url') } : {}) };
         const previousCredentials = Reflect.get(sync, 'credentials');
         onTestFinished(() => Reflect.set(sync, 'credentials', previousCredentials));
-        Reflect.set(sync, 'credentials', { token: buildTokenWithSub(scope.accountId), secret: encodeBase64(secret, 'base64url') });
+        Reflect.set(sync, 'credentials', credentials);
         Reflect.set(sync, 'encryption', testEncryption);
+        getCredentialsForServerUrlMock.mockResolvedValue(credentials);
+        createEncryptionFromAuthCredentialsMock.mockImplementation(async credentials => {
+            const actual = await vi.importActual<typeof import('@/auth/encryption/createEncryptionFromAuthCredentials')>(
+                '@/auth/encryption/createEncryptionFromAuthCredentials');
+            return actual.createEncryptionFromAuthCredentials(credentials);
+        });
+        runtimeFetchMock.mockImplementation((url: string) => requestMock(new URL(url).pathname));
         const metadata = { path: '/repo', host: 'test', machineId: 'stop-machine' };
-        const encrypted = scenario === 'e2ee';
         await testEncryption.initializeSessions(new Map([[sessionId, null]]));
         const sessionEncryption = testEncryption.getSessionEncryption(sessionId)!;
         const wireMetadata = encrypted ? await sessionEncryption.encryptMetadata(metadata) : JSON.stringify(metadata);
@@ -4252,20 +4264,27 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
         onTestFinished(() => runner.mockRestore());
         const { sessionStopWithServerScope } = await import('./ops/sessions');
+        const caller = { kind: 'session', sessionId: scenario === 'self' ? sessionId : 'managing-session',
+            starterDepth: 0, turnDepth: 1 } as const;
         const result = await sessionStopWithServerScope(sessionId, { serverId: scope.serverId, scope, isCurrent: () => current,
-            ...(scenario === 'automatic' ? { actionContext: { surface: 'ui', authority: 'account_automation' } } : {}) });
-        if (scenario === 'shared_editor' || scenario === 'stale') {
+            ...(scenario === 'automatic' ? { actionContext: { surface: 'ui', authority: 'account_automation' } } : {}),
+            ...(scenario === 'manager' || scenario === 'self' ? { actionContext: {
+                surface: 'agent', authority: 'account_automation', actionCaller: caller,
+                agentStartContext: { caller, baseline: { machineId: 'stop-machine', directory: '/repo' },
+                    ledSubtreeSessionIds: [sessionId], workDepthLimit: 2, roles: {}, callerPermissionCeiling: 'default' },
+            } } : {}) });
+        if (scenario === 'shared_editor' || scenario === 'stale' || scenario === 'self') {
             expect(effects).toEqual([]);
             expect(result).toMatchObject({ success: false, code: 'session_stop_control_unavailable' });
             return;
         }
         if (scenario === 'metadata_rejected' || scenario === 'retired') {
-            expect(effects).toEqual(['metadata']);
+            expect(effects, result.message).toEqual(['metadata']);
             expect(result.success).toBe(false);
             return;
         }
-        if (scenario === 'runner') expect(result).toMatchObject({ success: false, code: 'session_stop_requested' });
-        else expect(result.success).toBe(true);
+        if (scenario === 'runner') expect(result, result.message).toMatchObject({ success: false, code: 'session_stop_requested' });
+        else expect(result.success, result.message).toBe(true);
         expect(effects).toEqual(scenario === 'automatic' ? ['physical'] : ['metadata', 'physical']);
         if (scenario !== 'automatic') {
             expect(emitSessionMetadataUpdateWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId,
@@ -4275,7 +4294,8 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
             const { readSessionOwnerMetadataView } = await import('./domains/session/readSessionOwnerMetadataView');
             const { readSessionExplicitStopV1FromMetadata } = await import('@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1');
             expect(readSessionExplicitStopV1FromMetadata(readSessionOwnerMetadataView(stored))).toEqual({ v: 1, cause: 'explicit_stop',
-                requestId: expect.any(String), requestedAtMs: expect.any(Number) });
+                requestId: expect.any(String), requestedAtMs: expect.any(Number),
+                ...(scenario === 'manager' ? { managerSessionId: caller.sessionId } : {}) });
         }
     });
 
