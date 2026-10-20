@@ -289,20 +289,35 @@ function machineProvisionerRoleResultProjection(descriptor: MachineProvisionerCo
     case 'rebuild': return rebuildResultProjection(descriptor.resourceSchema);
   }
 }
+// The role envelopes around a descriptor's launch/resource schema do not depend
+// on the descriptor: only the declared native schemas are substituted afterwards.
+// Building them once keeps manifest validation from rebuilding and re-normalizing
+// the same generic contracts for every role of every provisioner.
+let genericRoles: Readonly<Record<'plain' | 'continueAcquire', ReturnType<typeof defineMachineProvisionerSchemas>>> | undefined;
+function genericRoleSchemas(continueAcquire: boolean) {
+  genericRoles ??= Object.freeze({
+    plain: defineMachineProvisionerSchemas({ launch: MachineProvisionerCheckInputV1Schema, resource: MachineProvisionerCheckInputV1Schema }),
+    continueAcquire: defineMachineProvisionerSchemas({ launch: MachineProvisionerCheckInputV1Schema, resource: MachineProvisionerCheckInputV1Schema, continueAcquire: true }),
+  });
+  return continueAcquire ? genericRoles.continueAcquire : genericRoles.plain;
+}
+let genericReconciliation: ReturnType<typeof defineMachineProvisionerReconciliationSchemas> | undefined;
+function genericReconciliationRoleSchemas() {
+  return genericReconciliation ??= defineMachineProvisionerReconciliationSchemas({ launch: MachineProvisionerCheckInputV1Schema,
+    resource: MachineProvisionerCheckInputV1Schema, nativeOperation: MachineProvisionerCheckInputV1Schema });
+}
 function machineProvisionerRoleInputProjection(descriptor: MachineProvisionerContributionV1, role: MachineProvisionerRoleV1): PluginJsonSchemaV2 | undefined {
   // Options deliberately owns its provider-declared query, not a universal wrapper.
   if (role === 'options') return undefined;
   if (role === 'cleanup') {
     if (!descriptor.reconciliation) return undefined;
-    const { cleanupInput } = defineMachineProvisionerReconciliationSchemas({ launch: MachineProvisionerCheckInputV1Schema,
-      resource: MachineProvisionerCheckInputV1Schema, nativeOperation: MachineProvisionerCheckInputV1Schema });
+    const { cleanupInput } = genericReconciliationRoleSchemas();
     return normalizePluginJsonSchema({ ...cleanupInput.jsonSchema,
       properties: { nativeOperation: nestedProjection(descriptor.reconciliation.nativeOperationSchema) } });
   }
   if (role === 'reconcile' || role === 'destroy' && descriptor.reconciliation) {
     if (!descriptor.reconciliation) return undefined;
-    const schemas = defineMachineProvisionerReconciliationSchemas({ launch: MachineProvisionerCheckInputV1Schema,
-      resource: MachineProvisionerCheckInputV1Schema, nativeOperation: MachineProvisionerCheckInputV1Schema });
+    const schemas = genericReconciliationRoleSchemas();
     const projection = (role === 'reconcile' ? schemas.input : schemas.destroyInput).jsonSchema;
     return normalizePluginJsonSchema({ ...projection, anyOf: projection.anyOf!.map(variant => {
       if (variant.properties?.nativeOperation) return { ...variant,
@@ -313,8 +328,7 @@ function machineProvisionerRoleInputProjection(descriptor: MachineProvisionerCon
         properties: { ...correlation.properties, launch: nestedProjection(descriptor.launchSchema) } } } } : variant;
     }) });
   }
-  const roles = defineMachineProvisionerSchemas({ launch: MachineProvisionerCheckInputV1Schema, resource: MachineProvisionerCheckInputV1Schema,
-    ...(descriptor.reconciliation?.continueAcquire ? { continueAcquire: true } : {}) });
+  const roles = genericRoleSchemas(descriptor.reconciliation?.continueAcquire === true);
   const schema = role === 'check' ? roles.checkInput : role === 'acquire' ? roles.acquireInput
     : role === 'bootstrap' ? roles.bootstrapInput : role === 'power' ? roles.powerInput : role === 'rebuild' ? roles.rebuildInput
       : role === 'exec' ? roles.execInput : role === 'putFile' ? roles.putFileInput : roles.resourceInput;
