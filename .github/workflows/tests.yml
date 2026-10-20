@@ -289,6 +289,18 @@ jobs:
         # The root preparation has already published current plugin runtimes.
         # Reuse the canonical currentness scan and finish physical runtime custody.
         run: yarn workspace @happier-dev/cli build:shared --source-dev
+      - name: Setup process-custody Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: apps/cli/native/processcustody/go.mod
+          cache-dependency-path: apps/cli/native/processcustody/go.sum
+      - name: Prepare the canonical CLI native process-custody helper
+        # CLI source tests refuse to compile; the canonical owner stages the
+        # helper into apps/cli/tools/unpacked, which the archive below carries.
+        run: >-
+          node --import ./packages/cli-common/registerSourceRuntime.mjs --input-type=module --eval
+          "import { prepareNativeCustody } from './apps/cli/src/test-setup.ts'; await prepareNativeCustody(process.argv[1]);"
+          "$GITHUB_WORKSPACE/apps/cli"
       - name: Load the prepared Iroh native runtime
         run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Record the installed dependency tree's admission with the canonical refresh owner
