@@ -145,6 +145,24 @@ describe('session.spawn_new daemon dispatch', () => {
         });
     });
 
+    it('settles an emitted spawn whose socket dropped before the acknowledgement as outcome-unknown, not as a failure to start', async () => {
+        // Socket.IO clears every issued acknowledgement with this error when the
+        // scoped-rpc socket is recycled; the daemon may already be creating the Session.
+        machineRpcWithServerScopeMock.mockImplementation(async (request: { onIssued?: () => void }) => {
+            request.onIssued?.();
+            throw markRpcRequestDisposition(createRpcCallError({
+                error: 'socket has been disconnected',
+                errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN,
+            }), 'outcomeUnknown');
+        });
+
+        await expect(dispatchSessionSpawnNewToMachine({ payload })).resolves.toEqual({
+            type: 'pending',
+            retryWithSameCreationKey: true,
+            outcome: 'unknown',
+        });
+    });
+
     it('keeps a definitive daemon refusal a typed failure rather than an unknown outcome', async () => {
         machineRpcWithServerScopeMock.mockRejectedValue(createRpcCallError({
             error: 'RPC method not available',
