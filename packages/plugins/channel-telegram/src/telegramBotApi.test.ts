@@ -329,6 +329,7 @@ describe('Telegram Bot API adapter', () => {
       id: '-100123',
       type: 'supergroup',
       label: 'Happier team',
+      isForum: false,
     });
     expect(JSON.parse(new TextDecoder().decode(requests[0]?.body))).toEqual({ chat_id: '-100123' });
   });

@@ -98,6 +98,7 @@ function botIdentity() {
       first_name: 'Happier Bot',
       username: 'HappierBot',
       can_read_all_group_messages: false,
+      has_topics_enabled: true,
     },
   };
 }
@@ -265,7 +266,7 @@ describe('Telegram Channel provider actions', () => {
         if (input.url.endsWith('/getMe')) return response(botIdentity());
         if (input.url.endsWith('/getChat')) {
           expect(JSON.parse(new TextDecoder().decode(input.body))).toEqual({ chat_id: '-100456' });
-          return response({ ok: true, result: { id: -100456, type: 'supergroup', title: 'Deploys' } });
+          return response({ ok: true, result: { id: -100456, type: 'supergroup', title: 'Deploys', is_forum: true } });
         }
         throw new Error(`Unexpected Telegram request: ${input.url}`);
       }),
@@ -503,6 +504,47 @@ describe('Telegram Channel provider actions', () => {
     });
   });
 
+  it.each([
+    { type: 'supergroup', isForum: false, threadId: 11 },
+    { type: 'supergroup', isForum: true, threadId: null },
+    // General is not an is_topic_message, including replies with a thread ID.
+    { type: 'supergroup', isForum: true, threadId: 1 },
+    { type: 'supergroup', isForum: true, threadId: 11 },
+    { type: 'private', isForum: false, threadId: 11 },
+  ])('keeps an ordinary reply on its parent chat ($type, forum=$isForum, thread=$threadId)', async ({ type, isForum, threadId }) => {
+    const chatId = type === 'private' ? 456 : -100456;
+    const http = { request: vi.fn(async (input: TelegramHttpRequestInput) => {
+      if (input.url.endsWith('/getMe')) return response(botIdentity());
+      if (input.url.endsWith('/getUpdates')) return response({ ok: true, result: [{ update_id: 42, message: {
+        message_id: 8, ...(threadId === null ? {} : { message_thread_id: threadId }), date: 1_700_000_000,
+        chat: { id: chatId, type, ...(isForum ? { is_forum: true } : {}) },
+        from: { id: 789, is_bot: false }, text: 'ordinary reply',
+        reply_to_message: { message_id: 7, from: { id: 123, is_bot: true } },
+      } }] });
+      if (input.url.endsWith('/getChat')) return response({ ok: true, result: { id: chatId, type, is_forum: isForum } });
+      if (input.url.endsWith('/sendMessage')) return response({ ok: true, result: { message_id: 88 } });
+      throw new Error(`Unexpected Telegram request: ${input.url}`);
+    }) };
+    const context = coreContext(http);
+    const result = await pollTelegramObservations({ ...connection,
+      checkpoint: { v: 1, offset: '42', caughtUpAtMs: Date.now() }, limit: 10, waitMs: 0,
+    }, context);
+    if (result.kind !== 'batch' || result.observations[0]?.observation.kind !== 'fullText') throw new Error('Expected the reply.');
+    const observation = result.observations[0].observation.observation;
+    expect(observation).toMatchObject({
+      endpoint: { kind: type === 'private' ? 'direct' : 'shared', id: String(chatId) },
+      message: { addressingEvidence: 'replyToIntegration', replyToMessageId: '7' },
+    });
+    await expect(deliverTelegramMessage({ ...connection, endpoint: observation.endpoint, content: { text: 'answer' },
+      deliveryKey: 'ordinary-reply', replyContext: { replyToMessageId: observation.message.id },
+      mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress',
+    }, context)).resolves.toMatchObject({ kind: 'delivered' });
+    const sent = http.request.mock.calls.find(([input]) => input.url.endsWith('/sendMessage'))?.[0];
+    expect(JSON.parse(new TextDecoder().decode(sent?.body))).toEqual({
+      chat_id: String(chatId), text: 'answer', reply_parameters: { message_id: 8 }, link_preview_options: { is_disabled: true },
+    });
+  });
+
   it('normalizes a private-chat topic as a thread endpoint instead of its parent DM', async () => {
     const http = {
       request: vi.fn(async (input: TelegramHttpRequestInput) => {
@@ -515,6 +557,7 @@ describe('Telegram Channel provider actions', () => {
               message: {
                 message_id: 1,
                 message_thread_id: 17,
+                is_topic_message: true,
                 date: 1_700_000_000,
                 chat: { id: 456, type: 'private' },
                 from: { id: 789, is_bot: false },
@@ -565,8 +608,9 @@ describe('Telegram Channel provider actions', () => {
                 message: {
                   message_id: 2,
                   message_thread_id: 17,
+                  is_topic_message: true,
                   date: 1_700_000_001,
-                  chat: { id: -100456, type: 'supergroup' },
+                  chat: { id: -100456, type: 'supergroup', is_forum: true },
                   from: { id: 789, is_bot: false },
                   text: 'shared topic',
                 },
@@ -854,6 +898,53 @@ describe('Telegram Channel provider actions', () => {
       kind: 'batch',
       observations: [{ observation: { kind: 'fullText', observation: { message: { text } } } }],
     });
+  });
+
+  it.each([
+    { type: 'group', id: -456, forum: false, privateTopics: false },
+    { type: 'supergroup', id: -100456, forum: false, privateTopics: false },
+    { type: 'private', id: 456, forum: false, privateTopics: false },
+  ])('refuses an ordinary reply thread retained or manually entered on a chat without topics ($type)', async ({ type, id, forum, privateTopics }) => {
+    const http = { request: vi.fn(async (input: TelegramHttpRequestInput) => {
+      if (input.url.endsWith('/getMe')) return response({ ...botIdentity(), result: { ...botIdentity().result, has_topics_enabled: privateTopics } });
+      if (input.url.endsWith('/getChat')) return response({ ok: true, result: { id, type, is_forum: forum } });
+      if (input.url.endsWith('/sendMessage')) return response({ ok: true, result: { message_id: 88 } });
+      throw new Error(`Unexpected Telegram request: ${input.url}`);
+    }) };
+    await expect(resolveTelegramEndpoint({ ...connection, query: `${id}:17` }, coreContext(http)))
+      .resolves.toMatchObject({ kind: 'resolved', candidates: [] });
+    await expect(deliverTelegramMessage({ ...connection,
+      endpoint: { kind: 'thread', audience: type === 'private' ? 'direct' : 'shared', id: `${id}:17`, parentId: String(id) },
+      content: { text: 'not a topic' }, deliveryKey: 'invalid-topic', mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress',
+    }, coreContext(http))).resolves.toEqual({ kind: 'notDelivered', retry: 'never' });
+    expect(http.request.mock.calls.some(([input]) => input.url.endsWith('/sendMessage'))).toBe(false);
+  });
+
+  it.each([
+    { type: 'supergroup', id: -100456, topic: false },
+    { type: 'supergroup', id: -100456, topic: true },
+    { type: 'private', id: 456, topic: true },
+  ])('suppresses username mentions at the native Unicode limit for ordinary reply and topic deliveries ($type, topic=$topic)', async ({ type, id, topic }) => {
+    const suffix = ' @SomeActualUsername @OtherUser';
+    const text = `${'😀'.repeat(4096 - Array.from(suffix).length)}${suffix}`;
+    const http = { request: vi.fn(async (input: TelegramHttpRequestInput) => {
+      if (input.url.endsWith('/getMe')) return response(botIdentity());
+      if (input.url.endsWith('/getChat')) return response({ ok: true, result: { id, type, is_forum: type === 'supergroup' } });
+      if (input.url.endsWith('/sendMessage')) return response({ ok: true, result: { message_id: 88 } });
+      throw new Error(`Unexpected Telegram request: ${input.url}`);
+    }) };
+    await expect(deliverTelegramMessage({ ...connection,
+      endpoint: topic ? { kind: 'thread', audience: type === 'private' ? 'direct' : 'shared', id: `${id}:17`, parentId: String(id) }
+        : { kind: 'shared', audience: 'shared', id: String(id) },
+      content: { text }, deliveryKey: 'mention-suppression', replyContext: { replyToMessageId: '7' },
+      mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress',
+    }, coreContext(http))).resolves.toMatchObject({ kind: 'delivered' });
+    const sent = http.request.mock.calls.find(([input]) => input.url.endsWith('/sendMessage'))?.[0];
+    const body = JSON.parse(new TextDecoder().decode(sent?.body));
+    expect(body).toEqual({ chat_id: String(id), text: text.replaceAll('@', '＠'),
+      ...(topic ? { message_thread_id: 17 } : {}),
+      reply_parameters: { message_id: 7 }, link_preview_options: { is_disabled: true } });
+    expect(Array.from(body.text)).toHaveLength(4096);
   });
 
   it.each([undefined, '17', '456:17'])('delivers a private-chat thread endpoint with thread relation %s', async (threadId) => {

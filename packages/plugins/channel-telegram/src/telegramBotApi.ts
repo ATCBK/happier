@@ -28,6 +28,7 @@ export type TelegramBotIdentity = Readonly<{
   username: string;
   displayName: string;
   canReadAllGroupMessages: boolean;
+  hasTopicsEnabled: boolean;
 }>;
 
 export type TelegramWebhookInfo = Readonly<{
@@ -39,6 +40,7 @@ export type TelegramChat = Readonly<{
   id: string;
   type: 'private' | 'group' | 'supergroup' | 'channel';
   label: string | null;
+  isForum: boolean;
 }>;
 
 export type TelegramTextEntity = Readonly<{
@@ -53,6 +55,7 @@ export type TelegramIncomingMessage = Readonly<{
   chatId: string;
   chatType: 'private' | 'group' | 'supergroup' | 'channel';
   messageThreadId: string | null;
+  isTopicMessage: boolean;
   senderId: string | null;
   senderIsBot: boolean;
   senderIsChat: boolean;
@@ -304,6 +307,7 @@ function parseIncomingMessage(value: unknown): TelegramIncomingMessage | null {
     chatId: String(chatId),
     chatType,
     messageThreadId: messageThreadId === null ? null : String(messageThreadId),
+    isTopicMessage: value.is_topic_message === true,
     senderId: senderId === null ? null : String(senderId),
     senderIsBot: sender?.isBot === true,
     senderIsChat,
@@ -394,6 +398,7 @@ export function createTelegramBotApi(input: Readonly<{
         username,
         displayName,
         canReadAllGroupMessages: result?.can_read_all_group_messages === true,
+        hasTopicsEnabled: result?.has_topics_enabled === true,
       };
     },
 
@@ -450,6 +455,7 @@ export function createTelegramBotApi(input: Readonly<{
         id: String(id),
         type,
         label: title || firstName || username || null,
+        isForum: result?.is_forum === true,
       };
     },
 

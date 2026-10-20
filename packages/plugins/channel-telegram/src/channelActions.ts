@@ -53,6 +53,7 @@ import {
   TELEGRAM_MAX_LONG_POLL_TIMEOUT_SECONDS,
   type TelegramBotApi,
   type TelegramBotIdentity,
+  type TelegramChat,
   type TelegramGetUpdatesResult,
   type TelegramIncomingMessage,
   type TelegramUpdate,
@@ -292,12 +293,13 @@ async function inspectTelegramPollingPrerequisite(
 }
 
 function endpointFromChat(
-  message: Pick<TelegramIncomingMessage, 'chatId' | 'chatType' | 'messageThreadId'>,
+  message: Pick<TelegramIncomingMessage, 'chatId' | 'chatType' | 'messageThreadId' | 'isTopicMessage'>,
   label?: string | null,
 ): ConversationResolvedEndpointV1 | null {
   if (
-    message.messageThreadId !== null
-    && (message.chatType === 'private' || message.chatType === 'group' || message.chatType === 'supergroup')
+    message.isTopicMessage
+    && message.messageThreadId !== null
+    && (message.chatType === 'private' || message.chatType === 'supergroup')
   ) {
     return {
       kind: 'thread',
@@ -435,7 +437,12 @@ function telegramEndpointAddress(endpoint: ConversationResolvedEndpointV1): Tele
   return address !== null && endpoint.parentId === address.chatId ? address : null;
 }
 
-function endpointMatches(endpoint: ConversationResolvedEndpointV1, chat: Awaited<ReturnType<TelegramBotApi['getChat']>>): boolean {
+function chatSupportsTopics(chat: TelegramChat, identity: TelegramBotIdentity): boolean {
+  return (chat.type === 'supergroup' && chat.isForum)
+    || (chat.type === 'private' && identity.hasTopicsEnabled);
+}
+
+function endpointMatches(endpoint: ConversationResolvedEndpointV1, chat: Awaited<ReturnType<TelegramBotApi['getChat']>>, identity: TelegramBotIdentity): boolean {
   if ('kind' in chat) return false;
   const audience = chat.type === 'private'
     ? 'direct'
@@ -445,7 +452,8 @@ function endpointMatches(endpoint: ConversationResolvedEndpointV1, chat: Awaited
   return address?.chatId === chat.id
     && ((endpoint.kind === 'direct' && chat.type === 'private')
       || (endpoint.kind === 'shared' && (chat.type === 'group' || chat.type === 'supergroup'))
-      || (endpoint.kind === 'thread' && (chat.type === 'private' || chat.type === 'group' || chat.type === 'supergroup')));
+      || (endpoint.kind === 'thread' && chatSupportsTopics(chat, identity)
+        && (chat.type !== 'supergroup' || address.messageThreadId !== '1')));
 }
 
 function preSendFailureResult(result: ConversationProviderFailureV1): ConversationDeliveryResultV1 {
@@ -626,10 +634,16 @@ export async function resolveTelegramEndpoint(input: unknown, context: PluginInv
   }, { signal: context.signal });
   context.signal.throwIfAborted();
   if ('kind' in chat) return readFailure(chat);
+  if (threadAddress !== null && !chatSupportsTopics(chat, ready.identity)) {
+    return { kind: 'resolved', candidates: [] };
+  }
   const candidate = endpointFromChat({
     chatId: chat.id,
     chatType: chat.type,
     messageThreadId: threadAddress?.messageThreadId ?? null,
+    // General has no is_topic_message in Telegram's updates and is our parent
+    // endpoint, including when its conventional ID is entered explicitly.
+    isTopicMessage: threadAddress !== null && (chat.type !== 'supergroup' || threadAddress.messageThreadId !== '1'),
   }, chat.label);
   return ConversationEndpointResolveResultV1Schema.parse({
     kind: 'resolved',
@@ -824,13 +838,16 @@ export async function deliverTelegramMessage(input: unknown, context: PluginInvo
   const chat = await ready.api.getChat({ chatId }, { signal: context.signal });
   context.signal.throwIfAborted();
   if ('kind' in chat) return preSendFailureResult(readFailure(chat));
-  if (!endpointMatches(request.endpoint, chat)) return { kind: 'notDelivered', retry: 'never' };
+  if (!endpointMatches(request.endpoint, chat, ready.identity)) return { kind: 'notDelivered', retry: 'never' };
   if (context.signal.aborted) return { kind: 'notDelivered', retry: 'safe' };
   let result: Awaited<ReturnType<TelegramBotApi['sendMessage']>>;
   try {
     result = await ready.api.sendMessage({
       chatId,
-      text: request.content.text,
+      // Telegram creates @username entities server-side even without entities
+      // or parse_mode. Fullwidth @ stays readable without growing the native
+      // Unicode-code-point chunk selected by core.
+      text: request.content.text.replaceAll('@', '＠'),
       suppressLinkPreview: request.linkPreviewPolicy === 'suppress',
       ...((request.chunkIndex ?? 0) === 0 && replyToMessageId !== undefined
         ? { replyToMessageId }
