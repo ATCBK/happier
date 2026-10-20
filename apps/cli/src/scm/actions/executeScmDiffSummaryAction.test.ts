@@ -103,6 +103,50 @@ describe('executeScmDiffSummaryAction', () => {
         }
     });
 
+    it('grounds a PR draft in the captured template, matching summary and recorded command outcomes without publishing', async () => {
+        const fixture = await changedRepository();
+        const sessionId = 'draft-session';
+        const captured = await captureScmComparison({ cwd: fixture.rootPath, source: { kind: 'workingTree' }, sessionId });
+        await scmDiffSummaryResultStore.create({ cwd: fixture.rootPath, sessionId, output: {
+            success: true, sourceKey: captured.comparison.id, comparison: captured.comparison,
+            summaryMarkdown: 'Existing explanation',
+        } });
+        const actions: string[] = [];
+        let resultId: string | undefined;
+        const output = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, comparisonId: captured.comparison.id,
+            modelSelector: { modelId: 'explicit' }, pullRequestDraft: {} }, sessionId, backendTarget: BACKEND_TARGET,
+            readTranscriptPage: async ({ afterSeq }) => afterSeq ? { messages: [{ seq: 2, createdAt: 2, content: {
+                role: 'agent', content: { type: 'codex', data: { type: 'tool-call-result', callId: 'test',
+                    output: { stdout: '1 test failed', exitCode: 1 }, id: 'result', isError: true } },
+            } }], hasMore: false, nextAfterSeq: null } : { messages: [{ seq: 1, createdAt: 1, content: {
+                role: 'agent', content: { type: 'codex', data: { type: 'tool-call', callId: 'test', name: 'Bash',
+                    input: { command: 'yarn test' }, id: 'call' } },
+            } }], hasMore: true, nextAfterSeq: 1 },
+            executeCanonicalAction: async (actionId, input) => {
+                actions.push(actionId);
+                if (actionId === 'scm.pullRequest.openCompose') {
+                    expect(input).toMatchObject({ includeTemplate: true, base: captured.comparison.endpoints.before });
+                    return { ok: true, result: { success: true, nextAction: { kind: 'none' },
+                        template: { kind: 'ready', body: '## Changes\n\n## Testing\n- [ ] Tests passed' } } };
+                }
+                const start = ExecutionRunStartRequestSchema.parse(input);
+                const intent = ExecutionRunScmDiffSummaryInputV1Schema.parse(start.intentInput);
+                resultId = intent.resultId;
+                const stored = await scmDiffSummaryResultStore.readStoredScope({ cwd: fixture.rootPath, sessionId, resultId: resultId! });
+                const evidence = JSON.parse(stored!.pullRequestDraftEvidence!);
+                expect(evidence).toMatchObject({ template: '## Changes\n\n## Testing\n- [ ] Tests passed',
+                    summary: { summaryMarkdown: 'Existing explanation' }, testing: { state: 'complete', commands: [
+                        { command: 'yarn test', state: 'error', result: { stdout: '1 test failed', exitCode: 1 } },
+                    ] } });
+                expect(intent.outputs).toEqual(['summary']);
+                return { ok: true, result: { runId: 'pr-draft-run', callId: 'call', sidechainId: 'sidechain' } };
+            },
+        });
+        expect(output).toMatchObject({ success: true, runId: 'pr-draft-run', resultId });
+        expect(actions).toEqual(['scm.pullRequest.openCompose', 'execution.run.start']);
+    });
+
     it('inherits investigation from Account settings, permits an explicit false override and separates cached results', async () => {
         const previous = getActiveAccountSettingsSnapshot();
         const fixture = await changedRepository();
