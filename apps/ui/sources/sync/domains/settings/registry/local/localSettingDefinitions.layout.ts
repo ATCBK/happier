@@ -4,13 +4,13 @@ import { SessionCompanionPreferencesV1Schema } from '@/components/sessions/compa
 import { normalizeSessionMobileSurface, type SessionMobileSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
 import { normalizeProjectMobileSurface, type ProjectMobileSurface } from '@/components/workspaceCockpit/project/projectCockpitState';
 import { StoredNavigationSurfacePlacementsV1Schema } from '../../mobileSurfacePinning';
-import { DEFAULT_RIGHT_PREFERRED_PX } from '@/components/ui/panels/paneBreakpoints';
+import { DEFAULT_RIGHT_PREFERRED_PX, DEFAULT_SESSION_WIDTH_PX } from '@/components/ui/panels/paneBreakpoints';
 
 import {
     EMPTY_PERSISTED_PANE_SCOPE_STATE,
     objectKeyCount,
     paneScopeStateSchema,
-    serializeNormalizedPaneSizeWithBasisKey,
+    serializePaneSizePxBucket,
 } from './localSettingDefinitions.shared';
 
 const sessionMobileSurfaceSchema = z.custom<SessionMobileSurface>((value) => (
@@ -33,6 +33,18 @@ const compactAppDestinationPreferencesSchema = z.strictObject({
 });
 
 export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
+    paneArrangement: {
+        schema: z.catch(z.enum(['session', 'editor']), 'session'), default: 'session',
+        description: 'Pane arrangement on this device', storageScope: 'local',
+    },
+    sessionColumnWidthPx: {
+        schema: z.number(), default: DEFAULT_SESSION_WIDTH_PX,
+        description: 'Preferred session column width in px', storageScope: 'local',
+    },
+    collectionRailWidthsV1: {
+        schema: z.catch(z.record(z.string(), z.number()), {}), default: {},
+        description: 'Preferred collection rail widths by navigator on this device', storageScope: 'local',
+    },
     uiSurfaceFinish: {
         schema: z.catch(z.enum(['flat', 'soft']), 'soft'), default: 'soft',
         description: 'Surface finish on this device', storageScope: 'local',
@@ -77,14 +89,8 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
             valueKind: 'bucket',
             privacy: 'bucketed',
             identityScope: 'device_user',
-            serializeCurrentWithContext: serializeNormalizedPaneSizeWithBasisKey('rightPaneWidthBasisPx', 1200, 0.25, 0.4),
+            serializeCurrent: serializePaneSizePxBucket(300, 480),
         },
-    },
-    rightPaneWidthBasisPx: {
-        schema: z.number(),
-        default: 1200,
-        description: 'Container width basis for right pane width scaling',
-        storageScope: 'local',
     },
     detailsPaneWidthPx: {
         schema: z.number(),
@@ -97,14 +103,8 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
             valueKind: 'bucket',
             privacy: 'bucketed',
             identityScope: 'device_user',
-            serializeCurrentWithContext: serializeNormalizedPaneSizeWithBasisKey('detailsPaneWidthBasisPx', 1200, 0.25, 0.4),
+            serializeCurrent: serializePaneSizePxBucket(300, 480),
         },
-    },
-    detailsPaneWidthBasisPx: {
-        schema: z.number(),
-        default: 1200,
-        description: 'Container width basis for details pane width scaling',
-        storageScope: 'local',
     },
     bottomPaneHeightPx: {
         schema: z.number(),
@@ -117,14 +117,8 @@ export const LAYOUT_LOCAL_SETTING_DEFINITIONS = {
             valueKind: 'bucket',
             privacy: 'bucketed',
             identityScope: 'device_user',
-            serializeCurrentWithContext: serializeNormalizedPaneSizeWithBasisKey('bottomPaneHeightBasisPx', 900, 0.25, 0.4),
+            serializeCurrent: serializePaneSizePxBucket(225, 360),
         },
-    },
-    bottomPaneHeightBasisPx: {
-        schema: z.number(),
-        default: 900,
-        description: 'Container height basis for bottom pane height scaling',
-        storageScope: 'local',
     },
     terminalRendererPreference: {
         schema: z.catch((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value === 'native-experimental' ? 'native' : value), z.enum(['auto', 'xterm-webview', 'native'])), 'auto'),

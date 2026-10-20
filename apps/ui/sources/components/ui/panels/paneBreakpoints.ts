@@ -60,7 +60,7 @@ export const DEFAULT_RIGHT_MIN_PX = 260;
 export const DEFAULT_DETAILS_MIN_PX = 320;
 /**
  * The right sidebar's width until the user drags it (the labs' side column, 340 px). It stays this
- * width at every window size; only a width the user chose scales with the window.
+ * width at every window size, clamped only by the measured dock budget.
  */
 export const DEFAULT_RIGHT_PREFERRED_PX = 340;
 

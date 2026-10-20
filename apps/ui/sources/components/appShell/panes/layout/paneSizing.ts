@@ -23,7 +23,7 @@ export const PANE_SIZING_DEFAULTS = {
     session: { minPx: DEFAULT_SESSION_MIN_PX, defaultPx: DEFAULT_SESSION_WIDTH_PX },
     right: {
         minPx: DEFAULT_RIGHT_MIN_PX,
-        /** Unscaled until the user resizes the sidebar (`skipScalingWhenPreferredWidthPxMatches`). */
+        /** Stored pixels are a preference; window changes only clamp their rendered size. */
         defaultPx: DEFAULT_RIGHT_PREFERRED_PX,
         // No global cap: the effective max is derived from the container width minus the main min width
         // (and any other docked pane). This enables user-resizable panes to scale naturally on wide screens.

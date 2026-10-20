@@ -52,7 +52,7 @@ function useSettings(settings: Partial<ReturnType<typeof storage.getState>['loca
 
 describe('DetailsPaneHost', () => {
     it('opens a tabless details pane with its header, and closes it when the destination clears the selection', async () => {
-        useSettings({ detailsPaneWidthPx: 520, detailsPaneWidthBasisPx: 1200 });
+        useSettings({ detailsPaneWidthPx: 520 });
         const { DetailsPaneHost } = await import('./DetailsPaneHost');
         const onClose = vi.fn();
         const screen = await renderScreen((<DetailsPaneHost
@@ -79,7 +79,7 @@ describe('DetailsPaneHost', () => {
     });
 
     it('overlays instead of squeezing the main content below the minimum the destination declares', async () => {
-        useSettings({ detailsPaneWidthPx: 520, detailsPaneWidthBasisPx: 1200 });
+        useSettings({ detailsPaneWidthPx: 520 });
         const { DetailsPaneHost } = await import('./DetailsPaneHost');
         const details = { content: React.createElement('PluginDetailStub') };
 
@@ -93,8 +93,8 @@ describe('DetailsPaneHost', () => {
         expect(hostProps().detailsDockWidthPx).toBe(520);
     });
 
-    it('persists a resized width, with the container it was chosen in, for every details pane', async () => {
-        useSettings({ detailsPaneWidthPx: 520, detailsPaneWidthBasisPx: 1200 });
+    it('persists a fixed resized width for every details pane', async () => {
+        useSettings({ detailsPaneWidthPx: 520 });
         const { DetailsPaneHost } = await import('./DetailsPaneHost');
         await renderScreen((<DetailsPaneHost
             main={<div />}
@@ -104,13 +104,13 @@ describe('DetailsPaneHost', () => {
 
         await act(async () => { hostProps().onCommitDetailsDockWidthPx?.(610); });
         // (The pane provider persists its own scopes too; only the width writes are this contract.)
-        expect(storage.getState().localSettings).toMatchObject({ detailsPaneWidthPx: 610, detailsPaneWidthBasisPx: 1200 });
+        expect(storage.getState().localSettings).toMatchObject({ detailsPaneWidthPx: 610 });
     });
 
     it('budgets the docked pane from its own container, so the shell column beside it is a fixed claim', async () => {
         // Window 1440, but the shell's rail and contextual column take 450 of it: the page gets 990.
         state.windowWidthPx = 1440;
-        useSettings({ detailsPaneWidthPx: 400, detailsPaneWidthBasisPx: 990 });
+        useSettings({ detailsPaneWidthPx: 400 });
         const { DetailsPaneHost } = await import('./DetailsPaneHost');
         const screen = await renderScreen((<DetailsPaneHost
             main={<div />}
@@ -129,7 +129,7 @@ describe('DetailsPaneHost', () => {
 
     it('never docks wider than main allows while dragging: pulled past the threshold it becomes an overlay and stays one', async () => {
         state.windowWidthPx = 990;
-        useSettings({ detailsPaneWidthPx: 400, detailsPaneWidthBasisPx: 990 });
+        useSettings({ detailsPaneWidthPx: 400 });
         const { DetailsPaneHost } = await import('./DetailsPaneHost');
         await renderScreen((<DetailsPaneHost
             main={<div />}
@@ -141,14 +141,14 @@ describe('DetailsPaneHost', () => {
 
         // Dragging inside the budget: still docked, and the docked pane can never be made wider.
         await act(async () => {
-            hostProps().onDragDetailsDockWidthPx?.(420, { attemptedSizePx: 420, clampedSizePx: 420, exceededMinPx: false, exceededMaxPx: false });
+            hostProps().onDragDetailsDockWidthPx?.(420, { attemptedSizePx: 420, clampedSizePx: 420, exceededMinPx: false, exceededMaxPx: false, overshootPx: 0, collapseArmed: false });
         });
         expect(hostProps().layout.details).toBe('docked');
         expect(hostProps().detailsDockMaxWidthPx).toBe(budget);
 
         // Pulling past it: the pane leaves the row and floats over main at the pulled width.
         await act(async () => {
-            hostProps().onDragDetailsDockWidthPx?.(budget, { attemptedSizePx: 600, clampedSizePx: budget, exceededMinPx: false, exceededMaxPx: true });
+            hostProps().onDragDetailsDockWidthPx?.(budget, { attemptedSizePx: 600, clampedSizePx: budget, exceededMinPx: false, exceededMaxPx: true, overshootPx: 600 - budget, collapseArmed: false });
         });
         expect(hostProps().layout.details).toBe('overlay');
         expect(hostProps().detailsDockWidthPx).toBe(600);
@@ -161,7 +161,7 @@ describe('DetailsPaneHost', () => {
     });
 
     it("stands a destination's details and the App's right sidebar in one pane host", async () => {
-        useSettings({ detailsPaneWidthPx: 420, detailsPaneWidthBasisPx: 1200, rightPaneWidthPx: 360, rightPaneWidthBasisPx: 1200 });
+        useSettings({ detailsPaneWidthPx: 420, rightPaneWidthPx: 360 });
         const { DetailsPaneHost } = await import('./DetailsPaneHost');
         await renderScreen(<DetailsPaneHost
             main={<div />}

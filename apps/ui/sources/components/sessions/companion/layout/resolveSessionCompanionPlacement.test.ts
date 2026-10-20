@@ -24,13 +24,14 @@ const shown: SessionCompanionPreferenceV1 = {
 
 function paneLayout(overrides: Partial<AppPaneScopeLayoutState> = {}): AppPaneScopeLayoutState {
     return {
+        arrangement: 'session', mainHidden: false, mainDrawerOpen: false, effectiveDetailsOpen: false, detailsAvailable: true,
         containerWidthPx: 1440,
         containerHeightPx: 900,
         mainRegionHeightPx: 900,
         mainRegionWidthPx: 1000,
         multiPaneEnabled: true,
         deviceType: 'tablet',
-        layout: { kind: 'single', right: 'hidden', details: 'hidden' },
+        layout: { main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' },
         bottomPresentation: 'docked',
         ...overrides,
     };
@@ -51,6 +52,11 @@ function placement(overrides: Partial<SessionCompanionPlacementInput> = {}) {
 }
 
 describe('resolveSessionCompanionPlacement', () => {
+    it('uses the existing collapsed placement inside a fixed editor-first session column', () => {
+        expect(placement({ paneLayout: paneLayout({ arrangement: 'editor', mainRegionWidthPx: 440,
+            layout: { main: 'docked', kind: 'twoPane', right: 'hidden', details: 'docked' } }),
+        })).toEqual({ kind: 'collapsed_control', edge: 'trailing', reason: 'geometry' });
+    });
     it('keeps the readable rail floor after a smaller card is measured and still requires enough Chat space', () => {
         const widthPx = resolveSessionCompanionOuterRailWidthPx(SESSION_BOARD_MIN_ITEM_WIDTH_PX);
         expect(placement({ cardBounds: { widthPx: 110, heightPx: 168 } }))
