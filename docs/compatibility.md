@@ -50,6 +50,13 @@ second test pipeline. Remove this ingress when support for those released 0.2
 clients testing against an upgraded daemon ends. The moving predecessor at
 `f18aba940c5c56e5b24454e176c836c171098a2d` still produces that request.
 
+Test explicitly selects its one requested server through the canonical Session
+selection resolver, including an Off or ruleless server, without changing its
+reach rules. A successful saved-server Test records tool annotations in the
+existing catalog snapshot. Read-only Session tool projection still denies
+unclassified tools; checking an `allow_read_only` server first supplies the read
+annotations needed to expose its read tools after restart with resume.
+
 ## Coarse Artifact kind (0.3 development)
 
 Artifact kind filtering is an additive HTTP and persistence extension.
