@@ -136,9 +136,27 @@ describe('compileUniversalPluginUiCommonJs', () => {
                 ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native'] }) : undefined,
         });
         const module = { exports: {} as Record<string, unknown> };
-        runInNewContext(new TextDecoder().decode(result.bytes), { module, exports: module.exports, TextEncoder, TextDecoder });
+        runInNewContext(new TextDecoder().decode(result.bytes), { module, exports: module.exports, TextEncoder, TextDecoder, structuredClone });
         if (typeof module.exports.renderSurface !== 'function') throw new Error('Missing renderSurface');
         expect(module.exports.renderSurface()).toEqual(expected);
+    });
+
+    it.each([
+        ['scm-github', 'src/ui/renderSurface.tsx', 'github-detail-native'],
+        ['scm-gitlab', 'src/ui/renderSurface.tsx', 'gitlab-detail-native'],
+        ['sentry', 'src/ui/renderSurface.tsx', 'sentry-detail-native'],
+        ['triage', 'src/ui/comparisonPicker.tsx', 'triage-comparison-picker-native'],
+    ])('compiles the current %s UI artifact through the source author boundary', async (directory, entry, artifactId) => {
+        const repoRoot = resolve(import.meta.dirname, '../../../../..');
+        const packages = await readWorkspacePackages(repoRoot);
+        const projectRoot = join(repoRoot, 'packages/plugins', directory);
+        const result = await compileUniversalPluginUiCommonJs({
+            projectRoot, entryPath: join(projectRoot, entry), artifactId, requestedExports: ['renderSurface'],
+            exportConditions: ['happier-source'],
+            resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
+                ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native'] }) : undefined,
+        });
+        expect(result.bytes.byteLength).toBeGreaterThan(0);
     });
 
     it('keeps a real Triage text projection free of unused schema and crypto implementations', async () => {

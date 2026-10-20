@@ -2,8 +2,8 @@ import {
   changeLimaPower, createLimaInstance, deleteLimaInstance, execLimaGuest, inspectLimaCapabilities, inspectLimaInstance,
   limaInstanceField, limaVersionAtLeast, parseLimaVersion, putLimaGuestFile, runLimaCommand,
   validateLimaStore,
-} from '@happier-dev/plugin-sdk/machine-provisioners';
-import type { LimaCommandResult, LimaExecutor, LimaInstance } from '@happier-dev/plugin-sdk/machine-provisioners';
+} from '@happier-dev/plugin-sdk/machine-provisioners/lima';
+import type { LimaCommandResult, LimaExecutor, LimaInstance } from '@happier-dev/plugin-sdk/machine-provisioners/lima';
 import type { MachineProvisionerOptionsResultV1 } from '@happier-dev/plugin-sdk/machine-provisioners';
 import { LimaLaunchSchema, LimaOptionsInputSchema, LimaResourceSchema } from './schemas.js';
 import type { LimaLaunch, LimaResource } from './schemas.js';

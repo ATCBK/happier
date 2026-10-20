@@ -169,6 +169,11 @@
       "types": "./dist/machine-provisioners/index.d.ts",
       "default": "./dist/machine-provisioners/index.js"
     },
+    "./machine-provisioners/lima": {
+      "happier-source": "./src/machine-provisioners/lima/index.ts",
+      "types": "./dist/machine-provisioners/lima/index.d.ts",
+      "default": "./dist/machine-provisioners/lima/index.js"
+    },
     "./machine-provisioners/ssh": {
       "happier-source": "./src/machine-provisioners/ssh/index.ts",
       "types": "./dist/machine-provisioners/ssh/index.d.ts",
@@ -232,6 +237,11 @@
       "happier-source": "./src/scm/backend/index.ts",
       "types": "./dist/scm/backend/index.d.ts",
       "default": "./dist/scm/backend/index.js"
+    },
+    "./scm/git": {
+      "happier-source": "./src/scm/git/index.ts",
+      "types": "./dist/scm/git/index.d.ts",
+      "default": "./dist/scm/git/index.js"
     },
     "./scm/hosting": {
       "happier-source": "./src/scm/hosting/index.ts",

@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { canonicalAbsolutePathsEqual } from '@happier-dev/plugin-sdk/fs';
-import { createGitTemporaryIndex, parseGitComparisonOutput, resolveGitIndexPath, type GitTemporaryIndexCommandAdapter } from '@happier-dev/plugin-sdk/scm';
+import { parseGitComparisonOutput } from '@happier-dev/plugin-sdk/scm';
+import { createGitTemporaryIndex, resolveGitIndexPath, type GitTemporaryIndexCommandAdapter } from '@happier-dev/plugin-sdk/scm/git';
 
 describe('public native SCM adapters', () => {
     it('isolates a real Git index and preserves literal renamed comparison paths', async () => {

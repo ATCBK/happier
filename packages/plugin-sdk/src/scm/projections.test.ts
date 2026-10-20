@@ -613,9 +613,7 @@ describe('SCM package-local projections', () => {
         const program = createSdkProgram();
         expect(moduleExportNames(program, 'src/scm/projections.ts')).toEqual(ROOT_EXPORTS);
         expect(moduleExportNames(program, 'src/scm/index.ts')).toEqual([...ROOT_EXPORTS,
-            'GitFileLineage', 'GitTemporaryIndex', 'GitTemporaryIndexCommand', 'GitTemporaryIndexCommandAdapter',
-            'GitTemporaryIndexCommandResult', 'GitTemporaryIndexFailure', 'GitTemporaryIndexSeed',
-            'createGitTemporaryIndex', 'parseGitComparisonOutput', 'resolveGitIndexPath',
+            'GitFileLineage', 'parseGitComparisonOutput',
         ].sort());
     }, 120_000);
 

@@ -1,4 +1,4 @@
-import type { LimaCommandResult, LimaExecutor } from '@happier-dev/plugin-sdk/machine-provisioners';
+import type { LimaCommandResult, LimaExecutor } from '@happier-dev/plugin-sdk/machine-provisioners/lima';
 import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import type { ManagedExecutableRef } from '@happier-dev/plugin-sdk/managed-services';
 

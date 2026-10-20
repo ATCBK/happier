@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import type { ManagedExecutableRef } from '@happier-dev/plugin-sdk/managed-services';
-import { changeLimaPower, execLimaGuest, putLimaGuestFile } from '@happier-dev/plugin-sdk/machine-provisioners';
+import { changeLimaPower, execLimaGuest, putLimaGuestFile } from '@happier-dev/plugin-sdk/machine-provisioners/lima';
 import { createLimaSdkExecutor } from './nativeExecutor.js';
 
 const executable: ManagedExecutableRef = { kind: 'managedDependency', id: { pluginId: 'happier.machine.lima', localId: 'lima-cli' } };

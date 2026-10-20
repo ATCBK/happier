@@ -1,5 +1,5 @@
-export type { GitTemporaryIndexCommand, GitTemporaryIndexCommandResult, GitTemporaryIndexCommandAdapter, GitTemporaryIndexSeed, GitTemporaryIndex, GitTemporaryIndexFailure, GitFileLineage } from './nativeAdapters.js';
-export { createGitTemporaryIndex, resolveGitIndexPath, parseGitComparisonOutput } from './nativeAdapters.js';
+export type { GitFileLineage } from './comparisonOutput.js';
+export { parseGitComparisonOutput } from './comparisonOutput.js';
 export type { PluginScmRegistrationApi } from './projections.js';
 export { ScmHostingProviderKindProtocolSchema } from './projections.js';
 export type { ProtocolScmHostingProviderKind } from './projections.js';
