@@ -81,4 +81,16 @@ describe('PresentationNoticeHost', () => {
         // A used Undo retires its notice instead of lingering for the timeout.
         expect(screen.findByTestId('current-session-presentation-notice')).toBeNull();
     });
+
+    it('lets a sticky notice be dismissed without running its inverse, and gives a transient notice no dismiss', async () => {
+        const run = vi.fn();
+        publishPresentationNotice({ key: 'set-aside', message: 'Your edits were set aside', severity: 'info', sticky: true,
+            undo: { label: 'Undo', run } });
+        const screen = await renderScreen(<PresentationNoticeHost />);
+        await screen.pressByTestIdAsync('current-session-presentation-notice-dismiss');
+        expect(run).not.toHaveBeenCalled();
+        expect(readPresentationNotice()).toBeNull();
+        await React.act(async () => { publishPresentationNotice({ key: 'saved', message: 'Saved', severity: 'info' }); });
+        expect(screen.findByTestId('current-session-presentation-notice-dismiss')).toBeNull();
+    });
 });

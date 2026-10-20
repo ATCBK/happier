@@ -1,9 +1,11 @@
 import * as React from 'react';
 import { Animated, Platform, Pressable, View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 
 import { Text } from '@/components/ui/text/Text';
+import { Icon } from '@/components/ui/icons/Icon';
+import { t } from '@/text';
 import { Typography } from '@/constants/Typography';
 import {
     resolveOverlayMotionPreset,
@@ -103,6 +105,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.link,
     },
+    // A sticky notice stays until it is dismissed (RU-22): the × sits after Undo, quieter than it.
+    dismissControl: {
+        minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
+        minWidth: resolveMinimumInteractiveTargetSize(Platform.OS),
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 8,
+        marginLeft: -theme.space.s8,
+    },
 }));
 
 /** The message with its subject in the stronger weight, wherever the language puts the name. */
@@ -120,6 +131,7 @@ function renderNoticeMessage(message: string, emphasis: string | undefined, emph
 
 export const PresentationNoticeHost = React.memo(function PresentationNoticeHost() {
     const styles = stylesheet;
+    const { theme } = useUnistyles();
     const notice = React.useSyncExternalStore(
         subscribePresentationNotices,
         readPresentationNotice,
@@ -168,7 +180,7 @@ export const PresentationNoticeHost = React.memo(function PresentationNoticeHost
     const hostPointerEvents = resolveOverlayPointerEvents('box-none');
     const shown = notice ?? lastShownRef.current;
     const leaving = notice === null;
-    const noticePointerEvents = resolveOverlayPointerEvents(undo && !leaving ? 'auto' : 'none');
+    const noticePointerEvents = resolveOverlayPointerEvents((undo || notice?.sticky) && !leaving ? 'auto' : 'none');
 
     if (!present || !shown) return null;
     const shownUndo = leaving ? shown.undo ?? null : undo;
@@ -209,6 +221,18 @@ export const PresentationNoticeHost = React.memo(function PresentationNoticeHost
                         style={({ pressed }) => [styles.undoControl, pressed && styles.undoControlActive]}
                     >
                         <Text style={styles.undoLabel}>{shownUndo.label}</Text>
+                    </Pressable>
+                ) : null}
+                {shown.sticky ? (
+                    <Pressable
+                        testID={leaving ? undefined : 'current-session-presentation-notice-dismiss'}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('common.close')}
+                        hitSlop={4}
+                        onPress={() => retirePresentationNotice(shown.key)}
+                        style={({ pressed }) => [styles.dismissControl, pressed && styles.undoControlActive]}
+                    >
+                        <Icon name="x" size={14} color={theme.colors.text.secondary} />
                     </Pressable>
                 ) : null}
                 <SurfaceRim role="floating" radius={NOTICE_RADIUS_PX} border="modal" />
