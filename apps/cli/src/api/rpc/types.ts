@@ -140,6 +140,7 @@ export const RPC_ADMISSION_PREDICATES = [
     'machine_custodian', 'machine_installation', 'machine_request_target', 'machine_scope',
     'machine_currentness', 'machine_authority_currentness', 'request_cancelled',
     'session_authorization', 'session_target', 'authorization_unavailable',
+    'discussion_approval', 'discussion_reply_custody', 'discussion_reply_result', 'discussion_publication',
 ] as const;
 export type RpcAdmissionPredicate = (typeof RPC_ADMISSION_PREDICATES)[number];
 

@@ -9,13 +9,14 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import { SessionInputSourceSessionV1Schema, type SessionInputSourceSessionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 import { AgentRuntimeDaemonServiceTurnWitnessV1Schema, projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceTurnWitness';
-import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcAdmissionPredicate, RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { RunnerMcpSessionWithContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/participants';
 import type { StoredCredentials } from '@/persistence';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { openResourceDataKey } from '@/api/encryption/resourceDataKey';
 import { openSessionStoredContent } from '@/session/transport/encryption/sessionStoredContentCodec';
@@ -101,6 +102,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
   serverUrl: string;
   signal?: AbortSignal;
   executeSourceAction?: ApprovedDiscussionSourceActionExecute;
+  reportStage?: (stage: 'discussion_reply_custody' | 'discussion_reply_result') => void;
 }>): Promise<boolean> {
   const { request, credentials, signal } = params;
   if ('operation' in request) return false;
@@ -111,6 +113,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
     || request.request.mentionedAccountIds.length > 0 || (request.request.mentionedSessionIds?.length ?? 0) > 0) return false;
   const parentMessageId = request.request.replyTarget.messageId;
   return await runWithServerHttpBaseUrl(params.serverUrl, async () => {
+    params.reportStage?.('discussion_reply_custody');
     const original = await readSessionMessageReply({ credentials, sessionId: request.sessionId,
       localId: marker.requestLocalId, ...(signal ? { signal } : {}) });
     if (original.status !== 'available') return false;
@@ -131,6 +134,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
       && (progress.outcome.publicationRef.kind !== 'discussion'
         || progress.outcome.publicationRef.discussion.serverId !== params.serverId
         || progress.outcome.publicationRef.discussion.discussionId !== request.discussionId)) return false;
+    params.reportStage?.('discussion_reply_result');
     let message: string;
     if (workflow) {
       // Open through the existing Workflow Action owner, including its current
@@ -189,7 +193,30 @@ export function registerDiscussionAgentPublisher(params: Readonly<{
   session: RunnerMcpSessionWithContext<Pick<ApiSessionClient, 'sessionId' | 'postAgentDiscussionMessage'>>;
 }>): void {
   params.rpcHandlerManager.registerHandler(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, async (raw: unknown, context) => {
-    const denied = () => ({ v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const });
+    let stage: RpcAdmissionPredicate = 'session_authorization';
+    const refused = (error: 'discussion_post_denied' | 'discussions_unavailable') => {
+      context?.reportAdmissionDenial?.(stage);
+      return { v: 1 as const, ok: false as const, error };
+    };
+    const denied = () => refused('discussion_post_denied');
+    const readFailed = (error: unknown) => {
+      const { kind } = classifyServerEndpointError(error);
+      return refused(kind === 'server_error' || kind === 'dependency_unavailable' || kind === 'network' || kind === 'timeout'
+        ? 'discussions_unavailable' : 'discussion_post_denied');
+    };
+    const reportStage = (next: 'discussion_reply_custody' | 'discussion_reply_result') => { stage = next; };
+    const publish = async (publication: DiscussionAgentPublisherPublicationInputV1, signal?: AbortSignal) => {
+      stage = 'discussion_publication';
+      // A thrown/lost append acknowledgement remains outcome-unknown to the caller.
+      try {
+        const result = await params.session.postAgentDiscussionMessage(publication, signal ? { signal } : undefined);
+        if (!result.ok) context?.reportAdmissionDenial?.(stage);
+        return result;
+      } catch (error) {
+        context?.reportAdmissionDenial?.(stage);
+        throw error;
+      }
+    };
     const parsed = DiscussionAgentPublisherRequestV1Schema.safeParse(raw);
     if (!parsed.success || parsed.data.request.sessionId !== params.session.sessionId) return denied();
     const activePublication = 'witness' in parsed.data;
@@ -206,6 +233,7 @@ export function registerDiscussionAgentPublisher(params: Readonly<{
     const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
     if (signal?.aborted) return denied();
     if ('approvedActionReplay' in parsed.data) {
+      stage = 'discussion_approval';
       let publication: DiscussionAgentPublisherPublicationInputV1 | null;
       try {
         const credentials = await params.readOwnerAccountCredentials();
@@ -222,6 +250,7 @@ export function registerDiscussionAgentPublisher(params: Readonly<{
         const { terminalReturn, draftReview, ...reviewedOrigin } = approved;
         if (terminalReturn && !await isExactTerminalDiscussionReturn({ request: parsed.data.request, credentials,
           serverId: params.serverId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
+          reportStage,
           ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) })) return denied();
         const { runId: _authoredRun, toolCallId: _authoredTool, sourceSession: _authoredSource, ...reviewedRequest } = parsed.data.request;
         if (approved.replyReturn) {
@@ -238,25 +267,27 @@ export function registerDiscussionAgentPublisher(params: Readonly<{
             discussionAddressing: approved.sourceSession.discussionAddressing }) : null;
           publication = prepared && !('operation' in prepared) && draftReview ? { ...prepared, draftReview } : prepared;
         }
-      } catch { return denied(); }
+      } catch (error) { return readFailed(error); }
       // Once publication begins, loss of its acknowledgement is not proof of
       // denial. Preserve the transport failure for normal outcome reconciliation.
-      return publication ? await params.session.postAgentDiscussionMessage(publication, signal ? { signal } : undefined) : denied();
+      return publication ? await publish(publication, signal) : denied();
     }
     const { v: _version, sessionId: _sessionId, sourceSession: _authoredSource, ...request } = parsed.data.request;
     if (!activePublication) {
+      stage = 'discussion_reply_custody';
       if (!('replyReturn' in request) || request.replyReturn?.serverId !== params.serverId) return denied();
       try {
         const credentials = await params.readOwnerAccountCredentials();
         if (!credentials || !await isExactTerminalDiscussionReturn({ request: parsed.data.request, credentials,
           serverId: params.serverId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
+          reportStage,
           ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) })
           || (await params.readOwnerAccountCredentials())?.token !== credentials.token || signal?.aborted) return denied();
-      } catch { return denied(); }
+      } catch (error) { return readFailed(error); }
       // The append owner stamps factual original provenance. Raw Account
       // operands supply neither a different causal root nor Run attribution.
       const { runId: _authoredRun, toolCallId: _authoredTool, ...terminal } = request;
-      return await params.session.postAgentDiscussionMessage(terminal, signal ? { signal } : undefined);
+      return await publish(terminal, signal);
     }
     const publication = prepareActiveDiscussionAgentPublication({ session: params.session, serverId: params.serverId, request: parsed.data.request });
     if (!publication) return denied();
@@ -264,12 +295,13 @@ export function registerDiscussionAgentPublisher(params: Readonly<{
     // active explicit answer to that same parent until the durable result path
     // can publish it under C2's one original-input obligation.
     if (!('operation' in publication) && publication.replyReturn) {
+      stage = 'discussion_reply_custody';
       const credentials = await params.readOwnerAccountCredentials();
       if (!credentials) return denied();
       const original = await readSessionMessageReply({ credentials, sessionId: params.session.sessionId,
         localId: publication.replyReturn.requestLocalId, ...(signal ? { signal } : {}) });
       if (original.status === 'available' && original.progress.workflow) return denied();
     }
-    return await params.session.postAgentDiscussionMessage(publication, signal ? { signal } : undefined);
+    return await publish(publication, signal);
   });
 }

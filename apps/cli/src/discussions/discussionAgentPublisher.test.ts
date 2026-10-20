@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import type { RpcHandler } from '@/api/rpc/types';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerDiscussionAgentPublisher } from './discussionAgentPublisher';
 import { createWorkflowAccountRunActionOwner, materializeWorkflowAcceptedSnapshotV1,
@@ -158,9 +157,10 @@ describe('trusted Discussion reply publisher', () => {
           askAgent: true, sendToSession: true, manageAccess: true, leave: false },
       } } };
     });
-    const handlers = new Map<string, RpcHandler>();
+    const logger = vi.fn();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'receiver', encryptionMode: 'plain', logger });
     const posts: unknown[] = [];
-    registerDiscussionAgentPublisher({ rpcHandlerManager: { registerHandler: (id, handler) => { handlers.set(id, handler); } },
+    registerDiscussionAgentPublisher({ rpcHandlerManager: rpc,
       serverId: 'home', serverUrl: 'https://home.test', readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
       isApprovalExecutionOriginCurrent: async () => false,
       executeSourceAction: async (actionId, input, context) => actionId === 'workflow.run.invocations.get'
@@ -170,7 +170,7 @@ describe('trusted Discussion reply publisher', () => {
         posts.push(request); committed = true; return { v: 1, ok: false, error: 'discussion_post_denied' };
       } },
     });
-    const handler = handlers.get(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1)!;
+    const handler = (request: unknown) => rpc.invokeLocal(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, request);
     const publication = (text: string, attempt = '0') => ({ request: { v: 1, sessionId: 'receiver', discussionId: 'discussion',
       replyReturn: { serverId: 'home', requestLocalId: localId, acceptedTurnId: 'turn',
         workflow: { runId, invocationRecordId: recordId, invocationAttempt: attempt } },
@@ -179,6 +179,10 @@ describe('trusted Discussion reply publisher', () => {
         replyTarget: { kind: 'message', messageId: 'question' } },
     } });
     await handler(publication('forged output'));
+    expect(logger).toHaveBeenCalledWith('[RPC] Request completed', expect.objectContaining({
+      outcomeCode: 'discussion_post_denied', admissionPredicate: 'discussion_reply_result',
+    }));
+    expect(JSON.stringify(logger.mock.calls)).not.toContain('forged output');
     await handler(publication('accepted answer', '1'));
     expect(posts).toEqual([]);
     await handler(publication('accepted answer'));

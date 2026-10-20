@@ -85,6 +85,10 @@ it.each([
   // transitions, replay, registration and Discussion resource crypto stay real.
   const home = createServer(async (request, response) => {
     response.setHeader('Content-Type', 'application/json');
+    // This per-case Home owns its connections. Do not retain the bootstrap
+    // socket across cold Session construction; pooled HTTP lifetime is not the
+    // approval/publication contract exercised by this fixture.
+    response.setHeader('Connection', 'close');
     const path = request.url?.split('?')[0] ?? '';
     httpCalls.push({ method: request.method, path });
     const reply = (body: unknown, status = 200) => { response.statusCode = status; response.end(JSON.stringify(body)); };
