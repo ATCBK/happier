@@ -30,6 +30,15 @@ Do not introduce direct product-runtime calls to:
 
 These are allowed only behind centralized managed runtime/tooling abstractions.
 
+In current development source, Windows command discovery and invocation share
+`packages/cli-common/windowsCommandInvocation.mjs`. A recognized npm wrapper that
+only forwards arguments to an existing native `.exe` resolves to that executable,
+avoiding `cmd.exe`'s smaller command-line limit (including Claude Code's native npm
+installation). Other command scripts retain shell execution and its existing
+quoting, including npm JavaScript wrappers and wrappers whose target is missing
+or still a text placeholder. Recognition does not choose a different installation
+or modify the subprocess environment.
+
 In current development source, the PTY provider uses the existing Python relay on
 POSIX Bun. Both native packages use `tty.ReadStream` for a nonblocking PTY master;
 Bun 1.4.2 can return a successful spawn without working input/output
