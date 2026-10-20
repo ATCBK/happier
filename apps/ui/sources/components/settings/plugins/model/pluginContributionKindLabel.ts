@@ -14,6 +14,7 @@ export const PLUGIN_KIND_SHELF_ORDER = [
     'providers',
     'scmHostingProviders',
     'scmBackends',
+    'languageServers',
     'voice',
     'roles',
     'workflows',
@@ -56,6 +57,8 @@ export function pluginKindShelfTitle(key: PluginKindShelfKey): string {
       return t('settingsPlugins.surfaces.kinds.scmHostingProviders');
     case 'scmBackends':
       return t('settingsPlugins.surfaces.kinds.scmBackends');
+    case 'languageServers':
+      return t('settingsPlugins.surfaces.kinds.languageServers');
     case 'voice':
       return t('settingsPlugins.surfaces.kinds.voice');
     case 'connectedAccounts':
@@ -83,6 +86,7 @@ function shelfKeyFor(kind: PluginContributionKind): PluginKindShelfKey | null {
     case 'providers':
     case 'scmHostingProviders':
     case 'scmBackends':
+    case 'languageServers':
     case 'connectedAccounts':
     case 'inputTypes':
     case 'mcp':

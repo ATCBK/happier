@@ -141,6 +141,7 @@ import { projectSessionFollowSourceKeyPreparationAfterSetV1, type SessionFollowS
 import type { SessionFollowActionInputV1, SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
 import { machineContributionRegistryProjectionDescribe, machinePluginUiTargetedContributionsRead } from '@/sync/ops/machineContributionRegistryProjection';
 import { machineWorkspaceFileSearch } from '@/sync/ops/machineWorkspaceFileSearch';
+import { machineLanguageIntelligenceQuery, machineLanguageIntelligenceRestart } from '@/sync/ops/machineLanguageIntelligence';
 import { machineWorkspaceFileReplacePreview, machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFileReplace';
 import { randomUUID } from '@/platform/randomUUID';
 import { executeCurrentUiContextAction, executeCurrentUiContextContributedAction } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
@@ -2861,6 +2862,12 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       const result = await machineWorkspaceFileReplaceApply(machineId, { rootPath, operation: { kind: 'replace', matcher, files } }, { serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal });
       return !result.ok && 'errorCode' in result ? { ok: false, errorCode: result.errorCode === 'method_unavailable' ? 'update_required' : 'workspace_file_replace_unavailable', error: result.errorCode } : result;
     },
+    languageIntelligenceQuery: ({ machineId, request }, context) => machineLanguageIntelligenceQuery(machineId, request, {
+      serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal,
+    }),
+    languageIntelligenceRestart: ({ machineId, request }, context) => machineLanguageIntelligenceRestart(machineId, request, {
+      serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal,
+    }),
     workspaceFilesSearch: async ({ machineId, ...request }, context) => {
       const result = await machineWorkspaceFileSearch(machineId, request, {
         serverId: context.serverId,
