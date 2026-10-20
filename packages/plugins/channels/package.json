@@ -56,11 +56,13 @@
   },
   "devDependencies": {
     "@types/node": ">=20",
+    "@types/mailparser": "^3.4.6",
     "@happier-dev/plugins-channel-discord": "0.0.0",
     "@happier-dev/plugins-channel-telegram": "0.0.0",
     "@happier-dev/plugins-scm-github": "0.0.0",
     "@types/react": "19.2.0",
     "esbuild": "0.27.2",
+    "mailparser": "^3.7.4",
     "react": "19.2.0",
     "react-native": "0.83.5",
     "typescript": "^5.9.2",

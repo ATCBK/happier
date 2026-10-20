@@ -3,7 +3,7 @@ import type {
   ConversationDeliveryResultV1,
   ConversationResolvedEndpointV1,
 } from '@happier-dev/channels-protocol/v1';
-import { ConversationDeliveryInputV1Schema } from '@happier-dev/channels-protocol/v1';
+import { ConversationDeliveryInputV1Schema, countConversationTextUnits } from '@happier-dev/channels-protocol/v1';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import {
   compilePluginJsonSchema,
@@ -1094,6 +1094,74 @@ describe('Channels control-response outward custody', () => {
     expect(executeAdmittedTargetedOperationWithExecutionOrigin.mock.calls.map(([, input]) =>
       input.chunkIndex)).toEqual([0, 1]);
     expect(store.rows.size).toBe(1);
+  });
+
+  it.each([
+    { name: 'paragraph before word', maximum: 20, body: 'alpha\n\nbeta gamma delta', expected: ['alpha\n\n', 'beta gamma delta'] },
+    { name: 'line before word', maximum: 16, body: 'alpha\nbeta gamma delta', expected: ['alpha\n', 'beta gamma delta'] },
+    { name: 'word before grapheme', maximum: 12, body: 'alpha beta gamma', expected: ['alpha beta ', 'gamma'] },
+    { name: 'whole fitting code block', maximum: 22, body: 'introduction\n\n```ts\nx()\n```\nend',
+      expected: ['introduction\n\n', '```ts\nx()\n```\nend'] },
+    { name: 'exactly fitting code block', maximum: 11, body: 'pre\n```ts\nx\n```\nmore',
+      expected: ['pre\n', '```ts\nx\n```', '\nmore'] },
+    { name: 'long code block', maximum: 30, body: '```typescript\n' + 'x();\n'.repeat(12) + '```' },
+    { name: 'tilde code block', maximum: 30, body: '~~~ts\n' + 'x();\n'.repeat(15) + '~~~' },
+    { name: 'unbroken Unicode token', maximum: 9, body: '👩‍💻'.repeat(11) },
+    { name: 'UTF-8 bytes', maximum: 9, unit: 'utf8Bytes' as const, body: '😀'.repeat(11) },
+    { name: 'UTF-16 units', maximum: 5, unit: 'utf16CodeUnits' as const, body: '😀'.repeat(11) },
+    { name: 'unterminated fence', maximum: 30, body: '```ts\n' + 'x'.repeat(70) },
+    { name: 'CRLF fence', maximum: 30, body: '```ts\r\n' + 'x();\r\n'.repeat(12) + '```' },
+    { name: 'unrenderable grapheme', maximum: 2, body: '👩‍💻', refused: true },
+    { name: 'unrenderable fence header', maximum: 12, body: '```typescript\n' + 'x'.repeat(20) + '\n```', refused: true },
+  ])('splits at semantic boundaries: $name', async ({ name, maximum, body, expected, refused, unit = 'unicodeCodePoints' as const }) => {
+    const state = new MemoryAccountCollection();
+    const connection = providerConnectionRow();
+    await state.put({ ...connection, payload: { ...connection.payload,
+      outboundTextLimit: { maximum, unit },
+    } }, { expectedRevision: 'absent' });
+    await state.put({ id: 'binding-1', 'record-kind': 'binding', 'connection-id': 'connection-1', 'binding-id': 'binding-1',
+      payload: { authorityEpoch: 7, enabled: true, deletionState: 'none', endpoint,
+        target: sessionTarget, linkPreviewPolicy: 'suppress' },
+    }, { expectedRevision: 'absent' });
+    const store = new MemoryDeliveryStore();
+    const existing = sessionProjectionRecord();
+    const record = { ...existing, obligation: { ...existing.obligation, content: { text: body } } };
+    store.rows.set(record.custodyId, record);
+    const sends: ConversationDeliveryInputV1[] = [];
+    const result = await redriveConversationOutwardDeliveryThroughProviderAction({
+      stateCollection: state as never, targetedContributions: targetedProviderDeliveryContributions(), store, record,
+      attemptId: 'semantic-reply', now: () => 100, signal: new AbortController().signal,
+      // Genuine external provider Action boundary; core splitting, authority and custody remain real.
+      actions: { async executeAdmittedTargetedOperationWithExecutionOrigin(_operation: unknown, value: unknown) {
+        sends.push(ConversationDeliveryInputV1Schema.parse(value));
+        return { result: { kind: 'delivered', providerMessageIds: [`message-${sends.length}`] }, executionOrigin: providerTransportOrigin };
+      } } as never,
+    });
+    if (refused) {
+      expect(result).toMatchObject({ kind: 'settled', custody: { state: 'notDelivered' } });
+      expect(sends).toEqual([]);
+      return;
+    }
+    expect(result).toMatchObject({ kind: 'settled', custody: { state: 'delivered' } });
+    const chunks = sends.map(send => send.content.text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every(chunk => countConversationTextUnits(chunk, unit) <= maximum)).toBe(true);
+    expect(new Set(sends.map(send => send.deliveryKey)).size).toBe(chunks.length);
+    if (expected) expect(chunks).toEqual(expected);
+    if (name === 'long code block' || name === 'tilde code block') {
+      const marker = name === 'long code block' ? '```' : '~~~';
+      const language = name === 'long code block' ? 'typescript' : 'ts';
+      expect(chunks.every(chunk => chunk.startsWith(`${marker}${language}\n`) && chunk.endsWith(marker))).toBe(true);
+      expect(chunks.map(chunk => chunk.slice(marker.length + language.length + 1, -marker.length)).join(''))
+        .toBe('x();\n'.repeat(name === 'long code block' ? 12 : 15));
+    } else if (name === 'unterminated fence' || name === 'CRLF fence') {
+      expect(chunks.every(chunk => /^```ts\r?\n/u.test(chunk) && chunk.endsWith('```'))).toBe(true);
+      expect(chunks.map(chunk => chunk.replace(/^```ts\r?\n/u, '').replace(/\n?```$/u, '')).join('').replace(/\s/gu, ''))
+        .toBe(name === 'unterminated fence' ? 'x'.repeat(70) : 'x();'.repeat(12));
+    } else {
+      expect(chunks.join('')).toBe(body);
+      if (name === 'unbroken Unicode token') expect(chunks.every(chunk => /^(?:👩‍💻)+$/u.test(chunk))).toBe(true);
+    }
   });
 
   it.each(['paused', 'target changed', 'epoch changed', 'unavailable', 'provider retired', 'provider unavailable'] as const)(

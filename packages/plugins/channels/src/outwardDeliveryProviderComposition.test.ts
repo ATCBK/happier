@@ -353,7 +353,7 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
           transportOrigin: setupOrigin,
           providerConnectionKey: prepared.providerConnectionKey, providerConfig: prepared.providerConfig,
           routingIdentityKey: 'a'.repeat(43), integrationPrincipal: prepared.integrationPrincipal, authorityEpoch: 1 },
-        outboundTextLimit: { maximum: limit.maximum, unit: limit.unit }, transport: { kind: prepared.recommendedTransport === 'socket' ? 'socket' : 'checkpointedPull' },
+        outboundTextLimit: limit, transport: { kind: prepared.recommendedTransport === 'socket' ? 'socket' : 'checkpointedPull' },
         replayContinuity: prepared.replayContinuity, overlapSafety: prepared.overlapSafety,
       }), { expectedRevision: 'absent' });
       const family = '👨‍👩‍👧‍👦';

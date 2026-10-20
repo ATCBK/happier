@@ -4,7 +4,7 @@ import type { SessionSendRequest, SessionSummary } from '@happier-dev/plugin-sdk
 import type { SessionTranscriptGetExternalShareableResultV1 } from '@happier-dev/plugin-sdk/actions';
 import type { PluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
-import { ConversationBindingTargetV1Schema, type ConversationResolvedEndpointV1 } from '@happier-dev/channels-protocol/v1';
+import { ConversationBindingTargetV1Schema, ConversationOutboundTextLimitV1Schema, countConversationTextUnits, type ConversationResolvedEndpointV1 } from '@happier-dev/channels-protocol/v1';
 import { createChannelsJourneyFixture } from './channelsJourney.js';
 import { createConversationSessionProjectionFrontierRow } from '../sessionProjection.js';
 import { CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION } from '../collections.js';
@@ -38,6 +38,10 @@ export type ProviderConformanceAdapter = Readonly<{
   nativeLimit?: number;
   expectedAddress: Readonly<Record<string, JsonValue>>;
   messageId(id: number): string;
+  /** Some providers correlate a thread reply to its root rather than the answered member. */
+  replyMessageId?(id: number): string;
+  /** Native shares with no authenticated forwarding contract are refused as unsupported content. */
+  forwardedInput?: 'unsupportedContent';
   /** Native reply policy may repeat correlation on every chunk. */
   replyOnLaterChunks?: boolean;
   expectedText(text: string): string;
@@ -195,22 +199,46 @@ export function defineProviderConformanceJourneys(definition: ProviderConformanc
       } finally { await f.dispose(); }
     });
 
-    it('projects a long reply through native limits with the original thread and reply address', async () => {
+    it.each(['unbroken Unicode token', 'paragraphs', 'fitting fence', 'long fence'] as const)(
+      'projects a long reply through native limits with the original thread and reply address: %s', async shape => {
       const f = await fixture(definition);
       try {
         await f.receive({ id: 10, text: 'question' });
         const limit = f.adapter.nativeLimit ?? 4096;
-        const text = 'x'.repeat(limit - 2) + '@' + 'x'.repeat(limit + 18);
+        const paragraph = 'x'.repeat(Math.floor(limit / 2)) + '\n\n';
+        const text = shape === 'unbroken Unicode token'
+          ? '👩‍💻'.repeat(Math.ceil(limit / 3)) + '@' + 'x'.repeat(limit + 18)
+          : shape === 'paragraphs' ? paragraph + 'y'.repeat(Math.floor(limit / 2) + 10)
+          : shape === 'fitting fence' ? 'x'.repeat(limit - 10) + '\n\n```ts\nx()\n```\nend'
+          : '```ts\n' + 'x();\n'.repeat(Math.ceil(limit / 5) * 2) + '```';
         await f.answer(text);
-        expect(f.adapter.sent).toHaveLength(f.adapter.nativeLimit === undefined ? 1 : 3);
-        expect(f.adapter.sent.map(send => send.text).join('')).toBe(f.adapter.expectedText(text));
+        const chunks = f.adapter.sent.map(send => send.text);
+        if (f.adapter.nativeLimit === undefined) {
+          expect(chunks).toEqual([f.adapter.expectedText(text)]);
+        } else {
+          expect(chunks.length).toBeGreaterThan(1);
+          if (shape === 'long fence') {
+            expect(chunks.every(chunk => chunk.startsWith('```ts\n') && chunk.trimEnd().endsWith('```'))).toBe(true);
+            expect(chunks.map(chunk => chunk.slice(6, -3)).join('')).toBe('x();\n'.repeat(Math.ceil(limit / 5) * 2));
+          } else {
+            expect(chunks.join('')).toBe(f.adapter.expectedText(text));
+            if (shape === 'paragraphs') expect(chunks[0]).toBe(paragraph);
+            if (shape === 'fitting fence') expect(chunks).toEqual(['x'.repeat(limit - 10) + '\n\n', '```ts\nx()\n```\nend']);
+          }
+        }
+        const declared = record(f.adapter.connection.payload).outboundTextLimit;
         for (const send of f.adapter.sent) {
           expect(send.address).toMatchObject(f.adapter.expectedAddress);
-          if (f.adapter.nativeLimit !== undefined) expect(Array.from(send.text).length).toBeLessThanOrEqual(f.adapter.nativeLimit);
+          if (declared !== undefined) {
+            const native = ConversationOutboundTextLimitV1Schema.parse(declared);
+            // Captured native text includes provider formatting and mention suppression.
+            expect(countConversationTextUnits(send.text, native.unit)).toBeLessThanOrEqual(native.maximum);
+          }
         }
-        expect(f.adapter.sent[0]?.replyTo).toBe(f.adapter.messageId(10));
+        const replyId = f.adapter.replyMessageId?.(10) ?? f.adapter.messageId(10);
+        expect(f.adapter.sent[0]?.replyTo).toBe(replyId);
         expect(f.adapter.sent.slice(1).map(send => send.replyTo)).toEqual(f.adapter.sent.slice(1)
-          .map(() => f.adapter.replyOnLaterChunks ? f.adapter.messageId(10) : undefined));
+          .map(() => f.adapter.replyOnLaterChunks ? replyId : undefined));
         expect([...f.journey.deliveries.rows.values()].map(row => row.value.payload)).toContainEqual(expect.objectContaining({ state: 'delivered' }));
         f.assertRows();
       } finally { await f.dispose(); }
@@ -267,6 +295,15 @@ export function defineProviderConformanceJourneys(definition: ProviderConformanc
         expect(f.births).toEqual([]);
         expect(f.adapter.sent).toEqual([]);
         await f.receive({ id: 13, text: '/allow approval-id session', forwarded: true });
+        if (f.adapter.forwardedInput === 'unsupportedContent') {
+          expect(f.admissions).toEqual([]);
+          expect(f.adapter.sent).toEqual([]);
+          const refusals = [...f.journey.state.rows.values()].filter(row => row.value['record-kind'] === 'ingress-obligation')
+            .flatMap(row => { const refusal = record(row.value.payload).nonAdmission; return refusal ? [record(refusal).reason] : []; });
+          expect(refusals).toContain('unsupportedContent');
+          f.assertRows();
+          return;
+        }
         expect(f.admissions.map(request => request.text)).toEqual(['/allow approval-id session']);
         expect(f.admissions[0]?.source).toMatchObject({ contentProvenance: 'forwarded', externalActor: { kind: 'human' } });
         expect(f.adapter.sent).toEqual([]);
@@ -288,7 +325,7 @@ export function defineProviderConformanceJourneys(definition: ProviderConformanc
         await f.answer('topic answer');
         expect(f.adapter.sent).toHaveLength(1);
         expect(f.adapter.sent[0]?.address).toEqual(vector.address);
-        expect(f.adapter.sent[0]?.replyTo).toBe(f.adapter.messageId(10));
+        expect(f.adapter.sent[0]?.replyTo).toBe(f.adapter.replyMessageId?.(10) ?? f.adapter.messageId(10));
         f.assertRows();
       } finally { await f.dispose(); }
     });

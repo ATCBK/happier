@@ -149,23 +149,75 @@ async function prepareConversationOutwardDeliveryProviderActionInvocation(input:
   };
 }
 
-/** Native units are counted by the protocol owner; a visible grapheme stays intact. */
+/**
+ * One splitter for fresh delivery and redrive; providers never split again.
+ * The native-limit formatting contract preserves unit counts, so this measure
+ * includes the eventual provider rendering and mention suppression as well.
+ */
 function splitConversationOutboundText(text: string, limit: ConversationOutboundTextLimit): readonly string[] | null {
-  const chunks: string[] = [];
-  let chunk = '';
-  let units = 0;
-  for (const { segment: character } of new Intl.Segmenter('und', { granularity: 'grapheme' }).segment(text)) {
-    const characterUnits = countConversationTextUnits(character, limit.unit);
-    if (characterUnits > limit.maximum) return null;
-    if (units + characterUnits > limit.maximum) {
-      chunks.push(chunk);
-      chunk = '';
-      units = 0;
+  type Fence = { start: number; bodyStart: number; closeStart: number; end: number; opener: string; marker: string; fits: boolean; closed: boolean };
+  const fences: Fence[] = [];
+  let open: Omit<Fence, 'closeStart' | 'end' | 'fits' | 'closed'> | undefined;
+  for (const line of text.matchAll(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n|$)/gm)) {
+    const marker = line[1]!;
+    const info = line[2]!;
+    if (open) {
+      if (marker[0] !== open.marker[0] || marker.length < open.marker.length || info.trim()) continue;
+      // The newline following a closing fence is prose separation, not part
+      // of the block. A block exactly at the native ceiling still fits whole.
+      const end = line.index + line[0].replace(/\r?\n$/, '').length;
+      fences.push({ ...open, closeStart: line.index, end, closed: true,
+        fits: countConversationTextUnits(text.slice(open.start, end), limit.unit) <= limit.maximum });
+      open = undefined;
+    } else if (marker[0] !== '`' || !info.includes('`')) {
+      open = { start: line.index, bodyStart: line.index + line[0].length,
+        opener: line[0].replace(/\r?\n$/, '') + '\n', marker };
     }
-    chunk += character;
-    units += characterUnits;
   }
-  if (chunk) chunks.push(chunk);
+  if (open) fences.push({ ...open, closeStart: text.length, end: text.length, fits: false, closed: false });
+
+  // Keep original whitespace. These ranks are preferences, never truncation.
+  const ranks = new Map<number, number>();
+  for (const boundary of text.matchAll(/((?:\r?\n[\t ]*){2,})|(\r?\n)|([^\S\r\n]+)/g)) {
+    ranks.set(boundary.index + boundary[0].length, boundary[1] ? 3 : boundary[2] ? 2 : 1);
+  }
+  let fenceIndex = 0;
+  const points = Array.from(new Intl.Segmenter('und', { granularity: 'grapheme' }).segment(text), ({ segment, index }) => {
+    const end = index + segment.length;
+    while (fences[fenceIndex] && (fences[fenceIndex]!.end < end
+      || (fences[fenceIndex]!.end === end && fences[fenceIndex]!.closed))) fenceIndex++;
+    const fence = fences[fenceIndex];
+    return { end, segment, units: countConversationTextUnits(segment, limit.unit),
+      fence: fence && fence.start < end ? fence : undefined };
+  });
+  const chunks: string[] = [];
+  let start = 0;
+  let first = 0;
+  let prefix = '';
+  while (first < points.length) {
+    let units = countConversationTextUnits(prefix, limit.unit);
+    let selected: { index: number; suffix: string; fence: Fence | undefined; rank: number } | undefined;
+    for (let index = first; index < points.length; index++) {
+      const point = points[index]!;
+      units += point.units;
+      if (units > limit.maximum) break;
+      const fence = point.fence;
+      // A fitting block is atomic. Even a long block's opening/closing lines
+      // remain atomic; only its body may be continued in another message.
+      if (fence && (fence.fits || point.end <= fence.bodyStart
+        || (fence.closed && point.end >= fence.closeStart))) continue;
+      const suffix = fence ? `${point.segment.endsWith('\n') ? '' : '\n'}${fence.marker}` : '';
+      if (units + countConversationTextUnits(suffix, limit.unit) > limit.maximum) continue;
+      const rank = point.end === text.length ? 4 : ranks.get(point.end) ?? 0;
+      if (selected === undefined || rank >= selected.rank) selected = { index, suffix, fence, rank };
+    }
+    if (selected === undefined) return null;
+    const end = points[selected.index]!.end;
+    chunks.push(prefix + text.slice(start, end) + selected.suffix);
+    prefix = selected.fence?.opener ?? '';
+    start = end;
+    first = selected.index + 1;
+  }
   return chunks;
 }
 

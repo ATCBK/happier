@@ -1,4 +1,5 @@
 import { expect } from 'vitest';
+import { simpleParser } from 'mailparser';
 import { definePlugin, type JsonValue, type PluginServices } from '@happier-dev/plugin-sdk';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import type { PluginWebSocketConnection } from '@happier-dev/plugin-sdk/http';
@@ -12,8 +13,7 @@ import { parseDiscordMessageDispatch } from '../../channel-discord/src/discordMe
 import { mapDiscordMessageToSocketIngress } from '../../channel-discord/src/discordObservation.js';
 import { emailPlugin } from '../../channel-email/src/plugin.js';
 import { EmailTransportsContributionProtocolV1 as emailProtocol, EmailTransportFetchRawInputV1Schema,
-  EmailTransportSubmitRawInputV1Schema } from '../../channel-email/src/transports.js';
-import { parseEmail } from '../../channel-email/src/email/parse.js';
+  EmailTransportSubmitRawInputV1Schema, type EmailTransportListSinceResultV1 } from '../../channel-email/src/transports.js';
 import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
 import { channelsOperationOnlyTargetedContributionsFixture } from './testkit/operationOnlyTargetedContributionsFixture.js';
 import { defineProviderConformanceJourneys, type ChannelsJourney, type ProviderConformanceAdapter,
@@ -194,7 +194,7 @@ async function emailAdapter(): Promise<ProviderConformanceAdapter> {
   const ops = emailProtocol.operations;
   const transportDefinition = definePlugin({ id: 'example.conformance-mail', version: '0.0.0', actions: {
     list: { title: 'List mail', surfaces: ops.listSince.declaration.surfaces, dangerLevel: ops.listSince.declaration.dangerLevel, inputSchema: ops.listSince.declaration.input.schema.jsonSchema,
-      resultSchema: ops.listSince.declaration.resultSchema.jsonSchema, run: async input => {
+      resultSchema: ops.listSince.declaration.resultSchema.jsonSchema, run: async (input): Promise<EmailTransportListSinceResultV1> => {
         const checkpoint = record(input).checkpoint;
         if (checkpoint !== null && record(checkpoint).generation !== generation) return { kind: 'historyGap', reason: 'providerHistoryUnavailable' };
         return { kind: 'batch', refs: checkpoint === null ? [] : refs, checkpointAfterBatch: { generation } };
@@ -209,9 +209,11 @@ async function emailAdapter(): Promise<ProviderConformanceAdapter> {
     submit: { title: 'Submit raw mail', surfaces: ops.submitRaw.declaration.surfaces, dangerLevel: ops.submitRaw.declaration.dangerLevel, inputSchema: ops.submitRaw.declaration.input.schema.jsonSchema,
       resultSchema: ops.submitRaw.declaration.resultSchema.jsonSchema, run: async input => {
         const request = EmailTransportSubmitRawInputV1Schema.parse(input);
-        const mime = await parseEmail(Buffer.from(request.mimeBase64, 'base64'), { bodyFormat: 'text', quotedHistory: 'never', stripSignatures: false });
-        sent.push({ text: mime.text, address: { from: request.envelope.from, to: [...request.envelope.to] },
-          ...(mime.inReplyTo === null ? {} : { replyTo: mime.inReplyTo }),
+        // Inspect the native text alternative without reapplying inbound HTML shaping.
+        const mime = await simpleParser(Buffer.from(request.mimeBase64, 'base64'), { skipHtmlToText: true, skipTextToHtml: true });
+        if (mime.text === undefined) throw new Error('The native Email reply must include its text alternative');
+        sent.push({ text: mime.text.replace(/\r\n/g, '\n').trimEnd(), address: { from: request.envelope.from, to: [...request.envelope.to] },
+          ...(mime.inReplyTo === undefined ? {} : { replyTo: mime.inReplyTo }),
           // MIME has no chat-mention primitive; recipients remain exact native envelope principals.
           mentionsSuppressed: request.envelope.to.length === 1 && request.envelope.to[0] === human });
         return { kind: 'delivered', providerMessageIds: [request.messageId] };
@@ -238,7 +240,7 @@ async function emailAdapter(): Promise<ProviderConformanceAdapter> {
   return { provider, connection: { ...base, payload }, origin: () => placement,
     endpoint: { kind: 'thread', audience: 'direct', id: '<root@example.com>', parentId: mailbox }, parent: { kind: 'direct', audience: 'direct', id: mailbox },
     allowedPrincipals: [human, 'bot@example.com', mailbox], sent, expectedAddress: { from: mailbox, to: [human] },
-    messageId: id => `<message-${id}@example.com>`, expectedText: text => `${text}\n\n${replyText}`, baseline: async journey => { await journey.poll(); },
+    messageId: id => `<message-${id}@example.com>`, expectedText: text => `${text}\n\n> ${replyText}`, baseline: async journey => { await journey.poll(); },
     async receive(journey, message) {
       replyText = message.text;
       const id = `<message-${message.id}@example.com>`;

@@ -1505,7 +1505,7 @@ describe('thread router admission', () => {
         ...harness.context.services.actions,
         // Endpoint resolution is a provider Action boundary. Pairing, target
         // validation, storage transitions, parsing and routing all stay real.
-        executeAdmittedTargetedOperationWithExecutionOrigin: async (operation, input, options) => operation === endpointResolve
+        executeAdmittedTargetedOperationWithExecutionOrigin: async (operation, input, options) => Object.is(operation, endpointResolve)
           ? { result: { kind: 'resolved', candidates: provider === 'telegram' ? [parentEndpoint, proofEndpoint] : [parentEndpoint] }, executionOrigin }
           : harness.context.services.actions.executeAdmittedTargetedOperationWithExecutionOrigin(operation, input, options),
       } as PluginServices['actions'],
