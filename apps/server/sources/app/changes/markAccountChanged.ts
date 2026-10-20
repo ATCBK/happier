@@ -1,5 +1,6 @@
 import { afterTx, getTransactionContext, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
+import { resolveDbSqlDialect } from "@/config/databaseProvider";
 import { buildAccountChangeWakeUpdate } from "@/app/events/eventPayloadBuilders";
 import { eventRouter } from "@/app/events/connectionEventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
@@ -103,12 +104,12 @@ export async function flushAccountChangesInTx(tx: Tx): Promise<void> {
     if (state.operations.length > 0) {
         const accountIds = [...state.accountIds].sort();
         assertAccountSessionOwnerMetadataAdmissionAudienceInTx(tx, accountIds);
-        const provider = getDbProviderFromEnv(process.env, 'postgres');
-        if (accountIds.length > 0 && provider === 'postgres') {
+        const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, 'postgres'));
+        if (accountIds.length > 0 && dialect === 'postgres') {
             await tx.$queryRawUnsafe(
                 'SELECT "id" FROM "Account" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR NO KEY UPDATE', accountIds,
             );
-        } else if (accountIds.length > 0 && provider === 'mysql') {
+        } else if (accountIds.length > 0 && dialect === 'mysql') {
             await tx.$queryRawUnsafe(
                 `SELECT \`id\` FROM \`Account\` WHERE \`id\` IN (${accountIds.map(() => '?').join(', ')}) ORDER BY \`id\` FOR UPDATE`,
                 ...accountIds,
@@ -314,8 +315,8 @@ async function publishAccountProjectionChanges(
     for (const request of requests) counts.set(request.accountId, (counts.get(request.accountId) ?? 0) + 1);
     const accountIds = [...counts.keys()].sort();
     const changedAt = new Date();
-    const provider = getDbProviderFromEnv(process.env, "postgres");
-    if (provider === "postgres") {
+    const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, "postgres"));
+    if (dialect === "postgres") {
         // A locking SELECT cannot inline; its ordered rows fence the UPDATE
         // without adding another round trip or relying on the UPDATE scan plan.
         // Existing Account batches advanced updatedAt through Prisma; Session
@@ -513,8 +514,8 @@ async function publishAccountChanged(
     // Cursor strategy (locked in a.project.md):
     // - allocate a unique per-account cursor by incrementing Account.seq once per call,
     // - write that cursor value into the coalesced AccountChange row.
-    const provider = getDbProviderFromEnv(process.env, "postgres");
-    if (provider === "postgres" && typeof (tx as { $queryRawUnsafe?: unknown }).$queryRawUnsafe === "function") {
+    const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, "postgres"));
+    if (dialect === "postgres" && typeof (tx as { $queryRawUnsafe?: unknown }).$queryRawUnsafe === "function") {
         const rows = await (tx as {
             $queryRawUnsafe: <TRow>(query: string, ...values: unknown[]) => Promise<TRow[]>;
         }).$queryRawUnsafe<{ cursor: number | bigint; activationCount?: number }>(

@@ -1,5 +1,6 @@
 import { getTransactionContext, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
+import { resolveDbSqlDialect } from "@/config/databaseProvider";
 
 export type AccountAdmissionIntent = "content" | "exclusive";
 
@@ -88,12 +89,12 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
 ): Promise<readonly string[]> {
     const ids = [...new Set(accountIds)].sort();
     if (ids.length === 0) return [];
-    const provider = getDbProviderFromEnv(process.env, "postgres");
-    if (provider !== "sqlite") {
-        assertManagedAdmissionAudience(tx, ids, intent === "exclusive" || provider === "mysql");
+    const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, "postgres"));
+    if (dialect !== "sqlite") {
+        assertManagedAdmissionAudience(tx, ids, intent === "exclusive" || dialect === "mysql");
     }
 
-    if (provider === "sqlite") {
+    if (dialect === "sqlite") {
         const present: string[] = [];
         for (const id of ids) {
             const affectedRows = await tx.$executeRawUnsafe(
@@ -111,7 +112,7 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
     const mode = intent === "content" ? "KEY SHARE" : "UPDATE";
     // MySQL has no compatible key-share/non-key-update pair. Its approved
     // admission contract retains the early exclusive fence for both intents.
-    const query = provider === "mysql"
+    const query = dialect === "mysql"
         ? ids.length === 1
             ? "SELECT `id` FROM `Account` WHERE `id` = ? FOR UPDATE"
             : `SELECT \`id\` FROM \`Account\` WHERE \`id\` IN (${ids.map(() => "?").join(", ")}) ORDER BY \`id\` FOR UPDATE`
@@ -120,7 +121,7 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
             : `SELECT "id" FROM "Account" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR ${mode}`;
     const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
         query,
-        ...(provider === "mysql" || ids.length === 1 ? ids : [ids]),
+        ...(dialect === "mysql" || ids.length === 1 ? ids : [ids]),
     );
     const present = rows.map(row => row.id);
     if (new Set(present).size !== present.length) {

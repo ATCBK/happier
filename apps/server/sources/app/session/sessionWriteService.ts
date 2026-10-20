@@ -16,6 +16,7 @@ import { observeCreateSessionMessageStage } from "@/app/monitoring/metrics/sessi
 import { db } from "@/storage/db";
 import { afterTx, inReadSnapshot, inTx, transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime } from "@/storage/prisma";
+import { resolveDbSqlDialect } from "@/config/databaseProvider";
 import type { SessionTranscriptSurfaceItemReferenceInputV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { log, warn } from "@/utils/logging/log";
 import type { Prisma } from "@prisma/client";
@@ -3316,10 +3317,10 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
             includeLifecyclePublications: producesAutomationSessionLifecycleOccurrence(params.turnMutation.action),
         });
     }
-    const provider = getDbProviderFromEnv(process.env, "postgres");
-    if (provider !== "sqlite") {
+    const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, "postgres"));
+    if (dialect !== "sqlite") {
         await tx.$queryRawUnsafe(
-            provider === "postgres"
+            dialect === "postgres"
                 ? 'SELECT "id" FROM "Session" WHERE "id" = $1 FOR NO KEY UPDATE'
                 : 'SELECT `id` FROM `Session` WHERE `id` = ? FOR UPDATE',
             sessionId,

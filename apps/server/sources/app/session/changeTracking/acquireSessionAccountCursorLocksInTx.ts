@@ -1,6 +1,7 @@
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/session/access/sessionRecipients";
 import { inReadSnapshot, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
+import { resolveDbSqlDialect } from "@/config/databaseProvider";
 import { getSessionLifecycleAutomationPublicationAudienceInTx } from "@/app/workflows/workflowPublicationAudience";
 import { hasSessionFollowSessionSource } from "@/app/session/follow/sessionFollowSourceIdentity";
 import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication } from "@/app/changes/markAccountChanged";
@@ -85,10 +86,10 @@ export async function fenceSessionAccountCursorAudienceInTx(
         includeSingleAccount: true,
         intent: options?.intent ?? "content",
     });
-    const provider = getDbProviderFromEnv(process.env, "postgres");
+    const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, "postgres"));
     // Direct captured-audience callers still reserve SQLite's single writer,
     // without querying independently lockable resource scopes it does not have.
-    if (provider === "sqlite") return accountIds;
+    if (dialect === "sqlite") return accountIds;
     const admittedAccountIds = new Set(accountIds);
     const admittedSessionIds = new Set(projectionSessionIds);
     const validateInitialAudience = async () => {
@@ -100,12 +101,12 @@ export async function fenceSessionAccountCursorAudienceInTx(
     };
     await validateInitialAudience();
     if (projectionSessionIds.length > 0) {
-        if (provider === "postgres") {
+        if (dialect === "postgres") {
             await tx.$queryRawUnsafe(
                 'SELECT "id" FROM "Session" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR NO KEY UPDATE',
                 projectionSessionIds,
             );
-        } else if (provider === "mysql") {
+        } else if (dialect === "mysql") {
             await tx.$queryRawUnsafe(
                 `SELECT \`id\` FROM \`Session\` WHERE \`id\` IN (${projectionSessionIds.map(() => "?").join(", ")}) ORDER BY \`id\` FOR UPDATE`,
                 ...projectionSessionIds,
