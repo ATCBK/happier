@@ -111,6 +111,7 @@ import {
   type ConversationConnectionEndpointRequiredResultV1,
   type ConversationConnectionWebhookEndpointSetupRequiredResultV1,
   type ConversationPairingResourceV1,
+  type ConversationResolvedEndpointV1,
   ConversationSessionLastDeliveryV1Schema,
   type ConversationSessionLastDeliveryV1,
   type ConversationSessionLastDeliveryOutcomeV1,
@@ -3380,6 +3381,10 @@ type BindingCreatePairingContext = Readonly<{
   challengeId: string;
   expiresAt: number;
 }>;
+type BindingCreateProofThread = Readonly<{
+  selection: BindingCreateEndpointSelection;
+  candidate: BindingCreateEndpointCandidate;
+}>;
 type BindingCreatePairingRequest = Readonly<{
   connectionId: string;
   expectedConnectionRevision: number;
@@ -3396,7 +3401,24 @@ type BindingCreateFeedback =
   | 'targetResultDeliveryUnavailable'
   | 'createUnavailable'
   | 'pairingUnavailable'
+  | 'pairingRouterBootstrapInvalid'
+  | 'pairingProofMismatch'
+  | 'pairingProofUnavailable'
   | 'created';
+
+/** The pairing writer's typed refusals each name their own repair. */
+function pairingCreateRefusalFeedback(code: string | undefined): BindingCreateFeedback {
+  switch (code) {
+    case 'channels_pairing_router_bootstrap_invalid':
+      return 'pairingRouterBootstrapInvalid';
+    case 'channels_pairing_proof_endpoint_mismatch':
+      return 'pairingProofMismatch';
+    case 'channels_pairing_proof_endpoint_unavailable':
+      return 'pairingProofUnavailable';
+    default:
+      return 'createUnavailable';
+  }
+}
 
 function bindingTargetVerificationFeedback(
   reason: string,
@@ -4030,6 +4052,12 @@ const ROUTER_ROUTE_DEFAULT_POLICY: ThreadRouterRoute['policy'] = Object.freeze({
 function ThreadRouterControls(props: Readonly<{
   target: BindingEditorThreadRouterTarget;
   admittedPrincipalIds: readonly string[];
+  /**
+   * `pairing`: the router is set up through a pairing challenge. Its one group
+   * stays empty until the person who pairs fills it at finalize, so the group
+   * can be named but not given members or siblings here.
+   */
+  membership?: 'resolved' | 'pairing';
   disabled: boolean;
   signal: AbortSignal;
   onChange: (transform: (target: BindingEditorThreadRouterTarget) => BindingEditorThreadRouterTarget) => void;
@@ -4102,9 +4130,62 @@ function ThreadRouterControls(props: Readonly<{
   ];
   const trimmedGroupName = newGroupName.trim();
   const groupNameTaken = target.principalGroups.some((group) => group.id === trimmedGroupName);
+  const pairing = props.membership === 'pairing';
+  const pairingGroup = pairing ? target.principalGroups[0] : undefined;
+  const [pairingGroupName, setPairingGroupName] = React.useState(pairingGroup?.id ?? '');
+  const renamePairingGroup = (next: string) => {
+    setPairingGroupName(next);
+    const name = next.trim();
+    // `any` is the route wildcard, never a group name.
+    if (name === '' || name === 'any') return;
+    props.onChange((current) => {
+      const previous = current.principalGroups[0]?.id;
+      if (previous === undefined || previous === name) return current;
+      return {
+        ...current,
+        principalGroups: current.principalGroups.map((group, index) => index === 0 ? { ...group, id: name } : group),
+        routes: current.routes.map((route) => route.when.group === previous
+          ? { ...route, when: { ...route.when, group: name } }
+          : route),
+      };
+    });
+  };
 
   return (
     <Stack gap="large">
+      {pairingGroup === undefined ? null : (
+        <ItemGroup
+          testID="channels-router-groups"
+          title={t('plugins.channels.surface.routerGroupTitle', 'Sender group')}
+          description={t(
+            'plugins.channels.surface.routerPairingGroupDescription',
+            'Only people in this group can start a thread. The person who sends the pairing code joins it, and you see who that is before the router is turned on.',
+          )}
+        >
+          <Item
+            title={t('plugins.channels.surface.routerGroupNameLabel', 'Group name')}
+            fieldAccessory
+            accessoryOutsidePressable
+            accessory={(
+              <Form.TextField
+                testID="channels-router-pairing-group-name"
+                label={t('plugins.channels.surface.routerGroupNameLabel', 'Group name')}
+                presentation="field"
+                value={pairingGroupName}
+                autoCapitalize="none"
+                disabled={props.disabled}
+                onChange={renamePairingGroup}
+              />
+            )}
+          />
+          <Item
+            testID="channels-router-pairing-group-members"
+            title={t('plugins.channels.surface.routerPairingGroupMembers', 'People')}
+            subtitle={t('plugins.channels.surface.routerPairingGroupMembersValue', 'Whoever sends the pairing code')}
+          />
+        </ItemGroup>
+      )}
+      {pairing ? null : (
       <ItemGroup
         testID="channels-router-groups"
         surface="none"
@@ -4209,6 +4290,7 @@ function ThreadRouterControls(props: Readonly<{
         </ItemGroup>
         </Stack>
       </ItemGroup>
+      )}
 
       <ItemGroup
         testID="channels-router-routes"
@@ -4216,7 +4298,7 @@ function ThreadRouterControls(props: Readonly<{
         title={t('plugins.channels.surface.routerRoutesTitle', 'Routes')}
         description={t(
           'plugins.channels.surface.routerRoutesDescription',
-          'A new thread starts a session from the first route that matches it. Mail that matches no route is dropped.',
+          'A new thread starts a session from the first route that matches it. A thread that matches no route is ignored.',
         )}
       >
         <Stack gap="small">
@@ -4273,13 +4355,13 @@ function ThreadRouterControls(props: Readonly<{
               )}
             />
             <Item
-              title={t('plugins.channels.surface.routerRouteForwarded', 'Forwarded mail')}
+              title={t('plugins.channels.surface.routerRouteForwarded', 'Forwarded messages')}
               accessoryWraps
               accessoryOutsidePressable
               accessory={(
             <Form.Select
               presentation="segmented"
-              label={t('plugins.channels.surface.routerRouteForwarded', 'Forwarded mail')}
+              label={t('plugins.channels.surface.routerRouteForwarded', 'Forwarded messages')}
               options={[
                 { value: 'any', label: t('plugins.channels.surface.routerForwardedAny', 'Either') },
                 { value: 'true', label: t('plugins.channels.surface.routerForwardedTrue', 'Only forwarded') },
@@ -4427,12 +4509,30 @@ function isBindingEditorPrincipalCandidate(
   return candidate.kind === 'human' || candidate.kind === 'bot';
 }
 
+/**
+ * A provider names some places only through their parent (a Telegram forum
+ * topic carries its group's title). The label stays presentation; the
+ * immutable id is the fallback when nothing better exists.
+ */
+function pairingPlaceLabel(endpoint: ConversationResolvedEndpointV1, t: Translate): string {
+  if (endpoint.label !== undefined) return endpoint.label;
+  if (endpoint.kind === 'thread' && endpoint.parentLabel !== undefined) {
+    return t('plugins.channels.surface.pairingThreadInParent', 'A topic in {parent}', { parent: endpoint.parentLabel });
+  }
+  return endpoint.id;
+}
+
 function bindingCreateEndpointSelection(
   query: string,
   candidate: BindingCreateEndpointCandidate,
+  kinds?: readonly ['thread'],
 ): BindingCreateEndpointSelection {
   // The resolver's display labels remain presentation-only. The guarded writer
-  // receives the provider-authenticated identity and the exact query evidence.
+  // receives the provider-authenticated identity and the exact query evidence,
+  // including the kind filter the candidate was found under.
+  if (kinds !== undefined) {
+    return { ...bindingCreateEndpointSelection(query, candidate), kinds: [...kinds] };
+  }
   const { kind, audience, id, parentId } = candidate;
   if (kind === 'direct') {
     return { query, selected: parentId === undefined ? { kind, audience, id } : { kind, audience, id, parentId } };
@@ -5119,13 +5219,38 @@ function BindingCreatePairingHandoff(props: Readonly<{
         {unknownOutcome}
         {feedbackContent}
         <Status tone="attention" label={props.t('plugins.channels.surface.bindingCreatePairingProposal', 'Pairing request received')} />
+        {/*
+          The proof names who sent the code and where, nothing more. In a shared
+          place that is whoever posted it first, so the owner checks the person
+          before finalizing. A private chat's title is that person's name.
+        */}
+        <Text
+          tone="secondary"
+          value={proposal.proofEndpoint.audience === 'shared'
+            ? props.t(
+              'plugins.channels.surface.bindingCreatePairingProposalShared',
+              'This is whoever sent the code in {place}. Finalize only if it is the person you expect; otherwise cancel and start again.',
+              { place: pairingPlaceLabel(proposal.proofEndpoint, props.t) },
+            )
+            : props.t(
+              'plugins.channels.surface.bindingCreatePairingProposalPrivate',
+              'This is who sent the code in a private message. Finalize only if it is the person you expect.',
+            )}
+        />
         <Metadata
           title={props.t('plugins.channels.surface.bindingCreatePairingProposalDetails', 'Pairing request')}
           entries={[
             {
-              label: props.t('plugins.channels.surface.bindingCreatePairingEndpoint', 'External conversation'),
-              value: proposal.endpointLabel
-                ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation'),
+              label: props.t('plugins.channels.surface.bindingCreatePairingSender', 'Sent by'),
+              value: proposal.proofEndpoint.audience === 'direct' && proposal.endpointLabel !== null
+                ? `${proposal.endpointLabel} (${proposal.principalId})`
+                : proposal.principalId,
+            },
+            {
+              label: props.t('plugins.channels.surface.bindingCreatePairingSentIn', 'Sent in'),
+              value: proposal.proofEndpoint.audience === 'direct'
+                ? props.t('plugins.channels.surface.bindingCreatePairingSentInPrivate', 'A private message')
+                : pairingPlaceLabel(proposal.proofEndpoint, props.t),
             },
           ]}
         />
@@ -5149,6 +5274,79 @@ function BindingCreatePairingHandoff(props: Readonly<{
   // A challenge whose bounded lifetime has run out is expired here, without
   // waiting for a Resource reread: keeping the token, link, and deep link on
   // screen would keep offering a completion the provider will refuse.
+  if (challenge !== undefined && !challengeExpiry.expired && challenge.proofEndpoint !== undefined) {
+    // Shared proof: the code is posted where the destination's people can see
+    // it. There is no private link or QR, because either would move the proof
+    // somewhere the challenge does not accept.
+    const place = pairingPlaceLabel(challenge.proofEndpoint, props.t);
+    const command = `/pair ${challenge.manualToken}`;
+    return (
+      <Stack gap="small" testID="channels-binding-create-pairing-shared">
+        {unknownOutcome}
+        {feedbackContent}
+        <Heading
+          level={2}
+          value={props.t('plugins.channels.surface.bindingCreatePairingSharedTitle', 'Send the code in {place}', { place })}
+        />
+        <Text
+          tone="secondary"
+          value={props.t(
+            'plugins.channels.surface.bindingCreatePairingSharedDescription',
+            'Post this as a new message, not as a reply. A code sent anywhere else is ignored.',
+          )}
+        />
+        <Text testID="channels-binding-create-pairing-command" variant="code" selectable value={command} />
+        {challengeExpiry.countdown === undefined ? null : (
+          <Text
+            testID="channels-binding-create-pairing-countdown"
+            tone="secondary"
+            value={`${props.t('plugins.channels.surface.bindingCreatePairingExpiresIn', 'Expires in')} ${challengeExpiry.countdown}`}
+          />
+        )}
+        <Action.Copy
+          title={props.t('plugins.channels.surface.bindingCreatePairingCopyCommand', 'Copy command')}
+          value={command}
+        />
+        <Metadata
+          title={props.t('plugins.channels.surface.bindingCreatePairingChallengeDetails', 'Pairing challenge')}
+          entries={[
+            {
+              label: props.t('plugins.channels.surface.bindingCreateProofConnecting', 'Connecting'),
+              value: challenge.destinationLabel,
+            },
+            {
+              label: props.t('plugins.channels.surface.bindingCreateProofPlace', 'Send the code in'),
+              value: place,
+            },
+            {
+              label: props.t('plugins.channels.surface.bindingCreatePairingAttempts', 'Attempts remaining'),
+              value: String(challenge.attemptsRemaining),
+            },
+          ]}
+        />
+        <Banner
+          tone="secondary"
+          title={props.t('plugins.channels.surface.bindingCreatePairingSharedRaceTitle', 'Anyone in {place} can see this code', { place })}
+          description={props.t(
+            'plugins.channels.surface.bindingCreatePairingSharedRaceDescription',
+            'Whoever sends it first is proposed. You see who it was, and nothing is turned on until you approve them.',
+          )}
+        />
+        <Status
+          tone="neutral"
+          label={props.t('plugins.channels.surface.bindingCreatePairingWaiting', 'Waiting for the code')}
+        />
+        <Button
+          title={props.t('plugins.channels.surface.bindingCreatePairingCancel', 'Cancel pairing')}
+          variant="secondary"
+          busy={cancelAction.execution.status === 'pending'}
+          disabled={actionLocked}
+          onPress={cancelPairing}
+        />
+        {retryAction}
+      </Stack>
+    );
+  }
   if (challenge !== undefined && !challengeExpiry.expired) {
     return (
       <Stack gap="small">
@@ -5303,6 +5501,14 @@ function BindingCreateJourney(props: Readonly<{
   const [pairingRequired, setPairingRequired] = React.useState(false);
   const [pairingContext, setPairingContext] = React.useState<BindingCreatePairingContext | undefined>();
   const [pairingCreateRequest, setPairingCreateRequest] = React.useState<BindingCreatePairingRequest | undefined>();
+  // An optional thread of a shared router parent where the pairing code is
+  // accepted instead of the parent itself. Unset means the parent.
+  const [proofThread, setProofThread] = React.useState<BindingCreateProofThread | undefined>();
+  const [proofLocationKind, setProofLocationKind] = React.useState<'destination' | 'thread'>('destination');
+  const [proofThreadQuery, setProofThreadQuery] = React.useState('');
+  const [proofThreadCandidates, setProofThreadCandidates] = React.useState<
+    readonly BindingCreateEndpointCandidate[] | undefined
+  >();
   const {
     candidates: sessionCandidates,
     nextCursor: sessionNextCursor,
@@ -5364,6 +5570,20 @@ function BindingCreateJourney(props: Readonly<{
       return label !== undefined && label !== principal.id ? `${label} (${principal.id})` : principal.id;
     }).join(', ');
   const admittedPrincipalIds = principalSelection?.selected.map((principal) => principal.id) ?? [];
+  // A thread router needs a parent new threads can start under; a thread or an
+  // issue is itself a leaf.
+  const routerParentSelected = endpointSelection?.selected.kind === 'direct'
+    || endpointSelection?.selected.kind === 'shared';
+  // A shared destination is proved by a message posted where its people can see
+  // it: the destination itself, or (for a router) one of its own threads. A
+  // direct destination keeps the private proof path and its link.
+  const sharedProof = pairingRequired && endpointSelection?.selected.audience === 'shared';
+  const proofThreadsAvailable = sharedProof && target?.kind === 'threadRouter' && routerParentSelected;
+  const selectedProofThread = proofThreadsAvailable && proofLocationKind === 'thread' ? proofThread : undefined;
+  // Choosing "one of its topics" is an optional step: until one is chosen the
+  // challenge cannot be created, and switching back restores the default.
+  const proofLocationIncomplete = proofThreadsAvailable && proofLocationKind === 'thread' && proofThread === undefined;
+  const proofEndpointSelection = sharedProof ? selectedProofThread?.selection ?? endpointSelection : undefined;
   const bindingCreateOutcomeUnknown = createAction.execution.status === 'outcomeUnknown';
   const pairingCreateOutcomeUnknown = pairingAction.execution.status === 'outcomeUnknown';
   const newSessionRecipeSelection = useBindingNewSessionRecipeSelection({
@@ -5422,6 +5642,10 @@ function BindingCreateJourney(props: Readonly<{
     setPairingRequired(false);
     setPairingContext(undefined);
     setPairingCreateRequest(undefined);
+    setProofThread(undefined);
+    setProofLocationKind('destination');
+    setProofThreadQuery('');
+    setProofThreadCandidates(undefined);
     resetSessionPages();
     setAutomationCandidates([]);
     setAutomationNextCursor(undefined);
@@ -5506,9 +5730,15 @@ function BindingCreateJourney(props: Readonly<{
     if (actionLocked) return;
     // Pairing is a resolver outcome for the current principal search, not a
     // durable target choice. Returning to that search leaves its query intact
-    // while requiring the next resolution to establish pairing again.
+    // while requiring the next resolution to establish pairing again. A router
+    // draft seeded for either path no longer matches the next resolution.
     setPairingRequired(false);
     setPairingContext(undefined);
+    setRouterDraft(undefined);
+    setProofThread(undefined);
+    setProofLocationKind('destination');
+    setProofThreadQuery('');
+    setProofThreadCandidates(undefined);
     setFeedback(undefined);
     setStage('principal');
   }, [actionLocked]);
@@ -5535,6 +5765,10 @@ function BindingCreateJourney(props: Readonly<{
     setPrincipalSelection(undefined);
     setPrincipalLabels({});
     setPairingRequired(false);
+    setProofThread(undefined);
+    setProofLocationKind('destination');
+    setProofThreadQuery('');
+    setProofThreadCandidates(undefined);
     setAutomationCandidates([]);
     setAutomationNextCursor(undefined);
     setTarget(undefined);
@@ -5624,6 +5858,55 @@ function BindingCreateJourney(props: Readonly<{
       setFeedback('resolverUnavailable');
     }
   }, [actionLocked, currentConnection, endpointSelection, principalQuery, props.signal, resolveAction]);
+
+  /**
+   * A shared router parent may accept the pairing code in one of its own
+   * threads. The same endpoint resolver finds it; only authenticated threads
+   * of the selected parent are offered, which is exactly what the pairing
+   * writer accepts.
+   */
+  const searchProofThreads = React.useCallback(async () => {
+    if (currentConnection === undefined
+      || endpointSelection === undefined
+      || actionLocked
+      || props.signal.aborted) {
+      return;
+    }
+    const parsedInput = ConversationBindingResolveInputV1Schema.safeParse({
+      kind: 'endpoint',
+      connectionId: currentConnection.connectionId,
+      expectedConnectionRevision: currentConnection.revision,
+      query: proofThreadQuery,
+      kinds: ['thread'],
+    });
+    if (!parsedInput.success) {
+      setFeedback('resolverUnavailable');
+      return;
+    }
+    setFeedback(undefined);
+    setProofThreadCandidates(undefined);
+    const settled = await resolveAction.execute(parsedInput.data);
+    if (!mountedRef.current || props.signal.aborted) return;
+    if (settled.status !== 'success') {
+      if (settled.status === 'error') setFeedback('resolverUnavailable');
+      return;
+    }
+    const result = ConversationBindingResolveResultV1Schema.safeParse(settled.result);
+    if (!result.success) {
+      setFeedback('resolverUnavailable');
+    } else if (result.data.kind === 'endpointCandidates') {
+      const parentId = endpointSelection.selected.id;
+      setProofThreadCandidates(result.data.candidates.filter((candidate) => (
+        candidate.kind === 'thread' && candidate.parentId === parentId
+      )));
+    } else if (result.data.kind === 'stale') {
+      setFeedback('resolverStale');
+    } else if (result.data.kind === 'notReady') {
+      setFeedback('resolverNotReady');
+    } else {
+      setFeedback('resolverUnavailable');
+    }
+  }, [actionLocked, currentConnection, endpointSelection, proofThreadQuery, props.signal, resolveAction]);
 
   const loadAutomationTargets = React.useCallback(async (cursor?: string) => {
     if (actionLocked || props.signal.aborted) return;
@@ -5792,9 +6075,10 @@ function BindingCreateJourney(props: Readonly<{
       // matches it instead of connection+revision, so a second device's
       // superseding challenge can never be adopted here.
       pairingRequestId,
-      // Pairing proves the person through a private message, but it binds the
-      // conversation this person chose here.
+      // Pairing binds the conversation chosen here. A direct one is proved in
+      // a private message; a shared one where its people can see the code.
       endpointSelection,
+      ...(proofEndpointSelection === undefined ? {} : { proofEndpointSelection }),
       target: createTarget,
     });
     if (!parsedInput.success) {
@@ -5812,7 +6096,7 @@ function BindingCreateJourney(props: Readonly<{
     if (settled.status !== 'success') {
       if (settled.status === 'error') {
         setPairingCreateRequest(undefined);
-        setFeedback('createUnavailable');
+        setFeedback(pairingCreateRefusalFeedback(settled.code));
       }
       return;
     }
@@ -5838,7 +6122,7 @@ function BindingCreateJourney(props: Readonly<{
       challengeId: result.data.challengeId,
       expiresAt: result.data.expiresAt,
     });
-  }, [actionLocked, createTarget, currentConnection, endpointSelection, pairingAction, props.signal]);
+  }, [actionLocked, createTarget, currentConnection, endpointSelection, pairingAction, proofEndpointSelection, props.signal]);
 
   const feedbackContent = (() => {
     if (bindingCreateOutcomeUnknown) {
@@ -5926,6 +6210,27 @@ function BindingCreateJourney(props: Readonly<{
         props.t(
           'plugins.channels.surface.bindingCreatePairingUnavailableDescription',
           'No current pairing challenge was found. Create a new challenge to try again.',
+        ),
+      ],
+      pairingRouterBootstrapInvalid: [
+        props.t('plugins.channels.surface.bindingCreatePairingRouterGroupTitle', 'Pairing needs one empty sender group'),
+        props.t(
+          'plugins.channels.surface.bindingCreatePairingRouterGroupDescription',
+          'Go back to Policies and keep a single sender group. The person who pairs joins it; you can add groups after the router is set up.',
+        ),
+      ],
+      pairingProofMismatch: [
+        props.t('plugins.channels.surface.bindingCreatePairingProofMismatchTitle', 'The code can’t be accepted there'),
+        props.t(
+          'plugins.channels.surface.bindingCreatePairingProofMismatchDescription',
+          'Choose the conversation you are connecting, or one of its own topics, then create the challenge again.',
+        ),
+      ],
+      pairingProofUnavailable: [
+        props.t('plugins.channels.surface.bindingCreatePairingProofUnavailableTitle', 'Couldn’t check where to send the code'),
+        props.t(
+          'plugins.channels.surface.bindingCreatePairingProofUnavailableDescription',
+          'The connection or its provider isn’t reachable right now. Nothing was created; try again in a moment.',
         ),
       ],
     };
@@ -6016,6 +6321,12 @@ function BindingCreateJourney(props: Readonly<{
                         setPrincipalSelection(undefined);
                         setPrincipalLabels({});
                         setPairingRequired(false);
+                        setProofThread(undefined);
+                        setProofLocationKind('destination');
+                        setProofThreadCandidates(undefined);
+    setProofLocationKind('destination');
+    setProofThreadQuery('');
+    setProofThreadCandidates(undefined);
                         setAutomationCandidates([]);
                         setAutomationNextCursor(undefined);
                         setInputModeOverride(undefined);
@@ -6104,32 +6415,45 @@ function BindingCreateJourney(props: Readonly<{
                   )}
                 />
               ) : null}
-              {pairingRequired || endpointAudience !== 'direct' ? null : (
+              {/*
+                Any conversation new threads can start under may route them: a
+                mailbox, a forum group or a channel, whether its people were
+                resolved by the provider or will be proved by pairing.
+              */}
+              {!routerParentSelected ? null : (
                 <ItemGroup
                   testID="channels-binding-create-router-option"
                   title={props.t('plugins.channels.surface.bindingCreateRouterTitle', 'A session for each thread')}
                   description={props.t(
                     'plugins.channels.surface.bindingCreateRouterDescription',
-                    'For a mailbox: every new thread from an allowed sender starts its own session, chosen by routes you set next.',
+                    'Every new thread starts its own session, chosen by routes you set next.',
                   )}
                 >
                   <Item
                     testID="channels-binding-target-router"
                     icon={<Icon name="conversations" />}
                     title={props.t('plugins.channels.surface.bindingCreateRouter', 'Route new threads')}
-                    subtitle={props.t(
-                      'plugins.channels.surface.bindingCreateRouterSubtitle',
-                      'Everyone you allowed starts in one sender group',
-                    )}
+                    subtitle={pairingRequired
+                      ? props.t(
+                        'plugins.channels.surface.bindingCreateRouterPairingSubtitle',
+                        'The person who pairs starts in one sender group',
+                      )
+                      : props.t(
+                        'plugins.channels.surface.bindingCreateRouterSubtitle',
+                        'Everyone you allowed starts in one sender group',
+                      )}
                     disabled={actionLocked}
                     onPress={() => {
                       setTarget({
                         kind: 'threadRouter',
                         label: props.t('plugins.channels.surface.bindingCreateRouter', 'Route new threads'),
                       });
+                      // A paired router starts with one named, empty group: the
+                      // person who proves themselves fills it at finalize. No
+                      // member is typed or guessed here.
                       setRouterDraft((current) => current ?? {
                         kind: 'threadRouter',
-                        principalGroups: [{ id: 'senders', principalIds: admittedPrincipalIds }],
+                        principalGroups: [{ id: 'senders', principalIds: pairingRequired ? [] : admittedPrincipalIds }],
                         routes: [],
                       });
                       setNewSessionDraft(undefined);
@@ -6246,6 +6570,7 @@ function BindingCreateJourney(props: Readonly<{
                 <ThreadRouterControls
                   target={routerDraft}
                   admittedPrincipalIds={admittedPrincipalIds}
+                  membership={pairingRequired ? 'pairing' : 'resolved'}
                   disabled={actionLocked}
                   signal={props.signal}
                   onChange={(transform) => setRouterDraft((current) => (current === undefined ? current : transform(current)))}
@@ -6352,6 +6677,124 @@ function BindingCreateJourney(props: Readonly<{
                 value={props.t('plugins.channels.surface.bindingCreateReview', 'Review binding')}
                 focusTarget={stageFocusTarget}
               />
+              {/*
+                Shared proof: the conversation being connected and the place the
+                code is posted are two facts, shown as two rows. The code is
+                visible to everyone there, which the description says before
+                the challenge exists.
+              */}
+              {!sharedProof ? null : (
+                <ItemGroup
+                  testID="channels-binding-create-proof-location"
+                  title={props.t('plugins.channels.surface.bindingCreateProofTitle', 'Where to send the code')}
+                  description={props.t(
+                    'plugins.channels.surface.bindingCreateProofDescription',
+                    'Post /pair and the code there as a new message, not a reply. Anyone there can see the code, so whoever sends it first is proposed. You check who it was before anything is turned on.',
+                  )}
+                >
+                  <Item
+                    title={props.t('plugins.channels.surface.bindingCreateProofConnecting', 'Connecting')}
+                    subtitle={endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation')}
+                  />
+                  {!proofThreadsAvailable ? (
+                    <Item
+                      testID="channels-binding-create-proof-place"
+                      title={props.t('plugins.channels.surface.bindingCreateProofPlace', 'Send the code in')}
+                      subtitle={endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation')}
+                    />
+                  ) : (
+                    <Item
+                      testID="channels-binding-create-proof-place"
+                      title={props.t('plugins.channels.surface.bindingCreateProofPlace', 'Send the code in')}
+                      subtitle={proofLocationKind === 'destination'
+                        ? endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation')
+                        : proofThread === undefined
+                          ? props.t('plugins.channels.surface.bindingCreateProofThreadNone', 'Find the topic or thread below')
+                          : pairingPlaceLabel(proofThread.candidate, props.t)}
+                      accessoryWraps
+                      accessoryOutsidePressable
+                      accessory={(
+                        <Form.Select
+                          testID="channels-binding-create-proof-kind"
+                          presentation="segmented"
+                          label={props.t('plugins.channels.surface.bindingCreateProofPlace', 'Send the code in')}
+                          options={[
+                            {
+                              value: 'destination',
+                              label: props.t('plugins.channels.surface.bindingCreateProofDestination', 'This conversation'),
+                            },
+                            {
+                              value: 'thread',
+                              label: props.t('plugins.channels.surface.bindingCreateProofThread', 'One of its topics'),
+                            },
+                          ]}
+                          value={proofLocationKind}
+                          disabled={actionLocked}
+                          onChange={(next) => {
+                            if (next === 'destination' || next === 'thread') setProofLocationKind(next);
+                          }}
+                        />
+                      )}
+                    />
+                  )}
+                  {!proofThreadsAvailable || proofLocationKind !== 'thread' ? null : (
+                    <Item
+                      title={props.t('plugins.channels.surface.bindingCreateProofThreadQuery', 'Topic or thread')}
+                      accessoryWraps
+                      accessoryOutsidePressable
+                      accessory={(
+                        <Row gap="small" align="center" wrap>
+                          <Form.TextField
+                            testID="channels-binding-create-proof-thread-query"
+                            label={props.t('plugins.channels.surface.bindingCreateProofThreadQuery', 'Topic or thread')}
+                            presentation="field"
+                            value={proofThreadQuery}
+                            autoCapitalize="none"
+                            disabled={actionLocked}
+                            onChange={setProofThreadQuery}
+                          />
+                          <Button
+                            testID="channels-binding-create-proof-thread-search"
+                            variant="secondary"
+                            title={props.t('plugins.channels.surface.bindingCreateProofThreadSearch', 'Find')}
+                            busy={resolveAction.execution.status === 'pending'}
+                            disabled={actionLocked || proofThreadQuery.trim() === ''}
+                            onPress={searchProofThreads}
+                          />
+                        </Row>
+                      )}
+                    />
+                  )}
+                  {!proofThreadsAvailable || proofLocationKind !== 'thread' || proofThreadCandidates === undefined
+                    ? null
+                    : proofThreadCandidates.length === 0 ? (
+                      <Item
+                        testID="channels-binding-create-proof-thread-empty"
+                        subtitle={props.t(
+                          'plugins.channels.surface.bindingCreateProofThreadEmpty',
+                          'No topic or thread of {parent} matches. Search by its name or ID.',
+                          { parent: endpointLabel ?? props.t('plugins.channels.surface.bindingCreateEndpointFallback', 'Conversation') },
+                        )}
+                      />
+                    ) : proofThreadCandidates.map((candidate) => (
+                      <Item
+                        key={candidate.id}
+                        testID={`channels-binding-create-proof-thread:${candidate.id}`}
+                        title={pairingPlaceLabel(candidate, props.t)}
+                        subtitle={candidate.id}
+                        selected={proofThread?.candidate.id === candidate.id}
+                        disabled={actionLocked}
+                        onPress={() => {
+                          setProofThread({
+                            candidate,
+                            selection: bindingCreateEndpointSelection(proofThreadQuery, candidate, ['thread']),
+                          });
+                          setFeedback(undefined);
+                        }}
+                      />
+                    ))}
+                </ItemGroup>
+              )}
               <Banner
                 testID="channels-binding-create-privacy-disclosure"
                 tone="secondary"
@@ -6509,7 +6952,7 @@ function BindingCreateJourney(props: Readonly<{
                   ? props.t('plugins.channels.surface.bindingCreatePairingConfirm', 'Create pairing challenge')
                   : props.t('plugins.channels.surface.bindingCreateConfirm', 'Link conversation')}
                 busy={createAction.execution.status === 'pending' || pairingAction.execution.status === 'pending'}
-                disabled={actionLocked || feedback === 'created'}
+                disabled={actionLocked || feedback === 'created' || (pairingRequired && proofLocationIncomplete)}
                 onPress={pairingRequired ? createPairing : createBinding}
               />
               <BindingCreateStepActions

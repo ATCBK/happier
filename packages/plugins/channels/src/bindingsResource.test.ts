@@ -175,7 +175,7 @@ describe('Channels bindings Resource', () => {
           revision: 4,
           connectionId: 'connection-1',
           endpoint: { audience: 'shared', label: 'Release support' },
-          target: { kind: 'session', summary: 'session-support' },
+          target: { kind: 'session', summary: 'session-support', sessionId: 'session-support' },
           inputMode: 'addressedMessages',
           deliveryMode: 'mirrorSession',
           approval: { kind: 'enabled', maximumScope: 'session' },

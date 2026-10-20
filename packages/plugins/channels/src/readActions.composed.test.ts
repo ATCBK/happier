@@ -55,7 +55,8 @@ describe('registered Channels Account read Actions', () => {
           'binding-id': bindingId, 'created-at': createdAt, 'updated-at': updatedAt, payload }, { expectedRevision: 'absent' });
       }
       const first = await kit.invokeAction('binding/list-v1', { parentBindingId: 'router-1', limit: 1 }, { surface: 'agent' });
-      expect(first).toMatchObject({ bindings: [{ bindingId: 'child-a', parentBindingId: 'router-1', revision: 1 }], nextCursor: expect.any(String) });
+      expect(first).toMatchObject({ bindings: [{ bindingId: 'child-a', parentBindingId: 'router-1', revision: 1,
+        target: { kind: 'session', sessionId: 'session-child-a' } }], nextCursor: expect.any(String) });
       const cursor = (first as { nextCursor: string }).nextCursor;
       expect(await kit.invokeAction('binding/list-v1', { parentBindingId: 'another-router', limit: 1 }, { surface: 'agent' }))
         .toMatchObject({ bindings: [], nextCursor: cursor });

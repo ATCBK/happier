@@ -555,7 +555,7 @@ describe('Channels Session conversations Resource', () => {
         revision: 1,
         connectionId: 'connection-1',
         endpoint: { audience: 'shared' },
-        target: { kind: 'session', summary: 'session-a' },
+        target: { kind: 'session', summary: 'session-a', sessionId: 'session-a' },
         inputMode: 'addressedMessages',
         deliveryMode: 'mirrorSession',
         approval: { kind: 'enabled', maximumScope: 'session' },

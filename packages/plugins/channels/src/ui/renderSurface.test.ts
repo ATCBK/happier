@@ -791,6 +791,31 @@ const bindingEndpointSelection = {
   },
 };
 
+/** The shared destination as the pairing writer freezes it for shared proof. */
+const bindingSharedProofEndpoint = {
+  kind: 'shared' as const,
+  audience: 'shared' as const,
+  id: 'room-project',
+  label: 'Project room',
+};
+
+/** A direct conversation keeps the private proof path and its link. */
+const bindingDirectEndpointCandidate = {
+  kind: 'direct' as const,
+  audience: 'direct' as const,
+  id: 'chat-ada',
+  label: 'Ada',
+};
+
+const bindingDirectEndpointSelection = {
+  query: 'project-room',
+  selected: {
+    kind: 'direct' as const,
+    audience: 'direct' as const,
+    id: 'chat-ada',
+  },
+};
+
 const bindingPrincipalCandidate = {
   id: 'principal-ada',
   kind: 'human' as const,
@@ -805,11 +830,14 @@ const bindingPrincipalSelection = {
   }],
 };
 
-async function openBindingEndpointSelection(fixture: PluginUiTestkit): Promise<void> {
+async function openBindingEndpointSelection(
+  fixture: PluginUiTestkit,
+  candidateLabel: string = bindingEndpointCandidate.label,
+): Promise<void> {
   await fixture.press(await fixture.getByRole('button', { name: 'Add binding' }));
   await enterTextByTestId('channels-binding-create-endpoint-query', bindingEndpointSelection.query);
   await fixture.press(await fixture.getByRole('button', { name: 'Search endpoints' }));
-  await fixture.press(await fixture.getByRole('button', { name: bindingEndpointCandidate.label }));
+  await fixture.press(await fixture.getByRole('button', { name: candidateLabel }));
 }
 
 async function searchBindingPrincipal(fixture: PluginUiTestkit): Promise<void> {
@@ -3134,8 +3162,9 @@ describe('Channels mounted binding creation', () => {
         expiresAt: 1_040,
         attemptsRemaining: 5,
         destinationLabel: 'Project room',
+        proofEndpoint: bindingSharedProofEndpoint,
         manualToken: 'ABCDEFGH',
-        deepLinkUrl: 'https://example.test/pair?token=ABCDEFGH',
+        deepLinkUrl: null,
       }],
       proposals: [],
     }, 'e');
@@ -3156,8 +3185,9 @@ describe('Channels mounted binding creation', () => {
           expiresAt: 1_040,
           attemptsRemaining: 5,
           destinationLabel: 'Project room',
+          proofEndpoint: bindingSharedProofEndpoint,
           manualToken: 'ABCDEFGH',
-          deepLinkUrl: 'https://example.test/pair?token=ABCDEFGH',
+          deepLinkUrl: null,
         };
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
@@ -3192,12 +3222,15 @@ describe('Channels mounted binding creation', () => {
       await fixture.press(await fixture.getByRole('button', { name: 'Review binding' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Create pairing challenge' }));
       await vi.waitFor(() => {
-        // The person chose a shared conversation and then proves themselves in
-        // a private message. The challenge must carry the conversation they
-        // chose, or pairing silently binds the private message instead.
+        // The person chose a shared conversation. The challenge carries that
+        // conversation as the destination and, by default, as the one place
+        // the code is accepted, so it can never bind wherever proof arrived.
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate,
-          input: expect.objectContaining({ endpointSelection: bindingEndpointSelection }),
+          input: expect.objectContaining({
+            endpointSelection: bindingEndpointSelection,
+            proofEndpointSelection: bindingEndpointSelection,
+          }),
         }));
       });
 
@@ -3239,7 +3272,7 @@ describe('Channels mounted binding creation', () => {
         kind: 'session',
         sessionId: 'session-pairing',
         policy: {
-          deliveryMode: 'repliesOnly',
+          deliveryMode: 'mirrorSession',
           permissionCeiling: 'read-only',
           approvals: { kind: 'off' },
           newSession: { kind: 'off' },
@@ -3285,6 +3318,8 @@ describe('Channels mounted binding creation', () => {
         expectedConnectionRevision: 1,
         expiresAt: 601_000,
         endpointLabel: 'Ada',
+        proofEndpoint: bindingDirectEndpointCandidate,
+        principalId: 'principal-ada',
         state: 'proposed',
       }],
     }, '9');
@@ -3299,13 +3334,15 @@ describe('Channels mounted binding creation', () => {
         expectedConnectionRevision: 1,
         expiresAt: 601_000,
         endpointLabel: 'Ada',
+        proofEndpoint: bindingDirectEndpointCandidate,
+        principalId: 'principal-ada',
         state: 'proposed',
       }],
     }, 'a');
     const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve) {
         return (input as Readonly<{ kind?: unknown }>).kind === 'endpoint'
-          ? { kind: 'endpointCandidates', candidates: [bindingEndpointCandidate] }
+          ? { kind: 'endpointCandidates', candidates: [bindingDirectEndpointCandidate] }
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
@@ -3399,7 +3436,9 @@ describe('Channels mounted binding creation', () => {
     });
 
     try {
-      await openBindingEndpointSelection(fixture);
+      // A direct conversation is proved privately: the challenge offers its
+      // deep link and QR, and sends no shared proof location.
+      await openBindingEndpointSelection(fixture, bindingDirectEndpointCandidate.label);
       await searchBindingPrincipal(fixture);
 
       await expect(fixture.getByText('Pairing is required')).resolves.toBeDefined();
@@ -3424,12 +3463,13 @@ describe('Channels mounted binding creation', () => {
             connectionId: 'connection-1',
             expectedConnectionRevision: 1,
             pairingRequestId: expect.stringMatching(/\S/u),
-            endpointSelection: bindingEndpointSelection,
+            endpointSelection: bindingDirectEndpointSelection,
             target: {
               kind: 'session',
               sessionId: 'session-pairing',
               policy: {
-                deliveryMode: 'repliesOnly',
+                // A direct conversation mirrors its Session by default.
+                deliveryMode: 'mirrorSession',
                 permissionCeiling: 'read-only',
                 approvals: { kind: 'off' },
                 newSession: { kind: 'off' },
@@ -3474,6 +3514,9 @@ describe('Channels mounted binding creation', () => {
       const pairingRefreshActions = await fixture.getAllByRole('button', { name: 'Refresh pairing status' });
       await fixture.press(pairingRefreshActions[0]!);
       await expect(fixture.getByText('Pairing request received')).resolves.toBeDefined();
+      // Review names the person who actually sent the code and where.
+      await expect(fixture.getByText('Ada (principal-ada)')).resolves.toBeDefined();
+      await expect(fixture.getByText('A private message')).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Finalize pairing' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -3726,6 +3769,7 @@ describe('Channels mounted binding creation', () => {
             expiresAt: 601_000,
             attemptsRemaining: 5,
             destinationLabel: 'Project room',
+            proofEndpoint: bindingSharedProofEndpoint,
             manualToken: 'ABCDEFGH',
             deepLinkUrl: null,
           }],
@@ -3745,7 +3789,9 @@ describe('Channels mounted binding creation', () => {
             connectionId: 'connection-1',
             expectedConnectionRevision: 1,
             expiresAt: 601_000,
-            endpointLabel: 'Ada',
+            endpointLabel: 'Project room',
+            proofEndpoint: bindingSharedProofEndpoint,
+            principalId: 'principal-ada',
             state: 'proposed',
           }],
         }, '6'),
@@ -3769,6 +3815,7 @@ describe('Channels mounted binding creation', () => {
             expiresAt: 601_000,
             attemptsRemaining: 5,
             destinationLabel: 'Project room',
+            proofEndpoint: bindingSharedProofEndpoint,
             manualToken: 'ABCDEFGH',
             deepLinkUrl: null,
           };
@@ -3812,6 +3859,238 @@ describe('Channels mounted binding creation', () => {
           }));
         });
         await expect(fixture.getByRole('button', { name: 'Add binding' })).resolves.toBeDefined();
+      } finally {
+        await fixture.dispose();
+      }
+    }
+  });
+
+  it('sets up a shared router parent through pairing with an empty named group and an optional topic for the code', async () => {
+    const topicCandidate = {
+      kind: 'thread' as const,
+      audience: 'shared' as const,
+      id: 'room-project:7',
+      parentId: 'room-project',
+      parentLabel: 'Project room',
+    };
+    // The resolver may return threads of other parents; only the selected
+    // parent's own threads are proof locations the writer accepts.
+    const siblingParentTopic = {
+      kind: 'thread' as const,
+      audience: 'shared' as const,
+      id: 'room-other:3',
+      parentId: 'room-other',
+      parentLabel: 'Other room',
+    };
+    const copiedValues: string[] = [];
+    const renderedQrPayloads: string[] = [];
+    const sharedChallenge = {
+      expiresAt: 601_000,
+      attemptsRemaining: 5,
+      destinationLabel: 'Project room',
+      proofEndpoint: topicCandidate,
+      manualToken: 'ABCDEFGH',
+      deepLinkUrl: null,
+    };
+    const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve) {
+        const request = input as Readonly<{ kind?: unknown; kinds?: readonly string[] }>;
+        if (request.kind === 'endpoint') {
+          return request.kinds?.includes('thread') === true
+            ? { kind: 'endpointCandidates', candidates: [topicCandidate, siblingParentTopic] }
+            : { kind: 'endpointCandidates', candidates: [bindingEndpointCandidate] };
+        }
+        return { kind: 'unavailable', reason: 'principalResolveUnsupported' };
+      }
+      if (action === 'session.list') {
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
+      }
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
+        return { kind: 'created', generationId: 'pairing-generation', challengeId: 'pairing-challenge', ...sharedChallenge };
+      }
+      throw new Error(`Unexpected mounted Action: ${String(action)}`);
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-instance-93', mountNonce: 'fixture-mount-93' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(emptyDataClient, {
+        renderMarkdown: () => null,
+        renderCodeBlock: () => null,
+        renderPopover: () => null,
+        renderIcon: () => null,
+        renderQRCode: ({ data }) => {
+          renderedQrPayloads.push(data);
+          return null;
+        },
+      } satisfies PluginUiPresentationHost),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction,
+        readResource: async ({ resource }) => {
+          const localId = resourceFixtureLocalId(resource);
+          if (localId === PAIRING_RESOURCE.localId) {
+            return jsonResource({
+              generationId: 'pairing-generation',
+              observedAt: 1,
+              challenges: [{
+                challengeId: 'pairing-challenge',
+                connectionId: 'connection-1',
+                expectedConnectionRevision: 1,
+                pairingRequestId: 'pairing-request-fixture',
+                ...sharedChallenge,
+              }],
+              proposals: [],
+            }, 'b');
+          }
+          if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
+          if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
+          throw new Error(`Unexpected Resource: ${localId}`);
+        },
+        writeClipboard: async ({ value }) => { copiedValues.push(value); },
+      },
+    });
+
+    try {
+      await openBindingEndpointSelection(fixture);
+      await searchBindingPrincipal(fixture);
+      await expect(fixture.getByText('Pairing is required')).resolves.toBeDefined();
+      // A shared parent whose people are proved by pairing can still route
+      // each new thread to its own session.
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-binding-target-router"]')).not.toBeNull();
+      });
+      expect(document.body.textContent).toContain('The person who pairs starts in one sender group');
+      await pressByTestId('channels-binding-target-router');
+
+      // The one group is named by the owner and has no typed members.
+      await expect(fixture.findByRole('heading', { name: 'Routes' })).resolves.toBeDefined();
+      expect(document.body.textContent).toContain('Whoever sends the pairing code');
+      await expect(fixture.getByRole('button', { name: 'Add group' })).rejects.toThrow();
+      await enterTextByTestId('channels-router-pairing-group-name', 'owners');
+      await fixture.press(await fixture.getByRole('button', { name: 'Review binding' }));
+
+      // The destination and the place the code is posted are separate facts.
+      const proof = document.querySelector<HTMLElement>('[data-testid="channels-binding-create-proof-location"]');
+      expect(proof?.textContent).toContain('Connecting');
+      expect(proof?.textContent).toContain('Send the code in');
+      expect(proof?.textContent).toContain('not a reply');
+      await expect(fixture.getByRole('radio', { name: 'This conversation', state: { checked: true } })).resolves.toBeDefined();
+
+      // Choosing a topic is optional; once chosen, nothing is created until a
+      // topic of this parent is picked.
+      await fixture.press(await fixture.getByRole('radio', { name: 'One of its topics', state: { checked: false } }));
+      await expect(fixture.getByRole('button', {
+        name: 'Create pairing challenge',
+        state: { disabled: true },
+      })).resolves.toBeDefined();
+      await enterTextByTestId('channels-binding-create-proof-thread-query', topicCandidate.id);
+      await fixture.press(await fixture.getByRole('button', { name: 'Find' }));
+      await vi.waitFor(() => {
+        expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
+          action: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve,
+          input: {
+            kind: 'endpoint',
+            connectionId: 'connection-1',
+            expectedConnectionRevision: 1,
+            query: topicCandidate.id,
+            kinds: ['thread'],
+          },
+        }));
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-binding-create-proof-thread:room-project:7"]')?.textContent)
+          .toContain('A topic in Project room');
+      });
+      expect(document.body.textContent).not.toContain('Other room');
+      await pressByTestId('channels-binding-create-proof-thread:room-project:7');
+      await fixture.press(await fixture.getByRole('button', { name: 'Create pairing challenge' }));
+      await vi.waitFor(() => {
+        expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
+          action: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate,
+          input: {
+            connectionId: 'connection-1',
+            expectedConnectionRevision: 1,
+            pairingRequestId: expect.stringMatching(/\S/u),
+            endpointSelection: bindingEndpointSelection,
+            proofEndpointSelection: {
+              query: topicCandidate.id,
+              kinds: ['thread'],
+              selected: { kind: 'thread', audience: 'shared', id: 'room-project:7', parentId: 'room-project' },
+            },
+            target: {
+              kind: 'threadRouter',
+              principalGroups: [{ id: 'owners', principalIds: [] }],
+              routes: [],
+            },
+          },
+        }));
+      });
+
+      // The shared challenge offers the manual command at its place, never a
+      // private link or QR that would move the proof elsewhere.
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-binding-create-pairing-command"]')?.textContent)
+          .toBe('/pair ABCDEFGH');
+      });
+      expect(document.body.textContent).toContain('Send the code in A topic in Project room');
+      expect(document.body.textContent).toContain('Anyone in A topic in Project room can see this code');
+      await expect(fixture.getByRole('button', { name: 'Open pairing link' })).rejects.toThrow();
+      expect(renderedQrPayloads).toEqual([]);
+      await fixture.press(await fixture.getByRole('button', { name: 'Copy command' }));
+      expect(copiedValues).toEqual(['/pair ABCDEFGH']);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('names the repair for each typed shared-pairing refusal', async () => {
+    for (const refusal of [
+      { code: 'channels_pairing_router_bootstrap_invalid', title: 'Pairing needs one empty sender group' },
+      { code: 'channels_pairing_proof_endpoint_mismatch', title: 'The code can’t be accepted there' },
+      { code: 'channels_pairing_proof_endpoint_unavailable', title: 'Couldn’t check where to send the code' },
+    ] as const) {
+      const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+        if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve) {
+          return (input as Readonly<{ kind?: unknown }>).kind === 'endpoint'
+            ? { kind: 'endpointCandidates', candidates: [bindingEndpointCandidate] }
+            : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
+        }
+        if (action === 'session.list') {
+          return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
+        }
+        if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
+          throw new PluginError({ code: refusal.code, message: 'Refused by the pairing writer.' });
+        }
+        throw new Error(`Unexpected mounted Action: ${String(action)}`);
+      });
+      const fixture = await createPluginUiTestkit({
+        identity: { instanceId: `fixture-instance-94-${refusal.code}`, mountNonce: `fixture-mount-94-${refusal.code}` },
+        authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+        surface: renderSurface,
+        surfaceContext: createChannelsSurfaceContext(),
+        adapter: createChannelsSemanticAdapter(),
+        handlers: {
+          selectActionInput: async () => ({ kind: 'cancelled' as const }),
+          executeAction,
+          readResource: async ({ resource }) => {
+            const localId = resourceFixtureLocalId(resource);
+            if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
+            if (localId === CONNECTIONS_RESOURCE.localId) return connectionsResource;
+            throw new Error(`Unexpected Resource: ${localId}`);
+          },
+        },
+      });
+
+      try {
+        await openBindingEndpointSelection(fixture);
+        await searchBindingPrincipal(fixture);
+        await fixture.press(await fixture.getByRole('button', { name: 'Pairing Session' }));
+        await fixture.press(await fixture.getByRole('button', { name: 'Review binding' }));
+        await fixture.press(await fixture.getByRole('button', { name: 'Create pairing challenge' }));
+        await expect(fixture.getByText(refusal.title)).resolves.toBeDefined();
+        expect(document.body.textContent).not.toContain('Could not create the binding');
       } finally {
         await fixture.dispose();
       }
