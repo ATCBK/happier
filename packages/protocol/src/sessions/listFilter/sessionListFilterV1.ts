@@ -144,7 +144,7 @@ export function matchSessionProjectFilterV1(
     if (checkoutId !== undefined && checkoutId !== null && (typeof checkoutId !== 'string' || !checkoutId.trim())) return 'unavailable';
     const target = typeof checkoutId === 'string'
         ? { serverId, id: checkoutId }
-        : typeof record.machineId === 'string' && typeof record.path === 'string'
+        : typeof record.machineId === 'string' && typeof record.path === 'string' && record.path.trim().length > 0
             ? { serverId, machineId: record.machineId, rootPath: record.path }
             : null;
     if (!target) return 'miss';

@@ -93,6 +93,9 @@ describe('SessionListFilterV1', () => {
         expect(match({ machineId: 'machine', path: 'c:/repo/' })).toBe('match');
         expect(match({ machineId: 'machine', path: 'c:/repo/child' })).toBe('miss');
         expect(match({ machineId: 'foreign', path: 'c:/repo' })).toBe('miss');
+        for (const path of [undefined, '', '   ']) {
+            expect(match({ machineId: 'machine', ...(path === undefined ? {} : { path }) })).toBe('miss');
+        }
         expect(match(null)).toBe('unavailable');
         expect(matchSessionProjectFilterV1({ workspaceId: 'checkout' }, 'home-a', project)).toBe('unavailable');
         expect(match({ projectId: '', workspaceId: 'checkout' })).toBe('unavailable');
