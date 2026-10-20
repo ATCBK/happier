@@ -1365,7 +1365,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(rowWrapper.props.collapsable).toBe(false);
     });
 
-    it('opens the iOS native context menu when the row reports its long press (K1: the long press is the menu)', async () => {
+    it.each(['ios', 'android'] as const)('opens the %s native context menu when the row reports its long press', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const initialListProps = virtualizedListState.current?.props;
         expect(initialListProps).toBeTruthy();
@@ -1392,7 +1393,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(closed.props.nativeContextMenuOpen).toBe(false);
     });
 
-    it('suppresses iOS native context menu activation while the native list is being scrolled', async () => {
+    it.each(['ios', 'android'] as const)('suppresses %s native context menu activation while the native list is being scrolled', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const listProps = virtualizedListState.current?.props;
         const row = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
@@ -1423,7 +1425,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(opened.props.nativeContextMenuOpen).toBe(true);
     });
 
-    it('closes an open iOS native context menu when native list scrolling starts', async () => {
+    it.each(['ios', 'android'] as const)('closes an open %s native context menu when native list scrolling starts', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const listProps = virtualizedListState.current?.props;
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
@@ -1443,7 +1446,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(closed.props.nativeContextMenuOpen).toBe(false);
     });
 
-    it('ignores stale iOS native context menu close requests from another row', async () => {
+    it.each(['ios', 'android'] as const)('ignores stale %s native context menu close requests from another row', async (platform) => {
+        nativeBoundary.platformOs = platform;
         const screen = await renderSessionsList();
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
 
@@ -1474,15 +1478,15 @@ describe('SessionsList (native virtualization)', () => {
         expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 
-    it('keeps Android session rows free of drag gestures and native inline context menus outside Organize mode', async () => {
+    it('shares Android context-menu state without drag gestures outside Organize mode', async () => {
         nativeBoundary.platformOs = 'android';
 
         const screen = await renderSessionsList();
 
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
         expect(first.props.dragGripGesture).toBeUndefined();
-        expect(first.props.nativeContextMenuOpen).toBeUndefined();
-        expect(first.props.onNativeContextMenuOpenChange).toBeUndefined();
+        expect(first.props.nativeContextMenuOpen).toBe(false);
+        expect(first.props.onNativeContextMenuOpenChange).toEqual(expect.any(Function));
         expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 
