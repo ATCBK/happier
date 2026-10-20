@@ -29,6 +29,7 @@ export type {
 export { buildTriageEntryRouteSegmentV1, readTriageEntryRouteSegmentV1 } from './entryRoute.js';
 export {
     triageTaskStatusCategoryV1,
+    triageTaskTransitionCapabilitiesV1,
     TriageEntryRelationsV1Schema, TriageTaskFieldV1Schema,
     TriageTaskCapabilitiesV1Schema, TriageTaskTransitionV1Schema,
 } from './observations.js';

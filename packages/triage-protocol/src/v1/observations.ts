@@ -174,8 +174,18 @@ export const TriageTaskCapabilitiesV1Schema = defineProtocolObject({
     createFields: defineProtocolUniqueArray(TriageTaskFieldV1Schema).optional(),
     editFields: defineProtocolUniqueArray(TriageTaskFieldV1Schema).optional(),
     transitions: defineProtocolArray(TriageTaskTransitionV1Schema).optional(),
+    /** An offered native transition that completes this task in one write. Absent means use the workflow menu. */
+    completingTransitionId: TriageIdentifierV1ProtocolSchema.optional(),
 }, { policy: 'closed' });
 export type TriageTaskCapabilitiesV1 = ReturnType<typeof TriageTaskCapabilitiesV1Schema.parse>;
+
+/** Sources with dynamic workflows declare quick completion only when their offered workflow is unambiguous. */
+export function triageTaskTransitionCapabilitiesV1(
+    transitions: NonNullable<TriageTaskCapabilitiesV1['transitions']>,
+): Pick<TriageTaskCapabilitiesV1, 'transitions' | 'completingTransitionId'> {
+    const completed = transitions.filter(transition => triageTaskStatusCategoryV1(transition.state) === 'completed');
+    return { transitions, ...(completed.length === 1 ? { completingTransitionId: completed[0]!.id } : {}) };
+}
 
 /** Live read facts, not a second relationship store. Omitted facts remain unknown. */
 export const TriageEntryRelationsV1Schema = defineProtocolObject({
@@ -232,6 +242,10 @@ export const TriageSourceEntrySnapshotV1Schema = defineProtocolObject({
      */
     designation: TriageTextV1ProtocolSchema.optional(),
     createdAtMs: defineProtocolNumber({ integer: true }).optional(),
+    /** ISO date or datetime, preserving a provider's calendar date rather than inventing a timezone. */
+    dueDate: TriageTextV1ProtocolSchema.optional(),
+    /** Authoritative completion time, never the entry's general updated time. Absence is unknown. */
+    completedAtMs: defineProtocolNumber({ integer: true }).optional(),
     state: TriageEntryStateV1ProtocolSchema,
     relations: TriageEntryRelationsV1Schema.optional(),
     /** Entry-specific workflows may refine the kind's capability declaration. */

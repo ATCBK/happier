@@ -117,6 +117,14 @@ describe('Triage source observation union', () => {
 });
 
 describe('Triage snapshot and row facts', () => {
+    it('keeps optional due and completion facts and an explicit completing transition in the source snapshot', () => {
+        const facts = { dueDate: '2026-10-25', completedAtMs: 1_799_000_000_000,
+            taskCapabilities: { completingTransitionId: 'done', transitions: [{ id: 'done', label: 'Done', state: { presentation: 'resolved' } }] } };
+        expect(TriageSourceEntrySnapshotV1Schema.parse({ ...present.snapshot, ...facts })).toMatchObject(facts);
+        expect(TriageSourceEntrySnapshotV1Schema.parse(present.snapshot)).not.toHaveProperty('dueDate');
+        expect(TriageSourceEntrySnapshotV1Schema.safeParse({ ...present.snapshot, dueDate: 123 }).success).toBe(false);
+        expect(TriageSourceEntrySnapshotV1Schema.safeParse({ ...present.snapshot, taskCapabilities: { ...facts.taskCapabilities, extra: true } }).success).toBe(false);
+    });
     it('retains task stage, cancellation reason and live relation facts without changing entry identity', () => {
         const parent = { source: fixture.configuredInstance.instance.source, ...localRef };
         const snapshot = {
