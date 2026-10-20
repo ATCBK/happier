@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import type { SessionRunnerRuntimeStateV1 } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
 import { RPC_ERROR_CODES, RPC_METHODS, SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
-import { createSessionFixture } from '@/dev/testkit';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
 vi.mock('@/modal', async () => {
@@ -27,7 +27,7 @@ const decodedRequests: Array<{ method: string; payload: unknown }> = [];
 
 beforeEach(async () => {
     boundary.resetRequests();
-    storage.setState({ sessions: {} });
+    storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
     vi.mocked(Modal.confirm).mockReset();
     vi.mocked(Modal.confirm).mockResolvedValue(true);
     resetScopedMachineTransportCacheForTests();
@@ -125,7 +125,7 @@ describe('session runner restart op', () => {
     });
 
     function installActivity(foreground = false) {
-        storage.setState({ sessions: { s1: createSessionFixture({ id: 's1',
+        storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId: home.id,
             active: true, activeAt: Date.now(), presence: 'online',
             latestTurnStatus: foreground ? 'in_progress' : null,
             runtimeActivityState: 'active', runtimeActivityActiveCount: 2,
@@ -147,6 +147,49 @@ describe('session runner restart op', () => {
         vi.mocked(Modal.confirm).mockResolvedValue(false);
         await expect(restartCases[0][1]()).resolves.toBeNull();
         expect(decodedRequests).toEqual([]);
+    });
+
+    it.each(['missing detail', 'other Home detail'] as const)('protects exact-Home list activity with %s', async detail => {
+        storage.setState({
+            sessions: detail === 'missing detail' ? {} : { s1: createSessionFixture({
+                id: 's1', serverId: 'other-home', runtimeActivityState: 'idle', runtimeActivityActiveCount: 9,
+            }) },
+            sessionListRowsByServerId: { [home.id]: { s1: createSessionListRenderableSessionFixture({
+                id: 's1', runtimeActivityState: 'active', runtimeActivityActiveCount: 3,
+            }) } },
+        });
+        vi.mocked(Modal.confirm).mockResolvedValue(false);
+        await expect(restartCases[0][1]()).resolves.toBeNull();
+        expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('3'),
+            expect.objectContaining({ destructive: true }));
+        expect(decodedRequests).toEqual([]);
+    });
+
+    it('protects an applied-Home legacy carrier while another Home is staged', async () => {
+        const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable,
+            publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        const previousActive = getActiveServerSnapshot();
+        const previousScope = storage.getState().sessionLocalStateScope;
+        const staged = await boundary.addHome('https://staged-restart.example.test', 'account-b');
+        try {
+            publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: home.serverUrl, generation: 1 }, false);
+            await setActiveServerId(staged.id);
+            installActivity();
+            const session = storage.getState().sessions.s1!;
+            storage.setState({ sessions: { s1: { ...session, serverId: undefined } },
+                sessionLocalStateScope: { serverId: home.id, accountId: home.accountId } });
+            vi.mocked(Modal.confirm).mockResolvedValue(false);
+            await expect(ops.restartSessionRunnerOnCurrentRuntime({ runtimeState })).resolves.toBeNull();
+            expect(decodedRequests).toEqual([]);
+        } finally {
+            publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+            await setActiveServerId(previousActive.serverId);
+            storage.setState({ sessionLocalStateScope: previousScope });
+        }
     });
 
     it('honors the caller lifetime after the dialog resolves', async () => {

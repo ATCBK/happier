@@ -12,9 +12,13 @@ import {
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { resolveMachineRpcTargetServerId } from '@/sync/runtime/orchestration/serverScopedRpc/resolveMachineRpcTargetServerId';
 import { delay } from '@/utils/timing/time';
 import { Modal } from '@/modal';
 import { storage } from '@/sync/domains/state/storage';
+import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/connectionManager';
+import { selectHomeQualifiedSession } from '@/sync/domains/session/selectHomeQualifiedSession';
+import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { hasActiveSessionRuntimeActivity } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import { t } from '@/text';
 
@@ -179,12 +183,20 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
 // One open confirmation protects repeated presses across every UI runner restart.
 let backgroundWorkConfirmationOpen = false;
 
+function readRunnerRestartSessionActivity(input: RestartSessionRunnerInput) {
+    const state = storage.getState();
+    const activeServerId = getAppliedActiveServerSnapshot().serverId;
+    const serverId = resolveMachineRpcTargetServerId(input.serverId);
+    return selectHomeQualifiedSession(state, input.runtimeState.sessionId, serverId, activeServerId)
+        ?? readSessionListRowForServerId(state.sessionListRowsByServerId, serverId, input.runtimeState.sessionId);
+}
+
 async function confirmRunnerRestartStopsBackgroundWork(input: RestartSessionRunnerInput): Promise<boolean> {
     input.signal?.throwIfAborted();
     if (backgroundWorkConfirmationOpen) return false;
     backgroundWorkConfirmationOpen = true;
     try {
-        const count = storage.getState().sessions[input.runtimeState.sessionId]?.runtimeActivityActiveCount ?? 0;
+        const count = readRunnerRestartSessionActivity(input)?.runtimeActivityActiveCount ?? 0;
         const confirmed = await Modal.confirm(
             t('session.runnerRestartBackgroundWork.title'),
             t('session.runnerRestartBackgroundWork.body', { count }),
@@ -204,7 +216,7 @@ async function restartSessionRunnerWithBackgroundWorkConfirmation<Request>(input
     reconcileMode?: 'if_stale' | 'force_current_cli';
 }>): Promise<RestartSessionRunnerResultV1 | null> {
     input.signal?.throwIfAborted();
-    const session = storage.getState().sessions[input.runtimeState.sessionId];
+    const session = readRunnerRestartSessionActivity(input);
     // Interruption protection reads the reported fact even when presentation is stale or foregrounded.
     const hasActivity = hasActiveSessionRuntimeActivity({
         state: session?.runtimeActivityState, activeCount: session?.runtimeActivityActiveCount,
