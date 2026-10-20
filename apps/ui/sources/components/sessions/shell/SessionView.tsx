@@ -517,6 +517,7 @@ import { formatAttachmentSelectionSummary } from '@happier-dev/protocol/messages
 import { Text } from '@/components/ui/text/Text';
 import { SessionRightSidebarProvider } from '@/components/sessions/panes/SessionRightPanel';
 import { createSessionPaneSurfaceScope } from '@/components/sessions/plugins/useSessionPluginRuntime';
+import { PaneMainHideButton } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
 import { AppPaneScopeHost } from '@/components/appShell/panes/AppPaneScopeHost';
 import { useRegisterSessionPaneDriver } from '@/components/sessions/panes/useRegisterSessionPaneDriver';
 import { useTerminalJumpShortcut } from '@/components/sessions/terminal/jump/useTerminalJumpShortcut';
@@ -2472,20 +2473,21 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
 
     // At compact widths the empty people state uses the canonical header overflow, while a live
     // facepile stays direct. Both presentations carry the same attention label and command.
+    // The header's last control is "Hide session" (lab ade-shell H1): it draws itself only where the
+    // pane host offers hiding.
     const headerRightElement = React.useMemo(() => (
-        collaborationAvailable && sessionRouteAddress
-            ? (
-                <>
-                    {headerProps.rightElement}
-                    <SessionCollaborationHeaderEntry
-                        target={sessionRouteAddress}
-                        compact={foldCollaborationHeaderEntry}
-                        onPress={openSessionCollaboration}
-                    />
-                </>
-            )
-            : headerProps.rightElement
-    ), [collaborationAvailable, sessionRouteAddress, foldCollaborationHeaderEntry, headerProps.rightElement, openSessionCollaboration]);
+        <>
+            {headerProps.rightElement}
+            {collaborationAvailable && sessionRouteAddress ? (
+                <SessionCollaborationHeaderEntry
+                    target={sessionRouteAddress}
+                    compact={foldCollaborationHeaderEntry}
+                    onPress={openSessionCollaboration}
+                />
+            ) : null}
+            <PaneMainHideButton color={theme.colors.chrome.header.foreground} />
+        </>
+    ), [theme.colors.chrome.header.foreground, collaborationAvailable, sessionRouteAddress, foldCollaborationHeaderEntry, headerProps.rightElement, openSessionCollaboration]);
 
     // Header - always shown on desktop/Mac, hidden in landscape mode only on actual phones.
     // Phone: pulling the title down opens All tabs; the opener lives in a leaf so this screen never
