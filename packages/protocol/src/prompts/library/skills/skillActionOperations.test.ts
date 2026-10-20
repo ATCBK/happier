@@ -4,7 +4,7 @@ import type { PromptLibraryArtifactStore, PromptLibraryStoredArtifact } from '..
 import type { SkillRulesActionPortV1 } from '../skillRulesActionsV1.js';
 import type { SkillRuleV1 } from '../../../reach/reachRuleV1.js';
 import { createSkillActionExecuteV1 } from './skillActionOperations.js';
-import { SKILL_ACTION_OUTPUT_SCHEMAS_V1, SkillInstallAcknowledgedEffectsV1Schema } from './skillActionSchemasV1.js';
+import { SKILL_ACTION_INPUT_SCHEMAS_V1, SKILL_ACTION_OUTPUT_SCHEMAS_V1, SkillInstallAcknowledgedEffectsV1Schema } from './skillActionSchemasV1.js';
 import { readSkillFrontmatterV1, readSkillLockV1 } from './skillLibraryItemV1.js';
 import { readSkillZipFilesV1 } from './skillZipV1.js';
 import { createRegistryHostV1 } from '../../../registries/registryHostV1.js';
@@ -24,6 +24,26 @@ import { listArtifactHeadersV1 } from '../../../artifacts/artifactListSelectionV
 const markdown = '---\nname: sample\ndescription: A useful skill\n---\nInstructions';
 const files = [{ path: 'SKILL.md', contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64'), contentKind: 'utf8' as const }];
 type RegistryPorts = Pick<ReturnType<typeof createRegistryHostV1>, 'readRegistryItem' | 'readRegistrySource' | 'filesForPointer' | 'readLinkSkills' | 'fetchLinkSkillFiles'>;
+function gitRegistryHarness() {
+  const initial = '1'.repeat(40), latest = '2'.repeat(40); let head = initial;
+  const original = [{ path: 'SKILL.md', unixMode: 0o644 as const, bytes: new TextEncoder().encode(markdown) }];
+  const upstream = [{ ...original[0]!, bytes: new TextEncoder().encode(markdown + '\nUpstream') }];
+  const source: RegistrySourceDescriptorV1 = { id: 'repo', title: 'Repo', format: 'git', kinds: ['skill'], url: 'https://github.com/a/b', enabled: true, addedAt: 0, origin: { kind: 'user' }, removable: true };
+  const atUrl = (url: string) => url.includes(latest) ? upstream : original;
+  // GitHub HTTP is the external boundary; registry decoding, pinning and integrity checks stay real.
+  const http: RegistryHttpV1 = {
+    getJson: async url => {
+      if (url.includes('marketplace.json')) return { ok: false, status: { state: 'unreachable' } };
+      if (url.includes('/commits/')) return { ok: true, fetchedAt: 1, value: { sha: url.endsWith('/HEAD') ? head : decodeURIComponent(url.split('/').at(-1)!) } };
+      if (url.includes('/git/trees/')) { const files = atUrl(url); return { ok: true, fetchedAt: 1, value: { sha: computeGitTreeShaV1(files), tree: files.map(file => ({ path: file.path, mode: '100644', type: 'blob', sha: computeGitBlobShaV1(file.bytes), size: file.bytes.length })) } }; }
+      return { ok: true, fetchedAt: 1, value: { name: 'b' } };
+    },
+    getText: async url => ({ ok: true, fetchedAt: 1, value: new TextDecoder().decode(atUrl(url)[0]!.bytes) }),
+    getBytes: async url => ({ ok: true, fetchedAt: 1, value: atUrl(url)[0]!.bytes }),
+  };
+  return { initial, latest, source, registry: createRegistryHostV1({ host: 'node', http, readSources: async () => [source] }),
+    setHead: (commit: string) => { head = commit; } };
+}
 function harness(registry?: RegistryPorts, foundReader?: (machineId: string, path: string) => Promise<FoundSkillBundleV1>) {
   // These in-memory ports stand for the independently committed Artifact/row/session stores.
   const artifacts = new Map<string, PromptLibraryStoredArtifact>();
@@ -446,33 +466,18 @@ describe('skill library Actions', () => {
     expect(h.artifacts.get('skill-1')!.revision).toEqual({ headerVersion: 2, bodyVersion: 2 });
   });
   it('consumes a real root GitHub producer, pins install bytes and preserves Modified edits through link choices', async () => {
-    const initial = '1'.repeat(40), latest = '2'.repeat(40); let head = initial;
-    const original = [{ path: 'SKILL.md', unixMode: 0o644 as const, bytes: new TextEncoder().encode(markdown) }];
-    const upstream = [{ ...original[0]!, bytes: new TextEncoder().encode(markdown + '\nUpstream') }];
-    const source: RegistrySourceDescriptorV1 = { id: 'repo', title: 'Repo', format: 'git', kinds: ['skill'], url: 'https://github.com/a/b', enabled: true, addedAt: 0, origin: { kind: 'user' }, removable: true };
-    const atUrl = (url: string) => url.includes(latest) ? upstream : original;
-    const http: RegistryHttpV1 = {
-      getJson: async url => {
-        if (url.includes('marketplace.json')) return { ok: false, status: { state: 'unreachable' } };
-        if (url.includes('/commits/')) return { ok: true, fetchedAt: 1, value: { sha: url.endsWith('/HEAD') ? head : decodeURIComponent(url.split('/').at(-1)!) } };
-        if (url.includes('/git/trees/')) { const files = atUrl(url); return { ok: true, fetchedAt: 1, value: { sha: computeGitTreeShaV1(files), tree: files.map(file => ({ path: file.path, mode: '100644', type: 'blob', sha: computeGitBlobShaV1(file.bytes), size: file.bytes.length })) } }; }
-        return { ok: true, fetchedAt: 1, value: { name: 'b' } };
-      },
-      getText: async url => ({ ok: true, fetchedAt: 1, value: new TextDecoder().decode(atUrl(url)[0]!.bytes) }),
-      getBytes: async url => ({ ok: true, fetchedAt: 1, value: atUrl(url)[0]!.bytes }),
-    };
-    const registry = createRegistryHostV1({ host: 'node', http, readSources: async () => [source] });
+    const { initial, latest, source, registry, setHead } = gitRegistryHarness();
     const producer = await registry.fetchRequest({ op: 'read', kind: 'skill', sourceId: 'repo', itemId: '' });
     if (producer.op !== 'read' || producer.item.payload.kind !== 'skill') throw new Error('Expected registry skill read');
     expect(producer.item.payload.skill.ref.repo).toBe(source.url);
-    head = latest; const h = harness(registry);
+    setHead(latest); const h = harness(registry);
     const install = await h.execute('skills.install', { source: { kind: 'registry', sourceId: 'repo', itemId: '', version: producer.item.summary.version } }, { surface: 'ui' });
     expect(install).toMatchObject({ skillIds: ['skill-1'] });
     expect(readSkillLockV1(h.artifacts.get('skill-1')!.header).provenance).toMatchObject({ kind: 'registry', registry: { itemId: '', ref: { commit: initial } } });
     expect(JSON.parse(h.artifacts.get('skill-1')!.body!).entries).toMatchObject(files);
     // Start the link-update scenario in its own library; Add now reuses the registry identity above.
     const linked = harness(registry);
-    head = initial;
+    setHead(initial);
     await linked.execute('skills.install', { source: { kind: 'link', url: source.url } }, { surface: 'ui' });
     await linked.execute('skills.update', { skillId: 'skill-1', expectedRevision: '1:1', files: [{ kind: 'upsert', file: { ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64') } }] }, { surface: 'ui' });
     const artifact = linked.artifacts.get('skill-1')!, lock = readSkillLockV1(artifact.header);
@@ -487,6 +492,49 @@ describe('skill library Actions', () => {
     const listed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await linked.execute('skills.list', {}, { surface: 'ui' }));
     expect(listed.items.find(item => item.skillId === 'skill-1')).toMatchObject({ modified: true, upstream: { state: 'current' } });
     expect(linked.artifacts.get('skill-1')!.body).toContain(encodeBase64(new TextEncoder().encode(markdown + '\nMine'), 'base64'));
+  });
+  it.each(['manual', 'auto'] as const)('preserves %s policy through settings read/save and a later upstream head', async updatePolicy => {
+    const { initial, latest, source, registry, setHead } = gitRegistryHarness();
+    const h = harness(registry), caller = { surface: 'ui' as const };
+    const installed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(await h.execute('skills.install', {
+      source: { kind: 'registry', sourceId: source.id, itemId: '', version: initial },
+    }, caller));
+    if (!('skillIds' in installed)) throw new Error('Expected committed skill');
+    const skillId = installed.skillIds[0]!;
+    await h.execute('skills.update', { skillId, expectedRevision: '1:1', updatePolicy }, caller);
+    const listItem = async (state?: 'updates') => {
+      const result = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(await h.execute('skills.list', state ? { state } : {}, caller));
+      const item = result.items.find(item => item.skillId === skillId);
+      if (!item) throw new Error('Expected listed skill');
+      return item;
+    };
+    const settings = await listItem();
+    const content = SkillReadResultV1Schema.parse(await readSkillInLibrary({ store: h.store, request: { skillId, includeFileContents: true } }));
+    const before = readSkillLockV1(h.artifacts.get(skillId)!.header);
+    expect(settings).toMatchObject({ updatePolicy, modified: false, provenance: { kind: 'registry', registry: { ref: { commit: initial } } } });
+    const saved = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.update'].parse(await h.execute('skills.update',
+      SKILL_ACTION_INPUT_SCHEMAS_V1['skills.update'].parse({ skillId, expectedRevision: content.revision,
+        updatePolicy: settings.updatePolicy, description: settings.description,
+        files: content.fileContents!.map(file => ({ kind: 'upsert', file })) }), caller));
+    expect(readSkillLockV1(h.artifacts.get(skillId)!.header)).toEqual(before);
+    expect(await listItem()).toMatchObject({ updatePolicy, revision: saved.revision, modified: false });
+
+    setHead(latest);
+    const producer = await registry.fetchRequest({ op: 'read', kind: 'skill', sourceId: source.id, itemId: '' });
+    if (producer.op !== 'read' || producer.item.payload.kind !== 'skill') throw new Error('Expected latest registry skill');
+    expect(producer.item.payload.skill.ref.commit).toBe(latest);
+    const observed = await h.execute.recordRegistryUpstream(skillId, { state: 'update_available', latest: producer.item.payload.skill.ref });
+    expect(observed).toMatchObject({ updatePolicy, modified: false, upstream: { state: 'update_available' } });
+    expect(await listItem('updates')).toMatchObject({ updatePolicy, modified: false, upstream: { latest: { commit: latest } } });
+    const diff = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.diff'].parse(await h.execute('skills.updates.diff', { skillId }, caller));
+    expect(diff.files).toMatchObject([{ path: 'SKILL.md', changed: true }]);
+    const applied = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.apply'].parse(await h.execute('skills.updates.apply',
+      { skillId, expectedRevision: observed!.revision }, caller));
+    expect(applied.provenance).toMatchObject({ kind: 'registry', registry: { ref: { commit: latest } } });
+    expect(await listItem()).toMatchObject({ updatePolicy, revision: applied.revision, modified: false, upstream: { state: 'current' } });
+    const resolved = SkillReadResultV1Schema.parse(await readSkillInLibrary({ store: h.store, request: { skillId } }));
+    expect(resolved.skillMd).toBe(markdown + '\nUpstream');
+    expect(readSkillLockV1(h.artifacts.get(skillId)!.header).importedDigest).not.toBe(before.importedDigest);
   });
   it('previews multiple uploaded skill folders and preserves acknowledged identities if a later content write fails', async () => {
     const h = harness(), source = { kind: 'upload', files: [...files.map(file => ({ ...file, path: 'one/' + file.path })), ...files.map(file => ({ ...file, path: 'two/' + file.path, contentBase64: encodeBase64(new TextEncoder().encode(markdown.replace('name: sample', 'name: other')), 'base64') }))] };

@@ -496,7 +496,18 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
               { sourceId: pointer.sourceId, itemId: pointer.itemId, version: pointer.version });
             previews = await withSourceSiblingPreviews([primary], input.selectPaths, signal); }
           else { if (!port.readLinkSkills) return fail('unsupported_source'); const url = input.source.url;
-            previews = await withSourceSiblingPreviews(await Promise.all((await port.readLinkSkills(url)).map(item => {
+            const readLinkSkills = port.readLinkSkills;
+            const items = input.source.refs ? await Promise.all(input.source.refs
+              .filter(ref => !input.selectPaths || input.selectPaths.includes(ref.path))
+              .map(async ref => {
+                const item = (await readLinkSkills(url, ref)).find(item => item.payload.kind === 'skill'
+                  && item.payload.skill.ref.path === ref.path);
+                if (!item || item.payload.kind !== 'skill' || item.payload.skill.ref.repo !== ref.repo
+                  || item.payload.skill.ref.commit !== ref.commit || item.payload.skill.ref.treeSha !== ref.treeSha)
+                  return fail('registry_version_mismatch');
+                return item;
+              })) : await readLinkSkills(url);
+            previews = await withSourceSiblingPreviews(await Promise.all(items.map(item => {
               if (item.payload.kind !== 'skill') return fail('unsupported_source');
               return preview(item, { kind: 'link', url, ref: item.payload.skill.ref }, url);
             })), input.selectPaths, signal); }

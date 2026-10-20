@@ -6,6 +6,7 @@ import {
   type SkillInstallPreviewV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { DEFAULT_CREATE_REACH_CHANGE_V1, type ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
+import type { RegistryContentRefV1 } from '@happier-dev/protocol/registries/registryItemsV1';
 
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import { readRegistryFailureStatus, type RegistryFailureStatus } from '@/registries/describeRegistrySourceStatus';
@@ -18,7 +19,7 @@ export type SkillInstallSource =
       itemId: string;
       version: string;
     }>
-  | Readonly<{ kind: 'link'; url: string }>
+  | Readonly<{ kind: 'link'; url: string; refs?: readonly Extract<RegistryContentRefV1, { kind: 'gitTree' }>[] }>
   | Readonly<{ kind: 'upload'; files: readonly SkillFileInputV1[] }>;
 
 /** What one add produced: the created skills, and the ones whose rules were not written (IR-70 partial result). */
@@ -96,7 +97,7 @@ export async function previewSkillInstall(
   execute: MountedAuthoringActionExecute,
   source: SkillInstallSource,
 ): Promise<
-  | Readonly<{ ok: true; items: readonly SkillInstallPreviewV1[] }>
+  | Readonly<{ ok: true; items: readonly SkillInstallPreviewV1[]; source: SkillInstallSource }>
   | Readonly<{ ok: false; error: string; status?: RegistryFailureStatus }>
 > {
   const result = await execute('skills.install', { source, dryRun: true });
@@ -106,11 +107,17 @@ export async function previewSkillInstall(
   );
   if (!parsed.success || !('items' in parsed.data))
     return { ok: false, error: 'skill_install_failed' };
+  const items = parsed.data.items.map((item) => SkillInstallPreviewV1Schema.parse(item));
+  const refs = items.map(item => {
+    const provenance = item.provenance;
+    const ref = provenance.kind === 'link' ? provenance.ref : provenance.kind === 'registry' ? provenance.registry.ref : null;
+    return ref?.kind === 'gitTree' ? ref : null;
+  });
+  if (source.kind === 'link' && refs.some(ref => ref === null)) return { ok: false, error: 'skill_preview_pin_missing' };
   return {
     ok: true,
-    items: parsed.data.items.map((item) =>
-      SkillInstallPreviewV1Schema.parse(item),
-    ),
+    items,
+    source: source.kind === 'link' ? { ...source, refs: refs.filter(ref => ref !== null) } : source,
   };
 }
 

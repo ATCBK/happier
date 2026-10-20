@@ -2,7 +2,7 @@ import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { AgentIdV1Schema } from '../../../agents/agentIdV1.js';
 import { ReachRulesChangeV1Schema } from '../../../reach/reachRulesChangeV1.js';
-import { RegistryItemPointerV1Schema } from '../../../registries/registryItemsV1.js';
+import { RegistryContentRefV1Schema, RegistryItemPointerV1Schema } from '../../../registries/registryItemsV1.js';
 import { SkillCostV1Schema } from './skillCostV1.js';
 import { SkillTrustV1Schema } from './skillTrustV1.js';
 import { SkillListItemV1Schema, SkillUnavailableItemV1Schema, SkillProvenanceV1Schema, SkillRevisionV1Schema } from './skillLibraryItemV1.js';
@@ -33,7 +33,9 @@ export const SkillInstallPreviewV1Schema = lazyZodSchema(() => z.strictObject({ 
 export type SkillInstallPreviewV1 = z.infer<typeof SkillInstallPreviewV1Schema>;
 export const SkillInstallSourceV1Schema = lazyZodSchema(() => z.union([
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RegistryItemPointerV1Schema, { kind: z.literal('registry') })),
-  z.strictObject({ kind: z.literal('link'), url: z.string().check(z.url()) }),
+  z.strictObject({ kind: z.literal('link'), url: z.string().check(z.url()),
+    /** The exact skill trees returned by the reviewed preview, including multi-repository links. */
+    refs: z.optional(z.array(RegistryContentRefV1Schema._zod.def.options[0])) }),
   z.strictObject({ kind: z.literal('upload'), files: z.array(SkillFileInputV1Schema) }),
 ]));
 const changeResult = lazyZodSchema(() => z.strictObject({ revision: SkillRevisionV1Schema }));

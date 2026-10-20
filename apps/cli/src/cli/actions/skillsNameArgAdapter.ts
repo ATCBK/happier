@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sameStoredCredentials } from '@/persistence';
 import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 as outputs, SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 as outputs, SkillFoundListResultV1Schema, SkillInstallSourceV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 import { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/registries';
 import { argvBeforeOptionTerminator } from '@/cli/commands/shared/argvFlags';
@@ -89,6 +89,10 @@ export async function tryHandleSkillsCliCommand(params: Readonly<{ argv: readonl
   } else if (command.actionId === 'skills.install') {
     if (typeof caller.source !== 'string') throw new Error('Supply a source.');
     let source = await readSkillSourceArgV1(caller.source);
+    if (caller.refs !== undefined) {
+      if (source.kind !== 'link') throw new Error('Reviewed Git refs require a link source.');
+      source = SkillInstallSourceV1Schema.parse({ ...source, refs: caller.refs });
+    }
     if (source.kind === 'registryUnpinned') {
       const pinned = source;
       let version: string | undefined;

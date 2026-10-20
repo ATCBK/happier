@@ -13,7 +13,7 @@ import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourc
 import { t } from '@/text';
 
 import { previewRef } from './SkillPreviewRows';
-import { previewSkillInstall } from './skillInstall';
+import { previewSkillInstall, type SkillInstallSource } from './skillInstall';
 import { SkillFoundAdd } from './SkillFoundAdd';
 
 /**
@@ -39,12 +39,12 @@ export function SkillLinkInput(
   const [state, setState] = React.useState<
     | Readonly<{ kind: 'idle' }>
     | Readonly<{ kind: 'finding' }>
-    | Readonly<{ kind: 'found'; url: string; items: readonly SkillInstallPreviewV1[] }>
+    | Readonly<{ kind: 'found'; url: string; source: SkillInstallSource; items: readonly SkillInstallPreviewV1[] }>
     | Readonly<{ kind: 'error'; message: string }>
   >({ kind: 'idle' });
 
   const find = React.useCallback(async () => {
-    const link = url.trim();
+    const link = url.trim().replace(/^npx\s+skills\s+add\s+/, '');
     if (!/^https:\/\/\S+$/.test(link)) {
       setState({ kind: 'error', message: t('capabilities.skillAdd.link.invalid') });
       return;
@@ -59,7 +59,7 @@ export function SkillLinkInput(
       });
       return;
     }
-    setState({ kind: 'found', url: link, items: preview.items });
+    setState({ kind: 'found', url: link, source: preview.source, items: preview.items });
   }, [props.ctx, props.execute, url]);
 
   const found = state.kind === 'found' ? state : null;
@@ -102,7 +102,7 @@ export function SkillLinkInput(
       key={found?.url ?? ''}
       ctx={props.ctx}
       execute={props.execute}
-      source={found ? { kind: 'link', url: found.url } : null}
+      source={found?.source ?? null}
       items={found?.items ?? null}
       groupTitle={t('capabilities.skillAdd.link.chooseWhich')}
       field={field}

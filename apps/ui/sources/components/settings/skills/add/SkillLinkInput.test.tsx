@@ -28,6 +28,9 @@ vi.mock('@/utils/platform/responsive', async (importOriginal) => {
   return { ...actual, useDeviceType: () => device.current };
 });
 
+const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
+const { SkillLinkInput } = await import('./SkillLinkInput');
+
 afterEach(() => {
   standardCleanup();
   device.current = 'tablet';
@@ -68,9 +71,7 @@ type Callbacks = Readonly<{ onAdded?: (id: string) => void; onSelectAdded?: (id:
  * The Link mode inside the real Add dialog body (the one list + details owner), as the Skills page opens it. Only the
  * Action transport (`execute`) and the device class are boundaries.
  */
-async function renderLink(answer: MountedAuthoringActionExecute, callbacks: Callbacks = {}) {
-  const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
-  const { SkillLinkInput } = await import('./SkillLinkInput');
+async function renderLink(answer: MountedAuthoringActionExecute, callbacks: Callbacks = {}, link = 'https://github.com/acme/agent-skills') {
   const onClose = vi.fn();
   const config = {
     title: 'Add a skill',
@@ -101,7 +102,7 @@ async function renderLink(answer: MountedAuthoringActionExecute, callbacks: Call
   };
   const screen = await renderScreen(<CapabilityAddModalBody config={config as never} onClose={onClose} />);
   await act(async () => {
-    screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills');
+    screen.changeTextByTestId('link.url', link);
   });
   await screen.pressByTestIdAsync('link.find');
   /** Open a found row as its press does: through the Collection model's own open action. */
@@ -155,6 +156,23 @@ function footerDirection(screen: Awaited<ReturnType<typeof renderFailedAdd>>) {
 }
 
 describe('SkillLinkInput footer', () => {
+  it('treats a pasted skills add command as link text for both preview and install', async () => {
+    const calls: unknown[] = [];
+    const answer: MountedAuthoringActionExecute = async (_actionId, input) => {
+      calls.push(input);
+      return (input as { dryRun?: boolean }).dryRun
+        ? { ok: true, result: { items: [PREVIEW] } }
+        : { ok: true, result: { skillIds: ['skill-new'], includedInSessionId: null } };
+    };
+    const { screen } = await renderLink(answer, {}, '  npx skills add https://github.com/acme/agent-skills  ');
+    expect(calls[0]).toEqual({ source: { kind: 'link', url: 'https://github.com/acme/agent-skills' }, dryRun: true });
+    await screen.pressByTestIdAsync('link.add');
+    expect(calls).toEqual([
+      { source: { kind: 'link', url: 'https://github.com/acme/agent-skills' }, dryRun: true },
+      { source: { kind: 'link', url: 'https://github.com/acme/agent-skills', refs: [PREVIEW.provenance.ref] } },
+    ]);
+  });
+
   it('keeps every acknowledged skill and retries only the remaining sibling rules', async () => {
     const calls: { actionId: string; input: unknown }[] = [];
     let remainingFails = true;
@@ -198,7 +216,9 @@ describe('SkillLinkInput footer', () => {
 });
 
 describe('SkillLinkInput details (G8)', () => {
-  const second = { ...PREVIEW, path: 'skills/to-prd', name: 'to-prd', description: 'Turn the talk into a PRD.' };
+  const second = { ...PREVIEW, path: 'skills/to-prd', name: 'to-prd', description: 'Turn the talk into a PRD.',
+    provenance: { ...PREVIEW.provenance, ref: { ...PREVIEW.provenance.ref, path: 'skills/to-prd', treeSha: 'c'.repeat(40) } } };
+  const source = { kind: 'link', url: 'https://github.com/acme/agent-skills', refs: [PREVIEW.provenance.ref, second.provenance.ref] };
   async function renderPair() {
     const installs: Record<string, unknown>[] = [];
     const answer: MountedAuthoringActionExecute = async (_actionId, input) => {
@@ -224,7 +244,7 @@ describe('SkillLinkInput details (G8)', () => {
     });
     await pressPrimary();
     expect(installs).toEqual([
-      { source: { kind: 'link', url: 'https://github.com/acme/agent-skills' }, selectPaths: ['skills/to-prd'], where: narrowed },
+      { source, selectPaths: ['skills/to-prd'], where: narrowed },
     ]);
     expect(onClose).toHaveBeenCalled();
     expect(selected).toEqual(['skill-new']);
@@ -234,7 +254,7 @@ describe('SkillLinkInput details (G8)', () => {
     const { open, pressPrimary, installs } = await renderPair();
     await open('skills/grill-me');
     await pressPrimary();
-    expect(installs).toEqual([{ source: { kind: 'link', url: 'https://github.com/acme/agent-skills' }, selectPaths: ['skills/grill-me'] }]);
+    expect(installs).toEqual([{ source, selectPaths: ['skills/grill-me'] }]);
   });
 
   it('ticks with the box, not the row, and the checklist footer adds the ticked set without a Where', async () => {
@@ -242,7 +262,7 @@ describe('SkillLinkInput details (G8)', () => {
     await (await row(PREVIEW)).pressByTestIdAsync('link.item.grill-me.tick');
     expect(screen.findByTestId('link.detail.title')).toBeNull();
     await screen.pressByTestIdAsync('link.add');
-    expect(installs).toEqual([{ source: { kind: 'link', url: 'https://github.com/acme/agent-skills' }, selectPaths: ['skills/to-prd'] }]);
+    expect(installs).toEqual([{ source, selectPaths: ['skills/to-prd'] }]);
   });
 });
 
