@@ -19,8 +19,10 @@ installPopoverCommonModuleMocks({
 // Resolve the real web graph before the timed DOM/portal interaction begins.
 const { PopoverScope } = await import('@/components/ui/popover');
 const { SessionListFilterEditorControl } = await import('./SessionListFilterEditorControl');
+const { buildSessionListFilterEditorLabels } = await import('./SessionListFilterControl');
 
 const labels = {
+    ...buildSessionListFilterEditorLabels(),
     search: 'Search filters', show: 'Show', myWork: 'My work', assignedToMe: 'Assigned to me',
     scope: 'Scope', sessions: 'Sessions', runs: 'Runs', both: 'Both', startedBy: 'Started by',
     startedByYou: 'You', startedByTriggers: 'Triggers', startedByAgents: 'Agents',

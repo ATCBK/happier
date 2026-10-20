@@ -376,13 +376,15 @@ describe('sessionListFilterEditorModel', () => {
         it('builds "failing sessions in payments" from Project and Work-status choices', () => {
             const defaults = createSessionListViewFilterDefaults({ homeServerIds: ['home-a'] });
             const model = build(defaults);
-            expect(section(model, 'status')?.kind === 'static' && section(model, 'status')?.options.map((option) => option.label))
+            const status = section(model, 'status');
+            const projects = section(model, 'projects');
+            expect(status?.kind === 'static' && status.options.map((option) => option.label))
                 .toEqual(['Working', 'Needs you', 'Failed', 'Idle', 'Offline']);
             // Only the selected Homes' projects are choices.
-            expect(section(model, 'projects')?.kind === 'static' && section(model, 'projects')?.options.map((option) => option.label))
+            expect(projects?.kind === 'static' && projects.options.map((option) => option.label))
                 .toEqual(['payments', 'happier']);
 
-            const projectOption = section(model, 'projects')?.kind === 'static' ? section(model, 'projects')!.options[0]!.id : '';
+            const projectOption = projects?.kind === 'static' ? projects.options[0]!.id : '';
             const withProject = reduceSessionListFilterEditorSelection(defaults, projectOption);
             const failing = reduceSessionListFilterEditorSelection(withProject, 'status:failed');
             expect(failing.projects).toEqual({ include: [payments], exclude: [] });
@@ -412,7 +414,8 @@ describe('sessionListFilterEditorModel', () => {
                 projects: { include: [payments, { serverId: 'home-a', projectKey: 'forgotten' }], exclude: [] },
             });
             const model = build(defaults);
-            const options = section(model, 'projects')?.kind === 'static' ? section(model, 'projects')!.options : [];
+            const projects = section(model, 'projects');
+            const options = projects?.kind === 'static' ? projects.options : [];
             // A retained project that this Home no longer lists stays a selected, removable choice.
             const forgotten = options.find((option) => option.label === 'forgotten');
             expect(forgotten && model.selection.selectedIds.has(forgotten.id)).toBe(true);

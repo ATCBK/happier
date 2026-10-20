@@ -45,6 +45,8 @@ const labels = {
     startedByYou: 'You', startedByTriggers: 'Triggers', startedByAgents: 'Agents',
     runsNeedingYouAlwaysShow: 'Runs that need you always show',
     onlyCoordinators: 'Only coordinators', onlyCoordinatorsDescription: 'Sessions coordinating other work',
+    status: 'Status', statusWorking: 'Working', statusNeedsYou: 'Needs you', statusFailed: 'Failed', statusIdle: 'Idle', statusOffline: 'Offline',
+    project: 'Project', projectIs: 'Is', projectIsNot: "Isn't",
 } as const;
 
 type HarnessOverrides = Partial<SessionListFilterEditorProps>;
