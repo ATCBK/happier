@@ -282,6 +282,7 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
             if (stopped) return stopped;
             const validation = validateSource({ source: request.source, env: readEnv() });
             if (!validation.ok) return validation;
+            if (request.includeAccountingSource === false) return ok({ source: validation.value.publicSource });
             const rootPath = resolveClaudeConfigDir({ source: validation.value.legacySource, env: readEnv() });
             const inventory = await discoverAgentAccountingJsonlSource([join(rootPath, 'projects')], request.signal);
             return ok({ source: validation.value.publicSource, accountingSource: {

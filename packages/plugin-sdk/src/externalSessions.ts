@@ -289,6 +289,9 @@ export type AgentExternalSessionTerminalObservation = Readonly<{
 
 export type AgentExternalSessionsResolveSourceRequest = AgentExternalSessionsInvocation & Readonly<{
     source: AgentExternalSessionSource;
+    /** Source admission alone needs no accounting inventory. Omission retains
+     * accounting discovery; older contributions may safely ignore false. */
+    includeAccountingSource?: boolean;
 }>;
 export type AgentExternalSessionsResolveSourceResult = Readonly<{
     source: AgentExternalSessionSource;

@@ -300,6 +300,10 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         invocation: request,
       });
       if (!mediaReadRoots.ok) return mediaReadRoots;
+      if (request.includeAccountingSource === false) return bounded({
+        source: validation.value.publicSource,
+        transcriptMediaReadRoots: mediaReadRoots.value,
+      }, request.maxSerializedBytes, 'Codex source result cannot fit the result byte bound.');
       const roots = mediaReadRoots.value.flatMap((home) => [join(home, 'sessions'), join(home, 'archived_sessions')]);
       const inventory = await discoverAgentAccountingJsonlSource(roots, request.signal);
       return bounded(

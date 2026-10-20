@@ -1229,7 +1229,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             if (terminal) return terminal;
             const parsedSource = parseSource(request.source);
             const maxSerializedBytes = request.maxSerializedBytes === undefined ? undefined : readMaxSerializedBytes(request.maxSerializedBytes);
-            if (!parsedSource || maxSerializedBytes === null) return invalidRequest();
+            if (!parsedSource || maxSerializedBytes === null
+                || (request.includeAccountingSource !== undefined && typeof request.includeAccountingSource !== 'boolean')) return invalidRequest();
             return await invokeBounded({
                 signal: request.signal,
                 retirementSignal: params.retirementSignal,
@@ -1243,6 +1244,7 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                     );
                     return await params.contribution.resolveSource({
                         source: parsedSource,
+                        ...(request.includeAccountingSource === undefined ? {} : { includeAccountingSource: request.includeAccountingSource }),
                         signal,
                         deadlineAtMs,
                         maxSerializedBytes,

@@ -45,6 +45,17 @@ const ENV_KEYS = [
   'PI_CODING_AGENT_SESSION_DIR',
 ] as const;
 
+const sourceInventoryReads = vi.hoisted(() => [] as string[]);
+// Filesystem enumeration is the boundary: keep source admission, the registered
+// contribution, link metadata and transport logic real.
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, opendir: (...args: Parameters<typeof actual.opendir>) => {
+    sourceInventoryReads.push(String(args[0]));
+    return actual.opendir(...args);
+  } };
+});
+
 type LinkIdentityProbe = Readonly<{
   source: Record<string, unknown>;
   remoteSessionId: string;
@@ -358,6 +369,12 @@ describe('first-party Agent link identities and host owner metadata', () => {
           const listed = await surface.listCandidates!({ source: ExternalSessionsSourceSchema.parse(source), limit: 5 });
           return listed.candidates;
         } });
+        sourceInventoryReads.length = 0;
+        const admitted = await surface.validateSource!({ source: ExternalSessionsSourceSchema.parse(probe.source) });
+        expect(admitted.ok).toBe(true);
+        // Opening one known conversation must not enumerate accounting history
+        // before reaching the indexed-link or transcript reader.
+        expect(sourceInventoryReads).toEqual([]);
         const controller = new AbortController();
         let outcome: unknown;
         completed = runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () => ensureExternalSessionLink({

@@ -149,6 +149,7 @@ export function createAgentExternalSessionsExecutionSurface(
         async validateSource(request) {
             const result = unwrap('resolveSource', await contribution.resolveSource({
                 source: toAgentSource(request.source, 'resolveSource'),
+                includeAccountingSource: false,
                 ...invocation(
                     undefined,
                     request.signal,

@@ -1292,6 +1292,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       if (stopped) return stopped;
       const resolved = resolvePiSource({ source: request.source, env: readEnv() });
       if (!resolved.ok) return resolved;
+      if (request.includeAccountingSource === false) return ok({ source: resolved.value.source });
       const inventory = await discoverAgentAccountingJsonlSource([resolved.value.sessionsRoot], request.signal);
       return ok({ source: resolved.value.source, accountingSource: {
         accountingSources: [PI_NATIVE_ACCOUNTING_SOURCE],
