@@ -33,6 +33,7 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES: readonly string[] = Objec
   "@happier-dev/plugins-auggie",
   "@happier-dev/plugins-channel-discord",
   "@happier-dev/plugins-channel-email",
+  "@happier-dev/plugins-channel-slack",
   "@happier-dev/plugins-channel-telegram",
   "@happier-dev/plugins-channels",
   "@happier-dev/plugins-claude",
@@ -55,6 +56,7 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES: readonly string[] = Objec
   "@happier-dev/plugins-kilo",
   "@happier-dev/plugins-kimi",
   "@happier-dev/plugins-kiro",
+  "@happier-dev/plugins-lang-typescript",
   "@happier-dev/plugins-linear",
   "@happier-dev/plugins-lmstudio",
   "@happier-dev/plugins-machine-boat",
@@ -130,6 +132,13 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_METADATA: readonly BundledFirstPartyPlug
     "packageVersion": "0.0.0",
     "pluginId": "happier.channel.email",
     "pluginPackageId": "channel-email"
+  },
+  {
+    "manifestPath": "bundled:happier.channel.slack",
+    "packageName": "@happier-dev/plugins-channel-slack",
+    "packageVersion": "0.0.0",
+    "pluginId": "happier.channel.slack",
+    "pluginPackageId": "channel-slack"
   },
   {
     "manifestPath": "bundled:happier.channel.telegram",
@@ -298,6 +307,13 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_METADATA: readonly BundledFirstPartyPlug
     "packageVersion": "0.0.0",
     "pluginId": "happier.agent.kiro",
     "pluginPackageId": "kiro"
+  },
+  {
+    "manifestPath": "bundled:happier.language.typescript",
+    "packageName": "@happier-dev/plugins-lang-typescript",
+    "packageVersion": "0.0.0",
+    "pluginId": "happier.language.typescript",
+    "pluginPackageId": "lang-typescript"
   },
   {
     "manifestPath": "bundled:happier.linear",
@@ -619,6 +635,19 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly BundledFirstPartyPlug
     }),
   }),
   Object.freeze({
+    pluginId: "happier.channel.slack",
+    manifestRelativePath: "assets/bundled-plugin-manifests/channel-slack.json",
+    manifestPath: "bundled:happier.channel.slack",
+    daemonEntryPath: "@happier-dev/plugins-channel-slack",
+    sourceSpec: Object.freeze({
+      kind: 'bundled',
+      locator: "@happier-dev/plugins-channel-slack",
+      trustPolicy: 'local_trusted',
+      installPolicy: 'link',
+      resolvedVersion: "0.0.0",
+    }),
+  }),
+  Object.freeze({
     pluginId: "happier.channel.telegram",
     manifestRelativePath: "assets/bundled-plugin-manifests/channel-telegram.json",
     manifestPath: "bundled:happier.channel.telegram",
@@ -899,6 +928,19 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly BundledFirstPartyPlug
     sourceSpec: Object.freeze({
       kind: 'bundled',
       locator: "@happier-dev/plugins-kiro",
+      trustPolicy: 'local_trusted',
+      installPolicy: 'link',
+      resolvedVersion: "0.0.0",
+    }),
+  }),
+  Object.freeze({
+    pluginId: "happier.language.typescript",
+    manifestRelativePath: "assets/bundled-plugin-manifests/lang-typescript.json",
+    manifestPath: "bundled:happier.language.typescript",
+    daemonEntryPath: null,
+    sourceSpec: Object.freeze({
+      kind: 'bundled',
+      locator: "@happier-dev/plugins-lang-typescript",
       trustPolicy: 'local_trusted',
       installPolicy: 'link',
       resolvedVersion: "0.0.0",
