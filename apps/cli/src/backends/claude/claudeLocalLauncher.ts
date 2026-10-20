@@ -388,6 +388,7 @@ export async function claudeLocalLauncher(
                 process.env.HAPPIER_E2E_PROVIDERS === '1' || process.env.HAPPY_E2E_PROVIDERS === '1';
             const pendingGateStartMs = configuration.startupTimingEnabled ? Date.now() : null;
             const discardResult = await discardQueuedAndPendingForLocalSwitch({
+                signal: processAbortController.signal,
                 queue: session.queue,
                 getServerPendingCount: () => session.client.peekPendingMessageQueueV2Count({ reconcileWhenEmpty: 'force', reason: 'manual-check' }),
                 discardServerPending: () =>
@@ -413,7 +414,7 @@ export async function claudeLocalLauncher(
             }
 
             if (discardResult !== 'proceed') {
-                return { type: 'switch' };
+                return exitReason ?? { type: 'switch' };
             }
         }
 
