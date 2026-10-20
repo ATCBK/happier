@@ -99,8 +99,8 @@ export function resolveActionIdFamilySettingsFamily(family: ActionIdFamilyV1): A
 }
 
 /** The user-facing name of one protocol Action family (API token grants choose these). */
-export function actionIdFamilyTitleKey(family: ActionIdFamilyV1): `actionFamilies.${ActionIdFamilyV1}` {
-    return `actionFamilies.${family}`;
+export function actionIdFamilyTitleKey(family: ActionIdFamilyV1): 'friends.title' | `actionFamilies.${Exclude<ActionIdFamilyV1, 'friends'>}` {
+    return family === 'friends' ? 'friends.title' : `actionFamilies.${family}`;
 }
 
 function buildActionIdFamilyIndex(): ReadonlyMap<ActionId, ActionSettingsFamily> {
