@@ -815,6 +815,7 @@ export {
 export {
   formatHappierAsOfTime,
   resolveHappierFreshnessText,
+  type HappierFreshnessTextParts,
 } from './state/asOfTime.js';
 export {
   HAPPIER_SCENE_ART_METRICS,
