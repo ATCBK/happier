@@ -13,6 +13,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
 
 import { openActionOperationDetail } from './openActionOperationDetail';
+import { openProjectCommandOutputPage } from './ProjectCommandOutputPage';
 import { readActionOperationOutputAttachment, readProjectCommandOutputWorkspace } from './actionOperationDetailPresentation';
 
 /**
@@ -42,6 +43,10 @@ export type ProjectCommandOutputOpenOptions = Readonly<{
   title: string;
   /** Opening on the user's own Run waits for the tab only; it never pops the detail by itself. */
   fallbackToDetail?: boolean;
+  /** The command's own name ("test", "Setup"), titling its phone output page; defaults to `title`. */
+  name?: string;
+  /** What runs, as declared, for the phone output page. */
+  command?: string | null;
 }>;
 
 function scopeServerId(scopeId: string): string | null {
@@ -92,7 +97,8 @@ export function useProjectCommandOutputDocked(attachment: OutputTerminalRef | nu
 /**
  * Opens a project command's output where its host shows terminals: the same PTY as a borrowed,
  * read-only bottom terminal tab, focused when it is already open there. Opening or closing the tab
- * never ensures, restarts or stops the process. Otherwise it opens the operation detail.
+ * never ensures, restarts or stops the process. On a phone a project command opens its output page;
+ * otherwise it opens the operation detail.
  */
 export function useProjectCommandOutputOpener() {
   const scopeId = React.useContext(ProjectCommandOutputHostContext);
@@ -131,7 +137,14 @@ export function useProjectCommandOutputOpener() {
             return;
           }
         }
-        if (options.fallbackToDetail !== false) openActionOperationDetail({
+        if (options.fallbackToDetail === false) return;
+        // A phone has no bottom terminal: a project command's output is its own page (lab OUTPUTp).
+        if (phone && attachment?.kind === 'projectCommand') {
+          openProjectCommandOutputPage({ serverId: operation.serverId, operationId: operation.snapshot.operationId,
+            name: options.name ?? options.title, command: options.command ?? null });
+          return;
+        }
+        openActionOperationDetail({
           serverId: operation.serverId, operationId: operation.snapshot.operationId,
         });
       };
@@ -149,6 +162,7 @@ export function useProjectCommandOutputOpener() {
     },
     [execute, phone, scopeId],
   );
-  // Desktop hosts with a bottom terminal open output there; elsewhere it opens the operation detail.
+  // Desktop hosts with a bottom terminal open output there; a phone opens a project command's output
+  // page; elsewhere it opens the operation detail.
   return { open, opensInTerminal: scopeId !== null && !phone } as const;
 }

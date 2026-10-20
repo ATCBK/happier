@@ -5,6 +5,7 @@ import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/worksp
 import type { WorkspaceSyncRelationshipSummary } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
 import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
@@ -32,9 +33,15 @@ vi.mock('@/utils/platform/responsive', async (importOriginal) => {
   return { ...actual, useDeviceType: () => device.current ?? actual.useDeviceType() };
 });
 
-import { ProjectScriptRow } from './ProjectScriptRow';
+// Machine RPC is the external boundary; the output Action, its custody check and presentation stay real.
+const outputRpc = vi.hoisted(() => vi.fn());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: outputRpc }));
 
-afterEach(() => { standardCleanup(); modal.show.mockClear(); device.current = null; });
+import { ProjectScriptRow } from './ProjectScriptRow';
+import { ProjectCommandOutputPage } from '@/components/inbox/actionOperations/ProjectCommandOutputPage';
+import { ActionOperationDetailModal } from '@/components/inbox/actionOperations/ActionOperationDetailModal';
+
+afterEach(() => { standardCleanup(); modal.show.mockClear(); outputRpc.mockReset(); device.current = null; });
 
 describe('Script row title line', () => {
   const workspace: WorkspaceAddressV1 = { serverId: 'home', machineId: 'machine', workspaceId: 'ws', rootPath: '/repo' };
@@ -153,5 +160,41 @@ describe('A new machine created for this Run', () => {
     expect(handlers.onResume).toHaveBeenCalledTimes(1);
     expect(screen.findByTestId('script.managed.cancel')).toBeNull();
     await screen.unmount();
+  });
+});
+
+describe('Script output on a phone', () => {
+  it('opens a finished run as its own output page with the script and its command, not the operation detail', async () => {
+    device.current = 'phone';
+    const serverId = 'srv_phone_output';
+    const { serveActionHomes } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const home = await serveActionHomes({ homes: [{ key: 'phone', serverUrl: 'https://phone-output.test', accountId: 'account', serverIdentityId: serverId }],
+      route: () => undefined });
+    try {
+      publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+      const workspace: WorkspaceAddressV1 = { serverId, machineId: 'source-machine', workspaceId: 'ws', rootPath: '/repo' };
+      const snapshot = ActionOperationSnapshotV1Schema.parse({
+        version: 1, operationId: 'fail-run', revision: 2, actionId: 'projects.script.run',
+        state: 'failed', scope: { accountId: 'account', machineId: 'worker-machine' },
+        title: 'Run a project script', createdAt: 1_000, startedAt: 1_000, settledAt: 2_000, cancellation: 'supported',
+        error: { errorCode: 'project_command_step_failed', error: 'Exited with code 17' },
+        domainRef: { kind: 'projectCommand', purpose: 'script', serverId,
+          machineId: 'worker-machine', workspaceRefId: 'ws', cwd: '/repo', terminalId: 'fail-pty' },
+      });
+      outputRpc.mockImplementation(async () => ({ kind: 'found', operation: snapshot }));
+      const operation: ActionOperationProjection = { serverId, observation: 'available', isUnavailableProjection: false, snapshot };
+      const screen = await renderScreen(<ProjectScriptRow testID="script" workspace={workspace} name="fail" badge={null}
+        command="exit 17" portable operation={operation} idleText="Not run" pending={false} failureCode={null}
+        compact={false} onRun={() => {}} />);
+      await screen.pressByTestIdAsync('script');
+      await vi.waitFor(() => expect(modal.show).toHaveBeenCalled());
+      const shown = modal.show.mock.calls.map(([config]) => config.component);
+      expect(shown).not.toContain(ActionOperationDetailModal);
+      expect(modal.show.mock.calls[0]?.[0]).toMatchObject({ component: ProjectCommandOutputPage,
+        props: { serverId, operationId: 'fail-run', name: 'fail', command: 'exit 17' } });
+      await screen.unmount();
+    } finally { await home.dispose(); }
   });
 });
