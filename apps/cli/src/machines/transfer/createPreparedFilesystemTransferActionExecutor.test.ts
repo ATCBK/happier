@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -134,7 +134,7 @@ describe('prepared filesystem Actions', () => {
       expect(lifecycle.getState().status).toBe('stopped');
     } finally { await lifecycle.stop(); await rm(rootPath, { recursive: true, force: true }); }
   });
-  it.each(['completed', 'owner_stopped'] as const)('keeps prepared custody truthful until real import completion or loss (%s)', async outcome => {
+  it.each(['completed', 'owner_stopped', 'guarded'] as const)('keeps prepared custody truthful until real import completion or loss (%s)', async outcome => {
     const rootPath = await mkdtemp(join(tmpdir(), 'happier-filesystem-action-'));
     const manager = createDirectTransferImportSessionManager();
     // The listening socket is the OS boundary; the real manager owns all import logic.
@@ -157,9 +157,12 @@ describe('prepared filesystem Actions', () => {
     const payload = Buffer.from([0, 255, 128, 10]);
     const sha256 = createHash('sha256').update(payload).digest('hex');
     try {
+      const original = Buffer.from('original');
+      if (outcome === 'guarded') await writeFile(join(rootPath, 'binary.dat'), original);
       const result = await runner.observe({ actionId: 'daemon.filesystem.upload', scope,
         execute: async ({ operationAcceptance, signal }) => projectPreparedFilesystemActionResult(await execute({
           actionId: 'daemon.filesystem.upload', input: { rootPath, path: 'binary.dat', overwrite: false,
+            ...(outcome === 'guarded' ? { expectedHash: createHash('sha256').update(original).digest('hex') } : {}),
             source: { sourceId: 'actual-reader', sizeBytes: payload.length, sha256 } },
           context: { runtimeAccountId: scope.accountId, operationAcceptance, signal } })) });
       if (!result.ok) throw new Error(result.error);

@@ -254,6 +254,7 @@ describe('startDaemonRuntimeBootstrap', () => {
       },
     }));
     const loadQuota = vi.fn();
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const result = await startDaemonRuntimeBootstrap({
       api: {
         getServerFeaturesSnapshot,
@@ -266,7 +267,7 @@ describe('startDaemonRuntimeBootstrap', () => {
           secret: new Uint8Array(32).fill(7),
         },
       },
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      logger,
       processEnv: {
         HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: 'true',
       },
@@ -317,6 +318,28 @@ describe('startDaemonRuntimeBootstrap', () => {
     expect(qualifiedConnectedAccountApi.listAccounts).toHaveBeenCalled();
     expect(qualifiedConnectedAccountApi.listGroups).toHaveBeenCalled();
     expect(loadQuota).not.toHaveBeenCalled();
+
+    const tickError = Object.assign(new Error('request failed token=private-refresh-token at /private/account/auth.json'), {
+      code: 'ECONNRESET',
+      response: { credential: 'private-response-secret' },
+    });
+    const leaseError = Object.assign(new Error('refresh lease not acquired'), {
+      code: 'connected_account_refresh_lease_not_acquired',
+    });
+    const onTickError = vi.mocked(startConnectedServiceRefreshLoop).mock.calls[0]![0].onTickError;
+    onTickError(new AggregateError([tickError, leaseError], 'Connected services refresh tick failed'));
+    expect(logger.debug).toHaveBeenLastCalledWith(
+      '[DAEMON RUN] Connected services refresh tick failed (non-fatal)',
+      {
+        error: 'AggregateError: Connected services refresh tick failed',
+        causes: [expect.stringContaining('ECONNRESET'), expect.stringContaining('connected_account_refresh_lease_not_acquired')],
+      },
+    );
+    const logged = JSON.stringify(logger.debug.mock.calls);
+    expect(logged).not.toContain('private-refresh-token');
+    expect(logged).not.toContain('private-response-secret');
+    expect(logged).not.toContain('/private/account');
+    expect(logged).not.toContain('startDaemonRuntimeBootstrap.test.ts');
   });
 
   it('creates daemon server-work with a connection gate and logger', async () => {

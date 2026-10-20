@@ -162,6 +162,17 @@ describe('commitDaemonLaunchSession', () => {
     expect(daemonLaunchRequiresCommittedSession({ directory: '/repo', creationAuthorization: { token: 'signed-proof' } })).toBe(true);
   });
 
+  it('commits a brokered Provider-model slot before route authentication, but does not infer authority from a service selection', () => {
+    const options: SpawnSessionOptions = { directory: '/repo', teamCredentialBindings: [{
+      v: 1, slot: { kind: 'provider_model' }, resourceId: 'resource-1',
+      expectedResourceRevision: 3, deliveryMode: 'brokered', teamId: 'team-1',
+    }] };
+    expect(daemonLaunchRequiresCommittedSession(options)).toBe(true);
+    expect(daemonLaunchRequiresCommittedSession({ ...options, teamCredentialBindings: [{
+      v: 1, slot: { kind: 'provider_model' }, resourceId: null,
+    }] })).toBe(false);
+  });
+
   it('commits a complete role snapshot before launch instead of transporting role text in the process environment', () => {
     const initialSessionRolesV1 = snapshotSessionRolesAtSpawnV1({
       leadSessionId: 'lead-1',

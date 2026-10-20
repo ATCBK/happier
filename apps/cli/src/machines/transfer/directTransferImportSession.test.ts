@@ -13,6 +13,7 @@ import { createComposerMediaStageStore } from '@/transfers/staging/composerMedia
 import { createOneBitGrayscalePng } from '@/testkit/media/pngFixtures';
 import { createDirectPeerTransferApp } from './directPeerTransport';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import { DirectTransferImportOpenRequestSchema } from './directTransferImportOpenRequest';
 
 let failNextUploadPromotionWithExdev = false;
 let failNextUploadSourceCleanup = false;
@@ -72,6 +73,35 @@ async function expectPathMissing(path: string): Promise<void> {
 }
 
 describe('direct transfer import session manager', () => {
+  it.each(['match', 'mismatch', 'absent'] as const)('carries the %s expectation through strict open, encryption and finalize', async variant => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-guarded-import-'));
+    const manager = createDirectTransferImportSessionManager();
+    const original = Buffer.from('original');
+    const replacement = Buffer.from('replacement');
+    const path = join(root, 'a.txt');
+    await writeFile(path, original);
+    const expectedHash = variant === 'absent' ? null : createHash('sha256').update(variant === 'match' ? original : 'stale').digest('hex');
+    const request = { t: 'session_file_upload_v1' as const, workingDirectory: root, path, sizeBytes: replacement.length, overwrite: false, expectedHash };
+    try {
+      const parsed = DirectTransferImportOpenRequestSchema.parse(request);
+      const authorization = manager.issueImportOpenAuthorizationToken(parsed);
+      const opened = await manager.openImportSession({ ...parsed, authorizationToken: authorization.authorizationToken });
+      if (!opened.success) throw new Error(opened.error);
+      const chunk = createEncryptedTransferChunkEnvelope({ transferId: opened.response.uploadId, sequence: 0,
+        payload: replacement, recipientPublicKeyBase64: opened.response.recipientPublicKeyBase64 });
+      expect(await manager.writeImportTransferChunk({ uploadId: opened.response.uploadId, index: 0,
+        payloadBase64: chunk.payloadBase64, encryptedDataKeyEnvelopeBase64: chunk.encryptedDataKeyEnvelopeBase64 })).toEqual({ success: true });
+      const finalized = await manager.finalizeImportTransferSession({ uploadId: opened.response.uploadId });
+      expect(finalized).toMatchObject(variant === 'match' ? { success: true } : {
+        success: false, errorCode: variant === 'absent' ? 'expected_file_absent' : 'hash_mismatch',
+      });
+      expect(await readFile(path)).toEqual(variant === 'match' ? replacement : original);
+    } finally {
+      await manager.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects fresh HTTP imports during a closed drain while admitted binary chunks and finalization continue', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-import-admission-'));
     const admissionDrain = createDaemonAdmissionDrain();
