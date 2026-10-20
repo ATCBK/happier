@@ -51,7 +51,9 @@ export type ProviderObservationAuthorizationFingerprintV1 = z.infer<typeof Provi
 export const ProviderProbeObservationIdentityV1Schema = canonicalFingerprintSchema('probe-observation:v1:')
   .brand<'ProviderProbeObservationIdentityV1'>();
 export type ProviderProbeObservationIdentityV1 = z.infer<typeof ProviderProbeObservationIdentityV1Schema>;
-export const ProviderCompatibilityFingerprintV1Schema = canonicalFingerprintSchema('compatibility:v1:');
+// Preserve the existing compatibility RPC boundary's whitespace normalization;
+// all readers then validate through the canonical fingerprint owner.
+export const ProviderCompatibilityFingerprintV1Schema = z.pipe(z.string().check(z.trim()), canonicalFingerprintSchema('compatibility:v1:'));
 
 type CanonicalJson = null | boolean | number | string | readonly CanonicalJson[] | Readonly<{ [key: string]: CanonicalJson }>;
 

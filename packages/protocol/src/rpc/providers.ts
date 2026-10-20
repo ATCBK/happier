@@ -13,6 +13,7 @@ import {
 import { ProviderErrorV1Schema } from '../providers/errors.js';
 import {
   ProviderConnectionSecurityFingerprintV1Schema,
+  ProviderCompatibilityFingerprintV1Schema,
   ProviderProbeObservationIdentityV1Schema,
   ProviderProbeRequestFingerprintV1Schema,
 } from '../providers/fingerprints.js';
@@ -725,8 +726,6 @@ export const DaemonProviderModelProjectionRequestV1Schema = lazyZodSchema(() => 
   }
 })));
 export type DaemonProviderModelProjectionRequestV1 = z.infer<typeof DaemonProviderModelProjectionRequestV1Schema>;
-
-const ProviderCompatibilityFingerprintV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256), z.startsWith('compatibility:v1:')));
 
 const DaemonProviderReasoningEffortSupportV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ supported: z.literal(false) }),

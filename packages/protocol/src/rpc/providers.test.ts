@@ -1261,6 +1261,9 @@ describe('provider machine RPC contracts', () => {
     for (const value of values) {
       expect(DaemonProviderModelSettingsMutationRequestV1Schema.parse(value)).toEqual(value);
     }
+    expect(DaemonProviderModelSettingsMutationRequestV1Schema.parse({
+      ...values[5], compatibilityFingerprint: ' compatibility:v1:abc ',
+    })).toEqual(values[5]);
     expect(DaemonProviderModelSettingsMutationRequestV1Schema.safeParse({
       ...values[5], rawSecret: 'nope',
     }).success).toBe(false);
