@@ -2741,7 +2741,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             await enqueue(createQueuedSessionEndMutation(mutation));
         },
         async enqueueTranscriptMessage(mutation, opts) {
-            const result = await enqueue(createQueuedTranscriptMessage(mutation), {
+            const { whenCommitted, ...result } = await enqueue(createQueuedTranscriptMessage(mutation), {
                 awaitFlush: true,
                 ...(opts?.admission === undefined ? {} : { admission: opts.admission }),
                 ...(opts?.observeCommitSignal === undefined ? {} : { observeCommitSignal: opts.observeCommitSignal }),
@@ -2749,7 +2749,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             return {
                 ...result,
                 ...(result.persisted ? { localId: mutation.localId } : {}),
-                ...(result.whenCommitted ? { whenCommitted: result.whenCommitted.then(commit => commit
+                ...(whenCommitted ? { whenCommitted: whenCommitted.then(commit => commit
                     ? { ...commit, localId: mutation.localId } : null) } : {}),
             };
         },

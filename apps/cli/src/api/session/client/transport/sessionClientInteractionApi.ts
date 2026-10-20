@@ -75,7 +75,9 @@ export type SessionInputProviderDispatchAdmission = 'admitted' | 'rejected' | 'h
  * consumer. Runtime code composes this type; it must not publish a second
  * admitted-input schema or re-derive these facts from the pending row.
  */
-export type ExecutionRunAdmittedPendingInputV1 = UserMessage & Readonly<{
+export type ExecutionRunAdmittedPendingInputV1 = {
+    [Key in keyof UserMessage as Key extends 'inputAdmissionReceipt' ? never : Key]: UserMessage[Key];
+} & Readonly<{
     authorAccountId: string | null;
     inputAdmissionReceipt: PendingQueueMaterializedMessage['inputAdmissionReceipt'] | null;
     pendingProviderAction: PendingQueueMaterializedMessage['providerAction'] | null;
@@ -399,7 +401,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
     // A missing current preference must not block a person's input or an
     // informational returned answer. Their later autonomous child can initialize
     // the original root when current Account authority becomes available.
-    if (request.sourceSession && !request.returnedAnswer && !autonomousCheckIn) {
+    if (request.sourceSession && !(request.v === 1 && request.returnedAnswer) && !autonomousCheckIn) {
         return { status: 'outcomeUnknown' };
     }
     const finalPayload = settledAuthority ? payload : {
