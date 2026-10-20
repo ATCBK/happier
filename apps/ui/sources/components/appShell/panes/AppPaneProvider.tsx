@@ -83,6 +83,7 @@ function normalizePersistedPaneSlot(slot: PersistedPaneSlot): PaneScopeState['ri
 
 function normalizePersistedPaneScopes(
     value: Readonly<Record<string, {
+        mainHidden?: boolean;
         right: PersistedPaneSlot;
         details: unknown;
         bottom: PersistedPaneSlot;
@@ -93,6 +94,7 @@ function normalizePersistedPaneScopes(
         Object.entries(value).map(([scopeId, scope]) => [
             scopeId,
             {
+                mainHidden: scope.mainHidden === true,
                 right: normalizePersistedPaneSlot(scope.right),
                 details: migrateLegacyDetailsWorkspaceState(scope.details),
                 bottom: normalizePersistedPaneSlot(scope.bottom),
@@ -104,6 +106,7 @@ function normalizePersistedPaneScopes(
 function serializePersistedPaneScopes(
     value: Readonly<Record<string, PaneScopeState>>,
 ): Record<string, {
+    mainHidden: boolean;
     right: {
         isOpen: boolean;
         activeTabId: string | null;
@@ -122,6 +125,7 @@ function serializePersistedPaneScopes(
         Object.entries(value).map(([scopeId, scope]) => [
             scopeId,
             {
+                mainHidden: scope.mainHidden,
                 right: {
                     isOpen: scope.right.isOpen,
                     activeTabId: scope.right.activeTabId,

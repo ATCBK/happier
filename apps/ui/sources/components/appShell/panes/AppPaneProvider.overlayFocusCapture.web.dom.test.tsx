@@ -234,6 +234,7 @@ function createScopeState(input: Readonly<{
     bottom?: PaneScopeState['bottom'];
 }>): PaneScopeState {
     return {
+        mainHidden: false,
         right: {
             isOpen: false,
             activeTabId: null,

@@ -18,7 +18,7 @@ import { usePaneActionRail, usePaneActionRailRightPaneHiddenByDetails } from '@/
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { RightSidebarActionRail, type RightSidebarRailAction } from '@/components/appShell/rightSidebar/RightSidebarActionRail';
-import { toggleRightSidebarTab } from '@/components/appShell/rightSidebar/rightSidebarActions';
+import { toggleRightSidebarTab, usePublishRightSidebarActions } from '@/components/appShell/rightSidebar/rightSidebarActions';
 import { getRightSidebarTabLabel } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import { useSessionTerminalAction } from '@/components/sessions/terminal/useSessionTerminalAction';
 import { toggleSessionReview } from './sessionPaneActions';
@@ -703,6 +703,11 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
 
 export const SessionActionRail = React.memo(() => {
     const model = useSessionRightSidebar();
+    usePublishRightSidebarActions({
+        tabs: model.rightPanelTabs.filter(tab => !tab.disabledReason).map(tab => tab.id),
+        activeTab: model.activeTab ?? undefined,
+        selectTab: model.setActiveTab,
+    });
     const terminal = useSessionTerminalAction({ sessionId: model.sessionId, scopeId: model.scopeId, serverId: model.pluginRuntime.serverId });
     // The Work tab's badge is the Work projection's outstanding count (D-S4): the same number the
     // header strip shows, read from the one owner the Session host mounted — never a second count.

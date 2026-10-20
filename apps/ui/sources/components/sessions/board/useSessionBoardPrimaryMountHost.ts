@@ -1,7 +1,6 @@
 import * as React from 'react';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { usePaneFocusMode } from '@/components/appShell/panes/focusMode/usePaneFocusMode';
 import { useSessionCompanionPlacement } from '@/components/sessions/companion/layout/useSessionCompanionPlacement';
 import { useSessionCompanionPreference } from '@/components/sessions/companion/state/useSessionCompanionPreference';
 import { useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
@@ -43,7 +42,6 @@ export function useSessionBoardHostVisibility(input: Readonly<{
     detailsDestinationKey?: string | null;
 }>): SessionBoardHostVisibility {
     const pane = useAppPaneScope(input.paneScopeId);
-    const paneFocusMode = usePaneFocusMode(input.paneScopeId);
     const destinationVisible = useDestinationVisibility();
     const layoutPresented = useLayoutPresentationActive();
     const hostViewed = useHostActivelyViewed();
@@ -75,7 +73,7 @@ export function useSessionBoardHostVisibility(input: Readonly<{
                 // Which items are ALSO presented in their own expanded destination, so
                 // two visible Details copies of one executable item can be told apart.
                 detailsExpandedItemIds: listVisibleSessionBoardDetailsExpandedItemIds(details),
-                detailsFocusModeActive: paneFocusMode.active,
+                mainHidden: scopeState?.mainHidden === true,
                 rightOpen: scopeState?.right?.isOpen === true,
                 rightActiveTabId: scopeState?.right?.activeTabId ?? null,
             }

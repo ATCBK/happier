@@ -36,6 +36,7 @@ type AppPaneScopeDetailsStateView = {
 };
 
 type AppPaneScopeStateView = {
+    mainHidden: boolean;
     right: PaneScopeState['right'];
     details: AppPaneScopeDetailsStateView;
     bottom: PaneScopeState['bottom'];
@@ -50,6 +51,7 @@ export type NativeOverlayFocusReturnCaptureProps = Readonly<{
 export type AppPaneScopeApi = {
     scopeId: string;
     scopeState: AppPaneScopeStateView | null;
+    setMainHidden: (hidden: boolean) => void;
     /** Native input capture props for the scope root that contains a pane opener. */
     overlayFocusReturnCaptureProps?: NativeOverlayFocusReturnCaptureProps;
     /** Ephemeral command-time focus for a Right overlay presentation. */
@@ -104,6 +106,7 @@ function getScopeState(state: ReturnType<typeof useAppPaneContext>['state'], sco
     const scopeState = state.scopes[scopeId] ?? null;
     if (!scopeState) return null;
     return {
+        mainHidden: scopeState.mainHidden,
         right: scopeState.right,
         details: buildDetailsWorkspaceStateView(scopeState.details),
         bottom: scopeState.bottom,
@@ -112,6 +115,9 @@ function getScopeState(state: ReturnType<typeof useAppPaneContext>['state'], sco
 
 export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     const { state, dispatch, overlayFocusReturnOwner } = useAppPaneContext();
+    const setMainHidden = React.useCallback((hidden: boolean) => {
+        dispatch({ type: 'setMainHidden', scopeId, hidden });
+    }, [dispatch, scopeId]);
     const scopeState = getScopeState(state, scopeId);
     const presentPane = usePanePresentation();
     const selectedRightDestinationRef = React.useRef(scopeState?.right.selectedDestination ?? null);
@@ -309,6 +315,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     return React.useMemo(() => ({
         scopeId,
         scopeState,
+        setMainHidden,
         overlayFocusReturnCaptureProps,
         rightOverlayFocusReturnRef,
         detailsOverlayFocusReturnRef,
@@ -343,6 +350,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     }), [
         scopeId,
         scopeState,
+        setMainHidden,
         overlayFocusReturnCaptureProps,
         rightOverlayFocusReturnRef,
         detailsOverlayFocusReturnRef,

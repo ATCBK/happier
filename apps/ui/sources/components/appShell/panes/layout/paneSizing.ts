@@ -3,6 +3,10 @@ import {
     DEFAULT_MAIN_MIN_PX,
     DEFAULT_RIGHT_MIN_PX,
     DEFAULT_RIGHT_PREFERRED_PX,
+    DEFAULT_EDITOR_MIN_PX,
+    DEFAULT_SESSION_MIN_PX,
+    DEFAULT_SESSION_WIDTH_PX,
+    type PaneArrangement,
 } from '@/components/ui/panels/paneBreakpoints';
 
 /**
@@ -16,6 +20,7 @@ import {
 export const PANE_SIZING_DEFAULTS = {
     mainMinPx: DEFAULT_MAIN_MIN_PX,
     mainMinThreePanePx: 320,
+    session: { minPx: DEFAULT_SESSION_MIN_PX, defaultPx: DEFAULT_SESSION_WIDTH_PX },
     right: {
         minPx: DEFAULT_RIGHT_MIN_PX,
         /** Unscaled until the user resizes the sidebar (`skipScalingWhenPreferredWidthPxMatches`). */
@@ -38,110 +43,6 @@ export const PANE_SIZING_DEFAULTS = {
     },
 } as const;
 
-function resolveScaledPreferredPaneSizePx(input: Readonly<{
-    preferredSizePx: number;
-    basisContainerSizePx: number;
-    containerSizePx: number;
-    skipScalingWhenPreferredSizePxMatches?: number;
-}>): number {
-    // Some panes want a fixed default width/height across viewport sizes until the user
-    // explicitly chooses a different size. When the preferred size matches that default marker,
-    // bypass basis scaling but still let the outer resolver clamp the final size.
-    if (
-        typeof input.skipScalingWhenPreferredSizePxMatches === 'number'
-        && Number.isFinite(input.skipScalingWhenPreferredSizePxMatches)
-        && input.preferredSizePx === input.skipScalingWhenPreferredSizePxMatches
-    ) {
-        return input.preferredSizePx;
-    }
-
-    const basis = input.basisContainerSizePx;
-    if (!Number.isFinite(basis) || basis <= 0) return input.preferredSizePx;
-
-    const ratio = input.containerSizePx / basis;
-    if (!Number.isFinite(ratio) || ratio <= 0) return input.preferredSizePx;
-
-    return input.preferredSizePx * ratio;
-}
-
-export function resolveScaledPaneWidthPx(input: Readonly<{
-    preferredWidthPx: number;
-    basisContainerWidthPx: number;
-    containerWidthPx: number;
-    minPx: number;
-    maxPx: number;
-    skipScalingWhenPreferredWidthPxMatches?: number;
-}>): number {
-    const clamp = (value: number) => Math.min(input.maxPx, Math.max(input.minPx, value));
-    return clamp(
-        resolveScaledPreferredPaneSizePx({
-            preferredSizePx: input.preferredWidthPx,
-            basisContainerSizePx: input.basisContainerWidthPx,
-            containerSizePx: input.containerWidthPx,
-            skipScalingWhenPreferredSizePxMatches: input.skipScalingWhenPreferredWidthPxMatches,
-        })
-    );
-}
-
-export function resolveScaledPaneWidthPxUncapped(input: Readonly<{
-    preferredWidthPx: number;
-    basisContainerWidthPx: number;
-    containerWidthPx: number;
-    minPx: number;
-    skipScalingWhenPreferredWidthPxMatches?: number;
-}>): number {
-    const clampMin = (value: number) => Math.max(input.minPx, value);
-    const prefer = input.preferredWidthPx;
-    if (!Number.isFinite(prefer)) return input.minPx;
-    return clampMin(
-        resolveScaledPreferredPaneSizePx({
-            preferredSizePx: prefer,
-            basisContainerSizePx: input.basisContainerWidthPx,
-            containerSizePx: input.containerWidthPx,
-            skipScalingWhenPreferredSizePxMatches: input.skipScalingWhenPreferredWidthPxMatches,
-        })
-    );
-}
-
-export function resolveScaledPaneHeightPx(input: Readonly<{
-    preferredHeightPx: number;
-    basisContainerHeightPx: number;
-    containerHeightPx: number;
-    minPx: number;
-    maxPx: number;
-    skipScalingWhenPreferredHeightPxMatches?: number;
-}>): number {
-    const clamp = (value: number) => Math.min(input.maxPx, Math.max(input.minPx, value));
-    return clamp(
-        resolveScaledPreferredPaneSizePx({
-            preferredSizePx: input.preferredHeightPx,
-            basisContainerSizePx: input.basisContainerHeightPx,
-            containerSizePx: input.containerHeightPx,
-            skipScalingWhenPreferredSizePxMatches: input.skipScalingWhenPreferredHeightPxMatches,
-        })
-    );
-}
-
-export function resolveScaledPaneHeightPxUncapped(input: Readonly<{
-    preferredHeightPx: number;
-    basisContainerHeightPx: number;
-    containerHeightPx: number;
-    minPx: number;
-    skipScalingWhenPreferredHeightPxMatches?: number;
-}>): number {
-    const clampMin = (value: number) => Math.max(input.minPx, value);
-    const prefer = input.preferredHeightPx;
-    if (!Number.isFinite(prefer)) return input.minPx;
-    return clampMin(
-        resolveScaledPreferredPaneSizePx({
-            preferredSizePx: prefer,
-            basisContainerSizePx: input.basisContainerHeightPx,
-            containerSizePx: input.containerHeightPx,
-            skipScalingWhenPreferredSizePxMatches: input.skipScalingWhenPreferredHeightPxMatches,
-        })
-    );
-}
-
 function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
 }
@@ -153,6 +54,9 @@ function reduceDownToMin(value: number, min: number, amount: number): { next: nu
 }
 
 export type DockedPaneSizingInput = Readonly<{
+    arrangement?: PaneArrangement;
+    sessionWidthPx?: number;
+    mainDocked?: boolean;
     containerWidthPx: number;
     mainMinPx: number;
     rightMinPx: number;
@@ -168,6 +72,8 @@ export type DockedPaneSizingInput = Readonly<{
 }>;
 
 export type DockedPaneSizingResult = Readonly<{
+    mainWidthPx?: number;
+    mainMaxWidthPx?: number;
     rightWidthPx: number;
     detailsWidthPx: number;
     rightMaxWidthPx: number;
@@ -176,6 +82,18 @@ export type DockedPaneSizingResult = Readonly<{
 
 export function resolveDockedPaneSizing(input: DockedPaneSizingInput): DockedPaneSizingResult {
     const width = input.containerWidthPx;
+    if (input.arrangement === 'editor' && Number.isFinite(width) && width > 0) {
+        const session = PANE_SIZING_DEFAULTS.session;
+        const sessionPreferredPx = Math.max(session.minPx, input.sessionWidthPx ?? session.defaultPx);
+        const rightWidthPx = input.rightDocked ? clamp(input.rightWidthPx, input.rightMinPx,
+            Math.max(input.rightMinPx, width - DEFAULT_EDITOR_MIN_PX - (input.mainDocked ? sessionPreferredPx : 0))) : 0;
+        const mainMaxWidthPx = Math.max(session.minPx, width - DEFAULT_EDITOR_MIN_PX - rightWidthPx);
+        const mainWidthPx = input.mainDocked ? clamp(sessionPreferredPx, session.minPx, mainMaxWidthPx) : 0;
+        const detailsWidthPx = Math.max(0, width - mainWidthPx - rightWidthPx);
+        return { mainWidthPx, mainMaxWidthPx, rightWidthPx, detailsWidthPx,
+            rightMaxWidthPx: Math.max(input.rightMinPx, width - DEFAULT_EDITOR_MIN_PX - mainWidthPx),
+            detailsMaxWidthPx: detailsWidthPx };
+    }
     if (!Number.isFinite(width) || width <= 0) {
         return {
             rightWidthPx: clamp(input.rightWidthPx, input.rightGlobalMinPx, input.rightGlobalMaxPx),

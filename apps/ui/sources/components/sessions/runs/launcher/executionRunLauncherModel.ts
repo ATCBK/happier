@@ -87,7 +87,7 @@ export function createExecutionRunLauncherDetailsTab(intent?: ExecutionRunIntent
  * resource does not create a Run until the canonical composer hands off its
  * first outbound message.
  */
-export function createInteractiveExecutionRunDraftDetailsTab(): DetailsTab {
+export function createInteractiveExecutionRunDraftDetailsTab(input?: Readonly<{ initialText?: string }>): DetailsTab {
     return {
         key: 'execution-run-conversation-draft',
         kind: 'executionRunLauncher',
@@ -95,6 +95,7 @@ export function createInteractiveExecutionRunDraftDetailsTab(): DetailsTab {
         resource: {
             kind: 'executionRunLauncher',
             mode: 'conversation',
+            ...(input?.initialText !== undefined ? { initialInstructions: input.initialText } : {}),
         },
     };
 }

@@ -9,6 +9,7 @@ import { useLocalSetting } from '@/sync/domains/state/storage';
 import { resolveMultiPaneDeviceType } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
 import { resolvePaneLayout } from '@/components/ui/panels/paneBreakpoints';
 import { PANE_SIZING_DEFAULTS } from '@/components/appShell/panes/layout/paneSizing';
+import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
@@ -47,13 +48,14 @@ export function useSessionFilePaneNavigation(params: Readonly<{ scopeId: string;
     const { width } = useWindowDimensions();
     const deviceType = useDeviceType();
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
+    const paneLayout = useOptionalAppPaneScopeLayout();
     const onNavigate = React.useCallback((tabId: 'files' | 'git') => {
         const surface = tabId === 'files' ? 'browse' : 'git';
         if (cockpit) {
             cockpit.switchSurface(surface);
             return;
         }
-        const layout = resolvePaneLayout({
+        const single = paneLayout ? !paneLayout.multiPaneEnabled || paneLayout.deviceType === 'phone' : resolvePaneLayout({
             containerWidthPx: width,
             deviceType: resolveMultiPaneDeviceType({ platform: Platform.OS, deviceType }),
             multiPaneEnabled,
@@ -62,10 +64,10 @@ export function useSessionFilePaneNavigation(params: Readonly<{ scopeId: string;
             mainMinPx: PANE_SIZING_DEFAULTS.mainMinPx,
             rightMinPx: PANE_SIZING_DEFAULTS.right.minPx,
             detailsMinPx: PANE_SIZING_DEFAULTS.details.minPx,
-        });
-        if (layout.kind === 'single') {
+        }).kind === 'single';
+        if (single) {
             router.push(resolveSessionRoutePathForSurface(params.sessionId, surface, { serverId: params.serverId }));
         }
-    }, [cockpit, deviceType, multiPaneEnabled, params.serverId, params.sessionId, router, width]);
+    }, [cockpit, deviceType, multiPaneEnabled, paneLayout, params.serverId, params.sessionId, router, width]);
     return useWorkspaceFilePaneNavigation(params.scopeId, onNavigate);
 }
