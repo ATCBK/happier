@@ -166,14 +166,15 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
       const id = sessionId(candidate)!;
       let current = sessionWarnings.get(id);
       if (!current || current.anchor !== decision.anchor || current.stopAt > decision.stopAt) {
-        if (!await input.notice(candidate, { kind: 'stopping', stopAt: decision.stopAt, rule: 'idle_sessions' }, signal)) {
-          idleBlocked.set(id, { signature: decision.signature, failed: true });
-          await clearSessionWarning(id);
-          await input.notice(candidate, { kind: 'clear' }, signal).catch(input.onError);
-          return { acted: true };
-        }
         current = { candidate, anchor: decision.anchor, stopAt: decision.stopAt, policy: decision.signature, rule: 'idle_sessions' };
         sessionWarnings.set(id, current); emit();
+        let acknowledged = false;
+        try { acknowledged = await input.notice(candidate, { kind: 'stopping', stopAt: decision.stopAt, rule: 'idle_sessions' }, signal); }
+        finally { if (!acknowledged && sessionWarnings.get(id) === current) await clearSessionWarning(id); }
+        if (!acknowledged) {
+          idleBlocked.set(id, { signature: decision.signature, failed: true });
+          return { acted: true };
+        }
       }
       if (signal.aborted || observed !== revision) return { acted: false, nextAt: plan.nextAt };
       if (now() < decision.stopAt) continue;
@@ -250,7 +251,12 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
         const needsFacts = memoryPolicy.enabled || policy.idleSessions.enabled || verification !== undefined;
         if (needsFacts && !releaseFacts) releaseFacts = input.subscribe(ownerChanged);
         else if (!needsFacts && releaseFacts) { releaseFacts(); releaseFacts = undefined; }
-        if ((memoryPolicy.enabled || verification) && !releaseVitals) releaseVitals = input.vitals.subscribe(ownerChanged);
+        if ((memoryPolicy.enabled || verification) && !releaseVitals) releaseVitals = input.vitals.subscribe(({ sample, minute }) => {
+          // Overview's live clock adds no sustain evidence. After a stop, observe
+          // absence on the next sample, then wait for the existing settle budget.
+          if (minute || verification && (verification.goneAt === undefined
+            || sample.sampledAt >= verification.goneAt + verification.cooldownMs)) ownerChanged();
+        });
         else if (!memoryPolicy.enabled && !verification && releaseVitals) { releaseVitals(); releaseVitals = undefined; }
         const needsPolicyWork = input.policyWork?.enabled(policy) === true;
         if (needsPolicyWork && !releasePolicyWork) releasePolicyWork = input.policyWork!.subscribe(changed);
@@ -358,11 +364,17 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
                     const stopAt = now() + policy.idleSessions.warnBeforeMs;
                     const inherited = sessionWarnings.get(sessionId(candidate)!);
                     if (inherited && inherited.anchor === anchor && inherited.stopAt <= stopAt) warning = inherited;
-                    else if (await input.notice(candidate, { kind: 'stopping', stopAt, rule: 'memory_guard' }, signal)) {
+                    else {
                       warning = { candidate, anchor, stopAt, policy: policyIdentity, rule: 'memory_guard' };
-                      sessionWarnings.set(sessionId(candidate)!, warning);
+                      const pending = warning;
+                      const id = sessionId(candidate)!;
+                      sessionWarnings.set(id, pending);
                       emit();
-                    } else { await fail(candidate, 'warning_unavailable'); changed(); continue; }
+                      let acknowledged = false;
+                      try { acknowledged = await input.notice(candidate, { kind: 'stopping', stopAt, rule: 'memory_guard' }, signal); }
+                      finally { if (!acknowledged && sessionWarnings.get(id) === pending) await clearSessionWarning(id); }
+                      if (!acknowledged) { await fail(candidate, 'warning_unavailable'); changed(); continue; }
+                    }
                   }
                   if (observed !== revision) continue;
                   nextAt = nextAt === undefined ? warning.stopAt : Math.min(nextAt, warning.stopAt);
