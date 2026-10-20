@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { RunFollowUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
-
+import { buildActivityOverviewSnapshot } from '@/activity/attention/buildActivityOverviewSnapshot';
+import { buildInboxSessionPresentation } from '@/activity/presentation/buildInboxSessionPresentation';
+import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 import { createInboxItemRoute, isFocusedInboxWorkItem, readInboxItemFocus, resolveInboxItemPageRoute } from './inboxItemFocus';
 
@@ -44,11 +47,7 @@ describe('Home-qualified Inbox focus', () => {
         }
     });
 
-    it('selects only the qualified Session when two Homes have the same id', async () => {
-        const { buildActivityOverviewSnapshot } = await import('@/activity/attention/buildActivityOverviewSnapshot');
-        const { buildInboxSessionPresentation } = await import('@/activity/presentation/buildInboxSessionPresentation');
-        const { buildInboxWorkGroups } = await import('@/activity/presentation/buildInboxWorkGroups');
-        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+    it('selects only the qualified Session when two Homes have the same id', () => {
         const sessions = ['home-a', 'home-b'].map((serverId) => createSessionFixture({
             id: 'same-session', serverId, active: true, pendingPermissionRequestCount: 1, pendingRequestObservedAt: 1_000,
         }));
