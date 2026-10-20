@@ -40,6 +40,60 @@ import { isDeepStrictEqual } from 'node:util';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
+import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+
+it('closes selected receiving admission while existing creation drains, then reopens on release', async () => {
+  const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+  let releaseCreation!: () => void;
+  const held = new Promise<void>(resolve => { releaseCreation = resolve; });
+  let starts = 0;
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => { starts++; await held; return { runId: 'run' }; });
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, async () => ({ runs: [] }));
+  const creating = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+  const reopen = rpc.pauseRequestAdmission([SESSION_RPC_METHODS.EXECUTION_RUN_START], {
+    details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+  });
+  const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]);
+  try {
+    const late = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+    expect(starts).toBe(1);
+    const transported = await rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`, params: {} });
+    expect(transported).toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+    expect(readExecutionRunStartRunCreation(transported.details)).toBe('noRunCreated');
+    releaseCreation();
+    await creating;
+    await idle;
+    const refused = await late as { errorCode: string; details?: unknown };
+    expect(refused).toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+    expect(readExecutionRunStartRunCreation(refused.details)).toBe('noRunCreated');
+    await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, {})).resolves.toEqual({ runs: [] });
+    reopen();
+    await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ runId: 'run' });
+  } finally { releaseCreation(); reopen(); await creating; }
+});
+
+it('preserves closed-gate no-Run evidence through the bound encrypted transport codec', async () => {
+  const key = new Uint8Array(32).fill(9);
+  const content: SocketRpcContent = { mode: 'e2ee', cipher: {
+    encryptRaw: async value => encodeBase64(encrypt(key, 'legacy', value)),
+    decryptRaw: async value => decrypt(key, 'legacy', decodeBase64(value)),
+  } };
+  const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'e2ee', encryptionKey: key, encryptionVariant: 'legacy', logger: () => {} });
+  const method = `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`;
+  const callId = '0123456789abcdef0123456789abcdef';
+  const handler = vi.fn(async () => ({ runId: 'unexpected' }));
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, handler);
+  const reopen = rpc.pauseRequestAdmission([SESSION_RPC_METHODS.EXECUTION_RUN_START], {
+    details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+  });
+  try {
+    const params = await socketRpcCodec.encodeParams(content, {}, { method, callId });
+    const result = await rpc.handleRequest({ method, params });
+    const decoded = await socketRpcCodec.decodeResult(content, { ok: true, result }, callId) as { details?: unknown };
+    expect(readExecutionRunStartRunCreation(decoded.details)).toBe('noRunCreated');
+    expect(handler).not.toHaveBeenCalled();
+  } finally { reopen(); }
+});
 
 const bindingCallId = '0123456789abcdef0123456789abcdef';
 const boundWorkspaceModel = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'codex', providerConnectionId: null, modelId: 'bound-model' });

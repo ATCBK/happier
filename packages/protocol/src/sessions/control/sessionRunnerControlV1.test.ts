@@ -46,6 +46,7 @@ const restartStatuses = [
   'missing_resume_snapshot',
   'missing_spawn_options',
   'unsupported_daemon',
+  'restart_admission_unsupported',
   'ineligible',
   'stop_failed',
   'spawn_failed',
@@ -72,6 +73,7 @@ const disabledReasons = [
   'runner_entrypoint_unknown',
   'runner_generation_unattested',
   'unsupported_daemon_version',
+  'restart_admission_unsupported',
 ] as const;
 
 describe('session runner control contract', () => {

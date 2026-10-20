@@ -11,6 +11,9 @@ import { createVersionRuntimeRefreshAttemptHandoff } from './versionRuntimeRefre
 import { observePlannedRunnerRetirement, waitForTrackedRunnerProcessesExit } from '../sessions/waitForTrackedRunnerProcessesExit';
 import type { PlannedRunnerRestartSignalRequest } from './types';
 import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createSessionRunnerRestartAdmission, prepareSessionRunnerRestartAdmission } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 function makeTracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
   return {
@@ -25,6 +28,45 @@ function makeTracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
 }
 
 describe('requestPlannedRunnerRestart', () => {
+  it('does not signal when its live receiving hold is lost after readiness', async () => {
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    const admission = createSessionRunnerRestartAdmission(() => rpc);
+    const connection = new AbortController();
+    const tracked = makeTracked({ pid: process.pid });
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      await expect(requestPlannedRunnerRestart({ sessionId: 'session', tracked, deferral: { kind: 'none' },
+        restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        isProcessSafeToSignal: async () => true,
+        prepareSignal: signal => prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal,
+          callRpc: (request, signal) => admission(request, AbortSignal.any([signal!, connection.signal])) }),
+        canSignal: async () => { connection.abort(); await Promise.resolve(); return true; },
+        requestSignal: request => requestConnectedServiceSessionRestartSignal({ pid: tracked.pid, delayMs: 0,
+          shouldSignal: request.shouldSignal, onSignalFailure: request.onSignalFailure }),
+      })).resolves.toEqual({ signaled: false, notSignaledReason: 'activity_in_progress' });
+      expect(kill).not.toHaveBeenCalled();
+    } finally { connection.abort(); kill.mockRestore(); }
+  });
+  it('reopens receiving creation admission when the final activity gate refuses the signal', async () => {
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => ({ admitted: true }));
+    const admission = createSessionRunnerRestartAdmission(() => rpc);
+    const tracked = makeTracked({ pid: process.pid });
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      await expect(requestPlannedRunnerRestart({ sessionId: 'session', tracked, deferral: { kind: 'none' },
+        restartRequestedPids: new Set(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        isProcessSafeToSignal: async () => true,
+        prepareSignal: signal => prepareSessionRunnerRestartAdmission({ expectedPid: tracked.pid, signal,
+          callRpc: (request, signal) => admission(request, signal) }),
+        canSignal: () => 'turn_in_progress',
+        requestSignal: request => requestConnectedServiceSessionRestartSignal({ pid: tracked.pid, delayMs: 0,
+          shouldSignal: request.shouldSignal, onSignalFailure: request.onSignalFailure }),
+      })).resolves.toEqual({ signaled: false, notSignaledReason: 'turn_in_progress' });
+      expect(kill).not.toHaveBeenCalled();
+      await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ admitted: true });
+    } finally { kill.mockRestore(); }
+  });
   it('captures the retiring generation after child work settles and revalidates it before signaling', async () => {
     const tracked = makeTracked();
     const trackedByPid = new Map([[tracked.pid, tracked]]);

@@ -18321,6 +18321,10 @@ describe('startDaemonSessionControlRuntime', () => {
         if (childActivity !== 'adopted runner survives' && childActivity !== 'credential retirement') {
             await installTrackedRunnerProcfsBoundary(tracked, () => credentialProcessLive);
         }
+        // The production starting-mode reader uses the reported runner's witness,
+        // which can differ from the launcher whose PID receives the signal.
+        tracked.runnerProcessIdentity = { pid: tracked.sessionRunnerPid ?? tracked.pid,
+            processStartTimeMs: 100, processCommandHash: 'a'.repeat(64), processCommand: tracked.processCommand };
         if (childActivity === 'remainder capture unavailable') {
             const previousReaddir = vi.mocked(filesystem.readdir).getMockImplementation()!;
             vi.mocked(filesystem.readdir).mockImplementation((async (path, options) => {
@@ -18373,6 +18377,18 @@ describe('startDaemonSessionControlRuntime', () => {
         fetchSessionByIdMock.mockResolvedValue({ id: tracked.happySessionId!, encryptionMode: 'plain' });
         // Session RPC is a network boundary. Keep the real public Run projector and strict consumer.
         vi.mocked(callSessionRpc).mockImplementation(async request => {
+            if (request.method === `${tracked.happySessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`) {
+                expect(request.request).toMatchObject({ expectedPid: tracked.sessionRunnerPid ?? tracked.pid });
+                const action = Reflect.get(request.request as object, 'action');
+                if (action === 'restart_hold') {
+                    await new Promise<void>(resolve => {
+                        if (request.signal?.aborted) resolve();
+                        else request.signal?.addEventListener('abort', () => resolve(), { once: true });
+                    });
+                    return { status: 'released' };
+                }
+                return { status: 'ready' };
+            }
             if (request.method === `${tracked.happySessionId}:${SESSION_RPC_METHODS.EXECUTION_RUN_LIST}`) {
                 childObserved = true;
                 if (childActivity === 'activity observation unavailable') throw new Error('fixture transport unavailable');
@@ -18467,8 +18483,12 @@ describe('startDaemonSessionControlRuntime', () => {
                 await retainExecutionRunState({ ...child, inputTurns: { ...child.inputTurns,
                     current: { ...child.inputTurns.current, state: 'completed' } } });
             }
-            await vi.waitFor(() => expect([signalSent, refreshResult]).toEqual([true, undefined]));
+            // The real exit observer can settle a missing synthetic runner before
+            // this observation. Successful completion is checked below; only the
+            // explicit retirement/budget cases require it to remain pending here.
+            await vi.waitFor(() => expect(signalSent).toBe(true));
             if (childActivity === 'Stop before exit' || childActivity === 'shutdown before exit' || childActivity === 'adopted runner survives') {
+                expect(refreshResult).toBeUndefined();
                 if (childActivity === 'Stop before exit') await runtime.stopSession('sess-refresh-drain');
                 if (childActivity === 'shutdown before exit') await runtime.stopControlServer();
                 await vi.waitFor(() => expect(refreshResult).toMatchObject({ ok: false, status: 'partial_failure',

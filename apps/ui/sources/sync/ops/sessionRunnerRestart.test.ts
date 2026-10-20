@@ -219,7 +219,7 @@ describe('session runner restart op', () => {
         await expect(restartCases[1][1]()).resolves.toMatchObject({ ok: false, status: 'partial_failure' });
     });
 
-    it.each(['busy', 'ineligible', 'version_unknown', 'unsupported_daemon', 'not_tracked', 'runner_not_active', 'missing_resume_snapshot', 'missing_spawn_options'] as const)('retains definitive %s outcomes without observing', async status => {
+    it.each(['busy', 'ineligible', 'version_unknown', 'unsupported_daemon', 'restart_admission_unsupported', 'not_tracked', 'runner_not_active', 'missing_resume_snapshot', 'missing_spawn_options'] as const)('retains definitive %s outcomes without observing', async status => {
         response = () => ({ ok: false, status, sessionId: 's1' });
         await expect(restartCases[0][1]()).resolves.toMatchObject({ ok: false, status });
         expect(decodedRequests.map(request => request.method)).toEqual([RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART]);

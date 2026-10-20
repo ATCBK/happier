@@ -31,6 +31,7 @@ import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machin
 import { reportPendingSessionActivationFailure } from '@/api/session/pendingActivationTransport';
 import { readTrackedSessionInputLiveWork } from '../lifecycle/readTrackedSessionInputLiveWork';
 import { waitForChangeOrDeadline } from '../lifecycle/waitForChangeOrDeadline';
+import { prepareSessionRunnerRestartAdmission, SessionRunnerRestartAdmissionUnsupportedError } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
 import { ExecutionRunListResponseSchema, isExecutionRunActive } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { readTrackedSessionMaterializedStateObservationBinding } from '../sessions/trackedSessionFromMarker';
 import { rm } from 'node:fs/promises';
@@ -6546,6 +6547,28 @@ export async function startDaemonSessionControlRuntime(
       return 'activity_observation_unavailable';
     }
   };
+  const prepareSessionRunnerSignal = async (sessionId: string, expectedPid: number, signal: AbortSignal) => {
+    try {
+      return await withSessionAccountContext(sessionId, async accountContext =>
+        await withSessionAccountHome(accountContext, async () => {
+          const credentials = accountContext?.bootstrap.credentials ?? params.credentials;
+          const transport = await resolveSessionTransportContext({ credentials, idOrPrefix: sessionId, signal });
+          if (!transport.ok || transport.sessionId !== sessionId) return null;
+          await assertSessionAccountCurrent(sessionId, accountContext);
+          return await prepareSessionRunnerRestartAdmission({ expectedPid, signal, callRpc: async (request, requestSignal) =>
+            await withSessionAccountHome(accountContext, async () => {
+              const input = { token: credentials.token, sessionId,
+                method: `${sessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`, request, timeoutMs: null,
+                signal: requestSignal ?? shutdownCancellationDomains.daemonWorkSignal };
+              return transport.mode === 'plain' ? await callSessionRpc({ ...input, mode: 'plain' })
+                : await callSessionRpc({ ...input, mode: 'e2ee', ctx: transport.ctx });
+            }) });
+        }), undefined, signal);
+    } catch (error) {
+      if (error instanceof SessionRunnerRestartAdmissionUnsupportedError) throw error;
+      return null;
+    }
+  };
   const resolvePredictiveSoftSwitchModeForInput = async (
     input: Readonly<{
       sessionId: string;
@@ -6618,6 +6641,8 @@ export async function startDaemonSessionControlRuntime(
     return await withSessionAccountContext(input.sessionId, async (accountContext) =>
       await requestPlannedRunnerRestart({
         reason: input.restartDiagnostic.reason ?? input.restartDiagnostic.trigger,
+        prepareSignal: signal => prepareSessionRunnerSignal(input.sessionId, input.tracked.sessionRunnerPid ?? input.tracked.pid,
+          AbortSignal.any([signal, shutdownCancellationDomains.daemonWorkSignal])),
         sessionId: input.sessionId,
         tracked: input.tracked,
         deferral: {
@@ -6701,6 +6726,10 @@ export async function startDaemonSessionControlRuntime(
     };
     return await requestPlannedRunnerRestart({
       reason: input.requesterReason ?? input.reason,
+      ...(input.requesterReason === 'request_auth_source_cutover' ? {} : {
+        prepareSignal: (signal: AbortSignal) => prepareSessionRunnerSignal(input.sessionId, input.tracked.sessionRunnerPid ?? input.tracked.pid,
+          AbortSignal.any([signal, shutdownCancellationDomains.daemonWorkSignal])),
+      }),
       sessionId: input.sessionId,
       tracked: input.tracked,
       completion: {

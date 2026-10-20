@@ -142,6 +142,7 @@ export class RpcHandlerManager {
     private acknowledgedRegistrationMethods = new Set<string>();
     private registrationReadinessWaiters = new Set<RegistrationReadinessWaiter>();
     private readonly inFlightRequestCounts = new Map<string, number>();
+    private readonly pausedRequestAdmission = new Map<string, Readonly<{ details?: unknown }>>();
     private activeTransportRequestControllers = new Set<AbortController>();
     /**
      * The authenticated relay stamps this short-lived id immediately before it
@@ -581,6 +582,21 @@ export class RpcHandlerManager {
                 errorCode: RPC_ERROR_CODES.FORBIDDEN,
             });
         }
+        const pausedAdmission = this.pausedRequestAdmission.get(this.readUnprefixedMethod(request.method));
+        if (pausedAdmission) {
+            // Bind an encrypted refusal to the actual request before encoding it.
+            // An unbound transport error intentionally drops domain evidence at
+            // the client codec; it cannot carry definite no-effect Run evidence.
+            try {
+                const decoded = await socketRpcCodec.decodeRequestParams(rpcContent, request.params, request.method);
+                callId = decoded.callId;
+            } catch (error) {
+                return await respond(request, { error: 'Unable to open RPC content',
+                    errorCode: readRpcErrorCode(error) ?? RPC_ERROR_CODES.UPDATE_REQUIRED });
+            }
+            return await deny('handler_admission', { error: 'RPC client temporarily unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE,
+                ...pausedAdmission });
+        }
         this.beginInFlightRequest(this.readUnprefixedMethod(request.method));
         const controller = new AbortController();
         this.activeTransportRequestControllers.add(controller);
@@ -1005,6 +1021,10 @@ export class RpcHandlerManager {
             if (!handler) {
                 return { error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
             }
+            if (this.pausedRequestAdmission.has(method)) {
+                return { error: 'RPC client temporarily unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE,
+                    ...this.pausedRequestAdmission.get(method) };
+            }
             this.beginInFlightRequest(method);
             const handlerExecutionId = this.beginHandlerExecution(method);
             try {
@@ -1207,6 +1227,18 @@ export class RpcHandlerManager {
             method: execution.method,
             activeForMs: Math.max(0, Math.round(observedAtMs - execution.startedAtMs)),
         }));
+    }
+
+    /** The single planned-restart owner closes admission; existing requests retain their lifetimes. */
+    pauseRequestAdmission(methods: readonly string[], refusal: Readonly<{ details?: unknown }> = {}): () => void {
+        const selected = new Set(methods);
+        for (const method of selected) this.pausedRequestAdmission.set(method, refusal);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            for (const method of selected) this.pausedRequestAdmission.delete(method);
+        };
     }
 
     /** Includes receiving authorization and cleanup, before/after handler execution. */

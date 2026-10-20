@@ -193,7 +193,7 @@ import {
   createSessionProviderInputOutcomeBinding,
   type SessionProviderInputOutcomePort,
 } from '@/agent/runtime/session/input/providerInputOutcome';
-import { registerSessionProviderInputAdmissionRpc } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { createSessionRunnerRestartAdmission, registerSessionProviderInputAdmissionRpc } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
 import { clearSessionGuardStateOnRunnerStart, type SessionGuardNoticeOwner } from '@/agent/runtime/session/input/sessionGuardNoticeRpc';
 import { dispatchActivityNotificationAsync } from '@/notifications/activity/dispatchActivityNotification';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
@@ -2550,6 +2550,7 @@ export async function runHostSessionRuntime(
   recordStartupPhase('host_input_setup');
   registerSessionProviderInputAdmissionRpc({
     consumer: inputConsumer,
+    runnerRestartAdmission: createSessionRunnerRestartAdmission(() => session.rpcHandlerManager),
     guardNotice,
     rpcHandlerRegistrar: currentControlRpcRegistrar.registrar,
     onApplicationSettled: async (request) => {
@@ -3868,11 +3869,6 @@ export async function runHostSessionRuntime(
       terminalRemoteModeLoop,
       capabilitySelection: {
         agent: capabilitySelectionAgentFacts,
-        waitForIdle: signal => session.rpcHandlerManager.waitForIdle(signal, [
-          SESSION_RPC_METHODS.EXECUTION_RUN_START,
-          SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE,
-          SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START,
-        ]),
         initialSkillRules: runnerSkills?.reach,
         initialMcpRules: runnerMcpReach,
         readMcpRules: () => {

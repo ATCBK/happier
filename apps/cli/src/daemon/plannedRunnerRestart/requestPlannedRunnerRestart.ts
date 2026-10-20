@@ -10,6 +10,7 @@ import type {
 import type { TrackedSession } from '../types';
 import type { RestartSessionRunnerCompletion } from './restartSessionRunnerOnCurrentRuntime';
 import type { OwnerRemainderCapture } from '../processes/endOwnerRemainder';
+import { SessionRunnerRestartAdmissionUnsupportedError, type SessionRunnerRestartAdmissionRelease } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
 
 type RestartCompletionWaiter = Readonly<{
   promise: Promise<RestartSessionRunnerCompletion>;
@@ -33,6 +34,8 @@ export type RequestPlannedRunnerRestartParams = Readonly<{
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
   requestSignal: (request: PlannedRunnerRestartSignalRequest) => Promise<PlannedRunnerRestartSignalResult>;
   canSignal?: (signal: AbortSignal) => PlannedRunnerRestartSignalGateResult | Promise<PlannedRunnerRestartSignalGateResult>;
+  /** Receiving creation admission remains closed through activity/capture checks and the signal. */
+  prepareSignal?: (signal: AbortSignal) => Promise<SessionRunnerRestartAdmissionRelease | null>;
   reason?: string;
   isShuttingDown?: () => boolean;
   isProcessSafeToSignal?: (params: Readonly<{
@@ -133,7 +136,10 @@ export async function requestPlannedRunnerRestart(
     // remain cancellable by their containing daemon/deferral lifetime.
     const lifetime = new AbortController();
     void completionState.promise?.then(() => lifetime.abort());
-    const signal = deferralSignal ? AbortSignal.any([lifetime.signal, deferralSignal]) : lifetime.signal;
+    const cancelBeforeSignal = () => lifetime.abort(deferralSignal?.reason);
+    deferralSignal?.addEventListener('abort', cancelBeforeSignal, { once: true });
+    if (deferralSignal?.aborted) cancelBeforeSignal();
+    const signal = lifetime.signal;
     let ownerStillCurrent = true;
     let missingProcessObserved = false;
     const trackedWitnessIsCurrent = (): boolean => {
@@ -169,12 +175,26 @@ export async function requestPlannedRunnerRestart(
       }
       return trackedWitnessIsCurrent();
     };
-    let signalResult: PlannedRunnerRestartSignalResult;
+    let signalResult: PlannedRunnerRestartSignalResult = { status: 'skipped_stale_owner' };
+    let releaseSignalAdmission: SessionRunnerRestartAdmissionRelease | undefined;
     try {
       signalResult = await params.requestSignal({
         tracked: params.tracked,
         shouldSignal: async () => {
           if (!await exactProcessWitnessIsCurrent()) return false;
+          if (params.prepareSignal && !releaseSignalAdmission) {
+            const receivingPid = params.tracked.sessionRunnerPid ?? expectedPid;
+            let release: SessionRunnerRestartAdmissionRelease | null;
+            try { release = await params.prepareSignal(signal); }
+            catch (error) {
+              if (!(error instanceof SessionRunnerRestartAdmissionUnsupportedError)) throw error;
+              params.tracked.runnerRestartAdmissionUnsupportedPid = receivingPid;
+              notSignaledReason = 'restart_admission_unsupported';
+              return false;
+            }
+            if (!release) { notSignaledReason = 'activity_observation_unavailable'; return false; }
+            releaseSignalAdmission = release;
+          }
           const allowedByActivityGate = (await params.canSignal?.(signal)) ?? true;
           if (allowedByActivityGate !== true) {
             notSignaledReason = allowedByActivityGate === false
@@ -191,7 +211,7 @@ export async function requestPlannedRunnerRestart(
             params.tracked.ownerRemainderCapture = captured;
           }
           if (!await exactProcessWitnessIsCurrent()) return false;
-          if (signal.aborted) {
+          if (signal.aborted || releaseSignalAdmission?.signal.aborted) {
             notSignaledReason = 'activity_in_progress';
             return false;
           }
@@ -222,7 +242,16 @@ export async function requestPlannedRunnerRestart(
         },
       });
     } finally {
-      lifetime.abort();
+      try {
+        if (signalResult.status === 'skipped_stale_owner') await releaseSignalAdmission?.();
+      } finally {
+        // The deferral queue retires its callback signal after applying a switch.
+        // Once signalled, receiver retirement/completion owns the hold instead.
+        deferralSignal?.removeEventListener('abort', cancelBeforeSignal);
+        // A signalled receiver retains the in-flight hold through physical exit.
+        // Its transport retirement (or completion) cancels that same request.
+        if (signalResult.status === 'skipped_stale_owner') lifetime.abort();
+      }
     }
 
     if (!ownerStillCurrent || signalResult.status === 'skipped_stale_owner') {

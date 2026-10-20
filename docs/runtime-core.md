@@ -43,12 +43,26 @@ live reload. Native-skill overlay changes and MCP changes use the daemon's exist
 restart-with-resume owner with reason `capability_selection_change` and
 `force_current_cli`; they never create a fresh conversation as a fallback.
 Turn/approval busy refusals wait for the next settled turn.
-Automatic capability replacement first joins admitted Run Start and Ensure
-handlers through the Session RPC owner's cancellable idle observation, then
-rechecks the current rules, selection and foreground settlement. This covers
-Run preparation before a public Run exists. Unrelated long-lived read observers
-do not hold that admission wait; the daemon's existing active-child gate still
-governs the eventual physical signal.
+Capability replacement, runtime refresh and planned Connected Service switches
+share the daemon's final replacement gate. It closes Run Start, Ensure and
+Ensure-or-Start admission, including aliases declared by their canonical Actions,
+at the receiving Session RPC owner and joins requests
+already received, including authorization and cleanup before a public Run exists.
+The same gate then rechecks child and foreground activity, captures the departing
+process tree and verifies process identity before signalling. Creation cannot
+enter during those asynchronous checks. Unrelated long-lived readers do not hold
+the drain. A refused creation retains typed `noRunCreated` evidence through local
+and transported dispatch. The admission hold remains an in-flight private RPC
+request after a separate readiness response. Existing request cancellation and
+transport retirement reopen admission, without a release-message dependency or
+an expiry timer. A signalled runner keeps the hold through retirement; normal
+completion of the Connected Service deferral callback does not release it. The daemon
+refuses to signal if that live request is lost during its final checks. The exact
+runner PID and attempt pair readiness with its own hold; a delayed older request
+cannot release or authorize another attempt.
+An older runner without this operation returns `restart_admission_unsupported`
+with the existing Stop-and-Resume recovery, rather than indefinite activity deferral;
+security-driven request-auth source cutover retains its interrupting path.
 Missing resume evidence
 or a launch mode requiring a person's restart leaves the selection pending, with
 an apply-status projection rather than a queue or timer. Effective skill- and MCP-rule

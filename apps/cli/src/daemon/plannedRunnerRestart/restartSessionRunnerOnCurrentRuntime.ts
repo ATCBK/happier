@@ -183,6 +183,7 @@ function validateRestartContext(input: Readonly<{
     if (eligibility.disabledReason === 'not_active') return skipped('runner_not_active', sessionId, eligibility.disabledReason);
     if (eligibility.disabledReason === 'missing_spawn_options') return skipped('missing_spawn_options', sessionId, eligibility.disabledReason);
     if (eligibility.disabledReason === 'missing_resume_identity') return skipped('missing_resume_snapshot', sessionId, eligibility.disabledReason);
+    if (eligibility.disabledReason === 'restart_admission_unsupported') return skipped('restart_admission_unsupported', sessionId, eligibility.disabledReason);
     return skipped('ineligible', sessionId, eligibility.disabledReason);
   }
 
@@ -517,6 +518,9 @@ async function restartSessionRunnerOnCurrentRuntimeImpl(
   });
   if (!restart.signaled) {
     if (signalVersionGateResult) return signalVersionGateResult;
+    if (restart.notSignaledReason === 'restart_admission_unsupported') {
+      return skipped('restart_admission_unsupported', sessionId, 'restart_admission_unsupported');
+    }
     if (restart.notSignaledReason === 'activity_observation_unavailable') {
       return { ok: false, status: 'partial_failure', sessionId,
         diagnostics: { activityObservation: 'unavailable' } };

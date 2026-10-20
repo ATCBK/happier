@@ -194,6 +194,8 @@ export interface TrackedSession {
    * tracks the wrapper PID (parent). This field stores the runner PID when known.
    */
   sessionRunnerPid?: number;
+  /** Observed private restart-admission refusal, valid only for this receiving runner PID. */
+  runnerRestartAdmissionUnsupportedPid?: number;
   /**
    * Set when a daemon-owned spawn times out before the runner has reported a
    * canonical session id. Late webhooks from this process must be ignored so a

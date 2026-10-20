@@ -1511,6 +1511,14 @@ describe('Custom ACP fresh daemon launch composition', () => {
       expect(options?.auth).toMatchObject({ clientType: 'user-scoped', token: storage.credentials.token });
       return createApiSessionSocketStub({ emitWithAck: (event, payload) => {
         expect(event).toBe(SOCKET_RPC_EVENTS.CALL);
+        if (payload && typeof payload === 'object'
+          && Reflect.get(payload, 'method') === `${sessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`) {
+          const request: unknown = Reflect.get(payload, 'params');
+          expect(request).toMatchObject({ expectedPid: tracked.pid });
+          if (!request || typeof request !== 'object') throw new Error('Expected restart admission request');
+          if (Reflect.get(request, 'action') === 'restart_hold') return new Promise(() => {});
+          return { ok: true, result: { status: 'ready' } };
+        }
         const method = `${sessionId}:${SESSION_RPC_METHODS.EXECUTION_RUN_LIST}`;
         expect(payload).toMatchObject({ method, params: {}, timeoutMs: null });
         childRunReads.push(method);

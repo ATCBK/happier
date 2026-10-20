@@ -224,7 +224,7 @@ export type SessionLoopLifecycleParams = Readonly<{
   sessionIsNew?: boolean;
   runtime: RuntimeTurnOperations;
   hookRuntime: HostSessionRuntimeHookRuntime;
-  capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'waitForIdle' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'readMcpRules' | 'initialMcpRules' | 'subscribeAccountSettings'>;
+  capabilitySelection?: Pick<CapabilitySelectionSynchronizerInput, 'agent' | 'skillsRunner' | 'readSkillRules' | 'initialSkillRules' | 'readMcpRules' | 'initialMcpRules' | 'subscribeAccountSettings'>;
   registerProviderAcceptedEffect: RegisterProviderAcceptedEffect;
   terminalRemoteModeLoop?: HostSessionTerminalRemoteModeLoop | null;
   messageBuffer: MessageBuffer;

@@ -27,8 +27,6 @@ export type CapabilitySelectionSynchronizerInput = Readonly<{
   agent: CapabilityApplyTimingInputV1['agent'];
   isStarted: () => boolean;
   isSettled: () => boolean;
-  /** The receiving Session RPC owner retains Run creation before a Run exists. */
-  waitForIdle?: (signal: AbortSignal) => Promise<void>;
   skillsRunner?: SessionSkillsReapplyRunner;
   skillsTransports?: RunnerSkillsTransports;
   initialSkillRules?: SkillRuleObservation;
@@ -142,14 +140,6 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   const apply = async () => {
     observe();
     if (lifetime.signal.aborted || !input.isStarted() || restartAccepted) return;
-    const requested = pending();
-    if ((requested.mcp || requested.skills) && input.isSettled() && !waitForNextSettlement && !blocked) {
-      await input.waitForIdle?.(lifetime.signal);
-      // Rules, selection and foreground custody can change while an admitted
-      // Run is preparing. Decide from the current observation after it settles.
-      observe();
-      if (lifetime.signal.aborted || !input.isStarted() || restartAccepted) return;
-    }
     const captured = desired;
     const capturedSkillRules = desiredSkillRules;
     const agent = readSessionCapabilityAgentFactsV1(input.session.getMetadataSnapshot()) ?? input.agent;

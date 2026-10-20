@@ -65,6 +65,9 @@ export function resolveSessionRunnerRestartEligibility(
     return { eligible: false, disabledReason: 'not_remote_started' };
   }
   if (!isActiveTrackedRunner(tracked)) return { eligible: false, disabledReason: 'not_active' };
+  if (tracked.runnerRestartAdmissionUnsupportedPid === (tracked.sessionRunnerPid ?? tracked.pid)) {
+    return { eligible: false, disabledReason: 'restart_admission_unsupported' };
+  }
   if (!hasExactProcessWitness(tracked)) {
     return {
       eligible: false,

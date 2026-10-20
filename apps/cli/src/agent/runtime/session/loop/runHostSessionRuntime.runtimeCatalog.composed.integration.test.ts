@@ -33,6 +33,8 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import { readSessionCapabilityApplyChange, sessionCapabilityApplyNotice } from '../../../../../../ui/sources/components/sessions/capabilities/sessionCapabilityApplyNotice';
 import { createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, SessionOwnerMetadataV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { readPendingCapabilityApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { prepareSessionRunnerRestartAdmission } from '../input/sessionProviderInputAdmissionRpc';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { CheckpointCodeRollbackResultSchema } from '@happier-dev/protocol/sessions/control/rollback/checkpointCodeRollback';
 import { buildRepositoryCheckpointRefs } from '@/scm/checkpoints';
 
@@ -907,6 +909,37 @@ async function useShellBridgeRuntimeFixture(config: HostSessionRuntimeConfig) {
 }
 
 describe('runHostSessionRuntime', () => {
+  it('binds restart admission to the receiving RPC manager rather than the lifecycle registrar', async () => {
+    const harness = createHarness();
+    const rpc = new RpcHandlerManager({ scopePrefix: harness.session.sessionId, encryptionMode: 'plain', logger: () => {} });
+    harness.session.rpcHandlerManager = rpc;
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => ({ started: true }));
+    delete harness.deps.runPermissionModePromptLoopFn;
+    harness.config.startRuntimeBeforeFirstPrompt = true;
+    let stop: (() => Promise<void>) | undefined;
+    let stopping: Promise<void> | undefined;
+    let observed = false;
+    // Real host termination reaches the OS; only process exit is substituted here.
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    harness.config.onRuntimeStopReady = (requestStop: () => Promise<void>) => { stop = requestStop; };
+    harness.config.onAfterStart = async () => {
+      try {
+        const release = await prepareSessionRunnerRestartAdmission({ expectedPid: process.pid, signal: new AbortController().signal,
+          callRpc: (request, signal) => rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION, request, { signal }) });
+        expect(release).not.toBeNull();
+        await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {}))
+          .resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+        await release?.();
+        await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ started: true });
+        observed = true;
+      } finally { stopping = stop?.(); void stopping?.catch(() => undefined); }
+    };
+    try {
+      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      await stopping;
+      expect(observed).toBe(true);
+    } finally { exit.mockRestore(); }
+  });
   it.each([
     { name: 'legacy void', outcome: undefined, warns: false },
     { name: 'applied', outcome: { status: 'applied' as const }, warns: false },
@@ -9415,7 +9448,7 @@ describe('runHostSessionRuntime', () => {
   });
 
   it.each([
-    ['Role', 503], ['Role', 403], ['Project', 503], ['Project', 403],
+    ['Role', 503], ['Role', 403], ['Project', 503], ['Project', 403], ['Account currentness', 503],
   ] as const)('classifies a Home %s startup read and lets existing respawn recover only transient failures (HTTP %s)', async (source, status) => {
     let preparationReads = 0;
     const requests: string[] = [];
@@ -9423,7 +9456,8 @@ describe('runHostSessionRuntime', () => {
       request.resume();
       const path = new URL(request.url ?? '/', 'http://localhost').pathname;
       requests.push(path);
-      const preparationPath = source === 'Role' ? '/v1/artifacts' : `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`;
+      const preparationPath = source === 'Role' ? '/v1/artifacts' : source === 'Account currentness'
+        ? '/v1/account/encryption/currentness' : `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`;
       const unavailable = path === preparationPath && ++preparationReads === 1;
       response.statusCode = unavailable ? status : 200;
       response.setHeader('content-type', 'application/json');
@@ -9431,6 +9465,8 @@ describe('runHostSessionRuntime', () => {
         : path === '/v1/artifacts' ? []
         : path === '/v1/account/encryption' ? { mode: 'plain', updatedAt: 1 }
         : path === '/v1/account/encryption/currentness' ? { mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 }
+        : path === '/v1/account/entity-rows/mcp' ? { status: 'present', revision: 1,
+          content: { t: 'plain', v: { v: 1, servers: [], bindings: [] } } }
         : path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list` ? ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [] })
         : {}));
     });
@@ -9439,7 +9475,8 @@ describe('runHostSessionRuntime', () => {
     if (!address || typeof address === 'string') throw new Error('Expected Home listener');
     const serverUrl = `http://127.0.0.1:${address.port}`;
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'role-start-account' })).toString('base64url')}.signature`, encryption: null };
-    const snapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {},
+    const snapshot = { source: 'network' as const,
+      settings: accountSettingsParse(source === 'Account currentness' ? { mcpServersStrictMode: true } : {}), rawSettings: {},
       scopeKey: resolveAccountSettingsScopeKey(credentials), settingsVersion: 1, loadedAtMs: 1,
       settingsSecretsReadKeys: [], whenRefreshed: null,
       promptLibraryCatalog: { status: 'ready' as const, rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ revision: 1,
@@ -9455,6 +9492,7 @@ describe('runHostSessionRuntime', () => {
       attempts.push(harness);
       harness.opts.credentials = credentials;
       harness.opts.accountSettingsContext = snapshot;
+      if (source === 'Account currentness') delete harness.deps.resolveRunnerMcpServersFn;
       const metadata = harness.session.getMetadataSnapshot();
       harness.session.getMetadataSnapshot = () => ({ ...metadata, work: { sessionRolesV1: {
         roleId: 'builder', overrides: {}, sessionRoles: {}, notes: '',
@@ -9479,8 +9517,10 @@ describe('runHostSessionRuntime', () => {
     });
     try {
       const failureError: unknown = await start().catch((error: unknown) => error);
-      expect(failureError).toMatchObject({ code: status === 503 ? 'preparation_pending' : 'attachment_unavailable',
-        reason: status === 503 ? 'unavailable' : 'locked' });
+      expect(failureError).toMatchObject(source === 'Account currentness'
+        ? { code: 'mcp_catalog_unavailable', reason: 'unreachable' }
+        : { code: status === 503 ? 'preparation_pending' : 'attachment_unavailable',
+          reason: status === 503 ? 'unavailable' : 'locked' });
       expect(preparationReads).toBe(1);
       expect(admitted).toEqual([]);
       expect(pendingInitialInput).toBe(true);
@@ -9489,7 +9529,7 @@ describe('runHostSessionRuntime', () => {
       if (!failure || failure.action !== 'fail') throw new Error('Expected published startup failure');
       expect(failure.issue).toMatchObject({ code: status === 503 ? 'preparation_pending' : 'attachment_unavailable', source: 'dependency_failure' });
       expect(JSON.stringify(failure)).not.toContain('PRIVATE_RESPONSE');
-      expect(diagnostics.mock.calls).toContainEqual(['[Session] Home preparation read failed', expect.objectContaining({
+      if (source !== 'Account currentness') expect(diagnostics.mock.calls).toContainEqual(['[Session] Home preparation read failed', expect.objectContaining({
         kind: status === 503 ? 'server_error' : 'auth_failed', statusCode: status, retryable: status === 503,
       })]);
       let respawned = false;
@@ -9514,7 +9554,8 @@ describe('runHostSessionRuntime', () => {
         expect(terminal).toEqual(['startup_dependency_failure']);
         expect(preparationReads).toBe(1);
       }
-      expect(requests).toContain(source === 'Role' ? '/v1/artifacts' : `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
+      expect(requests).toContain(source === 'Role' ? '/v1/artifacts' : source === 'Account currentness'
+        ? '/v1/account/entity-rows/mcp' : `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
       manager.markStopRequested('session-1', { reason: 'daemon_stop_session', requestedAtMs: Date.now() });
     } finally {
       cancellation.abort();
