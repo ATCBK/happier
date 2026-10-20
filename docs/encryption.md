@@ -427,9 +427,18 @@ Development MCP OAuth grants use the existing qualified Connected Account
 credential and account-configuration envelopes, under the reserved host service
 `happier/mcp-sign-in`; the service-local account id is the MCP server id.
 The MCP definition records only its OAuth authentication choice, not a token.
-Discovered client registrations are keyed by issuer in the grant configuration;
-client secrets use its secret fields, and access/refresh tokens use its credential
-record. Plain Accounts use explicit plain envelopes without fabricated Account
+Discovered and person-supplied client registrations are keyed by issuer in the
+grant configuration; client secrets use its `clientSecrets` secret field, and
+access/refresh tokens use its credential record. A supplied app enters through
+the sign-in Action's optional `client` input and the existing configuration
+owner's one-shot `clientRegistration` secret field. Discovery binds it to the
+actual issuer and stages only the canonical registration and per-issuer secrets;
+the one-shot field is omitted from settled Account configuration. Client metadata
+documents retain precedence, and an unused supplied app is not copied into the
+settled configuration. Replacing an app uses the same configuration CAS;
+`client: null` clears that server's saved registrations and client-secret map
+before retrying automatic sign-in. Action review and observations exclude the
+client secret, with live-only executable input custody. Plain Accounts use explicit plain envelopes without fabricated Account
 key material; E2EE Accounts use the incumbent Account-scoped cipher owners.
 Discovery configuration and temporary exchange metadata stay in the existing
 sealed attempt until settlement. Request-auth capability files are private,
