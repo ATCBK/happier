@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { ExternalSessionCandidateV1Schema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { resolveTranscriptBodySemanticEvent } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import type { AgentExternalSessionsContribution, AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
 import { AgentExternalSessionTranscriptRawRecordSchema } from '@happier-dev/plugin-sdk/sessions/external';
 import { activate, PLUGIN_MANIFEST } from '../../manifest.js';
@@ -47,7 +48,13 @@ describe('Qwen v0.25.3 native reader', () => {
       const transcript = await f.reader.pageTranscript({ ...f.request, remoteSessionId: sessionId, direction: 'older' });
       expect(transcript.ok).toBe(true); if (!transcript.ok) return;
       expect(transcript.value.items.map(item => item.id)).toEqual(['u1', 'a1', 'tools:tool:call', 'result']);
-      for (const item of transcript.value.items) expect(AgentExternalSessionTranscriptRawRecordSchema.safeParse(item.raw).success).toBe(true);
+      for (const item of transcript.value.items) {
+        expect(AgentExternalSessionTranscriptRawRecordSchema.safeParse(item.raw).success).toBe(true);
+        const derivedRole = item.raw.role === 'user' ? 'user'
+          : resolveTranscriptBodySemanticEvent({ protocol: 'acp', body: item.raw.content })?.role;
+        expect(derivedRole).toBeDefined();
+        if (item.messageRole !== undefined && item.messageRole !== null) expect(item.messageRole).toBe(derivedRole);
+      }
       expect(transcript.value.items[1]?.raw).toMatchObject({ content: { data: { message: body } } });
       for (const searchTerm of ['sapphire', '"quotes"\n東京 café', 'long visible body', 'visible tool emerald']) {
         const page = await f.reader.listCandidates({ ...f.request, searchTarget: 'content', searchTerm });

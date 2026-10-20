@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import type { AgentExternalSessionsContribution, AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
 import { AgentExternalSessionTranscriptRawRecordSchema } from '@happier-dev/plugin-sdk/sessions/external';
+import { resolveTranscriptBodySemanticEvent } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { GEMINI_PLUGIN } from '../../../../manifest.js';
 import { body, gemini, header, jsonl, records, sessionId, user } from './__fixtures__/gemini064.js';
 
@@ -51,7 +52,11 @@ describe('Gemini v0.64 native conversation reader', () => {
       expect(page.ok).toBe(true);
       if (!page.ok) return;
       expect(page.value.items.map(item => item.id)).toEqual(['u1', 'a1', 'tools:tool:call']);
-      for (const item of page.value.items) expect(AgentExternalSessionTranscriptRawRecordSchema.safeParse(item.raw).success).toBe(true);
+      for (const item of page.value.items) {
+        expect(AgentExternalSessionTranscriptRawRecordSchema.safeParse(item.raw).success).toBe(true);
+        const role = item.raw.role === 'user' ? 'user' : resolveTranscriptBodySemanticEvent({ protocol: 'acp', body: item.raw.content })?.role;
+        expect(item.messageRole ?? role).toBe(role);
+      }
       expect(page.value.items[1]?.raw).toMatchObject({ content: { data: { message: body } } });
       await appendFile(path, jsonl([{ ...user('display', 'injected invisible preamble'), displayContent: 'visible cyan' }]));
       expect(await reader.listCandidates({ ...request, searchTarget: 'content', searchTerm: 'injected invisible preamble' }))

@@ -116,7 +116,7 @@ export async function readQwenTranscript(file: QwenFile, signal: AbortSignal): P
     const projected = project(record, parts); partial ||= projected.unsupported;
     if (projected.text) {
       const user = record.type === 'user';
-      items.push({ id: record.uuid, createdAtMs, messageRole: user ? 'user' : 'agent',
+      items.push({ id: record.uuid, createdAtMs,
         ...(user ? { userProjection: 'source_fact' as const } : {}), raw: user
           ? { role: 'user', content: { type: 'text', text: projected.text } }
           : { role: 'agent', content: { type: 'acp', agentId: 'qwen', data: record.type === 'tool_result'
@@ -131,7 +131,7 @@ export async function readQwenTranscript(file: QwenFile, signal: AbortSignal): P
       const id = `${record.uuid}:tool:${call.id}`;
       const raw = AgentExternalSessionTranscriptRawRecordSchema.safeParse({ role: 'agent', content: { type: 'acp', agentId: 'qwen',
         data: { type: 'tool-call', callId: call.id, name: call.name, input: call.args ?? {} } } });
-      if (raw.success) items.push({ id, createdAtMs, messageRole: 'agent', raw: raw.data });
+      if (raw.success) items.push({ id, createdAtMs, raw: raw.data });
       else { partial = true; items.push(createExternalSessionUnsupportedTranscriptItem({ agentId: 'qwen', id, createdAtMs })); }
     }
   }

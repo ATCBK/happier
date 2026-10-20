@@ -118,4 +118,4 @@ export function createQwenExternalSessionsContribution(params: Readonly<{ env?: 
   };
   return Object.freeze(contribution);
 }
-export const qwenExternalSessionsContribution = createQwenExternalSessionsContribution();
+export const qwenExternalSessionsContribution: AgentExternalSessionsContribution = createQwenExternalSessionsContribution();

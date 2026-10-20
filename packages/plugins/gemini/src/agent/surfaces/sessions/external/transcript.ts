@@ -159,7 +159,7 @@ export async function readGeminiTranscript(filePath: string, signal: AbortSignal
       const output = parts(tool.result);
       partial ||= output.partial;
       if (output.text) items.push({ id: `${id}:tool:${tool.id}`, createdAtMs: time(tool.timestamp) || createdAt,
-        messageRole: 'agent', raw: { role: 'agent', content: { type: 'acp', agentId: 'gemini',
+        raw: { role: 'agent', content: { type: 'acp', agentId: 'gemini',
           data: { type: 'tool-result', callId: tool.id, output: output.text, isError: tool.status === 'error' } } } });
     }
   }
