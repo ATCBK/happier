@@ -215,7 +215,10 @@ export class ConnectedServiceMaterializedHomeCleanupScheduler {
     const targets: MaterializedHomeCleanupTarget[] = [];
     if (retainedSnapshot.identityDeletionAuthority === 'confirmed') {
       for (const entry of await readDirectoryEntries(this.#baseDir, this.#fileOperationTimeoutMs)) {
-        if (entry.name === '.attempts') continue;
+        // Requester Account roots are a namespace, not a materialization
+        // identity. This Account's Session inventory cannot establish absence
+        // for the foreign Sessions beneath it, even before their recovery runs.
+        if (entry.name === '.attempts' || entry.name === 'requester-accounts') continue;
         // ../0.2 may materialize directly under identity.id; current homes use its hash.
         if (retainedSnapshot.retainedSegments.has(entry.name) || retainedSnapshot.retainedKeys.has(entry.name)) continue;
         const mtimeMs = await readDirectoryMtimeMs(entry.path, this.#fileOperationTimeoutMs);

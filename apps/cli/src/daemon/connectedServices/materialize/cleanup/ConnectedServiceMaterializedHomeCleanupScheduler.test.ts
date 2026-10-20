@@ -27,6 +27,31 @@ async function touchOld(path: string, mtimeMs: number): Promise<void> {
 }
 
 describe('ConnectedServiceMaterializedHomeCleanupScheduler', () => {
+  it('does not apply custodian Session deletion authority to the requester Account namespace', async () => {
+    const root = await createTempDir('happier-requester-home-cleanup-');
+    try {
+      const baseDir = join(root, 'materialized');
+      const namespace = join(baseDir, 'requester-accounts');
+      // Even a requester home awaiting its first rollout belongs to another
+      // Account. A complete custodian inventory cannot prove it unreferenced.
+      const requesterHome = await createIdentityRoot(join(namespace, 'account-requester'), 'csm_requester');
+      await writeFile(join(requesterHome, 'codex', 'auth.json'), '{}');
+      const orphan = await createIdentityRoot(baseDir, 'csm_custodian-orphan');
+      const attempt = join(baseDir, '.attempts', 'stale-attempt');
+      await mkdir(attempt, { recursive: true });
+      for (const path of [namespace, orphan, attempt]) await touchOld(path, 1_000);
+      const scheduler = new ConnectedServiceMaterializedHomeCleanupScheduler({
+        baseDir, nowMs: () => 10_000, orphanTtlMs: 1_000, attemptTtlMs: 1_000,
+        getLiveMaterializationKeys: () => [], getRetainedMaterializationKeys: async () => [],
+      });
+      await scheduler.reconcile();
+      await scheduler.cleanupPendingMaterializedHomes();
+      await expectExists(requesterHome);
+      await expectMissing(orphan);
+      await expectMissing(attempt);
+    } finally { await removeTempDir(root); }
+  });
+
   it('preserves local transcripts and declared resume state but reclaims homes with only shared symlinks', async () => {
     const root = await createTempDir('happier-home-local-state-');
     try {
