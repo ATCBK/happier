@@ -217,6 +217,7 @@ describe('OpenCode server managed-service assembly', () => {
       } } });
     if (mode === 'default') {
       await expect(admission).rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+      expect(nativeModes.source?.read()).toMatchObject({ currentModeId: 'build', modes: [{ id: 'build' }, { id: 'plan' }] });
       expect(requests.some(({ path, method }) => method === 'POST' && path.includes('/message'))).toBe(false);
       return;
     }

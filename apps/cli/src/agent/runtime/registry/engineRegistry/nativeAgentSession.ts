@@ -5749,6 +5749,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             let sessions: NonNullable<AgentRuntime['sessions']> | undefined;
             let continuationRefusalMustRemainPrimary = false;
             let openRequest: AgentSessionOpenRequest;
+            let startupModeAdmission: Readonly<{ dispose(): void | Promise<void> }> | null = null;
             try {
                 if (resolvedLateEnvironmentValues) {
                     const lateEnvironment =
@@ -5837,6 +5838,11 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     };
                 }
                 openRequest = buildOpenRequest();
+                // Admit published mode evidence while open is still constructing
+                // the Session, before a plugin can apply invalid configuration.
+                startupModeAdmission = publications.modesSource.subscribe(() => {
+                    assertNativeAgentSessionModeAvailable(openInputs.configuration, publications);
+                });
                 if (openRequest.configuration?.workspaceWrites === 'deny' && sessionCapabilities.workspaceWrites !== 'deny') {
                     throw Object.assign(new Error('Agent cannot enforce the role workspace-write policy'), { code: 'role_policy_unenforceable' });
                 }
@@ -5965,6 +5971,8 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     }
                 }
                 throw boundaryError;
+            } finally {
+                await startupModeAdmission?.dispose();
             }
             let cancellation: NativeAgentSessionCancellation;
             let configuration: NativeAgentSessionConfiguration;

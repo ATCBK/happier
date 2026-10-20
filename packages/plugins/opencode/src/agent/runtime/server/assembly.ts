@@ -374,12 +374,6 @@ export async function createOpenCodeServerRuntimeAssembly(
           : params.request.checkpointId
             ? { kind: 'fork', source: { providerSessionId: params.request.checkpointId } }
             : (() => { throw new Error('OpenCode execution-run fork requires a provider checkpoint'); })());
-    if (runConfiguration) {
-      const projection = projectOpenCodeSessionConfiguration(runConfiguration);
-      for (const update of projection.updates) {
-        await operations.updateSessionRuntimeConfig(update);
-      }
-    }
     const dispose = async (): Promise<void> => {
       if (disposed) return;
       disposed = true;
@@ -436,6 +430,21 @@ export async function createOpenCodeServerRuntimeAssembly(
           executionRunId: params.executionRunId,
           disposeOperations: dispose,
         });
+
+    // Bind the observed catalogs before applying requested configuration. The
+    // host needs that evidence to classify a pre-input startup refusal even
+    // when configuration prevents this open from returning its Session.
+    try {
+      if (runConfiguration) {
+        const projection = projectOpenCodeSessionConfiguration(runConfiguration);
+        for (const update of projection.updates) {
+          await operations.updateSessionRuntimeConfig(update);
+        }
+      }
+    } catch (error) {
+      await disposeBestEffort(params.ctx, 'runtime after configuration refusal', runtime);
+      throw error;
+    }
 
     return {
       runtime: { ...runtime, ...(params.request.skills ? { skillsDelivered: false } : {}) },

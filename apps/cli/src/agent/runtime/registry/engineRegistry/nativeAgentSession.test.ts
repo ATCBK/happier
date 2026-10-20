@@ -6150,10 +6150,12 @@ describe('native Agent session host adapter', () => {
 
     it.each([
         { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false },
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true },
+        { mode: 'default', modes: null, currentModeId: null, accepted: false, refusesDuringOpen: true, missingInventory: true },
         { mode: 'custom', modes: [{ id: 'custom', name: 'Custom' }], currentModeId: 'build', accepted: true },
         { mode: 'custom', modes: null, currentModeId: null, accepted: true },
         { mode: 'custom', modes: [], currentModeId: 'custom', accepted: true },
-    ])('admits external native mode $mode against its observed inventory ($accepted)', async ({ mode, modes, currentModeId, accepted }) => {
+    ])('admits external native mode $mode against its observed inventory ($accepted, early=$refusesDuringOpen, missing=$missingInventory)', async ({ mode, modes, currentModeId, accepted, refusesDuringOpen, missingInventory }) => {
         const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
         const dispose = vi.fn();
         const updateConfiguration = vi.fn<NonNullable<AgentSessionRuntime['updateConfiguration']>>(async () => ({
@@ -6165,6 +6167,7 @@ describe('native Agent session host adapter', () => {
                 read: () => ({ modes, currentModeId }),
                 subscribe: () => ({ dispose() {} }),
             });
+            if (refusesDuringOpen) throw new PluginError({ code: 'native_agent_session_mode_unavailable', retryable: false });
             return { send, updateConfiguration, watch: () => ({ dispose() {} }), dispose };
         };
         const agentId = 'acme-native-mode-admission';
@@ -6185,9 +6188,10 @@ describe('native Agent session host adapter', () => {
         } as never);
         if (!accepted) {
             await expect(admission).rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
-            await expect(admission).rejects.toBeInstanceOf(SessionStartupInputRefusalError);
+            if (missingInventory) await expect(admission).rejects.not.toBeInstanceOf(SessionStartupInputRefusalError);
+            else await expect(admission).rejects.toBeInstanceOf(SessionStartupInputRefusalError);
             expect(send).not.toHaveBeenCalled();
-            expect(dispose).toHaveBeenCalledOnce();
+            expect(dispose).not.toHaveBeenCalled();
             return;
         }
         const created = await admission;
