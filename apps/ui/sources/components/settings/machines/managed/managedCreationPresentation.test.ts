@@ -39,6 +39,44 @@ const machine: ManagedMachineV1 = {
 };
 
 describe('managed creation presentation', () => {
+  it('retires a historical failure after confirmed removal but keeps a later failed request', () => {
+    const removed: ManagedMachineV1 = {
+      ...machine,
+      desired: 'delete',
+      intentRevision: 3,
+      allocation: 'confirmed-absent',
+      observation: { availability: 'absent', observedAt: 30 },
+    };
+    const failed: ActionOperationProjection = {
+      serverId: machine.homeId,
+      observation: 'available',
+      isUnavailableProjection: false,
+      snapshot: {
+        version: 1, operationId: 'earlier-request', revision: 2,
+        actionId: 'machines.managed.delete', state: 'failed',
+        scope: { accountId: 'owner', machineId: machine.controller.machineId },
+        title: 'Delete', createdAt: 10, settledAt: 20, cancellation: 'supported',
+        domainRef: { kind: 'managedMachine', id: machine.id,
+          controller: machine.controller, resource: machine.resource },
+        error: { errorCode: 'managed_controller_request_failed', error: 'managed_controller_request_failed' },
+      },
+    };
+    expect(managedCreationState(removed, { operation: failed })).toEqual({ kind: 'absent' });
+    expect(currentManagedCreationOperation(removed, failed)).toBeNull();
+    const later = { ...failed, snapshot: { ...failed.snapshot, createdAt: 35, settledAt: 40 } };
+    expect(currentManagedCreationOperation(removed, later)).toBe(later);
+    expect(currentManagedCreationOperation(machine, failed)).toBe(failed);
+    expect(currentManagedCreationOperation({ ...removed, observation: undefined }, failed)).toBe(failed);
+    const unsettled = { ...failed, snapshot: { ...failed.snapshot, settledAt: undefined } };
+    expect(currentManagedCreationOperation(removed, unsettled)).toBe(unsettled);
+    // Start and Stop observations must not erase a genuinely failed request.
+    for (const [desired, power] of [['start', 'running'], ['stop', 'stopped']] as const) {
+      const retained: ManagedMachineV1 = { ...machine, desired,
+        observation: { availability: 'present', power, observedAt: 30 } };
+      const powerFailure = { ...failed, snapshot: { ...failed.snapshot, actionId: 'machines.managed.power.set' as const } };
+      expect(currentManagedCreationOperation(retained, powerFailure)).toBe(powerFailure);
+    }
+  });
   it('retires only the selected service activation failure after the enrolled guest connects', () => {
     const enrolled = {
       ...machine,
