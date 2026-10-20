@@ -508,7 +508,7 @@ describe('SessionFollowEdge service', () => {
 
         // Stored transcript reads preserve historical ids; only original
         // admission applies the current Pending identity grammar.
-        await db.sessionMessage.update({ where: { sessionId_seq: { sessionId: source.id, seq: 3 } }, data: { localId: '' } });
+        await db.sessionMessage.updateMany({ where: { sessionId: source.id, seq: 3 }, data: { localId: '' } });
         await expect(inTx((tx) => projectSessionFollowSourceForRunnerInTx(tx, {
             principal, destinationSessionId: destination.id, request,
         }))).resolves.toMatchObject({ messages: [{ seq: 3, localId: '' }] });

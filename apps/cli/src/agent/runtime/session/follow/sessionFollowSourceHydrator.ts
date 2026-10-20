@@ -985,7 +985,7 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
           ? { kind: 'person_wrote' as const }
           : row.role === 'agent' && semanticBody && typeof semanticBody.type === 'string' && !decoded?.sidechainId
             ? readSessionFollowSemanticSourceEvent({ ...semanticBody, type: semanticBody.type })
-              ?? (content?.type === 'text' ? { kind: 'message' as const } : null)
+              ?? (voiceOriginal && content?.type === 'text' ? { kind: 'message' as const } : null)
             : null;
         // A manager's optional Turn fact cannot consume a selected transcript
         // original before its admitted input exists. Keep that prefix pending

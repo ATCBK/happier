@@ -5,6 +5,7 @@ import type { SessionAwarenessProjectionV1 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
+import { TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -51,14 +52,19 @@ describe('Session Follow source hydrator', () => {
   it.each(['plain', 'e2ee'] as const)('keeps a restricted %s manager terminal behind an unadmitted original but supports legacy rows', async mode => {
     const ctx = { encryptionKey: new Uint8Array(32).fill(21), encryptionVariant: 'dataKey' as const };
     const material = createSessionFollowSourceMaterialResolver();
-    material.installPreparedDataKey({ sourceSessionId: 'source', dataKey: ctx.encryptionKey });
+    if (mode === 'e2ee') material.installPreparedDataKey({ sourceSessionId: 'source', dataKey: ctx.encryptionKey });
     try {
-      for (const localId of ['report-original', null]) {
-        const payload = { role: 'agent', content: { type: 'event', data: { type: 'worker-report', summary: 'Pending report' } } };
+      for (const { localId, legacyText } of [{ localId: 'report-original', legacyText: false },
+        { localId: null, legacyText: false }, { localId: 'legacy-text', legacyText: true }]) {
+        const deferred = localId !== null && !legacyText;
+        const payload = { role: 'agent', content: legacyText ? { type: 'text', text: 'Historical final text' }
+          : { type: 'event', id: 'report-original',
+            data: TranscriptRawAgentEventV1Schema.parse({ type: 'worker-report', summary: 'Pending report' }) } };
         const hydrate = createSessionFollowSourceHydrator({ session: destinationSession,
           credentials: { token: 'token', encryption: null }, sourceMaterialResolver: material,
           deps: { fetchRunnerSourceProjection: async () => SessionFollowSourceProjectionResponseV1Schema.parse({ v: 1, source: {
-            id: 'source', encryptionMode: mode, metadata: mode === 'plain' ? '{}' : encryptSessionPayload({ ctx, payload: {} }),
+            id: 'source', encryptionMode: mode, metadata: mode === 'plain' ? JSON.stringify({ path: '/source', host: 'test' })
+              : encryptSessionPayload({ ctx, payload: { path: '/source', host: 'test' } }), metadataLayoutVersion: 0,
             archivedAt: null, createdAt: 1, updatedAt: 1, active: true, activeAt: Date.now(), thinking: false, thinkingAt: null,
             latestTurnStatus: 'completed', latestTurnId: 'completed-turn', latestTurnStatusObservedAt: 1,
             latestReadyEventSeq: null, latestReadyEventAt: null, meaningfulActivityAt: 1, agentStateVersion: 0,
@@ -67,9 +73,14 @@ describe('Session Follow source hydrator', () => {
         const result = await hydrate({ signal: new AbortController().signal,
           observation: { ...observation, relation: 'manager', attachedAt: 1,
             observed: { ...observation.observed, transcriptSeq: 2, turn: { id: 'completed-turn', status: 'completed' } } } });
-        expect(result?.observed.transcriptSeq).toBe(localId === null ? 2 : 1);
-        expect(result?.observed.turn).toEqual(localId === null ? { id: 'completed-turn', status: 'completed' } : null);
-        if (localId !== null) expect(result?.workerUpdate).toBeUndefined();
+        expect(result?.reason).toBe(deferred ? 'source_unavailable' : 'source_changed');
+        if (deferred) {
+          expect(result?.workerUpdate).toBeUndefined();
+          expect(result?.recentMessages).toEqual([]);
+        } else {
+          expect(result?.observed.transcriptSeq).toBe(2);
+          expect(result?.observed.turn).toEqual({ id: 'completed-turn', status: 'completed' });
+        }
       }
     } finally { material.dispose(); }
   });

@@ -4,7 +4,8 @@ import {
 } from '@happier-dev/protocol';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { SessionFollowSessionPendingObservationV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionFollowAdmittedInputObservationV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -116,7 +117,7 @@ describe('restricted Follow source-key receiver', () => {
     const sourceDataKey = new Uint8Array(32).fill(41);
     const encryptedContent = encryptSessionPayload({
       ctx: { encryptionKey: sourceDataKey, encryptionVariant: 'dataKey' },
-      payload: { role: 'user', content: { type: 'text', text: 'prepared Runner source' } },
+      payload: { role: 'agent', content: { type: 'codex', data: { type: 'message', message: 'prepared Runner source' } } },
     });
     const encryptedMetadata = encryptSessionPayload({
       ctx: { encryptionKey: sourceDataKey, encryptionVariant: 'dataKey' },
@@ -124,6 +125,8 @@ describe('restricted Follow source-key receiver', () => {
     });
     const delivered = { transcriptSeq: 1, readyEventSeq: 0, agentStateVersion: 0, turn: null };
     const observed = { transcriptSeq: 2, readyEventSeq: 0, agentStateVersion: 0, turn: null };
+    const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'wake', event: { kind: 'message' },
+      original: { sourceSessionId: 'source', sourceMessage: { localId: 'runner-source-original', seq: 2 } } });
     let edgeIsCurrent = true;
     const acknowledgeSessionFollow = vi.fn().mockResolvedValue({
       ok: true,
@@ -142,8 +145,8 @@ describe('restricted Follow source-key receiver', () => {
         publisherGeneration: '1',
         currentSourceSessionIds: edgeIsCurrent ? ['source'] : [],
         observations: edgeIsCurrent
-          ? [SessionFollowSessionPendingObservationV1Schema.parse({ sourceSessionId: 'source', destinationSessionId: 'destination',
-            delivered, observed, policy: { preset: 'everything' } })]
+          ? [SessionFollowAdmittedInputObservationV1Schema.parse({ kind: 'admitted_input', localInputId: 'accepted-input',
+            sourceSessionId: 'source', destinationSessionId: 'destination', delivered, observed, delivery })]
           : [],
       })),
       acknowledgeSessionFollow,
@@ -177,7 +180,7 @@ describe('restricted Follow source-key receiver', () => {
           },
           messages: [{
             seq: 2,
-            localId: null,
+            localId: 'runner-source-original',
             content: { t: 'encrypted', c: encryptedContent },
             createdAt: 2,
             accountActor: null,
@@ -186,11 +189,10 @@ describe('restricted Follow source-key receiver', () => {
         })) as never,
       },
     });
-    const hydrateForReconcile = vi.fn(hydrateObservation);
     const reconcile = createSessionFollowContextReconciler({
       session,
       maxFollowContextUtf8Bytes: 100_000,
-      hydrateObservation: hydrateForReconcile,
+      hydrateObservation,
       sourceMaterialController: sourceMaterial,
     });
 
@@ -201,7 +203,7 @@ describe('restricted Follow source-key receiver', () => {
     const startWakeDrivenReconciliation = () => {
       const generation = readSessionFollowWakeInvalidationGeneration();
       return waitForSessionFollowWakeInvalidation(generation, signal).then(async (changed) => (
-        changed ? await reconcile({ signal }) : null
+        changed ? await reconcile({ signal, followDeliveries: [{ delivery, localInputId: 'accepted-input', userMessageSeq: 2 }] }) : null
       ));
     };
     registerRestrictedSessionFollowSourceKeyReceiver({
@@ -229,28 +231,21 @@ describe('restricted Follow source-key receiver', () => {
     expect(sourceMaterial.resolveForHydration({ sourceSessionId: 'source', signal })).toMatchObject({ mode: 'e2ee' });
 
     const prepared = await preparedAfterInstall;
-    expect(hydrateForReconcile).toHaveBeenCalledOnce();
-    await expect(hydrateForReconcile.mock.results[0]!.value).resolves.toEqual(expect.objectContaining({
-      reason: 'source_changed',
-      recentMessages: [expect.objectContaining({ seq: 2, text: 'prepared Runner source' })],
-    }));
-    expect(session.observePendingSessionFollow).toHaveBeenCalledTimes(2);
     expect(prepared?.updates).toEqual([expect.objectContaining({
       reason: 'source_changed',
       recentMessages: [expect.objectContaining({ seq: 2, text: 'prepared Runner source' })],
     })]);
     expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
     prepared?.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'accepted-input', userMessageSeq: 2 });
-    await vi.waitFor(() => expect(acknowledgeSessionFollow).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(acknowledgeSessionFollow).toHaveBeenCalledWith(expect.objectContaining({
       sourceSessionId: 'source',
       expectedPublisherGeneration: '1',
-      policy: { preset: 'everything' },
-      relation: 'follower',
+      localInputId: 'accepted-input',
       expected: delivered,
       observed,
       consumed: observed,
       acceptance: { kind: 'admitted_input', localInputId: 'accepted-input', userMessageSeq: 2 },
-    }));
+    })));
 
     edgeIsCurrent = false;
     const prunedAfterStaleInstall = startWakeDrivenReconciliation();
