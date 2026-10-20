@@ -27,14 +27,14 @@ await import('../AppPaneProvider');
 await import('./DetailsPaneHost');
 
 describe('destination details presentation continuity', () => {
-    it('preserves an ordinary host explicit focus mode and action rail without destination-owned content', async () => {
+    it('preserves an ordinary host hidden main column and action rail without destination-owned content', async () => {
         const { PaneColumnsHost } = await import('../PaneColumnsHost');
         setPanelsEnabled(false);
         const screen = await renderScreen(<PaneColumnsHost
             main={<div />}
             detailsPane={<div />}
             rightPane={<div />}
-            paneFocusModeActive
+            mainHidden
             actionRail={React.createElement('StandaloneRail')}
         />);
         expect(screen.findByTestId('multi-pane-details-docked')).not.toBeNull();
@@ -95,7 +95,7 @@ describe('destination details presentation continuity', () => {
             destinationOwnsDetails
             rightPane={<Auxiliary name="right" />}
             bottomPane={<Auxiliary name="bottom" />}
-            paneFocusModeActive
+            mainHidden
             actionRail={<div />}
         />;
         const screen = await renderScreen(tree());

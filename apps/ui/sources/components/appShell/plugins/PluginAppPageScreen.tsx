@@ -5,6 +5,7 @@ import { Stack } from '@/components/appShell/workspace/destinationRoute';
 import { useDestinationFocus, useDestinationRouter, useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
 
 import { DetailsPaneSlotHost } from '@/components/appShell/panes/details/DetailsPaneSlot';
+import { Text } from '@/components/ui/text/Text';
 import { PluginSurfacePlacementHost } from '@/components/plugins/surfaces';
 import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurfaceFallback';
 import { PluginPageBackStepProvider } from '@/components/plugins/shared/PluginPageBackStep';
@@ -345,7 +346,11 @@ export function PluginAppPageScreen(props: Readonly<{
                     `Collection` opening its items) renders beside the page in the
                     same pane every destination uses.
                 */}
-                <DetailsPaneSlotHost testID="plugin-app-page-details">
+                <DetailsPaneSlotHost testID="plugin-app-page-details" mainColumn={{
+                    hideLabel: t('panes.mainColumn.hidePage', { title: headerTitle }),
+                    showLabel: t('panes.mainColumn.showPage', { title: headerTitle }),
+                    identity: <Text numberOfLines={1}>{headerTitle}</Text>,
+                }}>
                 <View testID="plugin-app-page-host" style={pageContentFrameStyle}>
                     <PluginPageBackStepProvider owner={locationOwner}>
                     <PluginPageIdentityHeaderProvider pluginId={props.pluginId} title={headerTitle} description={page.description} headerStyle={page.headerStyle}>

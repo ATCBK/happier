@@ -2,16 +2,88 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol';
+import { ScopeActionOutputSchemas } from '@happier-dev/protocol/actions/scopeActionFamily';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { resolveSessionListViewContextDefaults } from '@/components/sessions/shell/search/sessionListViewFilters';
 import { clearSessionListViewFilterRetentionForTests, useSessionListViewFilters } from '@/components/sessions/shell/search/useSessionListViewFilters';
-import { invokeScopeAction, registerSessionListScopeActionOwner, registerShellColumnActionOwner } from './scopeActionFamily';
+import { invokeScopeAction, registerFileEditorActionOwner, registerSessionListScopeActionOwner, registerShellColumnActionOwner } from './scopeActionFamily';
 
 afterEach(() => { standardCleanup(); clearSessionListViewFilterRetentionForTests(); });
 
 describe('client scope Actions through canonical mounted owners', () => {
+  it('routes mounted editor commands through the executor, targets tabs, and releases retired owners', async () => {
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({ scopeAction: ({ actionId, input }) => invokeScopeAction(actionId, input) }));
+    // Exercise the approved execution path; the protocol suite separately proves Ask-first defaults.
+    const approvedContext = { surface: 'ui', authority: 'present_user', bypassApprovals: true } as const;
+    const executeSave = (tabId?: string) => executor.execute('file.editor.save', tabId ? { tabId } : {}, approvedContext);
+    expect(await executeSave()).toEqual({ ok: true, result: { status: 'unavailable' } });
+    let selectedResolution: string | null = null;
+    const cleanFirst = registerFileEditorActionOwner(() => ({ tabId: 'first', serverId: 'home-a', accountId: 'account-a', save: async () => ({ status: 'clean', hash: 'base' }),
+      resolve: async () => ({ status: 'unavailable' }) }));
+    const cleanSecond = registerFileEditorActionOwner(() => ({ tabId: 'second', serverId: 'home-b', accountId: 'account-b', save: async () => ({ status: 'conflict' }),
+      resolve: async resolution => { selectedResolution = resolution; return { status: 'resolved', hash: 'resolved' }; } }));
+    try {
+      expect(await executeSave()).toEqual({ ok: true, result: { status: 'conflict' } });
+      expect(await executeSave('first')).toEqual({ ok: true, result: { status: 'clean', hash: 'base' } });
+      expect(await executeSave('missing')).toEqual({ ok: true, result: { status: 'unavailable' } });
+      expect(await invokeScopeAction('file.editor.save', {}, { serverId: 'home-a', runtimeAccountId: 'account-a' }))
+        .toEqual({ status: 'clean', hash: 'base' });
+      expect(await invokeScopeAction('file.editor.save', { tabId: 'second' }, { serverId: 'home-a', runtimeAccountId: 'account-a' }))
+        .toEqual({ status: 'unavailable' });
+      expect(await invokeScopeAction('file.editor.resolve', { tabId: 'first', resolution: 'discardDraft' }, { runtimeAccountId: 'account-b' }))
+        .toEqual({ status: 'unavailable' });
+      const cleanSameTabInAnotherScope = registerFileEditorActionOwner(() => ({ tabId: 'first', serverId: 'home-b', accountId: 'account-b',
+        save: async () => ({ status: 'saved', hash: 'other-account' }), resolve: async () => ({ status: 'unavailable' }) }));
+      try {
+        expect(await invokeScopeAction('file.editor.save', { tabId: 'first' }, { serverId: 'home-a', runtimeAccountId: 'account-a' }))
+          .toEqual({ status: 'clean', hash: 'base' });
+        expect(await invokeScopeAction('file.editor.save', { tabId: 'first' }, { serverId: 'home-b', runtimeAccountId: 'account-b' }))
+          .toEqual({ status: 'saved', hash: 'other-account' });
+      } finally { cleanSameTabInAnotherScope(); }
+      const resolved = await executor.execute('file.editor.resolve', { resolution: 'useTheirs', tabId: 'second' }, approvedContext);
+      expect(resolved).toEqual({ ok: true, result: { status: 'resolved', hash: 'resolved' } });
+      expect(selectedResolution).toBe('useTheirs');
+      expect(ScopeActionOutputSchemas['file.editor.resolve'].parse(resolved.ok ? resolved.result : null)).toEqual({ status: 'resolved', hash: 'resolved' });
+      const cleanReplacement = registerFileEditorActionOwner(() => ({ tabId: 'second', serverId: 'home-b', accountId: 'account-b', save: async () => ({ status: 'saved', hash: 'written' }),
+        resolve: async () => ({ status: 'unavailable' }) }));
+      try {
+        cleanSecond();
+        expect(await executeSave('second')).toEqual({ ok: true, result: { status: 'saved', hash: 'written' } });
+      } finally { cleanReplacement(); }
+      expect(await executeSave('second')).toEqual({ ok: true, result: { status: 'unavailable' } });
+      expect(await executeSave()).toEqual({ ok: true, result: { status: 'clean', hash: 'base' } });
+    } finally { cleanFirst(); cleanSecond(); }
+    expect(await executeSave()).toEqual({ ok: true, result: { status: 'unavailable' } });
+  });
+  it('routes columns independently through the executor, selects offered tabs and rejects unavailable controls', async () => {
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({ scopeAction: ({ actionId, input }) => invokeScopeAction(actionId, input) }));
+    let navigationVisible = true;
+    let mainVisible = true;
+    let sideVisible = false;
+    let activeTab = 'files';
+    const cleanups = [
+      registerShellColumnActionOwner('navigation', () => ({ present: true, available: true, visible: navigationVisible, setVisible: value => { navigationVisible = value; } })),
+      registerShellColumnActionOwner('main', () => ({ present: true, available: true, visible: mainVisible, label: 'Hide session', setVisible: value => { mainVisible = value; } })),
+      registerShellColumnActionOwner('side', () => ({ present: true, available: true, visible: sideVisible, tabs: ['files', 'plugin:notes'], activeTab,
+        selectTab: tab => { activeTab = tab; }, setVisible: value => { sideVisible = value; } })),
+    ];
+    try {
+      expect(await executor.execute('shell.column.set', { column: 'main', visible: false }, { surface: 'agent' })).toEqual({ ok: true, result: { ok: true } });
+      expect(mainVisible).toBe(false);
+      expect(navigationVisible).toBe(true);
+      expect(await executor.execute('shell.column.set', { column: 'side', visible: false, tab: 'plugin:notes' }, { surface: 'mcp' })).toEqual({ ok: true, result: { ok: true } });
+      expect(sideVisible).toBe(true);
+      expect(activeTab).toBe('plugin:notes');
+      const observed = await invokeScopeAction('shell.column.get', { column: 'side' });
+      expect(ScopeActionOutputSchemas['shell.column.get'].parse(observed)).toMatchObject({ visible: true, activeTab: 'plugin:notes' });
+      expect(await executor.execute('shell.column.set', { column: 'side', visible: true, tab: 'missing' }, { surface: 'ui' })).toMatchObject({ ok: false, errorCode: 'client_control_unavailable' });
+      expect(activeTab).toBe('plugin:notes');
+      expect(await invokeScopeAction('shell.column.set', { visible: false, tab: 'files' })).toMatchObject({ ok: false, errorCode: 'client_control_unavailable' });
+    } finally { cleanups.forEach(cleanup => cleanup()); }
+    expect(await invokeScopeAction('shell.column.get', { column: 'main' })).toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+  });
   it('changes the real retained filter model, preserves other facets, resets and retires at unmount', async () => {
     // The UI host is the system boundary; internal filtering and Action admission remain real.
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ scopeAction: ({ actionId, input }) => invokeScopeAction(actionId, input) }));
@@ -71,13 +143,13 @@ describe('client scope Actions through canonical mounted owners', () => {
       const [visible, setVisible] = React.useState(true);
       const read = React.useRef(() => ({ present: true, visible, available: true, setVisible }));
       read.current = () => ({ present: true, visible, available: true, setVisible });
-      React.useEffect(() => registerShellColumnActionOwner(() => read.current()), []);
+      React.useEffect(() => registerShellColumnActionOwner('navigation', () => read.current()), []);
       return visible;
     });
     await act(async () => { expect(await invokeScopeAction('shell.column.set', { visible: false })).toEqual({ ok: true }); });
     expect(hook.getCurrent()).toBe(false);
     expect(await invokeScopeAction('shell.column.get', {})).toEqual({ present: true, visible: false, available: true });
-    const cleanup = registerShellColumnActionOwner(() => ({ present: false, visible: false, available: false, setVisible: () => {} }));
+    const cleanup = registerShellColumnActionOwner('navigation', () => ({ present: false, visible: false, available: false, setVisible: () => {} }));
     await hook.unmount();
     expect(await invokeScopeAction('shell.column.get', {})).toEqual({ present: false, visible: false, available: false });
     expect(await invokeScopeAction('shell.column.set', { visible: true })).toMatchObject({ ok: false });

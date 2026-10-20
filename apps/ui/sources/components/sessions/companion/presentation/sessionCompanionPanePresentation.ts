@@ -19,30 +19,29 @@ export function createSessionCompanionPanePresentation(input: Readonly<{
         mode: 'beside_chat' | 'focus' | 'preserve_focus',
     ): SessionPresentationMutationOutcome {
         const mainColumn = input.readMainColumn();
-        if (!mainColumn) return { status: 'unavailable' };
+        if (mode === 'focus' && !mainColumn) return { status: 'unavailable' };
         const before = input.readPane();
         const beforeDetails = before.scopeState?.details ?? null;
-        const beforeMainHidden = mainColumn.hidden;
+        const beforeMainHidden = mainColumn?.hidden;
         const beforeBoardTabPresent = beforeDetails?.groups?.some(
             (group) => group.tabs.some((tab) => tab.key === boardTab.key),
         ) ?? beforeDetails?.tabs.some((tab) => tab.key === boardTab.key) ?? false;
         const paneAlreadyApplied = beforeDetails?.isOpen === true
             && beforeDetails.activeTabKey === boardTab.key;
         const mainHiddenAlreadyApplied = mode === 'preserve_focus'
-            || (mode === 'focus' ? beforeMainHidden : !beforeMainHidden);
+            || mainColumn === null
+            || mainColumn.hidden === (mode === 'focus');
         if (paneAlreadyApplied && mainHiddenAlreadyApplied) return { status: 'unchanged' };
 
         before.openDetailsTab(boardTab, { intent: 'pinned' });
         const mainHiddenChanged = !mainHiddenAlreadyApplied;
-        if (mode !== 'preserve_focus') mainColumn.setHidden(mode === 'focus');
+        if (mode !== 'preserve_focus') mainColumn?.setHidden(mode === 'focus');
         const paneChanged = !paneAlreadyApplied;
 
         return {
             status: 'applied',
             undo: () => {
                 if (!input.isUndoCurrent()) return;
-                const currentMainColumn = input.readMainColumn();
-                if (!currentMainColumn) return;
                 const currentPane = input.readPane();
                 const currentDetails = currentPane.scopeState?.details ?? null;
                 // Only invert this command's fields while they still match its result.
@@ -55,7 +54,9 @@ export function createSessionCompanionPanePresentation(input: Readonly<{
                     }
                     if (!beforeBoardTabPresent) currentPane.closeDetailsTab(boardTab.key);
                 }
-                if (mainHiddenChanged) {
+                if (mainHiddenChanged && beforeMainHidden !== undefined) {
+                    const currentMainColumn = input.readMainColumn();
+                    if (!currentMainColumn) return;
                     if (currentMainColumn.hidden !== (mode === 'focus')) return;
                     currentMainColumn.setHidden(beforeMainHidden);
                 }

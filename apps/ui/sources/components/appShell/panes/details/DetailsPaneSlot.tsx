@@ -162,6 +162,7 @@ const DetailsPaneSlotBodyView = React.memo(function DetailsPaneSlotBodyView(prop
  */
 export const DetailsPaneSlotHost = React.memo(function DetailsPaneSlotHost(props: Readonly<{
     children: React.ReactNode;
+    mainColumn?: React.ComponentProps<typeof DetailsPaneHost>['mainColumn'];
     testID?: string;
 }>) {
     const [store] = React.useState(createDetailsPaneSlotStore);
@@ -177,6 +178,7 @@ export const DetailsPaneSlotHost = React.memo(function DetailsPaneSlotHost(props
     return (
         <DetailsPaneHost
             main={main}
+            mainColumn={props.mainColumn}
             details={details}
             onCloseDetails={store.close}
             testID={frame?.testID ?? props.testID}

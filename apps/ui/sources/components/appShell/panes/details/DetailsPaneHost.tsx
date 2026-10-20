@@ -16,6 +16,7 @@ export type DetailsPaneContent = Readonly<{
 
 export type DetailsPaneHostProps = Readonly<{
     main: React.ReactNode;
+    mainColumn?: React.ComponentProps<typeof AppScopePaneHost>['mainColumn'];
     /** What the details pane shows; null closes it. The destination owns this selection. */
     details: DetailsPaneContent | null;
     /** The pane asks to close (its close button, Escape, or a tap on the overlay scrim). */
@@ -72,6 +73,7 @@ export const DetailsPaneHost = React.memo(function DetailsPaneHost(props: Detail
     return (
         <AppScopePaneHost
             main={props.main}
+            mainColumn={props.mainColumn}
             destinationDetails={destinationDetails}
             mainMinWidthPx={props.mainMinWidthPx}
         />

@@ -31,7 +31,7 @@ import { AppRightSidebarTabSurface, useAppRightSidebarTabs } from './appRightSid
 import { RightSidebarIconTabBar } from './RightSidebarIconTabBar';
 import { RightSidebarActionRail } from './RightSidebarActionRail';
 import { RightSidebarPaneHeader } from './RightSidebarPaneHeader';
-import { toggleRightSidebarTab } from './rightSidebarActions';
+import { toggleRightSidebarTab, usePublishRightSidebarActions } from './rightSidebarActions';
 import {
     getRightSidebarTabLabel,
     resolveRightSidebarTabSelection,
@@ -303,6 +303,11 @@ export function AppScopeRightSidebarActionRail(props: Readonly<{ scopeId: string
         scope: 'app',
     });
     const selectTab = useAppRightSidebarTabChooser(props.scopeId, tabs);
+    usePublishRightSidebarActions({
+        tabs: tabs.filter(tab => !tab.disabledReason).map(tab => tab.id),
+        activeTab: selection.kind === 'available' ? selection.tab.id : undefined,
+        selectTab,
+    });
     return <RightSidebarActionRail surfaceId="workspaceRail" testID="app-scope-right-sidebar-action-rail" testIDPrefix="app-scope-right-sidebar-rail" actions={tabs.map((tab) => ({
         id: tab.id,
         label: getRightSidebarTabLabel(tab),

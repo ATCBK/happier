@@ -41,6 +41,7 @@ import type {
 } from './detailsWorkspaceTypes';
 import { DetailsTabGroupPanel, type DetailsTabGroupPanelProps } from './DetailsTabGroupPanel';
 import type { DetailsTabPresentation } from './DetailsTabStrip';
+import { runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
@@ -347,7 +348,10 @@ export const DetailsSplitWorkspace = React.memo((props: DetailsSplitWorkspacePro
                 }
                 return;
             case 'closeLeaf':
-                props.pane.closeDetailsGroup?.(action.leafId);
+                void runGuardedTabNavigation(
+                    getOwnDetailsWorkspaceRecordEntry(groupsById, action.leafId)?.tabKeys ?? [],
+                    () => props.pane.closeDetailsGroup?.(action.leafId),
+                );
                 return;
             case 'toggleMaximizeLeaf':
                 props.pane.setMaximizedDetailsGroup?.(
@@ -363,7 +367,7 @@ export const DetailsSplitWorkspace = React.memo((props: DetailsSplitWorkspacePro
             default:
                 return;
         }
-    }, [details.maximizedGroupId, props.pane]);
+    }, [details.maximizedGroupId, groupsById, props.pane]);
 
     const splitCanvasState = React.useMemo(
         () => createDetailsWorkspaceSplitCanvasState({

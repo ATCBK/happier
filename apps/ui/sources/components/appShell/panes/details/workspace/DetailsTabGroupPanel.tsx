@@ -181,7 +181,7 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
     useStackHeaderActionsPublisher(headerActionsScopeKey, lendsControls ? renderLentControls : null);
     const controlsTakenByTab = useStackHeaderActionsClaimed(headerActionsScopeKey);
     const showStrip = !(lendsControls && controlsTakenByTab);
-    const { unsavedKeys, chromeFor } = useDetailsTabUnsavedKeys();
+    const { unsavedKeys, chromeFor } = useDetailsTabUnsavedKeys(props.pane.pinDetailsTab);
     // Every diff drawn in this group applies the one split-width rule against the group's width. Only
     // crossing the threshold is state: resizing the pane does not re-render its tabs per pixel.
     const [splitFits, setSplitFits] = React.useState<boolean | null>(null);

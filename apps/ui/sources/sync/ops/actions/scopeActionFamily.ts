@@ -1,5 +1,6 @@
 import { normalizeSessionListFilterHomeIds } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
-import { ScopeActionInputSchemas, type ScopeActionId, type ScopeActionInputById } from '@happier-dev/protocol/actions/scopeActionFamily';
+import { ScopeActionInputSchemas, type ScopeActionId, type ScopeActionInputById, type ScopeActionOutputById, type ShellColumn, type FileViewMode } from '@happier-dev/protocol/actions/scopeActionFamily';
+import type { FileChangesScope } from '@happier-dev/protocol/scm';
 import type { SessionListViewFilterController } from '@/components/sessions/shell/search/useSessionListViewFilterController';
 import { resolveSessionListViewContextDefaults } from '@/components/sessions/shell/search/sessionListViewFilters';
 import { resolveSessionListFilterScopeAvailability } from '@/components/sessions/shell/search/sessionListFilterEditorModel';
@@ -34,10 +35,52 @@ export type ShellColumnActionOwner = Readonly<{
   present: boolean;
   visible: boolean;
   available: boolean;
+  tabs?: readonly string[];
+  activeTab?: string;
+  label?: string;
+  arrangementAvailable?: boolean;
+  selectTab?(tab: string): void;
   setVisible(visible: boolean): void;
 }>;
 
-let readColumnOwner: (() => ShellColumnActionOwner) | null = null;
+const columnOwners = new Map<ShellColumn, () => ShellColumnActionOwner>();
+export type FileEditorActionOwner = Readonly<{
+  tabId: string;
+  serverId: string | null;
+  accountId: string | null;
+  save(): Promise<ScopeActionOutputById['file.editor.save']>;
+  resolve(resolution: ScopeActionInputById['file.editor.resolve']['resolution']): Promise<ScopeActionOutputById['file.editor.resolve']>;
+}>;
+const fileEditorOwners = new Set<Readonly<{ read: () => FileEditorActionOwner }>>();
+
+/** The registration carries commands only; the mounted file hook remains the buffer and write owner. */
+export function registerFileEditorActionOwner(read: () => FileEditorActionOwner): () => void {
+  // Tab ids are scope-local; the token gives each mounted registration its exact cleanup.
+  const owner = { read };
+  fileEditorOwners.add(owner);
+  return () => { fileEditorOwners.delete(owner); };
+}
+
+export type FileViewActionOwner = Readonly<{
+  tabId: string;
+  active: boolean;
+  serverId: string | null;
+  accountId: string | null;
+  mode: FileViewMode;
+  changesScope?: FileChangesScope;
+  blame: boolean;
+  availableModes: readonly FileViewMode[];
+  blameAvailable: boolean;
+  changesScopeAvailable: boolean;
+  set(patch: Omit<ScopeActionInputById['file.view.set'], 'tabId'>): boolean;
+}>;
+const fileViewOwners = new Map<string, () => FileViewActionOwner>();
+
+/** Mounted controller bridge only: the pane tab remains the sole view-state owner. */
+export function registerFileViewActionOwner(key: string, read: () => FileViewActionOwner): () => void {
+  fileViewOwners.set(key, read);
+  return () => { if (fileViewOwners.get(key) === read) fileViewOwners.delete(key); };
+}
 let readLibraryOwner: (() => WorkflowLibraryViewController) | null = null;
 
 /** The focused Library joins the same client-local view-control bridge as Sessions and shell chrome. */
@@ -46,9 +89,13 @@ export function registerWorkflowLibraryScopeActionOwner(read: () => WorkflowLibr
   return () => { if (readLibraryOwner === read) readLibraryOwner = null; };
 }
 
-export function registerShellColumnActionOwner(read: () => ShellColumnActionOwner): () => void {
-  readColumnOwner = read;
-  return () => { if (readColumnOwner === read) readColumnOwner = null; };
+export function registerShellColumnActionOwner(column: ShellColumn, read: () => ShellColumnActionOwner): () => void {
+  columnOwners.set(column, read);
+  return () => { if (columnOwners.get(column) === read) columnOwners.delete(column); };
+}
+
+export function readShellColumnActionOwner(column: ShellColumn): ShellColumnActionOwner | null {
+  return columnOwners.get(column)?.() ?? null;
 }
 
 function unavailable(errorCode: 'client_surface_unavailable' | 'client_control_unavailable') {
@@ -68,6 +115,34 @@ function readSessionListOwner(input: ScopeActionInputById['session.list.view.get
 
 export async function invokeScopeAction(actionId: ScopeActionId, rawInput: unknown,
   context?: Pick<ActionExecutorContext, 'serverId' | 'runtimeAccountId'>): Promise<unknown> {
+  if (actionId === 'file.editor.save' || actionId === 'file.editor.resolve') {
+    const input = ScopeActionInputSchemas[actionId].parse(rawInput);
+    const owners = [...fileEditorOwners].map(owner => owner.read()).filter(owner =>
+      (!input.tabId || owner.tabId === input.tabId)
+      && (!context?.serverId || owner.serverId === context.serverId)
+      && (!context?.runtimeAccountId || owner.accountId === context.runtimeAccountId));
+    const owner = owners.at(-1);
+    if (!owner) return { status: 'unavailable' };
+    return actionId === 'file.editor.save' ? owner.save()
+      : owner.resolve(ScopeActionInputSchemas['file.editor.resolve'].parse(rawInput).resolution);
+  }
+  if (actionId === 'file.view.get' || actionId === 'file.view.set') {
+    const input = ScopeActionInputSchemas[actionId].parse(rawInput);
+    const owners = [...fileViewOwners.values()].map(read => read()).filter(owner =>
+      (input.tabId ? owner.tabId === input.tabId : owner.active)
+      && (!context?.serverId || owner.serverId === context.serverId)
+      && (!context?.runtimeAccountId || owner.accountId === context.runtimeAccountId));
+    // Ambiguous unaddressed surfaces cannot choose another page's state.
+    const owner = owners.length === 1 ? owners[0] : null;
+    if (!owner) return unavailable('client_surface_unavailable');
+    if (actionId === 'file.view.get') return { tabId: owner.tabId, mode: owner.mode, blame: owner.blame,
+      ...(owner.changesScope ? { changesScope: owner.changesScope } : {}) };
+    const { tabId: _tabId, ...patch } = ScopeActionInputSchemas['file.view.set'].parse(rawInput);
+    if ((patch.mode !== undefined && !owner.availableModes.includes(patch.mode))
+      || (patch.blame !== undefined && !owner.blameAvailable)
+      || (patch.changesScope !== undefined && !owner.changesScopeAvailable)) return unavailable('client_control_unavailable');
+    return owner.set(patch) ? { ok: true } : unavailable('client_control_unavailable');
+  }
   if (actionId === 'workflow.library.view.get' || actionId === 'workflow.library.view.set' || actionId === 'workflow.library.view.reset') {
     const controller = readLibraryOwner?.();
     if (!controller?.focused || !controller.lifetime?.isCurrent()
@@ -85,12 +160,20 @@ export async function invokeScopeAction(actionId: ScopeActionId, rawInput: unkno
     return controller.update(patch) ? { ok: true } : unavailable('client_control_unavailable');
   }
   if (actionId === 'shell.column.get' || actionId === 'shell.column.set') {
-    const column = readColumnOwner?.();
-    if (!column) return unavailable('client_surface_unavailable');
-    if (actionId === 'shell.column.get') return { present: column.present, visible: column.visible, available: column.available };
     const input = ScopeActionInputSchemas[actionId].parse(rawInput);
+    const columnId = input.column ?? 'navigation';
+    const column = readShellColumnActionOwner(columnId);
+    if (!column) return unavailable('client_surface_unavailable');
+    if (actionId === 'shell.column.get') return { present: column.present, visible: column.visible, available: column.available,
+      ...(column.tabs ? { tabs: column.tabs } : {}), ...(column.activeTab === undefined ? {} : { activeTab: column.activeTab }),
+      ...(column.label === undefined ? {} : { label: column.label }) };
+    const update = ScopeActionInputSchemas['shell.column.set'].parse(rawInput);
     if (!column.present || !column.available) return unavailable('client_control_unavailable');
-    column.setVisible(input.visible);
+    if (update.tab !== undefined) {
+      if (columnId !== 'side' || !column.selectTab || !column.tabs?.includes(update.tab)) return unavailable('client_control_unavailable');
+      column.selectTab(update.tab);
+    }
+    column.setVisible(update.tab === undefined ? update.visible : true);
     return { ok: true };
   }
   const input = ScopeActionInputSchemas[actionId].parse(rawInput);

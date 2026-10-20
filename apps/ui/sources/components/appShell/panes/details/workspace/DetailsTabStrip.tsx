@@ -11,6 +11,7 @@ import type { DetailsTabState, DetailsWorkspaceGroupView } from './detailsWorksp
 import { hrefForDestinationRef, useDestinationInstanceTitles } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { buildActiveDetailsRouteParams } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
 
 export type DetailsTabStripTestIds = DocumentTabStripTestIds;
 export type DetailsTabPresentation = DocumentTabPresentation;
@@ -37,6 +38,9 @@ export function detailsTabPanelNativeId(groupId: string, tabKey: string): string
 /** Details owns resource semantics; DocumentTabStrip owns the shared document chrome. */
 export const DetailsTabStrip = React.memo((props: DetailsTabStripProps) => {
     const { theme } = useUnistyles();
+    const closeTab = React.useCallback((tabKey: string) => {
+        void runGuardedTabNavigation([tabKey], () => props.pane.closeDetailsTab(tabKey));
+    }, [props.pane.closeDetailsTab]);
     const entries = React.useMemo(() => props.sessionId ? props.group.tabs.map(tab => ({ key: tab.key, fallbackTitle: tab.title, ref: {
         kind: tab.kind === 'session' ? 'session' : 'sessionDetails',
         params: { id: props.sessionId!, ...(props.serverId ? { serverId: props.serverId } : {}), ...buildActiveDetailsRouteParams([tab], tab.key) },
@@ -57,7 +61,7 @@ export const DetailsTabStrip = React.memo((props: DetailsTabStripProps) => {
         onActivate={props.pane.setActiveDetailsTab}
         onPin={props.pane.pinDetailsTab}
         onUnpin={props.pane.unpinDetailsTab}
-        onClose={props.pane.closeDetailsTab}
+        onClose={closeTab}
         resolveTabPresentation={props.resolveTabPresentation}
         unsavedTabKeys={props.unsavedTabKeys}
         testIds={props.testIds}

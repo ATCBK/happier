@@ -8,12 +8,14 @@ import { AppPaneScopeHost, type AppPaneDestinationDetails } from './AppPaneScope
 import type { PaneRightSidebarAdapter } from './types';
 
 const APP_RIGHT_SIDEBAR_ADAPTER: PaneRightSidebarAdapter = Object.freeze({
+    available: false,
     render: ({ scopeId }: Readonly<{ scopeId: string }>) => (
         <AppScopeRightSidebar scopeId={scopeId} closable testID="app-scope-right-sidebar" />
     ),
 });
 const APP_RIGHT_SIDEBAR_RAIL_ADAPTER: PaneRightSidebarAdapter = Object.freeze({
     ...APP_RIGHT_SIDEBAR_ADAPTER,
+    available: true,
     renderActionRail: ({ scopeId }) => <AppScopeRightSidebarActionRail scopeId={scopeId} />,
 });
 
@@ -24,6 +26,7 @@ const APP_RIGHT_SIDEBAR_RAIL_ADAPTER: PaneRightSidebarAdapter = Object.freeze({
  */
 export const AppScopePaneHost = React.memo(function AppScopePaneHost(props: Readonly<{
     main: React.ReactNode;
+    mainColumn?: React.ComponentProps<typeof AppPaneScopeHost>['mainColumn'];
     /** The destination's open details, or `null` while none is open. */
     destinationDetails?: AppPaneDestinationDetails | null;
     mainMinWidthPx?: number;
@@ -33,6 +36,7 @@ export const AppScopePaneHost = React.memo(function AppScopePaneHost(props: Read
         <AppPaneScopeHost
             scopeId={APP_PANE_SCOPE_ID}
             main={props.main}
+            mainColumn={props.mainColumn}
             rightSidebarAdapter={tabs.length > 0 ? APP_RIGHT_SIDEBAR_RAIL_ADAPTER : APP_RIGHT_SIDEBAR_ADAPTER}
             destinationDetails={props.destinationDetails ?? null}
             mainMinWidthPx={props.mainMinWidthPx}

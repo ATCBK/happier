@@ -51,7 +51,6 @@ export type NativeOverlayFocusReturnCaptureProps = Readonly<{
 export type AppPaneScopeApi = {
     scopeId: string;
     scopeState: AppPaneScopeStateView | null;
-    setMainHidden: (hidden: boolean) => void;
     /** Native input capture props for the scope root that contains a pane opener. */
     overlayFocusReturnCaptureProps?: NativeOverlayFocusReturnCaptureProps;
     /** Ephemeral command-time focus for a Right overlay presentation. */
@@ -60,6 +59,8 @@ export type AppPaneScopeApi = {
     detailsOverlayFocusReturnRef?: FocusReturnMutableRef;
     /** Ephemeral command-time focus for a Bottom overlay presentation. */
     bottomOverlayFocusReturnRef?: FocusReturnMutableRef;
+    /** Command-time focus for the Editor-first folded main drawer. */
+    mainOverlayFocusReturnRef?: FocusReturnMutableRef;
     /** URL hydration updates retained state without requesting navigation. */
     openRight: (options?: Readonly<{ tabId?: string; present?: boolean }>) => void;
     closeRight: () => void;
@@ -115,9 +116,6 @@ function getScopeState(state: ReturnType<typeof useAppPaneContext>['state'], sco
 
 export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     const { state, dispatch, overlayFocusReturnOwner } = useAppPaneContext();
-    const setMainHidden = React.useCallback((hidden: boolean) => {
-        dispatch({ type: 'setMainHidden', scopeId, hidden });
-    }, [dispatch, scopeId]);
     const scopeState = getScopeState(state, scopeId);
     const presentPane = usePanePresentation();
     const selectedRightDestinationRef = React.useRef(scopeState?.right.selectedDestination ?? null);
@@ -125,6 +123,7 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     const rightOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'right');
     const detailsOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'details');
     const bottomOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'bottom');
+    const mainOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'main');
     const detailsPaneTabsBehavior = useLocalSetting('detailsPaneTabsBehavior');
     const paneRegion = usePaneRegion();
     const recordNativeFocusTarget = React.useCallback((event: unknown) => {
@@ -315,11 +314,11 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     return React.useMemo(() => ({
         scopeId,
         scopeState,
-        setMainHidden,
         overlayFocusReturnCaptureProps,
         rightOverlayFocusReturnRef,
         detailsOverlayFocusReturnRef,
         bottomOverlayFocusReturnRef,
+        mainOverlayFocusReturnRef,
         openRight,
         closeRight,
         setRightTab,
@@ -350,11 +349,11 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     }), [
         scopeId,
         scopeState,
-        setMainHidden,
         overlayFocusReturnCaptureProps,
         rightOverlayFocusReturnRef,
         detailsOverlayFocusReturnRef,
         bottomOverlayFocusReturnRef,
+        mainOverlayFocusReturnRef,
         openRight,
         closeRight,
         setRightTab,

@@ -22,6 +22,13 @@ import { useDestinationFocus } from '@/components/appShell/workspace/Destination
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { useAppPaneContext } from './AppPaneProvider';
 import { PaneColumnsHost } from './PaneColumnsHost';
+import { usePaneArrangement } from './arrangement/usePaneArrangement';
+import { useOptionalAppPaneScopeLayout } from './hooks/useAppPaneScopeLayout';
+import { PaneMainColumnContext, type PaneMainColumnDescriptor, type PaneMainColumnState } from './mainColumn/usePaneMainColumn';
+import { RightSidebarActionsContext, type RightSidebarActions } from '@/components/appShell/rightSidebar/rightSidebarActions';
+import { registerShellColumnActionOwner, type ShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
+import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
+import type { ResolvedPaneLayout } from '@/components/ui/panels/paneBreakpoints';
 import { resolvePluginUiRuntimeFormFactor } from './layout/resolveMultiPaneDeviceType';
 import {
     resolveSelectedPaneDestination,
@@ -60,6 +67,13 @@ export type AppPaneScopeHostProps = Readonly<{
     /** A creation default, never an instruction to reopen an existing scope. */
     initialRight?: InitialRightPaneState;
     main: React.ReactNode;
+    /** Hosts without a named main column never offer the hide control. */
+    mainColumn?: PaneMainColumnDescriptor;
+    arrangement?: 'honour' | 'session';
+    /** SHELL UI supplies the permanent editor's empty page. */
+    emptyEditorPane?: React.ReactNode;
+    /** Ancestor Session presentation consumes this same measured host control, including its drawer. */
+    onMainColumnControlsChange?: (controls: PaneMainColumnState | null) => void;
     /** The main content's own minimum width before a pane becomes an overlay. */
     mainMinWidthPx?: number;
     /**
@@ -100,6 +114,79 @@ export type AppPaneScopeHostProps = Readonly<{
         detailsPaneEnabled?: never;
     }>
 );
+
+/** Measured host controls: no second pane state or layout resolver. */
+function AppPaneScopeControls(props: Readonly<{
+    scopeId: string;
+    focused: boolean;
+    descriptor?: PaneMainColumnDescriptor;
+    rightOpen: boolean;
+    detailsOpen: boolean;
+    sideAvailable: boolean;
+    arrangementHonoured: boolean;
+    onControlsChange?: (controls: PaneMainColumnState | null) => void;
+    setHidden: (hidden: boolean) => void;
+    setSideVisible: (visible: boolean) => void;
+    sideActions: React.MutableRefObject<RightSidebarActions | null>;
+    children: React.ReactNode;
+}>) {
+    const layout = useOptionalAppPaneScopeLayout();
+    const folded = layout?.layout.main === 'overlay';
+    const hidden = layout?.mainHidden === true || (folded && !layout?.mainDrawerOpen);
+    const canHide = props.descriptor !== undefined && layout != null
+        && layout.layout.kind !== 'single' && (props.rightOpen || layout.effectiveDetailsOpen || props.detailsOpen);
+    const labels = React.useMemo(() => ({
+        hideLabel: props.descriptor?.hideLabel ?? '',
+        showLabel: props.descriptor?.showLabel ?? '',
+    }), [props.descriptor?.hideLabel, props.descriptor?.showLabel]);
+    // An intent can open Details and hide main in one batch, before canHide has rendered again.
+    // Availability controls entry points; the measured host alone resolves effective visibility.
+    const setHidden = props.setHidden;
+    const toggle = React.useCallback(() => setHidden(!hidden), [hidden, setHidden]);
+    const value = React.useMemo<PaneMainColumnState | null>(() => props.descriptor === undefined ? null : ({
+        hidden, canHide, folded, labels, identity: props.descriptor.identity, setHidden, toggle,
+    }), [canHide, folded, hidden, labels, props.descriptor?.identity, setHidden, toggle]);
+    const current = React.useRef({ value, props, layout });
+    current.current = { value, props, layout };
+    React.useLayoutEffect(() => {
+        props.onControlsChange?.(value);
+        return () => props.onControlsChange?.(null);
+    }, [props.onControlsChange, value]);
+    React.useEffect(() => {
+        if (!props.focused) return;
+        const unregisterMain = registerShellColumnActionOwner('main', (): ShellColumnActionOwner => {
+            const { value, props, layout } = current.current;
+            return {
+                present: true,
+                visible: value?.hidden !== true,
+                available: value?.canHide === true,
+                label: value?.hidden ? value.labels.showLabel : value?.labels.hideLabel,
+                arrangementAvailable: props.arrangementHonoured && layout?.deviceType !== 'phone',
+                setVisible: visible => value?.setHidden(!visible),
+            };
+        });
+        const unregisterSide = registerShellColumnActionOwner('side', (): ShellColumnActionOwner => {
+            const { props, layout } = current.current;
+            return {
+                present: true,
+                visible: props.rightOpen,
+                available: props.sideAvailable && layout?.multiPaneEnabled === true && layout.deviceType !== 'phone',
+                ...(props.sideActions.current ?? {}),
+                setVisible: props.setSideVisible,
+            };
+        });
+        return () => { unregisterMain(); unregisterSide(); };
+    }, [props.focused, props.scopeId]);
+    useKeyboardShortcutHandlers(React.useMemo(() => !props.focused ? {} : ({
+        'panes.main.toggle': () => { if (!canHide) return false; toggle(); return true; },
+        'panes.side.toggle': () => {
+            if (!props.sideAvailable || !layout?.multiPaneEnabled || layout.deviceType === 'phone') return false;
+            props.setSideVisible(!props.rightOpen);
+            return true;
+        },
+    }), [canHide, layout?.deviceType, layout?.multiPaneEnabled, props.focused, props.rightOpen, props.setSideVisible, props.sideAvailable, toggle]));
+    return <PaneMainColumnContext.Provider value={value}>{props.children}</PaneMainColumnContext.Provider>;
+}
 
 type PaneSelectionResolution = ReturnType<typeof resolveSelectedPaneDestination>;
 type AvailablePaneSelection = Extract<PaneSelectionResolution, Readonly<{ kind: 'available' }>>;
@@ -261,7 +348,7 @@ function PluginAppPaneSurface(props: Readonly<{
 
 const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Readonly<{ paneAdapter: ResolvedPaneAdapter | null }>) => {
     const enclosingNavigationBinding = usePluginSurfaceDestinationNavigationBinding();
-    const { dispatch, state } = useAppPaneContext();
+    const { dispatch, state, overlayFocusReturnOwner } = useAppPaneContext();
     const pane = useAppPaneScope(props.scopeId);
     const deviceType = useDeviceType();
     const appProjection = useAppShellPluginUiProjection().pluginUiProjection;
@@ -286,15 +373,39 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
     const paneAdapter = props.paneAdapter;
     const showActionRail = useAppPaneActionRailVisible(props.scopeId, paneAdapter?.rightSidebarAdapter ?? null);
     const detailsPaneEnabled = paneAdapter?.detailsPaneEnabled !== false;
+    const preference = usePaneArrangement();
+    const arrangement = props.arrangement === 'honour' && deviceType !== 'phone' ? preference.arrangement : 'session';
     const destinationDetails = props.destinationDetails;
     const destinationOwnsDetails = destinationDetails !== undefined;
-    const effectiveDetailsOpen = destinationOwnsDetails
+    const effectiveDetailsOpen = arrangement === 'editor' || (destinationOwnsDetails
         ? destinationDetails !== null
-        : detailsPaneEnabled ? detailsOpen : false;
-    const paneFocusModeActive =
-        state.focusMode?.scopeId === props.scopeId
-        && state.activeScopeId === props.scopeId
-        && (rightOpen || effectiveDetailsOpen);
+        : detailsPaneEnabled ? detailsOpen : false);
+    const mainHiddenPreference = scopeState?.mainHidden === true;
+    const resolveMainHidden = React.useCallback((layout: ResolvedPaneLayout) => (
+        props.mainColumn !== undefined && mainHiddenPreference && layout.kind !== 'single'
+        && (rightOpen || effectiveDetailsOpen)
+    ), [effectiveDetailsOpen, mainHiddenPreference, props.mainColumn, rightOpen]);
+    React.useEffect(() => {
+        // Route-owned details cannot be seen by the reducer. Reconcile them here with every host.
+        if (mainHiddenPreference && !rightOpen && !effectiveDetailsOpen) {
+            dispatch({ type: 'setMainHidden', scopeId: props.scopeId, hidden: false });
+        }
+    }, [dispatch, effectiveDetailsOpen, mainHiddenPreference, props.scopeId, rightOpen]);
+    const drawerControls = React.useRef<Readonly<{ open(): void; close(): void }> | null>(null);
+    const receiveDrawerControls = React.useCallback((controls: typeof drawerControls.current) => {
+        drawerControls.current = controls;
+    }, []);
+    const captureMainDrawerFocus = React.useCallback(() => {
+        overlayFocusReturnOwner?.capture(props.scopeId, 'main');
+    }, [overlayFocusReturnOwner, props.scopeId]);
+    const setMainHidden = React.useCallback((hidden: boolean) => {
+        if (hidden) drawerControls.current?.close(); else drawerControls.current?.open();
+        dispatch({ type: 'setMainHidden', scopeId: props.scopeId, hidden });
+    }, [dispatch, props.scopeId]);
+    const sideActions = React.useRef<RightSidebarActions | null>(null);
+    const setSideVisible = React.useCallback((visible: boolean) => {
+        dispatch({ type: visible ? 'openRight' : 'closeRight', scopeId: props.scopeId });
+    }, [dispatch, props.scopeId]);
 
     const paneSurfaceScope = React.useMemo<PaneSurfaceScope | null>(() => {
         // `scopeId` is opaque. A missing registered/direct scope adapter is an
@@ -618,13 +729,31 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
     const wrapContent = React.useCallback((content: React.ReactElement) => (
         // A scope without a target of its own (the App's pages) keeps the enclosing app-target binding.
         <PluginSurfaceDestinationNavigationBindingProvider binding={paneNavigationBinding ?? enclosingNavigationBinding}>
-            {wrapScopeContent ? wrapScopeContent(content) : content}
+            <RightSidebarActionsContext.Provider value={sideActions}>
+                <AppPaneScopeControls
+                    scopeId={props.scopeId}
+                    focused={screenFocused}
+                    descriptor={props.mainColumn}
+                    rightOpen={rightOpen}
+                    detailsOpen={effectiveDetailsOpen}
+                    sideAvailable={(rightSidebarAdapter !== null && rightSidebarAdapter.available !== false) || rightPaneBuiltinAdapter !== null}
+                    arrangementHonoured={props.arrangement === 'honour'}
+                    onControlsChange={props.onMainColumnControlsChange}
+                    setHidden={setMainHidden}
+                    setSideVisible={setSideVisible}
+                    sideActions={sideActions}
+                >
+                    {wrapScopeContent ? wrapScopeContent(content) : content}
+                </AppPaneScopeControls>
+            </RightSidebarActionsContext.Provider>
         </PluginSurfaceDestinationNavigationBindingProvider>
-    ), [enclosingNavigationBinding, paneNavigationBinding, wrapScopeContent]);
+    ), [effectiveDetailsOpen, enclosingNavigationBinding, paneNavigationBinding, props.arrangement, props.mainColumn, props.onMainColumnControlsChange, props.scopeId,
+        rightOpen, rightPaneBuiltinAdapter, rightSidebarAdapter, screenFocused, setMainHidden, setSideVisible, wrapScopeContent]);
 
     return (
         <PaneColumnsHost
             main={props.main}
+            mainAccessibilityLabel={props.mainColumn?.showLabel}
             mainMinWidthPx={props.mainMinWidthPx}
             rightPane={rightPane}
             detailsPane={detailsPane}
@@ -634,7 +763,13 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
             destinationOwnsDetails={destinationOwnsDetails}
             detailsOpenedFrom={scopeState?.details.openedFrom ?? null}
             bottomOpen={bottomOpen}
-            paneFocusModeActive={paneFocusModeActive}
+            arrangement={arrangement}
+            mainHidden={props.mainColumn !== undefined && mainHiddenPreference}
+            resolveMainHidden={resolveMainHidden}
+            onSetMainHidden={setMainHidden}
+            onMainDrawerControlsChange={receiveDrawerControls}
+            onBeforeMainDrawerOpen={captureMainDrawerFocus}
+            emptyEditorPane={props.emptyEditorPane}
             actionRail={showActionRail ? rightSidebarAdapter?.renderActionRail?.({ scopeId: props.scopeId }) ?? null : null}
             onCloseRight={onCloseRight}
             onCloseDetails={onCloseDetails}
@@ -642,6 +777,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
             rightOverlayFocusReturnRef={pane.rightOverlayFocusReturnRef}
             detailsOverlayFocusReturnRef={pane.detailsOverlayFocusReturnRef}
             bottomOverlayFocusReturnRef={pane.bottomOverlayFocusReturnRef}
+            mainOverlayFocusReturnRef={pane.mainOverlayFocusReturnRef}
             rootProps={pane.overlayFocusReturnCaptureProps}
             wrapContent={wrapContent}
         />

@@ -47,7 +47,7 @@ it('retains pane layout subscribers across content updates and publishes an actu
     expect(snapshots.at(-1)?.layout.kind).not.toBe(withRightPane?.layout.kind);
 });
 
-it('remembers dock dimensions and their viewport basis when the Settings Action is off', async () => {
+it('remembers fixed dock dimensions when the Settings Action is off', async () => {
     const { settingsParse } = await import('@/sync/domains/settings/settings');
     storage.setState({ settings: settingsParse({
         actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
@@ -60,8 +60,44 @@ it('remembers dock dimensions and their viewport basis when the Settings Action 
         columns.props.onCommitBottomDockHeightPx(260);
     });
     expect(storage.getState().localSettings).toMatchObject({
-        rightPaneWidthPx: 330, rightPaneWidthBasisPx: 1200,
-        detailsPaneWidthPx: 470, detailsPaneWidthBasisPx: 1200,
-        bottomPaneHeightPx: 260, bottomPaneHeightBasisPx: 800,
+        rightPaneWidthPx: 330,
+        detailsPaneWidthPx: 470,
+        bottomPaneHeightPx: 260,
     });
+    const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+    await act(async () => {
+        columns.props.onResetRightDockWidthPx(); columns.props.onResetDetailsDockWidthPx();
+        columns.props.onResetMainDockWidthPx(); columns.props.onResetBottomDockHeightPx();
+    });
+    expect(storage.getState().localSettings).toMatchObject({
+        rightPaneWidthPx: localSettingsDefaults.rightPaneWidthPx,
+        detailsPaneWidthPx: localSettingsDefaults.detailsPaneWidthPx,
+        sessionColumnWidthPx: localSettingsDefaults.sessionColumnWidthPx,
+        bottomPaneHeightPx: localSettingsDefaults.bottomPaneHeightPx,
+    });
+});
+
+it('opens only a folded session drawer and forgets transient opening on leaving editor-first', async () => {
+    const layouts: ReturnType<typeof useOptionalAppPaneScopeLayout>[] = [];
+    const controls: { current: Readonly<{ open: () => void; close: () => void }> | null } = { current: null };
+    const Probe = () => { layouts.push(useOptionalAppPaneScopeLayout()); return null; };
+    const onControls = (value: typeof controls.current) => { controls.current = value; };
+    const host = (arrangement: 'session' | 'editor') => <PaneColumnsHost testID="drawer-columns"
+        main={<Probe />} arrangement={arrangement} emptyEditorPane={<div />} onMainDrawerControlsChange={onControls} />;
+    const screen = await renderScreen(host('session'));
+    await act(async () => controls.current?.open());
+    expect(layouts.at(-1)?.mainDrawerOpen).toBe(false);
+    await screen.update(host('editor'));
+    const root = screen.findByTestId('drawer-columns');
+    await act(async () => root!.props.onLayout({ nativeEvent: { layout: { width: 834, height: 800 } } }));
+    expect(layouts.at(-1)?.layout.main).toBe('overlay');
+    expect(layouts.at(-1)?.mainDrawerOpen).toBe(false);
+    await act(async () => controls.current?.open());
+    expect(layouts.at(-1)?.mainDrawerOpen).toBe(true);
+    await screen.update(host('session'));
+    expect(layouts.at(-1)?.mainDrawerOpen).toBe(false);
+    await screen.update(host('editor'));
+    await act(async () => root!.props.onLayout({ nativeEvent: { layout: { width: 1440, height: 800 } } }));
+    await act(async () => controls.current?.open());
+    expect(layouts.at(-1)?.mainDrawerOpen).toBe(false);
 });

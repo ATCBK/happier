@@ -74,6 +74,21 @@ function PaneScopeProbe(props: Readonly<{ triggerOpenDetails?: boolean }>) {
 }
 
 describe('AppPaneProvider persistence', () => {
+    it('persists a generic main-column preference and restores it with the same scope', async () => {
+        const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
+        const wrapper = ({ children }: React.PropsWithChildren) => <AppPaneProvider>{children}</AppPaneProvider>;
+        const first = await renderHook(useAppPaneContext, { wrapper });
+        await act(async () => {
+            first.getCurrent().dispatch({ type: 'activateScope', scopeId: 'app' });
+            first.getCurrent().dispatch({ type: 'setMainHidden', scopeId: 'app', hidden: true });
+        });
+        expect(getStorage().getState().localSettings.appPaneScopesV1.app.mainHidden).toBe(true);
+        await first.unmount();
+        const second = await renderHook(useAppPaneContext, { wrapper });
+        expect(second.getCurrent().state.scopes.app.mainHidden).toBe(true);
+        await second.unmount();
+    });
+
     it('remembers the Account and window workspace layout when the Settings Action is off', async () => {
         const { settingsParse } = await import('@/sync/domains/settings/settings');
         const { useWorkspaceState } = await import('../workspace/useWorkspaceState');

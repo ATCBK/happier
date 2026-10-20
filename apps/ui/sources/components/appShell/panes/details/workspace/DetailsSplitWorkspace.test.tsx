@@ -8,6 +8,7 @@ import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPa
 import { SplitCanvasHost } from '@/components/appShell/splitCanvas/components/SplitCanvasHost';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { registerMountedTabUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -133,6 +134,20 @@ const pane = {
 await import('./DetailsSplitWorkspace');
 
 describe('DetailsSplitWorkspace', () => {
+    it('keeps a group open when one of its retained editors declines closing', async () => {
+        const { DetailsSplitWorkspace } = await import('./DetailsSplitWorkspace');
+        const requestDecision = vi.fn(async () => 'keepEditing' as const);
+        const remove = registerMountedTabUnsavedChangesGuard('file:a', { isDirtyRef: { current: true }, tag: 'file-editor', requestDecision });
+        const closeDetailsGroup = vi.fn();
+        try {
+            const screen = await renderScreen(<DetailsSplitWorkspace pane={{ ...pane, closeDetailsGroup }} renderTabContent={() => null} />);
+            await act(async () => {
+                screen.findAllByType(SplitCanvasHost)[0]!.props.dispatch({ type: 'closeLeaf', leafId: 'group:1' });
+            });
+            expect(requestDecision).toHaveBeenCalledTimes(1);
+            expect(closeDetailsGroup).not.toHaveBeenCalled();
+        } finally { remove(); }
+    });
     beforeEach(() => {
         nativeBack.addEventListener.mockClear();
         pane.splitDetailsGroup.mockReset();

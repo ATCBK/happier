@@ -3,6 +3,26 @@ import { describe, expect, it, vi } from 'vitest';
 import { applySessionPaneUrlState, buildActiveDetailsRouteParams, createSessionPaneDetailsTab, deriveSessionPaneUrlStateFromScopeState, parseSessionPaneUrlState, reconcileSessionPaneScopeFromUrlState, serializeSessionPaneUrlState } from './sessionPaneUrlState';
 
 describe('sessionPaneUrlState', () => {
+    it('uses the tab view Changes scope after file.view.set supersedes its opening link', () => {
+        const tab = createSessionPaneDetailsTab({ kind: 'file', path: 'src/a.ts', changes: { kind: 'turnCheckpoint', turnId: 'turn-4' } })!;
+        const state = { right: { isOpen: false, activeTabId: null }, bottom: { isOpen: false, activeTabId: null },
+            details: { isOpen: true, tabs: [tab], activeTabKey: tab.key, tabState: { [tab.key]: { view: { changesScope: { kind: 'workingTree' } } } } } };
+        expect(deriveSessionPaneUrlStateFromScopeState(state)?.details)
+            .toMatchObject({ changes: { kind: 'workingTree' } });
+    });
+    it.each([
+        { kind: 'turnCheckpoint' as const, turnId: 'turn-4' },
+        { kind: 'session' as const },
+        { kind: 'workingTree' as const },
+    ])('carries a file Changes scope through links and the existing file tab identity ($kind)', (changes) => {
+        const target = { kind: 'file' as const, path: 'src/a.ts', changes };
+        const params = serializeSessionPaneUrlState({ details: target });
+        expect(parseSessionPaneUrlState(params)?.details).toEqual(target);
+        const tab = createSessionPaneDetailsTab(target);
+        expect(tab?.key).toBe('file:src/a.ts');
+        expect(tab?.resource).toMatchObject({ changes });
+        expect(parseSessionPaneUrlState(buildActiveDetailsRouteParams([tab], tab!.key))?.details).toEqual(target);
+    });
     it('roundtrips the explicitly chosen evidence Session without treating it as destination authority', () => {
         const params = { details: 'scmReview', comparison: 'turnCheckpoint', turnId: 'turn-2', view: 'files', evidenceSessionId: 'chosen-session' };
         const state = parseSessionPaneUrlState(params);

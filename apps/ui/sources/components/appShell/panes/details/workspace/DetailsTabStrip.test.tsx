@@ -82,8 +82,13 @@ const testIds = {
 };
 
 describe('DetailsTabStrip chrome absorption for browser-view tabs', () => {
-    it.each(['keepEditing', 'save', 'discard'] as const)('guards a dirty close and handles %s through the shared guard', async (decision) => {
+    it.each([
+        ['keepEditing', 'x'], ['save', 'x'], ['discard', 'x'],
+        ['keepEditing', 'middle'], ['save', 'middle'], ['discard', 'middle'],
+    ] as const)('guards a dirty close and handles %s through %s', async (decision, entryPoint) => {
         const { DetailsTabStrip } = await import('./DetailsTabStrip');
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
         const pane = createPane();
         const tab = browserViewTab();
         const requestDecision = vi.fn(async () => decision);
@@ -95,12 +100,16 @@ describe('DetailsTabStrip chrome absorption for browser-view tabs', () => {
         try {
             const screen = await renderScreen(<DetailsTabStrip pane={pane} group={group(tab)} testIds={testIds} />);
             await act(async () => {
-                screen.findByTestId('tab-close-browser-view_bs_bv')?.props.onPress({});
+                if (entryPoint === 'x') screen.findByTestId('tab-close-browser-view_bs_bv')?.props.onPress({});
+                else screen.findByTestId('tab-browser-view_bs_bv')?.props.onAuxClick?.({ button: 1, preventDefault: vi.fn(), stopPropagation: vi.fn() });
             });
             expect(requestDecision).toHaveBeenCalledTimes(1);
             expect(pane.closeDetailsTab).toHaveBeenCalledTimes(decision === 'discard' ? 1 : 0);
             expect(onDiscard).toHaveBeenCalledTimes(decision === 'discard' ? 1 : 0);
-        } finally { remove(); }
+        } finally {
+            remove();
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
     });
     it('renders a favicon for a browser-view tab via the generic presentation hook', async () => {
         const { DetailsTabStrip } = await import('./DetailsTabStrip');
