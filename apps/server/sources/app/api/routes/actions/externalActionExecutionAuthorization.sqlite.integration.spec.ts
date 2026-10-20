@@ -1717,8 +1717,8 @@ describe("external Action execution authorization", () => {
             const key = buildScmReviewedMarksKey(comparisonId);
             const path = `/v1/kv/${encodeURIComponent(key)}`;
             expect((await request('GET', path)).statusCode).toBe(404);
-            const value = Buffer.from(JSON.stringify({ t: 'plain', v: { v: 1, comparisonId,
-                reviewedChangeRefs: ['captured-change'] } })).toString('base64');
+            const value = Buffer.from(JSON.stringify({ t: 'plain', v: { v: 1, scopeId: comparisonId,
+                reviewedChangeKeys: ['content-change'] } })).toString('base64');
             const mutation = { mutations: [{ key, value, version: -1 }] };
             const saved = await request('POST', '/v1/kv', mutation);
             expect(saved.statusCode, saved.body).toBe(200);

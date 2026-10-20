@@ -109,7 +109,7 @@ export type PrepareExternalActionRequesterAccountContext = (input: Readonly<{
 export type ExecuteExternalActionResult = Readonly<
   | {
     kind: 'invalid_request';
-    errorCode: 'invalid_action' | 'invalid_envelope' | 'invalid_encrypted_envelope' | 'encrypted_action_unsupported' | 'request_too_large' | 'target_required' | 'target_unavailable';
+    errorCode: 'invalid_action' | 'invalid_envelope' | 'invalid_encrypted_envelope' | 'encrypted_action_unsupported' | 'request_too_large' | 'target_required' | 'target_unavailable' | 'storage_unavailable';
     requestId?: string;
   }
   | {
@@ -291,7 +291,7 @@ export async function executeExternalAction(input: Readonly<{
         refusalBranch: 'requester_home_unavailable',
       });
       return { kind: 'invalid_request',
-        errorCode: requesterHomeUnavailable ? 'target_unavailable'
+        errorCode: requesterHomeUnavailable ? 'storage_unavailable'
           : envelope.data.v === 2 ? 'invalid_encrypted_envelope' : 'invalid_envelope',
         ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}) };
     }

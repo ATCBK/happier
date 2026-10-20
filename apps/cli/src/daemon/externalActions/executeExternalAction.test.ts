@@ -29,7 +29,10 @@ import { ApprovalRequestV2Schema, requiresExactDaemonApprovalReplay, type Approv
 import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 import { ActionsSettingsV1Schema, normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
-  ExternalActionExecutionAuthorizationV1Schema, projectExternalActionExecutionResultV1 } from '@happier-dev/protocol/actions/externalActionApi';
+  ExternalActionExecutionAuthorizationV1Schema, projectExternalActionExecutionResultV1,
+  projectExternalActionHttpError, ExternalActionHttpErrorSchema,
+  parseExternalActionDaemonDispatchResult } from '@happier-dev/protocol/actions/externalActionApi';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { registerApprovalRpcHandlers } from '@/rpc/handlers/approvals';
@@ -97,11 +100,12 @@ function createExactLimitMultibyteResult() {
 
 describe('executeExternalAction', () => {
   it.each([
-    { kind: 'account', settingsFailure: false, rootFailure: false },
-    { kind: 'terminal', settingsFailure: false, rootFailure: false },
-    { kind: 'account', settingsFailure: true, rootFailure: false },
-    { kind: 'account', settingsFailure: false, rootFailure: true },
-  ] as const)('opens an own-Account E2EE Browser request through installed custody (%s)', async ({ kind, settingsFailure, rootFailure }) => {
+    { kind: 'account', settingsFailure: false, rootFailure: false, rootUnavailable: false },
+    { kind: 'terminal', settingsFailure: false, rootFailure: false, rootUnavailable: false },
+    { kind: 'account', settingsFailure: true, rootFailure: false, rootUnavailable: false },
+    { kind: 'account', settingsFailure: false, rootFailure: true, rootUnavailable: false },
+    { kind: 'account', settingsFailure: false, rootFailure: false, rootUnavailable: true },
+  ] as const)('opens an own-Account E2EE Browser request through installed custody (%s)', async ({ kind, settingsFailure, rootFailure, rootUnavailable }) => {
     const phaseLog = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     const accountId = 'browser-own-account';
     const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(19) };
@@ -131,6 +135,7 @@ describe('executeExternalAction', () => {
       throw new Error('Unexpected Browser Account read');
     });
     const post = vi.spyOn(axios, 'post').mockImplementation(async () => {
+      if (rootUnavailable) return { status: 503, data: { error: 'database_connection_unavailable' } };
       if (rootFailure) {
         const error = new TypeError('private-account-content.Schema.nullable is not a function');
         error.name = 'private-account-content';
@@ -151,6 +156,17 @@ describe('executeExternalAction', () => {
           serverHttpBaseUrl: 'https://browser-home.test', ownCredentials: credentials, isCurrent: async () => true,
           createExecutor: () => executor }),
       });
+      if (rootUnavailable) {
+        expect(result).toEqual({ kind: 'invalid_request', errorCode: 'storage_unavailable', requestId: binding.requestId });
+        if (result.kind !== 'invalid_request') throw new Error('expected_pre_open_refusal');
+        expect(parseExternalActionDaemonDispatchResult(result)).toEqual(result);
+        const httpFailure = projectExternalActionHttpError(result.errorCode, result.requestId);
+        expect(httpFailure.statusCode).toBe(503);
+        expect(classifyServerEndpointError({ response: { status: httpFailure.statusCode } }).retryable).toBe(true);
+        expect(ExternalActionHttpErrorSchema.parse(httpFailure.payload)).toEqual({ error: 'invalid_request',
+          code: 'storage_unavailable', requestId: binding.requestId });
+        return;
+      }
       if (settingsFailure || rootFailure) {
         expect(result).toEqual({ kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope', requestId: binding.requestId });
         expect(phaseLog).toHaveBeenCalledWith('[external-action-phase]', expect.objectContaining({
