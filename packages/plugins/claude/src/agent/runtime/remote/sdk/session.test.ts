@@ -3154,7 +3154,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
-  it('keeps reading an Agent that stopped to wait on its own background shell until it settles', async () => {
+  it.each(['resume', 'stop'] as const)('keeps reading an Agent awaiting its background shell until its %s', async (outcome) => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
       exec: exec.service,
@@ -3178,6 +3178,10 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       runtime.beginTurnLifecycle();
       await runtime.sendTurnPrompt('launch a background agent');
       await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledTimes(1));
+      const handle = await exec.spawnClient.mock.results[0]?.value;
+      if (!handle) throw new Error('expected SDK client handle');
+      let queryClosed = false;
+      void handle.client.closed.then(() => { queryClosed = true; });
 
       // Claude Code 2.1.302: the Agent reports `completed` when it stops to wait on its own shell.
       await row({ subtype: 'task_started', task_id: 'agent-1', task_type: 'local_agent', is_backgrounded: true });
@@ -3192,11 +3196,15 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       await row({ subtype: 'task_notification', task_id: 'agent-1', status: 'completed' });
       await row({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
 
-      await row({ subtype: 'task_progress', task_id: 'agent-1' });
-      await vi.waitFor(() => expect(lastSnapshot()).toEqual(expect.objectContaining({ state: 'active', activeCount: 1 })));
+      expect(queryClosed).toBe(false);
+      if (outcome === 'resume') {
+        await row({ subtype: 'task_progress', task_id: 'agent-1' });
+        await vi.waitFor(() => expect(lastSnapshot()).toEqual(expect.objectContaining({ state: 'active', activeCount: 1 })));
+      }
 
-      await row({ subtype: 'task_updated', task_id: 'agent-1', patch: { status: 'completed' } });
+      await row({ subtype: 'task_updated', task_id: 'agent-1', patch: { status: outcome === 'resume' ? 'completed' : 'killed' } });
       await vi.waitFor(() => expect(lastSnapshot()).toEqual(expect.objectContaining({ state: 'idle', activeCount: 0 })));
+      await vi.waitFor(() => expect(queryClosed).toBe(true));
     } finally {
       await runtime.resetOrDisposeRuntime().catch(() => undefined);
     }

@@ -144,7 +144,7 @@ function readHookTaskActivity(
     if (readTaskId(nestedTask) !== requestedTaskId) return null;
     const status = terminalStatus(nestedTask.status);
     return status
-      ? { type: 'terminal', terminalStatus: status, sessionId, taskId: requestedTaskId }
+      ? { type: 'terminal', terminalStatus: 'stopped', sessionId, taskId: requestedTaskId }
       : null;
   }
 
@@ -460,6 +460,11 @@ export function createClaudeProviderActivityLedger(options?: ClaudeProviderActiv
               : {}),
             ...withParent(current.parentTaskId),
           });
+        } else if (current?.awaitingChildren === true && activity.terminalStatus !== 'completed') {
+          if (current.ownerScope !== undefined && current.ownerScope !== ownerScope) return false;
+          // A later stop/failure settles the pending wake; duplicate completed rows do not.
+          const { awaitingChildren: _settled, ownerScope: _owner, ...terminal } = current;
+          entries.set(key, terminal);
         } else {
           if (!current) {
             entries.set(key, {
