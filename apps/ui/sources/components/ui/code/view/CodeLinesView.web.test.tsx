@@ -79,6 +79,41 @@ async function flushReactAsyncWork(): Promise<void> {
 }
 
 describe('CodeLinesView (web)', () => {
+    it('delegates nested token pointer offsets in UTF-16 and never activates removed diff lines', async () => {
+        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
+        const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
+        const lines = buildCodeLinesFromFile({ text: '😀 target' });
+        const pointer = vi.fn();
+        const activate = vi.fn();
+        const screen = await renderScreen(<CodeLinesViewCore lines={lines} intelligence={{ onPointerToken: pointer, onActivateToken: activate }} />);
+        const textNode = { textContent: 'target' };
+        const code = { getAttribute: () => lines[0].id, contains: (node: unknown) => node === textNode };
+        const target = { closest: () => code };
+        const range = { selectNodeContents: vi.fn(), setEnd: vi.fn(), toString: () => '😀 ta' };
+        const oldDocument = globalThis.document;
+        vi.stubGlobal('document', {
+            ...oldDocument,
+            caretPositionFromPoint: () => ({ offsetNode: textNode, offset: 2 }),
+            createRange: () => range,
+        });
+        try {
+            const list = screen.tree.root.findByType('FlatList');
+            expect(list.props.onPointerMove).toEqual(expect.any(Function));
+            list.props.onPointerMove({ target, clientX: 10, clientY: 20 });
+            expect(pointer).toHaveBeenLastCalledWith(lines[0].id, 5);
+            list.props.onClick({ target, clientX: 10, clientY: 20, metaKey: true });
+            expect(activate).toHaveBeenLastCalledWith(lines[0].id, 5);
+            pointer.mockClear(); activate.mockClear();
+            await screen.update(<CodeLinesViewCore lines={[{ ...lines[0], kind: 'remove', newLine: null }]} intelligence={{ onPointerToken: pointer, onActivateToken: activate }} />);
+            const updated = screen.tree.root.findByType('FlatList');
+            updated.props.onPointerMove({ target, clientX: 10, clientY: 20 });
+            updated.props.onClick({ target, clientX: 10, clientY: 20, ctrlKey: true });
+            expect(pointer).not.toHaveBeenCalled();
+            expect(activate).not.toHaveBeenCalled();
+        } finally {
+            vi.stubGlobal('document', oldDocument);
+        }
+    });
     it('completes a web drag range in an explicit interaction mode', async () => {
         const { CodeLinesView } = await import('./CodeLinesView.web');
 
@@ -86,7 +121,7 @@ describe('CodeLinesView (web)', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 1,
@@ -97,7 +132,7 @@ describe('CodeLinesView (web)', () => {
             },
             {
                 id: 'f:2',
-                sourceIndex: 1,
+                sourceIndex: 1, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 2,
@@ -108,7 +143,7 @@ describe('CodeLinesView (web)', () => {
             },
             {
                 id: 'f:3',
-                sourceIndex: 2,
+                sourceIndex: 2, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 3,
@@ -163,7 +198,7 @@ describe('CodeLinesView (web)', () => {
                 lines={[
                     {
                         id: 'f:1',
-                        sourceIndex: 0,
+                        sourceIndex: 0, hunkIndex: null,
                         kind: 'file',
                         oldLine: null,
                         newLine: 1,
@@ -214,7 +249,7 @@ describe('CodeLinesView (web)', () => {
                     lines={[
                         {
                             id: 'f:1',
-                            sourceIndex: 0,
+                            sourceIndex: 0, hunkIndex: null,
                             kind: 'file',
                             oldLine: null,
                             newLine: 1,

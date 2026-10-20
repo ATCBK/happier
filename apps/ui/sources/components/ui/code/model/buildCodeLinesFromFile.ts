@@ -8,6 +8,7 @@ export function buildCodeLinesFromFile(params: { text: string }): CodeLine[] {
     return rawLines.map((line, index) => ({
         id: `f:${index + 1}`,
         sourceIndex: index,
+        hunkIndex: null,
         kind: 'file',
         oldLine: null,
         newLine: index + 1,

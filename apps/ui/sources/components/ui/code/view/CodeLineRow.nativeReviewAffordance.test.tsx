@@ -32,6 +32,28 @@ installCodeViewCommonModuleMocks({
 });
 
 describe('CodeLineRow native review affordance', () => {
+    it('activates the tapped identifier using measured wrapped text without consuming long-press comments', async () => {
+        const { CodeLineRow } = await import('./CodeLineRow');
+        const activate = vi.fn();
+        const comment = vi.fn();
+        const line = { id: 'current', sourceIndex: 0, hunkIndex: null, kind: 'file' as const, oldLine: null, newLine: 2,
+            renderPrefixText: '', renderCodeText: 'const first = 1; second();', renderIsHeaderLine: false, selectable: false };
+        const screen = await renderScreen(<CodeLineRow line={line} selected={false} onActivateToken={activate} onPressAddComment={comment}
+            syntaxHighlighting={{ mode: 'simple', language: 'typescript', maxLineLength: 100 }} />);
+        const code = screen.tree.root.findAll(node => typeof node.type === 'string' && node.props.onTextLayout)[0]!;
+        expect(code).toBeDefined();
+        act(() => code.props.onTextLayout({ nativeEvent: { lines: [
+            { text: 'const first = 1; ', x: 0, y: 0, width: 170, height: 20 },
+            { text: 'second();', x: 0, y: 20, width: 90, height: 20 },
+        ] } }));
+        act(() => code.props.onPress({ nativeEvent: { locationX: 25, locationY: 25 }, stopPropagation: vi.fn() }));
+        expect(activate).toHaveBeenLastCalledWith('current', 19);
+        activate.mockClear();
+        act(() => code.props.onLongPress());
+        act(() => code.props.onPress({ nativeEvent: { locationX: 25, locationY: 25 } }));
+        expect(comment).toHaveBeenCalledWith(line);
+        expect(activate).not.toHaveBeenCalled();
+    });
     it('renders a visible comment affordance beside selectable diff lines without replacing line selection', async () => {
         const { CodeLineRow } = await import('./CodeLineRow');
         const onPressAddComment = vi.fn();
@@ -39,7 +61,7 @@ describe('CodeLineRow native review affordance', () => {
 
         const line = {
             id: '1',
-            sourceIndex: 0,
+            sourceIndex: 0, hunkIndex: null,
             kind: 'add' as const,
             oldLine: null,
             newLine: 1,
@@ -86,7 +108,7 @@ describe('CodeLineRow native review affordance', () => {
 
         const line = {
             id: '1',
-            sourceIndex: 0,
+            sourceIndex: 0, hunkIndex: null,
             kind: 'add' as const,
             oldLine: null,
             newLine: 1,
@@ -122,7 +144,7 @@ describe('CodeLineRow native review affordance', () => {
 
         const line = {
             id: '1',
-            sourceIndex: 0,
+            sourceIndex: 0, hunkIndex: null,
             kind: 'add' as const,
             oldLine: null,
             newLine: 1,

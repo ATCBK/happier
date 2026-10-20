@@ -61,7 +61,7 @@ describe('CodeLinesView', () => {
                     lines={[
                         {
                             id: '1',
-                            sourceIndex: 0,
+                            sourceIndex: 0, hunkIndex: null,
                             kind: 'context',
                             oldLine: 1,
                             newLine: 1,
@@ -87,7 +87,7 @@ describe('CodeLinesView', () => {
                     lines={[
                         {
                             id: '1',
-                            sourceIndex: 0,
+                            sourceIndex: 0, hunkIndex: null,
                             kind: 'context',
                             oldLine: 1,
                             newLine: 1,
@@ -113,7 +113,7 @@ describe('CodeLinesView', () => {
         const lines = [
             {
                 id: '1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'context',
                 oldLine: 1,
                 newLine: 1,
@@ -156,7 +156,7 @@ describe('CodeLinesView', () => {
                     lines={[
                         {
                             id: '1',
-                            sourceIndex: 0,
+                            sourceIndex: 0, hunkIndex: null,
                             kind: 'context',
                             oldLine: 1,
                             newLine: 1,
@@ -184,7 +184,7 @@ describe('CodeLinesView', () => {
                     lines={[
                         {
                             id: '1',
-                            sourceIndex: 0,
+                            sourceIndex: 0, hunkIndex: null,
                             kind: 'context',
                             oldLine: 1,
                             newLine: 1,
@@ -195,7 +195,7 @@ describe('CodeLinesView', () => {
                         },
                         {
                             id: '2',
-                            sourceIndex: 1,
+                            sourceIndex: 1, hunkIndex: null,
                             kind: 'context',
                             oldLine: 2,
                             newLine: 2,
@@ -224,7 +224,7 @@ describe('CodeLinesView', () => {
                     lines={[
                         {
                             id: '1',
-                            sourceIndex: 0,
+                            sourceIndex: 0, hunkIndex: null,
                             kind: 'context',
                             oldLine: 1,
                             newLine: 1,
@@ -235,7 +235,7 @@ describe('CodeLinesView', () => {
                         },
                         {
                             id: '2',
-                            sourceIndex: 1,
+                            sourceIndex: 1, hunkIndex: null,
                             kind: 'context',
                             oldLine: 2,
                             newLine: 2,
@@ -246,7 +246,7 @@ describe('CodeLinesView', () => {
                         },
                         {
                             id: '3',
-                            sourceIndex: 2,
+                            sourceIndex: 2, hunkIndex: null,
                             kind: 'context',
                             oldLine: 3,
                             newLine: 3,
@@ -273,7 +273,7 @@ describe('CodeLinesView', () => {
                     lines={[
                         {
                             id: '1',
-                            sourceIndex: 0,
+                            sourceIndex: 0, hunkIndex: null,
                             kind: 'context',
                             oldLine: 1,
                             newLine: 1,
@@ -307,7 +307,7 @@ describe('CodeLinesView', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 1,
@@ -318,7 +318,7 @@ describe('CodeLinesView', () => {
             },
             {
                 id: 'f:2',
-                sourceIndex: 1,
+                sourceIndex: 1, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 2,
@@ -329,7 +329,7 @@ describe('CodeLinesView', () => {
             },
             {
                 id: 'f:3',
-                sourceIndex: 2,
+                sourceIndex: 2, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 3,
@@ -367,7 +367,7 @@ describe('CodeLinesView', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 1,
@@ -378,7 +378,7 @@ describe('CodeLinesView', () => {
             },
             {
                 id: 'f:2',
-                sourceIndex: 1,
+                sourceIndex: 1, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 2,
@@ -411,7 +411,7 @@ describe('CodeLinesView', () => {
         const lines = [
             {
                 id: 'f:1',
-                sourceIndex: 0,
+                sourceIndex: 0, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 1,
@@ -422,7 +422,7 @@ describe('CodeLinesView', () => {
             },
             {
                 id: 'f:2',
-                sourceIndex: 1,
+                sourceIndex: 1, hunkIndex: null,
                 kind: 'file' as const,
                 oldLine: null,
                 newLine: 2,
@@ -463,7 +463,7 @@ describe('CodeLinesView', () => {
                     lines={[
                         {
                             id: 'a',
-                            sourceIndex: 0,
+                            sourceIndex: 0, hunkIndex: null,
                             kind: 'context',
                             oldLine: 1,
                             newLine: 1,
@@ -474,7 +474,7 @@ describe('CodeLinesView', () => {
                         },
                         {
                             id: 'b',
-                            sourceIndex: 1,
+                            sourceIndex: 1, hunkIndex: null,
                             kind: 'context',
                             oldLine: 2,
                             newLine: 2,
@@ -509,7 +509,7 @@ describe('CodeLinesView', () => {
                         lines={[
                             {
                                 id: 'a',
-                                sourceIndex: 0,
+                                sourceIndex: 0, hunkIndex: null,
                                 kind: 'context',
                                 oldLine: 1,
                                 newLine: 1,
@@ -520,7 +520,7 @@ describe('CodeLinesView', () => {
                             },
                             {
                                 id: 'b',
-                                sourceIndex: 1,
+                                sourceIndex: 1, hunkIndex: null,
                                 kind: 'context',
                                 oldLine: 2,
                                 newLine: 2,
@@ -577,7 +577,7 @@ describe('CodeLinesView', () => {
                         lines={[
                             {
                                 id: 'a',
-                                sourceIndex: 0,
+                                sourceIndex: 0, hunkIndex: null,
                                 kind: 'context',
                                 oldLine: 1,
                                 newLine: 1,
@@ -588,7 +588,7 @@ describe('CodeLinesView', () => {
                             },
                             {
                                 id: 'b',
-                                sourceIndex: 1,
+                                sourceIndex: 1, hunkIndex: null,
                                 kind: 'context',
                                 oldLine: 2,
                                 newLine: 2,

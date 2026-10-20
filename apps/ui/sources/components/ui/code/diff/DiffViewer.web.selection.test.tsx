@@ -117,7 +117,7 @@ describe('DiffViewer (web renderer selection)', () => {
         expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeNull();
     });
 
-    it('uses the Happier renderer when range interaction is required', async () => {
+    it('retains the Pierre owner when range interaction starts and ends', async () => {
         const { DiffViewer } = await import('./DiffViewer.web');
 
         const screen = await renderScreen(
@@ -130,7 +130,9 @@ describe('DiffViewer (web renderer selection)', () => {
             />,
         );
 
-        expect(screen.findAllByType(pierreViewerType)[0] ?? null).toBeNull();
-        expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeTruthy();
+        const owner = screen.findAllByType(pierreViewerType)[0];
+        expect(owner).toBeTruthy();
+        await screen.update(<DiffViewer mode="unified" unifiedDiff={'diff --git a/a.ts b/a.ts'} filePath="a.ts" interactionMode="read" onPressLineRange={() => {}} />);
+        expect(screen.findAllByType(pierreViewerType)[0]).toBe(owner);
     });
 });

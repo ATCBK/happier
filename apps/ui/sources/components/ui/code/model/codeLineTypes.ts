@@ -11,6 +11,7 @@ export type CodeLine = Readonly<{
     // For unified diffs: index into `diff.split('\\n')`.
     // For file views: 0-based file line index.
     sourceIndex: number;
+    hunkIndex: number | null;
     kind: CodeLineKind;
     oldLine: number | null;
     newLine: number | null;

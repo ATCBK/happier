@@ -1,0 +1,43 @@
+diff --git a/node_modules/@pierre/diffs/dist/renderers/DiffHunksRenderer.js b/node_modules/@pierre/diffs/dist/renderers/DiffHunksRenderer.js
+--- a/node_modules/@pierre/diffs/dist/renderers/DiffHunksRenderer.js
++++ b/node_modules/@pierre/diffs/dist/renderers/DiffHunksRenderer.js
+@@ -749,5 +749,6 @@
+ 					rangeSize: Math.max(hunk?.collapsedBefore ?? 0, 0),
+ 					hunkSpecs: hunk?.hunkSpecs,
++					hunkContext: hunk?.hunkContext,
+ 					isFirstHunk: hunkIndex === 0,
+ 					isLastHunk: false,
+ 					isExpandable: isExpandableDiff
+@@ -784,1 +785,1 @@
+-					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, lineDecoration.gutterProperties);
++					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, { ...lineDecoration.gutterProperties, "data-old-line-number": deletionLine?.lineNumber, "data-new-line-number": additionLine?.lineNumber });
+@@ -1148,1 +1149,1 @@
+-function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs, isFirstHunk, isLastHunk, isExpandable }, context) {
++function pushSeparator(type, { hunkIndex, collapsedLines, rangeSize, hunkSpecs, hunkContext, isFirstHunk, isLastHunk, isExpandable }, context) {
+@@ -1199,6 +1200,7 @@
+ 	linesAST.push(createSeparator({
+ 		type: context.hunkSeparators,
+ 		content,
++		hunkContext,
+ 		expandIndex,
+ 		chunked,
+ 		slotName,
+diff --git a/node_modules/@pierre/diffs/dist/utils/createSeparator.js b/node_modules/@pierre/diffs/dist/utils/createSeparator.js
+--- a/node_modules/@pierre/diffs/dist/utils/createSeparator.js
++++ b/node_modules/@pierre/diffs/dist/utils/createSeparator.js
+@@ -19,1 +19,1 @@
+-function createSeparator({ type, content, expandIndex, chunked = false, slotName, isFirstHunk, isLastHunk }) {
++function createSeparator({ type, content, hunkContext, expandIndex, chunked = false, slotName, isFirstHunk, isLastHunk }) {
+@@ -50,7 +50,11 @@
+ 				tagName: "span",
+ 				children: [createTextNodeElement(content)],
+ 				properties: { "data-unmodified-lines": "" }
+-			})],
++			}), ...(type === "line-info" && hunkContext ? [createHastElement({
++				tagName: "span",
++				children: [createTextNodeElement(hunkContext)],
++				properties: { "data-hunk-context": "" }
++			})] : [])],
+ 			properties: { "data-separator-content": "" }
+ 		}));
+ 		if (chunked && expandIndex != null) contentChildren.push(createHastElement({

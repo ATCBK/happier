@@ -48,6 +48,10 @@ describe('Pierre unified old/new gutter', () => {
             expect(rows?.map((row) => row.type === 'element' ? [row.properties['data-column-number'], row.properties['data-old-line-number'], row.properties['data-new-line-number']] : [])).toEqual([
                 [9, 4, 9], [5, 5, undefined], [10, undefined, 10], [11, 6, 11],
             ]);
+            const html = renderer.renderFullHTML(rendered);
+            expect(html).not.toContain('data-line-number-side');
+            expect(html).not.toContain('data-old-line-number="undefined"');
+            expect(html).not.toContain('data-new-line-number="undefined"');
         } finally {
             renderer.cleanUp();
         }
