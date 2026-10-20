@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AutomationAccountCurrentnessWitnessV1Schema,
   projectAutomationAccountCurrentnessWitnessV1,
+  resolveValidatedAutomationAccountEncryptionV1,
   sameAutomationAccountContentIdentityV1,
   sameAutomationAccountCurrentnessWitnessV1,
 } from './automationAccountCurrentnessV1.js';
@@ -10,6 +11,13 @@ import {
 const E2EE_FINGERPRINT = 'aemk1_content_key_fingerprint';
 
 describe('automations/automationAccountCurrentnessV1', () => {
+  it('retains a currentness transport failure separately from unavailable encryption content', async () => {
+    const failure = Object.assign(new Error('request timed out'), { code: 'ECONNABORTED' });
+    await expect(resolveValidatedAutomationAccountEncryptionV1({ signal: new AbortController().signal,
+      resolveAccountEncryptionCurrentness: async () => { throw failure; },
+      resolveAccountEncryptionMaterial: async () => { throw new Error('material_must_not_be_read'); },
+    })).resolves.toEqual({ kind: 'unavailable', cause: failure });
+  });
   it('projects a keyless plain witness from an Account that retains a superseded content key', () => {
     // A supported Account migrated e2ee -> plain keeps `contentPublicKey`, so
     // its canonical currentness reading still carries a content-key

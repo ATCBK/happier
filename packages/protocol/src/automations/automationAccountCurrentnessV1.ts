@@ -71,7 +71,11 @@ export type ValidatedAutomationAccountEncryptionV1 =
     kind: 'retry';
     witness: AutomationAccountCurrentnessWitnessV1;
   }>
-  | Readonly<{ kind: 'unavailable' }>;
+  | Readonly<{
+    kind: 'unavailable';
+    /** Host-local read failure; never persisted or sent as content. */
+    cause?: unknown;
+  }>;
 
 export function isAvailableE2eeAutomationAccountEncryptionV1(
   value: AvailableAutomationAccountEncryptionV1,
@@ -96,8 +100,8 @@ export async function resolveValidatedAutomationAccountEncryptionV1(params: Read
   let rawCurrentness: AccountEncryptionCurrentnessResponse;
   try {
     rawCurrentness = await params.resolveAccountEncryptionCurrentness(params.signal);
-  } catch {
-    return { kind: 'unavailable' };
+  } catch (cause) {
+    return { kind: 'unavailable', cause };
   }
   if (params.signal.aborted) return { kind: 'unavailable' };
   const parsedCurrentness = AccountEncryptionCurrentnessResponseSchema.safeParse(rawCurrentness);
