@@ -117,7 +117,7 @@ describe('WebIframeEngine diagnostics wiring', () => {
                 frames.push(frame);
                 const identity = { browserSessionId: 'bs', viewId: `pane-${index}`, navigationGeneration: 1,
                     collectorId: `collector-${index}`, nonce: `nonce-${index}` };
-                screens.push(await renderScreen(<WebIframeEngine title="Preview" url="https://preview.example.test/" sandbox="allow-scripts allow-same-origin"
+                screens.push(await renderScreen(<WebIframeEngine title="Preview" url="https://preview.example.test/" sandbox="allow-scripts allow-same-origin" testID={`preview-pane-${index}`}
                     onNavigationStateChange={observed[index]}
                     diagnostics={{ ...identity, collectorVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', webPostMessageTargetOrigin: 'https://app.example.test', onEvents: vi.fn() }}
                     automation={{ ...identity, capabilityVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', adapterKind: 'localPreview', supportedActions: ['click'], controlService: createBrowserAutomationControlService({ nowMs: Date.now }) }}
