@@ -125,48 +125,64 @@ describe('TranscriptRowShell stale exact reservation', () => {
     });
   });
 
-    it('records a layout that reaches the row before its signature follows the resize under the new width', async () => {
-        const { reconciler, row } = setup(null);
+    describe('when the signature follows a resize', () => {
         const narrow = { ...SIGNATURE, widthBucket: 'width:448' } as const;
         const wide = { ...SIGNATURE, widthBucket: 'width:960' } as const;
-        const screen = await renderScreen(row(0, wide));
 
-        // The DOM has already reflowed to the narrow width; the signature moves in the same commit.
-        await act(async () => {
-            (content(screen)!.props.onLayout as (event: unknown) => void)(layoutEvent(202));
-            screen.update(row(1, narrow));
+        // The row's signature changes through state, so a layout and the signature can land in one commit.
+        function setupResize(initial: TranscriptItemHeightValiditySignature) {
+            const reconciler = createTestTranscriptMeasurementReconciler({ cache: createTestTranscriptItemHeightCache() });
+            const setSignature: { current: (signature: TranscriptItemHeightValiditySignature) => void } = { current: () => {} };
+            function Harness() {
+                const [signature, set] = React.useState(initial);
+                setSignature.current = set;
+                return (
+                    <TranscriptRowShell reconciler={reconciler} itemId={SIGNATURE.itemId} signature={signature}>
+                        {null}
+                    </TranscriptRowShell>
+                );
+            }
+            return { reconciler, setSignature, element: <Harness /> };
+        }
+        const layoutHandler = (screen: Screen) => content(screen)!.props.onLayout as (event: unknown) => void;
+
+        it('files a layout that reaches the row before its signature under the signature it commits with', async () => {
+            const { reconciler, setSignature, element } = setupResize(wide);
+            const screen = await renderScreen(element);
+
+            // The DOM has already reflowed to the narrow width; the signature moves in the same commit.
+            await act(async () => {
+                layoutHandler(screen)(layoutEvent(202));
+                setSignature.current(narrow);
+            });
+
+            expect(reconciler.resolveReservation(narrow)).toEqual({ kind: 'exact', minHeight: 202 });
+            expect(reconciler.resolveReservation(wide)).toBeUndefined();
         });
 
-        expect(reconciler.resolveReservation(narrow)).toEqual({ kind: 'exact', minHeight: 202 });
-        expect(reconciler.resolveReservation(wide)).toBeUndefined();
-    });
+        it('releases a cached height the already laid out content contradicts when the signature settles on its width', async () => {
+            const { reconciler, setSignature, element } = setupResize(wide);
+            // 242 was cached for the narrow width from a transient layout, taller than the content really is.
+            reconciler.recordMeasuredHeight({ signature: narrow, heightPx: 242 });
+            const screen = await renderScreen(element);
+            await contentLayout(screen, 202);
 
-    it('releases a cached height the already laid out content contradicts when the signature settles on its width', async () => {
-        const { reconciler, row } = setup(null);
-        const narrow = { ...SIGNATURE, widthBucket: 'width:448' } as const;
-        const wide = { ...SIGNATURE, widthBucket: 'width:960' } as const;
-        // 242 was cached for the narrow width from a transient layout, wider than the content really is.
-        reconciler.recordMeasuredHeight({ signature: narrow, heightPx: 242 });
-        const screen = await renderScreen(row(0, wide));
-        await contentLayout(screen, 202);
+            await act(async () => setSignature.current(narrow));
 
-        await act(async () => screen.update(row(1, narrow)));
+            expect(reservedMinHeight(screen)).toBeUndefined();
+        });
 
-        expect(reservedMinHeight(screen)).toBeUndefined();
-    });
+        it('does not file the old content height under a new width before the content has been laid out at it', async () => {
+            const { reconciler, setSignature, element } = setupResize(narrow);
+            const screen = await renderScreen(element);
+            await contentLayout(screen, 130);
 
-    it('does not file the old content height under a new width before the content has been laid out at it', async () => {
-        const { reconciler, row } = setup(null);
-        const narrow = { ...SIGNATURE, widthBucket: 'width:448' } as const;
-        const wide = { ...SIGNATURE, widthBucket: 'width:960' } as const;
-        const screen = await renderScreen(row(0, narrow));
-        await contentLayout(screen, 130);
+            // The signature follows the resize first; the row's layout at the new width has not arrived.
+            await act(async () => setSignature.current(wide));
+            expect(reconciler.resolveReservation(wide)).toBeUndefined();
 
-        // The signature follows the resize first; the row's layout at the new width has not arrived.
-        await act(async () => screen.update(row(1, wide)));
-        expect(reconciler.resolveReservation(wide)).toBeUndefined();
-
-        await contentLayout(screen, 88);
-        expect(reconciler.resolveReservation(wide)).toEqual({ kind: 'exact', minHeight: 88 });
+            await contentLayout(screen, 88);
+            expect(reconciler.resolveReservation(wide)).toEqual({ kind: 'exact', minHeight: 88 });
+        });
     });
 });

@@ -24,6 +24,34 @@ function operation(overrides: Partial<ActionOperationSnapshot> = {}): ActionOper
 }
 
 describe('action operation detail presentation', () => {
+    it.each([
+        ['projects.script.run', 'script', 'project_command_step_failed'],
+        ['projects.setup.apply', 'setup', 'project_setup_step_failed'],
+    ] as const)('presents the observed process exit for %s', (actionId, purpose, errorCode) => {
+        const detail = projectActionOperationDetail(operation({ actionId, state: 'failed', settledAt: 2_000,
+            domainRef: { kind: 'projectCommand', purpose, serverId: 'target-home', machineId: 'worker',
+                workspaceRefId: 'workspace', cwd: '/project', terminalId: 'terminal', exitCode: 17 },
+            error: { errorCode, error: errorCode },
+        }), 'available');
+        expect(detail.failure).toEqual({
+            reason: t('localServices.process.exitCode', { code: '17' }),
+            technicalLines: [{ key: 'failure-code', label: t('common.error'), value: errorCode }],
+        });
+    });
+
+    it('does not infer a process exit without the typed failure and observed exit code together', () => {
+        const attachment = { kind: 'projectCommand' as const, purpose: 'script' as const,
+            serverId: 'target-home', machineId: 'worker', workspaceRefId: 'workspace', cwd: '/project', terminalId: 'terminal' };
+        for (const snapshot of [
+            { domainRef: attachment, error: { errorCode: 'project_command_step_failed', error: 'project_command_step_failed' } },
+            { domainRef: { ...attachment, exitCode: 17 }, error: { errorCode: 'output_unavailable', error: 'Output could not be retained' } },
+        ]) {
+            const detail = projectActionOperationDetail(operation({ ...snapshot, state: 'failed', settledAt: 2_000 }), 'available');
+            expect(detail.failure?.reason).toBe(snapshot.error.errorCode === 'project_command_step_failed'
+                ? t('inbox.actionOperations.failureGeneric') : 'Output could not be retained');
+        }
+    });
+
     it('uses the shared typed setup failure copy for managed installation operations', () => {
         const detail = projectActionOperationDetail(operation({
             actionId: 'machines.managed.acquire', state: 'failed', settledAt: 2_000,

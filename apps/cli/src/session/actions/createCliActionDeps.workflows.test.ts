@@ -83,6 +83,30 @@ afterAll(async () => {
 });
 
 describe('createCliActionDeps workflow boundary', () => {
+  it.each([401, 403, 400])('keeps permanent feature HTTP %s refusal out of storage retry', async httpStatus => {
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
+    const deps = createCliActionDeps({ token, credentials: { token, encryption: null,
+      credentialProvenance: 'stored_session' }, sessionId: 'cli-global', mode: 'plain', ctx: null,
+      resolveServerFeaturesSnapshot: async () => ({ status: 'error', reason: 'response_status', httpStatus }) });
+    const result = await createActionExecutor(deps).execute('workflow.run.get', {
+      runId: '77777777-7777-4777-8777-777777777778',
+    }, { surface: 'cli' });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+  });
+  it.each(['timeout', 'missing'] as const)('keeps a %s feature observation out of the content-unavailable arm', async reason => {
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
+    const deps = createCliActionDeps({ token, credentials: { token, encryption: null,
+      credentialProvenance: 'stored_session' }, sessionId: 'cli-global', mode: 'plain', ctx: null,
+      resolveServerFeaturesSnapshot: async () => reason === 'missing' ? undefined : ({ status: 'error', reason }) });
+    const result = await createActionExecutor(deps).execute('workflow.run.start', {
+      runId: '77777777-7777-4777-8777-777777777778',
+      source: { kind: 'inline', definition: { version: 1, inputs: [], defaults: {}, blocks: [
+        { kind: 'wait', id: 'wait', document: { text: 'Continue', references: [], attachments: [] } },
+      ] } },
+    }, { surface: 'cli', externalActionTarget: { kind: 'machine', machineId: 'machine-1',
+      project: { machineId: 'machine-1', directory: tmpdir() } } });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'storage_unavailable' });
+  });
   it.each([
     { surface: 'ui', authority: 'present_user' },
     { surface: 'cli', authority: 'account_automation' },
@@ -371,6 +395,17 @@ describe('createCliActionDeps workflow boundary', () => {
     if (!listed.ok) throw new Error(listed.errorCode);
     WorkflowActionOutputSchemasV1['workflow.run.list'].parse(listed.result);
     expect(requests).toEqual([{ ...input, machineId: project.machineId }]);
+    if (selection === 'machine') {
+      const get = http.get.getMockImplementation()!;
+      http.get.mockImplementation(async (url: string) => {
+        if (url.endsWith('/v1/account/encryption/currentness')) {
+          throw Object.assign(new Error('request timed out'), { code: 'ECONNABORTED' });
+        }
+        return get(url);
+      });
+      await expect(actions.execute('workflow.run.get', { runId }, context))
+        .resolves.toMatchObject({ ok: false, errorCode: 'storage_unavailable' });
+    }
   });
 
   it.each(['session', 'detached', 'wrong_run', 'invalid_response', 'transport_failure', 'wrong_machine'] as const)(
@@ -790,6 +825,7 @@ describe('createCliActionDeps workflow boundary', () => {
       if (body.operation === 'invocations.list') return { data: { invocations: [index], parentRevision: 2, keyCensus } };
       throw new Error(`unexpected_effect:${String(body.operation)}`);
     });
+    let replyCustodyUnavailable = false;
     if (targetKind === 'session') {
       const baseGet = http.get.getMockImplementation()!;
       const input = { id: 'input-row', seq: 7, localId: 'input-1', createdAt: 1, updatedAt: 1,
@@ -802,6 +838,7 @@ describe('createCliActionDeps workflow boundary', () => {
               endSeqInclusive: 9, finalAssistantMessageSeq: null },
           }] }),
         };
+        if (url.endsWith('/reply')) return { status: 200, data: { v: 1, status: replyCustodyUnavailable ? 'unavailable' : 'none' } };
         if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: input } };
         if (url.includes('/messages?')) return { status: 200, data: { messages: [input,
           { id: 'started', seq: 8, localId: null, createdAt: 2, content: { t: 'plain', v: { role: 'agent',
@@ -833,6 +870,13 @@ describe('createCliActionDeps workflow boundary', () => {
     const inspected = await deps.workflowAction!({ actionId: 'workflow.run.invocations.get', input: { runId, invocationId: recordId }, context: {} });
     expect(inspected, JSON.stringify(inspected))
       .toMatchObject({ invocation: { recoveryAvailability: { retry: { kind: 'available' }, continueSameConversation: { kind: 'available' } } } });
+    if (targetKind === 'session') {
+      // An unreadable original obligation cannot borrow the later transcript's completion.
+      replyCustodyUnavailable = true;
+      expect(await deps.workflowAction!({ actionId: 'workflow.run.invocations.get', input: { runId, invocationId: recordId }, context: {} }))
+        .toMatchObject({ invocation: { recoveryAvailability: { retry: { kind: 'unavailable' }, continueSameConversation: { kind: 'unavailable' } } } });
+      replyCustodyUnavailable = false;
+    }
     expect(machineRpc.mock.calls.every(([input]) => input.machineId === 'machine-1')).toBe(true);
     expect(await deps.workflowAction!({ actionId: 'workflow.run.invocations.list', input: { runId }, context: {} }))
       .toEqual({ invocations: [index], parentRevision: 2 });

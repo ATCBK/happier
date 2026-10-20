@@ -17,9 +17,10 @@ const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
-const { createSessionFixture } = await import('@/dev/testkit');
+const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
-const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+const { prepareSessionDraftPersistenceStorage, discardSessionDraftPersistenceWrites } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+const { clearBrowserRecords } = await import('@/sync/domains/state/browserRecordStorage');
 const { resetSessionDraftRepositoryForTests, writeExistingSessionDraft, getSessionDraftSnapshot, listNewSessionDraftProjections } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
 const { createRepositoryComposerDocumentOwner } = await import('@/components/sessions/composer/repositoryComposerDocumentOwner');
 const { projectComposerDocumentSnapshot } = await import('@/components/sessions/composer/composerSnapshotProjection');
@@ -27,17 +28,25 @@ const { registerSessionComposerPresentationTarget } = await import('@/components
 const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { appendMountedComposerDraft } = await import('./appendMountedComposerDraft');
-const { renderScreen } = await import('@/dev/testkit');
+const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
 const { SessionAuthoringComposer } = await import('@/components/sessions/authoring/SessionAuthoringComposer');
 const { createComposerTextStore, useComposerTextValue } = await import('@/components/sessions/agentInput/composerTextStore');
 const { usePromptPickerController } = await import('@/components/sessions/agentInput/commandMenu/usePromptPickerController');
 const { useDraft } = await import('@/hooks/session/useDraft');
+const { useAskSelection } = await import('@/components/ui/code/selection/useAskSelection');
+const { askAboutRanges } = await import('@/components/ui/code/selection/askAboutRanges');
+const { buildAskSelectionQuote } = await import('@/components/ui/code/selection/askSelectionModel');
+const { buildWorkspaceCacheKey } = await import('@/sync/domains/workspaces/workspaceScope');
+const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
+const { askSelectionContext } = await import('@/components/ui/code/selection/askSelectionContext');
 
 let scope: { serverId: string; accountId: string };
 let unmount: (() => void) | undefined;
 beforeEach(async () => {
     await home.reset();
     resetSessionDraftRepositoryForTests();
+    await discardSessionDraftPersistenceWrites();
+    await clearBrowserRecords();
     await prepareSessionDraftPersistenceStorage();
     const serverId = await home.addHome({ serverUrl: 'https://append.test', name: 'Append', accountId: 'account-a' });
     home.answer(serverId, '/v1/auth/ping', { body: { success: true } });
@@ -45,7 +54,8 @@ beforeEach(async () => {
     if (!credentials) throw new Error('Expected signed-in Home');
     await restoreConnectionToActiveServer(credentials);
     scope = { serverId, accountId: 'account-a' };
-    getStorage().setState({ profileScope: scope, sessions: { 'source-session': createSessionFixture({ id: 'source-session', serverId }) } });
+    getStorage().setState({ profileScope: scope, sessions: { 'source-session': createSessionFixture({ id: 'source-session', serverId }) },
+        reviewCommentsDraftsByWorkspaceCacheKey: {} });
 });
 afterEach(async () => { unmount?.(); unmount = undefined; await disconnectActiveServerConnection(); vi.unstubAllGlobals(); });
 
@@ -69,6 +79,147 @@ function mountComposer(text: string, editable = true) {
 }
 
 describe('appendMountedComposerDraft', () => {
+    it('puts file selections in the real workspace draft store, retaining context until the composer mounts', async () => {
+        const workspaceScope = { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' };
+        const reveal = vi.fn();
+        const input = { workspaceScope, filePath: 'src/a.ts', savedText: 'first\nsecond\nlast',
+            text: 'inserted\nfirst\nchanged second\nlast', ranges: [{ startLine: 2, endLine: 3, text: 'irst\nchanged sec' }],
+            sessionTarget: { sessionId: 'source-session', revealSessionColumn: reveal } };
+        const first = await askAboutRanges(input);
+        expect(first.created).toBe(1);
+        await askAboutRanges(input);
+        const stored = getStorage().getState().reviewCommentsDraftsByWorkspaceCacheKey[buildWorkspaceCacheKey(workspaceScope)];
+        expect(stored).toHaveLength(1);
+        expect(stored?.[0]).toMatchObject({ id: first.drafts[0]?.id, body: '', includeInPrompt: true,
+            anchor: { kind: 'range', startLine: 1, endLine: 2 }, snapshot: { selectedLines: ['irst', 'changed sec'] } });
+        expect(reveal).toHaveBeenCalled();
+        const { focus } = mountComposer('');
+        await askAboutRanges(input);
+        expect(focus).toHaveBeenCalled();
+    });
+
+    it('asks about transcript code through the actual mounted composer transaction without sending', async () => {
+        const { owner, focus } = mountComposer('My unsent question');
+        const text = 'const code = `quoted`;';
+        const hook = await renderHook(() => useAskSelection({ scopeId: 'session:source-session',
+            workspaceScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' },
+            source: 'transcript', getSelection: () => ({ startLine: 1, endLine: 1, text }),
+            sessionTarget: { sessionId: 'source-session' },
+            accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            openDetailsTab: () => { throw new Error('A normal Session Ask must not open a Run'); },
+        }));
+        await act(async () => { expect(await hook.getCurrent().ask()).toBe(true); });
+        expect(owner.read().document.text).toBe(`My unsent question\n${buildAskSelectionQuote({ text })}`);
+        expect(focus).toHaveBeenCalled();
+        expect(home.requests.some((request) => request.path.includes('/sessions') && request.input != null)).toBe(false);
+        await hook.unmount();
+    });
+
+    it('opens the canonical New Session draft when file Ask is configured to use a session', async () => {
+        const workspaceScope = { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' };
+        const hook = await renderHook(() => useAskSelection({ scopeId: 'project:workspace-a', workspaceScope,
+            filePath: 'a.ts', source: 'file', getSelection: () => ({ startLine: 2, endLine: 2, text: 'value' }),
+            getLinesText: () => 'first\nvalue', savedText: 'first\nvalue', sessionTarget: null,
+            withoutSessionTarget: 'session',
+            accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            openDetailsTab: () => { throw new Error('The Session preference must not open a Run'); },
+        }));
+        await act(async () => { expect(await hook.getCurrent().ask()).toBe(true); });
+        const drafts = listNewSessionDraftProjections(scope);
+        expect(drafts).toHaveLength(1);
+        const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        expect(readNewSessionDraftFromRepository({ scope, draftId: drafts[0]!.draftId })).toMatchObject({
+            input: buildAskSelectionQuote({ text: 'value', filePath: 'a.ts', startLine: 2, endLine: 2 }),
+            selectedMachineId: 'machine-a', selectedPath: '/work',
+        });
+        await hook.unmount();
+    });
+
+    it('lets Problems use the same no-Session destination with its range questions', async () => {
+        const navigate = vi.fn();
+        const result = await askAboutRanges({
+            workspaceScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' },
+            filePath: 'a.ts', savedText: 'first\nvalue', sessionTarget: null,
+            ranges: [{ startLine: 2, endLine: 2, body: 'Explain this diagnostic' }],
+            targetContext: { accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+                withoutSessionTarget: 'session', navigateToNewSession: navigate,
+                openDetailsTab: () => { throw new Error('The Session preference must not open a Run'); } },
+        });
+        expect(result.created).toBe(1);
+        const drafts = listNewSessionDraftProjections(scope);
+        const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        expect(readNewSessionDraftFromRepository({ scope, draftId: drafts[0]!.draftId })?.input).toBe(
+            `${buildAskSelectionQuote({ text: 'value', filePath: 'a.ts', startLine: 2, endLine: 2 })}\n\nExplain this diagnostic`,
+        );
+        expect(navigate).toHaveBeenCalled();
+        expect(getStorage().getState().reviewCommentsDraftsByWorkspaceCacheKey).toEqual({});
+    });
+
+    it('retains the last transcript selection when focus moves into the composer', async () => {
+        const { owner } = mountComposer('Question');
+        let current: import('@/components/ui/code/selection/useAskSelection').AskSelection | null = { startLine: 1, endLine: 1, text: 'remembered code' };
+        let selectionChanged: (() => void) | undefined;
+        const hook = await renderHook(() => useAskSelection({ scopeId: 'session:source-session',
+            workspaceScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' },
+            source: 'transcript', getSelection: () => current,
+            subscribeSelection: (listener) => { selectionChanged = listener; return () => { selectionChanged = undefined; }; },
+            sessionTarget: { sessionId: 'source-session' },
+            accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) }, openDetailsTab: () => {},
+        }));
+        await act(async () => { current = null; selectionChanged?.(); });
+        expect(hook.getCurrent().selection).toBeNull();
+        await act(async () => { expect(await hook.getCurrent().ask()).toBe(true); });
+        expect(owner.read().document.text).toBe(`Question\n${buildAskSelectionQuote({ text: 'remembered code' })}`);
+        await hook.unmount();
+    });
+
+    it('keeps the remembered source when a retained inactive editor reports a selection change', async () => {
+        let inactiveSelectionChanged: (() => void) | undefined;
+        const common = { scopeId: 'session:source-session',
+            workspaceScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' },
+            source: 'transcript' as const, sessionTarget: { sessionId: 'source-session' }, openDetailsTab: () => {} };
+        const activeSelection = { startLine: 1, endLine: 1, text: 'active' };
+        const inactiveSelection = { startLine: 1, endLine: 1, text: 'inactive' };
+        const subscribeInactive = (listener: () => void) => { inactiveSelectionChanged = listener; return () => { inactiveSelectionChanged = undefined; }; };
+        const hook = await renderHook(() => ({
+            active: useAskSelection({ ...common, getSelection: () => activeSelection }),
+            inactive: useAskSelection({ ...common, active: false,
+                getSelection: () => inactiveSelection, subscribeSelection: subscribeInactive }),
+        }));
+        const activeSource = askSelectionContext.read(common.scopeId);
+        await act(async () => { inactiveSelectionChanged?.(); });
+        expect(askSelectionContext.read(common.scopeId)).toBe(activeSource);
+        await hook.unmount();
+    });
+
+    it('captures a terminal selection from its existing selection-completed event', async () => {
+        let current: import('@/components/ui/code/selection/useAskSelection').AskSelection | null = null;
+        const hook = await renderHook(() => useAskSelection({ scopeId: 'session:source-session',
+            workspaceScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' },
+            source: 'terminal', getSelection: () => current,
+            sessionTarget: { sessionId: 'source-session' }, openDetailsTab: () => {},
+        }));
+        await act(async () => { current = { startLine: 1, endLine: 1, text: 'terminal output' }; hook.getCurrent().remember(); });
+        expect(hook.getCurrent().selection?.text).toBe('terminal output');
+        await hook.unmount();
+    });
+
+    it('forgets the old selection when a retained surface switches file ownership', async () => {
+        let current: import('@/components/ui/code/selection/useAskSelection').AskSelection | null = { startLine: 1, endLine: 1, text: 'old code' };
+        const hook = await renderHook((props: { filePath?: string }) => useAskSelection({ scopeId: 'session:source-session',
+            workspaceScope: { serverId: scope.serverId, machineId: 'machine-a', rootPath: '/work' },
+            source: 'file', filePath: props.filePath, getSelection: () => current,
+            getLinesText: () => 'new code', savedText: 'new code',
+            sessionTarget: { sessionId: 'source-session' }, openDetailsTab: () => {},
+        }), { initialProps: { filePath: 'old.ts' } });
+        current = null;
+        await hook.rerender({ filePath: 'new.ts' });
+        await act(async () => { expect(await hook.getCurrent().ask()).toBe(false); });
+        expect(getStorage().getState().reviewCommentsDraftsByWorkspaceCacheKey).toEqual({});
+        await hook.rerender({});
+        expect(hook.getCurrent().canComment).toBe(false);
+        await hook.unmount();
+    });
     it('preserves picker insertion when Make repeatable appends through the mounted draft transaction', async () => {
         const { ref, owner } = mountComposer('');
         const textStore = createComposerTextStore('');

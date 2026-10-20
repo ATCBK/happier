@@ -4,6 +4,9 @@ import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { configuration } from '@/configuration';
+import { applyScmReviewedMarkIntent, isScmSelectionReviewed } from '@happier-dev/protocol/scm/reviewedMarks';
+import { buildScmReviewScopeId } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import { retainRepositoryCheckpointTurnEvidence } from '../checkpoints/sessionEvidence';
 import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { encodeRepositoryCheckpointScope } from '../checkpoints/refs';
 import { captureScmComparison, deleteCapturedScmComparison, prepareCapturedScmComparisonInvestigation, readCapturedScmComparison } from './captureScmComparison';
@@ -11,6 +14,50 @@ import { captureScmComparison, deleteCapturedScmComparison, prepareCapturedScmCo
 describe('captured SCM comparison storage', () => {
   const directories: string[] = [];
   afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+
+  it('isolates reviewed content by resolved turn selectors in new and retained captures', async () => {
+    const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-review-turn-scope-' });
+    directories.push(fixture.rootPath);
+    const captures = [];
+    for (const [sessionId, turnId] of [[randomUUID(), 'turn-1'], [randomUUID(), 'turn-1']] as const) {
+      for (const selectedTurn of [turnId, 'turn-2']) {
+        await retainRepositoryCheckpointTurnEvidence({ cwd: fixture.rootPath, scopeId: `${sessionId}:${fixture.rootPath}`, turnChangeSet: {
+          sessionId, turnId: selectedTurn, seqRange: { startSeqInclusive: 1, endSeqInclusive: 2 }, status: 'completed',
+          provider: 'agent', derivedAt: 1, files: [{ filePath: fixture.trackedPath, changeKind: 'modified',
+            source: 'provider_tool', confidence: 'exact', provider: 'agent', unifiedDiff: '@@ -1 +1 @@\n-before\n+after\n' }],
+        } });
+        captures.push({ sessionId, ...await captureScmComparison({ cwd: fixture.rootPath, sessionId, turnId: selectedTurn,
+          turnEvidenceMode: 'agent_reported', source: { kind: 'turnCheckpoint' } }) });
+      }
+    }
+    try {
+      const first = captures[0]!;
+      const scope = (comparison: typeof first.comparison) => buildScmReviewScopeId({ repositoryRootPath: comparison.repository.rootPath, source: comparison.source });
+      const refs = first.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.id));
+      expect(refs).not.toHaveLength(0);
+      const record = applyScmReviewedMarkIntent(first.comparison, null, refs, true);
+      expect(new Set(captures.map(capture => scope(capture.comparison))).size).toBe(4);
+      for (const captured of captures.slice(1)) {
+        expect(isScmSelectionReviewed(record, captured.comparison,
+          captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.id)))).toBe(false);
+      }
+      // A pre-normalization retained capture stores selectors in metadata/session, not source.
+      const path = join(configuration.activeServerDir, 'runtime', 'scm', 'comparisons',
+        encodeRepositoryCheckpointScope(first.sessionId), `${first.comparison.id}.json`);
+      const stored = JSON.parse(await readFile(path, 'utf8')) as { comparison: typeof first.comparison; metadata: typeof first.metadata };
+      stored.comparison.source = { kind: 'turnCheckpoint' };
+      stored.metadata.source = { kind: 'turnCheckpoint' };
+      await writeFile(path, JSON.stringify(stored));
+      const retained = await readCapturedScmComparison({ cwd: fixture.rootPath, sessionId: first.sessionId, comparisonId: first.comparison.id });
+      expect(retained.comparison.id).toBe(first.comparison.id);
+      expect(retained.comparison.inventory).toEqual(first.comparison.inventory);
+      expect(scope(retained.comparison)).toBe(scope(first.comparison));
+      expect(isScmSelectionReviewed(record, retained.comparison, refs)).toBe(true);
+    } finally {
+      await Promise.all(captures.map(capture => deleteCapturedScmComparison({ cwd: fixture.rootPath,
+        sessionId: capture.sessionId, comparisonId: capture.comparison.id })));
+    }
+  });
 
   it('preserves legacy occurrence ids byte for byte on real Git multi-hunk and metadata evidence', async () => {
     const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-hunk-id-vectors-' });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, writeFile, copyFile as copyFileMock, rename as renameMock, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, writeFile, copyFile as copyFileMock, rename as renameMock, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -38,7 +38,8 @@ const payload = Buffer.from('payload');
 const sha256 = createHash('sha256').update(payload).digest('hex');
 const roots: string[] = [];
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'happier-finalize-upload-'));
+  // macOS aliases /var to /private/var; match the writer's real destination at the OS boundary.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'happier-finalize-upload-')));
   roots.push(root);
   const tempPath = join(root, 'upload');
   const destPath = join(root, 'dest', 'file.txt');

@@ -194,7 +194,7 @@ describe('pendingQueueV2 optimistic thinking', () => {
         expect(JSON.parse(row!.request.body).requestedAction).toEqual(resetAction);
     });
 
-    it.each(['pending_input_v3', 'pending_input_v4'] as const)('admits exact Run input on %s without activating the parent and preserves the route on replay', async (serverWireMode) => {
+    it.each(['pending_input_v3', 'pending_input_v4', 'pending_input_v5'] as const)('admits exact Run input on %s without activating the parent and preserves the route on replay', async (serverWireMode) => {
         const sessionId = 'target-session';
         storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
         const recipient = { kind: 'execution_run' as const, runId: 'run-a' };

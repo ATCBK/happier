@@ -5,8 +5,6 @@ import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/ma
 import { readProjectManifestDocument } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
-import { workspaceFileEditorDraftCache } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraftCache';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
 // Only the remote daemon network is replaced; the Action admission and editor remain real.
@@ -25,6 +23,7 @@ const initialBytes = '{ "version": 1, "future": {"keep":true} }\n';
 const present = (bytes: string, hash: string) => ({ basis: { kind: 'present' as const, hash }, document: readProjectManifestDocument(bytes) });
 const detection = { entries: [], environments: [], devcontainers: [], coverage: 'complete' as const, diagnostics: [] };
 let workspace = { serverId: 'home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/project' };
+let workspaceSequence = 0;
 let inspectionReply: unknown;
 
 describe('Project definition Actions through the UI executor', () => {
@@ -32,7 +31,7 @@ describe('Project definition Actions through the UI executor', () => {
         await harness.reset();
         rpc.machine.mockReset();
         const serverId = await harness.addHome({ name: 'Project Home', serverUrl: 'https://project.test', serverIdentityId: 'srv_project_home', accountId: 'alice', currentAccount: true });
-        workspace = { ...workspace, serverId };
+        workspace = { ...workspace, serverId, rootPath: `/project/${++workspaceSequence}` };
         inspectionReply = { definition: present(initialBytes, 'a'.repeat(64)), detection, importCandidates: [] };
         harness.answer(serverId, '/v1/actions/projects.inspect', { select: body => {
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
@@ -55,7 +54,6 @@ describe('Project definition Actions through the UI executor', () => {
         } } } });
     });
     afterEach(() => {
-        workspaceFileEditorDraftCache.setDraft({ accountId: 'alice', workspaceCacheKey: buildWorkspaceCacheKey(workspace), filePath: '.happier/project.json', draft: null });
         standardCleanup();
     });
 
@@ -91,7 +89,8 @@ describe('Project definition Actions through the UI executor', () => {
         expect(model.getSnapshot().dirty).toBe(false);
         expect(rpc.machine.mock.calls.map(([request]) => ({ method: request.method, payload: request.payload, serverId: request.serverId,
             machineId: request.machineId, accountId: request.accountId, signal: request.signal }))).toEqual([
-            { method: 'daemon.projects.manifest.update.v1', payload: { workspace, expectedBasis: definition.basis, bytes }, serverId: workspace.serverId, machineId: 'machine', accountId: 'alice', signal },
+            // Account admission composes caller cancellation with retirement; identity is not a transport contract.
+            { method: 'daemon.projects.manifest.update.v1', payload: { workspace, expectedBasis: definition.basis, bytes }, serverId: workspace.serverId, machineId: 'machine', accountId: 'alice', signal: expect.any(AbortSignal) },
         ]);
         expect(ProjectManifestUpdateInputSchema.parse(rpc.machine.mock.calls[0][0].payload).bytes).toBe(bytes);
         expect(ExternalActionRequestEnvelopeV1Schema.parse(harness.requestsFor('/v1/actions/projects.inspect')[0].input).input)

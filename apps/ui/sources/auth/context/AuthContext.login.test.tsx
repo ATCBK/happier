@@ -153,9 +153,10 @@ describe('AuthContext.login', () => {
     });
 
     it.each([
-        { accountId: 'account-a', replacesAccount: false },
-        { accountId: 'account-new', replacesAccount: true },
-    ])('retires only the replaced Home archive operations (account=$accountId)', async ({ accountId, replacesAccount }) => {
+        { accountId: 'account-a', previousKind: 'valid', previousToken: buildTokenWithSub('account-a'), replacesAccount: false },
+        { accountId: 'account-new', previousKind: 'valid', previousToken: buildTokenWithSub('account-a'), replacesAccount: true },
+        { accountId: 'account-new', previousKind: 'malformed', previousToken: 'malformed-previous-token', replacesAccount: true },
+    ])('retires only the replaced Home archive operations (account=$accountId, previous=$previousKind)', async ({ accountId, previousToken, replacesAccount }) => {
         const homeA = { id: 'home-a', serverUrl: 'https://home-a.example.test', name: 'Home A', serverIdentityId: 'srv_archive_home_a' };
         const homeB = { id: 'home-b', serverUrl: 'https://home-b.example.test', name: 'Home B', serverIdentityId: 'srv_archive_home_b' };
         serverProfilesState.profiles = [homeA, homeB];
@@ -164,7 +165,7 @@ describe('AuthContext.login', () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const { storage } = await import('@/sync/domains/state/storageStore');
         const previousState = storage.getState();
-        const previousCredentials = { token: buildTokenWithSub('account-a') };
+        const previousCredentials = { token: previousToken };
         const focusedCredentials = { token: buildTokenWithSub('account-b') };
         await TokenStorage.setCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.serverIdentityId }, previousCredentials);
         await TokenStorage.setCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.serverIdentityId }, focusedCredentials);
