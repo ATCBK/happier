@@ -49,6 +49,7 @@ import type {
     AgentSessionContinuationControl,
     AgentSessionOpenRequest,
     AgentSessionConversationRollbackControl,
+    AgentSessionModesSnapshot,
     AgentSessionRuntimeFactory,
     AgentSessionRuntimeContext,
     AgentSessionRuntime,
@@ -6155,19 +6156,67 @@ describe('native Agent session host adapter', () => {
         { mode: 'custom', modes: [{ id: 'custom', name: 'Custom' }], currentModeId: 'build', accepted: true },
         { mode: 'custom', modes: null, currentModeId: null, accepted: true },
         { mode: 'custom', modes: [], currentModeId: 'custom', accepted: true },
-    ])('admits external native mode $mode against its observed inventory ($accepted, early=$refusesDuringOpen, missing=$missingInventory)', async ({ mode, modes, currentModeId, accepted, refusesDuringOpen, missingInventory }) => {
+        { mode: 'custom', modes: [], currentModeId: null, settledCurrentModeId: 'custom', accepted: true },
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true, unbindBeforeRefusal: true },
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', settledCurrentModeId: 'default', accepted: false, refusesDuringOpen: true, missingInventory: true },
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', settledCurrentModeId: 'default', publishNullInventory: true, accepted: false, refusesDuringOpen: true, missingInventory: true },
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true, genericFailure: true },
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true, openCode: true },
+        { mode: 'default', modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build', accepted: false, refusesDuringOpen: true, retriesStartupInstructions: true, missingInventory: true },
+    ])('admits external native mode $mode against its observed inventory ($accepted, early=$refusesDuringOpen, missing=$missingInventory, settled=$settledCurrentModeId, unbind=$unbindBeforeRefusal, generic=$genericFailure, opencode=$openCode, null=$publishNullInventory, retry=$retriesStartupInstructions)', async ({ mode, modes, currentModeId, accepted, refusesDuringOpen, missingInventory, settledCurrentModeId, unbindBeforeRefusal, genericFailure, openCode, publishNullInventory, retriesStartupInstructions }) => {
         const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
         const dispose = vi.fn();
         const updateConfiguration = vi.fn<NonNullable<AgentSessionRuntime['updateConfiguration']>>(async () => ({
             status: 'applied', changed: ['mode'],
         }));
+        const subscribers = new Set<(snapshot: AgentSessionModesSnapshot) => void>();
+        const registeredMcpServers: string[] = [];
+        const disconnectedMcpServers: string[] = [];
+        let snapshot: AgentSessionModesSnapshot = { modes, currentModeId };
+        const publishModes = (next: AgentSessionModesSnapshot): void => {
+            snapshot = next;
+            for (const subscriber of subscribers) subscriber(snapshot);
+        };
         const open: AgentSessionRuntimeFactory['open'] = async (_request, context) => {
+            if (retriesStartupInstructions && !('startupInstructions' in _request && _request.startupInstructions)) {
+                throw new PluginError({ code: 'native_agent_session_mode_unavailable', retryable: false });
+            }
+            if (openCode) {
+                const [{ createOpenCodeServerRuntimeAssembly }, { createContextFixture }] = await Promise.all([
+                    import('../../../../../../../packages/plugins/opencode/src/agent/runtime/server/assembly'),
+                    import('../../../../../../../packages/plugins/opencode/src/agent/runtime/server/assembly.managedServices.testkit'),
+                ]);
+                const ctx = createContextFixture({ managedServerBaseUrl: 'http://127.0.0.1:49213', managedServerRequest: async (input) => {
+                    const path = input.pathAndQuery.split('?')[0]!;
+                    const posted = input.body === undefined ? {} : JSON.parse(new TextDecoder().decode(input.body));
+                    if (path === '/mcp') registeredMcpServers.push(posted.name);
+                    if (path.endsWith('/disconnect')) disconnectedMcpServers.push(path);
+                    const body = path === '/session' ? { id: 'native-mode-cleanup' }
+                        : path === '/agent' ? [{ name: 'build', mode: 'primary' }]
+                        : path === '/mcp' ? { [posted.name]: { status: 'connected' } } : {};
+                    return { ok: true, status: 200, headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(body)).body };
+                } });
+                return (await createOpenCodeServerRuntimeAssembly({ ctx, directory: _request.cwd,
+                    happierSessionId: _request.sessionId, request: _request,
+                    endpoint: { mode: 'external-attach', baseUrl: 'http://127.0.0.1:49213', credential: null },
+                    mcpServers: { docs: { command: '/fixture/mcp' } },
+                    models: context.session.services.models, modes: context.session.services.modes })).runtime;
+            }
             // Native inventory is produced at the external plugin boundary and consumed through the real host binding.
-            context.session.services.modes.bind({
-                read: () => ({ modes, currentModeId }),
-                subscribe: () => ({ dispose() {} }),
+            const binding = context.session.services.modes.bind({
+                read: () => snapshot,
+                subscribe: (listener) => {
+                    subscribers.add(listener);
+                    return { dispose() { subscribers.delete(listener); } };
+                },
             });
-            if (refusesDuringOpen) throw new PluginError({ code: 'native_agent_session_mode_unavailable', retryable: false });
+            if (settledCurrentModeId) publishModes({ modes: publishNullInventory ? null : modes, currentModeId: settledCurrentModeId });
+            if (unbindBeforeRefusal) binding.dispose();
+            if (retriesStartupInstructions) {
+                binding.dispose();
+                throw new PluginError({ code: 'agent_session_startup_instructions_unsupported', retryable: false });
+            }
+            if (refusesDuringOpen) throw new PluginError({ code: genericFailure ? 'agent_session_error' : 'native_agent_session_mode_unavailable', retryable: false });
             return { send, updateConfiguration, watch: () => ({ dispose() {} }), dispose };
         };
         const agentId = 'acme-native-mode-admission';
@@ -6175,10 +6224,14 @@ describe('native Agent session host adapter', () => {
         const plan = await createNativeAgentRuntimeSessionPlan({
             runtime: { sessions: { open } }, lease: createLease(agentId),
             backend: contributions.backend, agent: contributions.agent,
-            sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false, configuration: true },
+            sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false, configuration: true,
+                ...(retriesStartupInstructions ? { startupInstructions: { versions: [1], revisionChanges: 'resume' } } : {}) },
             createSessionHostServiceOwners: () => createSessionHostServiceOwners(),
             sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/repo',
-                backendTarget: { kind: 'backend', backendId: agentId }, sessionModeId: mode }),
+                backendTarget: { kind: 'backend', backendId: agentId }, sessionModeId: mode,
+                ...(retriesStartupInstructions ? { agentSessionStartupInstructionsV1: {
+                    v: 1, id: 'happier.native_mode_test', revision: 1, instructions: 'Use the startup instructions.',
+                } } : {}) }),
         });
         if (!plan.config.createSessionRuntime) throw new Error('Expected native Session factory');
         const admission = plan.config.createSessionRuntime({ directory: '/repo', metadata: {},
@@ -6187,23 +6240,32 @@ describe('native Agent session host adapter', () => {
             getPermissionMode: () => 'default', setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
         } as never);
         if (!accepted) {
-            await expect(admission).rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
-            if (missingInventory) await expect(admission).rejects.not.toBeInstanceOf(SessionStartupInputRefusalError);
+            await expect(admission).rejects.toMatchObject({ code: genericFailure ? 'agent_session_error' : 'native_agent_session_mode_unavailable' });
+            if (missingInventory || genericFailure) await expect(admission).rejects.not.toBeInstanceOf(SessionStartupInputRefusalError);
             else await expect(admission).rejects.toBeInstanceOf(SessionStartupInputRefusalError);
             expect(send).not.toHaveBeenCalled();
-            expect(dispose).not.toHaveBeenCalled();
+            if (refusesDuringOpen) expect(dispose).not.toHaveBeenCalled();
+            else expect(dispose).toHaveBeenCalledOnce();
+            expect(subscribers.size).toBe(0);
+            if (openCode) {
+                expect(registeredMcpServers).toHaveLength(1);
+                expect(disconnectedMcpServers).toEqual(registeredMcpServers.map(name => `/mcp/${name}/disconnect`));
+            }
             return;
         }
         const created = await admission;
         try {
             await created.operations.sendTurnPrompt('continue', { localId: 'native-mode-input' });
             expect(send).toHaveBeenCalledOnce();
+            // Startup admission has ended; later catalog changes must not throw through the producer.
+            expect(() => publishModes({ modes: [], currentModeId: null })).not.toThrow();
             if (modes !== null && modes.length > 0) {
                 await expect(created.operations.updateSessionRuntimeConfig({ modeId: 'missing' }))
                     .resolves.toMatchObject({ status: 'failed', reason: 'native_agent_session_mode_unavailable' });
                 expect(updateConfiguration).not.toHaveBeenCalled();
             }
         } finally { await created.operations.resetOrDisposeRuntime(); }
+        expect(subscribers.size).toBe(0);
     });
 
     it('delegates the host compact command once to the native session with stripped instructions', async () => {

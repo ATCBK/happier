@@ -5750,6 +5750,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             let continuationRefusalMustRemainPrimary = false;
             let openRequest: AgentSessionOpenRequest;
             let startupModeAdmission: Readonly<{ dispose(): void | Promise<void> }> | null = null;
+            let startupModeRefusal: SessionStartupInputRefusalError | null = null;
             try {
                 if (resolvedLateEnvironmentValues) {
                     const lateEnvironment =
@@ -5838,10 +5839,17 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     };
                 }
                 openRequest = buildOpenRequest();
-                // Admit published mode evidence while open is still constructing
-                // the Session, before a plugin can apply invalid configuration.
-                startupModeAdmission = publications.modesSource.subscribe(() => {
-                    assertNativeAgentSessionModeAvailable(openInputs.configuration, publications);
+                // Observe without interrupting open: accepted current-mode facts
+                // may arrive after inventory, and producer cleanup may unbind it.
+                startupModeAdmission = publications.modesSource.subscribe((snapshot) => {
+                    if (snapshot.modes === null && !snapshot.currentModeId) return;
+                    try {
+                        assertNativeAgentSessionModeAvailable(openInputs.configuration, publications);
+                        startupModeRefusal = null;
+                    } catch (error) {
+                        if (!(error instanceof SessionStartupInputRefusalError)) throw error;
+                        startupModeRefusal = error;
+                    }
                 });
                 if (openRequest.configuration?.workspaceWrites === 'deny' && sessionCapabilities.workspaceWrites !== 'deny') {
                     throw Object.assign(new Error('Agent cannot enforce the role workspace-write policy'), { code: 'role_policy_unenforceable' });
@@ -5917,14 +5925,23 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     signal,
                 });
                 assertGenerationCurrent();
-                try {
-                    recordOpenPhase('open_preparation');
-                    session = await openNativeAgentSessionUntilAbort(
-                        () => {
+                const openNativeSession = async (): Promise<AgentSessionRuntime> => {
+                    // The startup-instructions fallback is a distinct open attempt.
+                    startupModeRefusal = null;
+                    try {
+                        return await openNativeAgentSessionUntilAbort(() => {
                             if (canApplyNativeStartup) hostRuntimeParams.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
                             return sessionFactory.open(openRequest, context);
-                        }, signal,
-                    );
+                        }, signal);
+                    } catch (error) {
+                        if (startupModeRefusal && isPluginError(error)
+                            && error.code === 'native_agent_session_mode_unavailable') throw startupModeRefusal;
+                        throw error;
+                    }
+                };
+                try {
+                    recordOpenPhase('open_preparation');
+                    session = await openNativeSession();
                     recordOpenPhase('factory_open');
                 } catch (error) {
                     if (!startupInstructions || !isPluginError(error)
@@ -5937,12 +5954,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     assertGenerationCurrent();
                     await params.attestSessionOpen?.({ phase: 'prepare', request: openRequest, providerSessionId, signal });
                     recordOpenPhase('startup_fallback_preparation');
-                    session = await openNativeAgentSessionUntilAbort(
-                        () => {
-                            if (canApplyNativeStartup) hostRuntimeParams.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
-                            return sessionFactory.open(openRequest, context);
-                        }, signal,
-                    );
+                    session = await openNativeSession();
                     recordOpenPhase('factory_open_fallback');
                 }
                 await params.attestSessionOpen?.({
