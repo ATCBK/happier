@@ -4,6 +4,7 @@ import { delay } from '@/utils/timing/time';
 import { t } from '@/text';
 import type { SessionStopRecovery } from '@/sync/ops/sessionStopContract';
 import { readSessionArchivePending, resolveSessionArchiveServerId } from '@/sync/domains/session/listing/sessionArchiveState';
+import { withSessionArchiveDeadline, type SessionArchiveRequestOptions } from '@/sync/ops/sessionArchiveLifecycle';
 
 type SessionMutationResult = Readonly<{
     success: boolean;
@@ -19,7 +20,7 @@ export type StopSessionAndMaybeArchiveParams = Readonly<{
     isPinned: boolean;
     archiveAfterStop: 'never' | 'always';
     stopSession: () => Promise<SessionMutationResult>;
-    archiveSession: () => Promise<SessionMutationResult>;
+    archiveSession: (options?: SessionArchiveRequestOptions) => Promise<SessionMutationResult>;
     stopErrorMessage: string;
     archiveErrorMessage: string;
 }>;
@@ -30,14 +31,6 @@ function readSessionArchiveAfterStopRetryDelayMsFromEnv(): number {
     const parsed = Number.parseInt(raw, 10);
     if (!Number.isFinite(parsed)) return 200;
     return Math.max(0, Math.min(5_000, parsed));
-}
-
-function readSessionArchiveAfterStopTimeoutMsFromEnv(): number {
-    const raw = String(process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_TIMEOUT_MS ?? '').trim();
-    if (!raw) return 75_000;
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed)) return 75_000;
-    return Math.max(0, Math.min(5 * 60_000, parsed));
 }
 
 export function isSessionActiveArchiveResult(result: SessionMutationResult): boolean {
@@ -55,25 +48,27 @@ export function resolveSessionStopFailureMessage(
 }
 
 async function archiveAfterStopWithRetry(params: Readonly<{
-    archiveSession: () => Promise<SessionMutationResult>;
+    archiveSession: (options?: SessionArchiveRequestOptions) => Promise<SessionMutationResult>;
     archiveErrorMessage: string;
     waitForInactive?: boolean;
 }>): Promise<void> {
-    let archiveResult = await params.archiveSession();
-    const deadlineMs = Date.now() + readSessionArchiveAfterStopTimeoutMsFromEnv();
-    const retryDelayMs = readSessionArchiveAfterStopRetryDelayMsFromEnv();
+    await withSessionArchiveDeadline(async ({ signal, deadlineMs, retryActiveSession }) => {
+        let archiveResult = await params.archiveSession({ signal });
+        const retryDelayMs = readSessionArchiveAfterStopRetryDelayMsFromEnv();
 
-    while (params.waitForInactive !== false && isSessionActiveArchiveResult(archiveResult) && Date.now() < deadlineMs) {
-        await delay(retryDelayMs);
-        archiveResult = await params.archiveSession();
-    }
+        while (retryActiveSession && params.waitForInactive !== false && isSessionActiveArchiveResult(archiveResult) && Date.now() < deadlineMs) {
+            await delay(Math.min(retryDelayMs, Math.max(0, deadlineMs - Date.now())));
+            if (signal.aborted || Date.now() >= deadlineMs) break;
+            archiveResult = await params.archiveSession({ signal });
+        }
 
-    if (!archiveResult.success) {
-        const message = isSessionActiveArchiveResult(archiveResult)
-            ? params.archiveErrorMessage
-            : archiveResult.message || params.archiveErrorMessage;
-        throw new HappyError(message, false);
-    }
+        if (!archiveResult.success) {
+            const message = isSessionActiveArchiveResult(archiveResult)
+                ? params.archiveErrorMessage
+                : archiveResult.message || params.archiveErrorMessage;
+            throw new HappyError(message, false);
+        }
+    });
 }
 
 export function isSessionArchivePending(sessionId: string, serverId?: string | null): boolean {

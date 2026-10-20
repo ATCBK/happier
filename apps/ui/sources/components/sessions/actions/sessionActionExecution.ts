@@ -117,7 +117,7 @@ async function runStopArchiveFlow(params: Readonly<{
         isPinned: params.target.isPinned,
         archiveAfterStop: params.archiveAfterStop,
         stopSession: async () => await stopSession(params.target.sessionId, { serverId: params.target.serverId }),
-        archiveSession: async () => await archiveSession(params.target.sessionId, { serverId: params.target.serverId }),
+        archiveSession: async (options) => await archiveSession(params.target.sessionId, { serverId: params.target.serverId, ...options }),
         stopErrorMessage: t('sessionInfo.failedToStopSession'),
         archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
     });

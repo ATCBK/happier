@@ -53,6 +53,7 @@ import { stopSessionUsingCanonicalStrategy } from './sessionStopStrategy';
 import type { Metadata } from '../domains/state/storageTypes';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { supportsSessionForkRequestId } from '@/utils/system/versionUtils';
+import { throwIfSessionArchiveAborted, withSessionArchiveDeadline, type SessionArchiveRequestOptions } from './sessionArchiveLifecycle';
 export { sessionRipgrep } from './sessionRipgrep';
 export type { SessionRipgrepResponse } from './sessionRipgrep';
 
@@ -818,32 +819,42 @@ export interface SessionArchiveResponse {
 
 const SESSION_ACTIVE_ARCHIVE_MESSAGE = 'Cannot archive an active session';
 
-async function archiveRequestWithContext(params: Readonly<{
+type ArchiveRequestParams = Readonly<{
     sessionId: string;
     serverId?: string | null;
     action: 'archive' | 'unarchive';
-}>): Promise<Response> {
+    signal?: AbortSignal;
+}>;
+
+function archiveRequestWithContext(params: ArchiveRequestParams): Promise<Response>;
+function archiveRequestWithContext<T>(params: ArchiveRequestParams, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+async function archiveRequestWithContext<T>(params: ArchiveRequestParams, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
     const context = await resolveServerScopedSessionContext({
         serverId: params.serverId ?? resolvePreferredServerIdForSessionId(params.sessionId) ?? null,
     });
     const path = `/v2/sessions/${params.sessionId}/${params.action}`;
+    const init: RequestInit = { method: 'POST', ...(params.signal ? { signal: params.signal } : {}) };
 
     if (context.scope === 'active') {
-        return await apiSocket.request(path, { method: 'POST' });
+        return consumeResponse
+            ? await apiSocket.request(path, init, consumeResponse)
+            : await apiSocket.request(path, init);
     }
 
-    return await runtimeFetchWithServerReachability({
+    const response = await runtimeFetchWithServerReachability({
         serverUrl: context.targetServerUrl,
         token: context.token,
         url: `${context.targetServerUrl}${path}`,
         init: {
-            method: 'POST',
+            ...init,
             headers: {
                 Authorization: `Bearer ${context.token}`,
             },
         },
         timeoutMs: context.timeoutMs,
+        signal: params.signal,
     });
+    return consumeResponse ? await consumeResponse(response) : response;
 }
 
 async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: number | null, capturedServerId: string): Promise<void> {
@@ -874,24 +885,39 @@ async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: numb
 
 export async function sessionArchiveWithServerScope(
     sessionId: string,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: Readonly<{ serverId?: string | null }> & SessionArchiveRequestOptions,
 ): Promise<SessionArchiveResponse> {
     try {
         const serverId = resolveSessionArchiveServerId(opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId));
-        const response = await archiveRequestWithContext({ sessionId, serverId, action: 'archive' });
-        if (!response.ok) {
-            const message = await response.text().catch(() => '');
-            if (response.status === 409) {
-                return { success: false, message: SESSION_ACTIVE_ARCHIVE_MESSAGE, code: 'session_active' };
+        const archive = async (signal: AbortSignal): Promise<SessionArchiveResponse> => {
+            throwIfSessionArchiveAborted(signal);
+            const result = await archiveRequestWithContext({ sessionId, serverId, action: 'archive', signal }, async (response): Promise<SessionArchiveResponse> => {
+                if (!response.ok) {
+                    const message = await response.text().catch(() => '');
+                    throwIfSessionArchiveAborted(signal);
+                    if (response.status === 409) {
+                        return { success: false, message: SESSION_ACTIVE_ARCHIVE_MESSAGE, code: 'session_active' };
+                    }
+                    return { success: false, message: message || 'Failed to archive session' };
+                }
+                const json: unknown = await response.json().catch(() => null);
+                throwIfSessionArchiveAborted(signal);
+                const archivedAt = json !== null && typeof json === 'object' && 'archivedAt' in json && typeof json.archivedAt === 'number'
+                    ? json.archivedAt
+                    : null;
+                return { success: true, archivedAt };
+            });
+            throwIfSessionArchiveAborted(signal);
+            if (result.success) {
+                await applyArchivedAtToLocalSession(sessionId, result.archivedAt ?? null, serverId);
             }
-            return { success: false, message: message || 'Failed to archive session' };
-        }
-        const json: unknown = await response.json().catch(() => null);
-        const archivedAt = json !== null && typeof json === 'object' && 'archivedAt' in json && typeof json.archivedAt === 'number'
-            ? json.archivedAt
-            : null;
-        await applyArchivedAtToLocalSession(sessionId, archivedAt, serverId);
-        return { success: true, archivedAt };
+            return result;
+        };
+        // Stop-and-archive supplies one enclosing deadline across all 409 attempts. Direct archive
+        // owns the same finite lifecycle here; a caller-provided signal never starts another timer.
+        return opts?.signal
+            ? await archive(opts.signal)
+            : await withSessionArchiveDeadline(async ({ signal }) => await archive(signal));
     } catch (error) {
         return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
     }

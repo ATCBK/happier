@@ -259,6 +259,17 @@ and completion after the user switches servers. A missing runner permits an arch
 but a server `session_active` conflict still fails immediately; it is not proof
 that the session stopped.
 
+The archive stage uses one deadline across readiness, the POST, response-body
+consumption, and any inactivity retries. It starts after Stop and defaults to
+75 seconds. `EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_TIMEOUT_MS=0` disables
+inactivity polling while retaining one request with the default finite deadline.
+Expiration cancels the HTTP read and releases admission so a user can retry;
+it does not prove that the server rolled back a write. Cold shared reachability
+activation retains its existing finite probe budget; a shorter archive deadline
+is observed after that activation finishes. Response consumers run
+inside the existing HTTP cancellation lifetime, and parsing failures do not
+replay a write or establish a server reachability failure.
+
 The development UI reconciles session-owned roster activity through its existing
 runtime presentation and freshness clock. Losing the owner makes stale activity
 unobserved; absence does not establish successful completion or cancellation.

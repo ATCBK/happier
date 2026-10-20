@@ -416,7 +416,7 @@ async function executeArchiveAction(params: Readonly<{
                     isPinned: target.pinned === true,
                     archiveAfterStop: 'always',
                     stopSession: () => stopSession(target),
-                    archiveSession: () => archiveSession(target),
+                    archiveSession: (options) => archiveSession(target, options),
                     stopErrorMessage: params.context.stopErrorMessage ?? DEFAULT_STOP_ERROR_MESSAGE,
                     archiveErrorMessage: params.context.archiveErrorMessage ?? DEFAULT_ARCHIVE_ERROR_MESSAGE,
                 });

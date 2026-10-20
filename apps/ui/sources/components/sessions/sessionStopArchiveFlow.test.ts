@@ -136,6 +136,50 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(isPending()).toBe(false);
     });
 
+    it('keeps a first archive attempt but disables inactivity polling when the configured timeout is zero', async () => {
+        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_TIMEOUT_MS = '0';
+        const archiveSession = vi.fn(async () => ({ success: false, code: 'session_active' }));
+        await expect(stopSessionAndMaybeArchive(params({ archiveSession })))
+            .rejects.toMatchObject({ message: 'archive failed' });
+        expect(archiveSession).toHaveBeenCalledTimes(1);
+        expect(isPending()).toBe(false);
+    });
+
+    it('recovers archive admission when the first request never settles', async () => {
+        process.env.EXPO_PUBLIC_HAPPIER_SESSION_ARCHIVE_AFTER_STOP_TIMEOUT_MS = '1000';
+        vi.useFakeTimers();
+        const cleanup = createDeferred<{ success: boolean }>();
+        const network: { signal?: AbortSignal } = {};
+        let settled = false;
+        // The supplied archive effect is the network boundary; its promise settles only on abort.
+        const archiveSession: StopSessionAndMaybeArchiveParams['archiveSession'] = (options) => {
+            network.signal = options?.signal;
+            return new Promise((resolve, reject) => {
+                options?.signal?.addEventListener('abort', () => {
+                    const error = new Error('Aborted');
+                    error.name = 'AbortError';
+                    reject(error);
+                }, { once: true });
+                void cleanup.promise.then(resolve);
+            });
+        };
+        const result = stopSessionAndMaybeArchive(params({ archiveSession }))
+            .catch((error: unknown) => error).finally(() => { settled = true; });
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            expect(isPending()).toBe(true);
+            await vi.advanceTimersByTimeAsync(1000);
+            expect({ settled, aborted: network.signal?.aborted, pending: isPending() })
+                .toEqual({ settled: true, aborted: true, pending: false });
+            expect(await result).toBeInstanceOf(Error);
+            await expect(stopSessionAndMaybeArchive(params())).resolves.toBeUndefined();
+            expect(isPending()).toBe(false);
+        } finally {
+            cleanup.resolve({ success: true });
+            await result;
+        }
+    });
+
     it('fails immediately when a missing runner cannot satisfy the authoritative archive guard', async () => {
         vi.useFakeTimers();
         const stopSession = vi.fn(async () => ({ success: false, code: 'session_stop_not_found' }));

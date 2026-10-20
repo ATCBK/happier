@@ -45,14 +45,24 @@ describe('server-scoped session archive operations', () => {
     let serverA: ServerProfile;
     let serverB: ServerProfile;
     let activeRequest: MockInstance<typeof apiSocket.request>;
+    const activeResponse = vi.fn(async () => response(42));
     const remoteRequest = vi.fn(async () => response(42));
+
+    function requestAtTransportBoundary(path: string, init?: RequestInit): Promise<Response>;
+    function requestAtTransportBoundary<T>(path: string, init: RequestInit | undefined, consume: (response: Response) => Promise<T>): Promise<T>;
+    async function requestAtTransportBoundary<T>(_path: string, _init?: RequestInit, consume?: (response: Response) => Promise<T>): Promise<Response | T> {
+        const result = await activeResponse();
+        return consume ? await consume(result) : result;
+    }
 
     beforeEach(() => {
         storage.setState(storage.getInitialState(), true);
         serverA = upsertServerProfile({ serverUrl: 'https://archive-a.example' });
         serverB = upsertServerProfile({ serverUrl: 'https://archive-b.example' });
         setActiveServerId(serverA.id);
-        activeRequest = vi.spyOn(apiSocket, 'request').mockImplementation(async () => response(42));
+        activeResponse.mockReset();
+        activeResponse.mockImplementation(async () => response(42));
+        activeRequest = vi.spyOn(apiSocket, 'request').mockImplementation(requestAtTransportBoundary);
         // Credentials and transport are external boundaries; resolution and all store projections stay real.
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
             token: 'header.eyJzdWIiOiJhY2NvdW50LWEifQ.signature',
@@ -70,7 +80,7 @@ describe('server-scoped session archive operations', () => {
     it('archives the active session through the socket transport and patches its real store projection', async () => {
         await expect(sessionArchiveWithServerScope(sessionId, { serverId: serverA.id }))
             .resolves.toMatchObject({ success: true, archivedAt: 42 });
-        expect(activeRequest).toHaveBeenCalledWith(`/v2/sessions/${sessionId}/archive`, { method: 'POST' });
+        expect(activeRequest.mock.calls[0]?.[0]).toBe(`/v2/sessions/${sessionId}/archive`);
         expect(storage.getState().sessions[sessionId]?.archivedAt).toBe(42);
         expect(storage.getState().sessionListRenderables[sessionId]?.archivedAt).toBe(42);
         expect(remoteRequest).not.toHaveBeenCalled();
@@ -101,7 +111,7 @@ describe('server-scoped session archive operations', () => {
 
     it('settles a request against its original server after the active server changes', async () => {
         const network = createDeferred<Response>();
-        activeRequest.mockReturnValueOnce(network.promise);
+        activeResponse.mockReturnValueOnce(network.promise);
         const firstSession = storage.getState().sessions[sessionId];
         const result = sessionArchiveWithServerScope(sessionId, { serverId: serverA.id });
         await vi.waitFor(() => expect(activeRequest).toHaveBeenCalledTimes(1));
@@ -160,7 +170,7 @@ describe('server-scoped session archive operations', () => {
 
     it.each(['archive', 'unarchive'] as const)('updates a cache-only active renderable after %s', async (action) => {
         storage.setState({ sessions: {} });
-        activeRequest.mockImplementation(async () => response(action === 'archive' ? 42 : null));
+        activeResponse.mockImplementation(async () => response(action === 'archive' ? 42 : null));
         const run = action === 'archive' ? sessionArchiveWithServerScope : sessionUnarchiveWithServerScope;
         await expect(run(sessionId, { serverId: serverA.id })).resolves.toMatchObject({ success: true });
         expect(storage.getState().sessionListRenderables[sessionId]?.archivedAt).toBe(action === 'archive' ? 42 : null);
@@ -172,7 +182,7 @@ describe('server-scoped session archive operations', () => {
         seedActiveSession(before);
         storage.setState({ sessions: {} });
         const network = createDeferred<Response>();
-        activeRequest.mockReturnValueOnce(network.promise);
+        activeResponse.mockReturnValueOnce(network.promise);
         const run = action === 'archive' ? sessionArchiveWithServerScope : sessionUnarchiveWithServerScope;
         const result = run(sessionId, { serverId: serverA.id });
         await vi.waitFor(() => expect(activeRequest).toHaveBeenCalledTimes(1));
@@ -184,7 +194,7 @@ describe('server-scoped session archive operations', () => {
 
     it('preserves local state and returns the stable session_active conflict code', async () => {
         const before = storage.getState().sessions[sessionId];
-        activeRequest.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'session-active' }), { status: 409 }));
+        activeResponse.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'session-active' }), { status: 409 }));
         await expect(sessionArchiveWithServerScope(sessionId)).resolves.toMatchObject({ success: false, code: 'session_active' });
         expect(storage.getState().sessions[sessionId]).toBe(before);
     });
