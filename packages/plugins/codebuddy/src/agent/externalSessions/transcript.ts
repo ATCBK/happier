@@ -9,7 +9,7 @@ import { CodeBuddySourceError, isRecord } from './source.js';
 // Pinned native CUSTOM_INPUT_ITEM_TYPES, plus its session-meta storage fact.
 const facts = new Set(['custom-title', 'ai-title', 'file-history-snapshot', 'summary', 'topic', 'goal-result', 'goal-progress', 'turn-metrics', 'resend-fork-notice', 'acp-terminal-state', 'request-recovery', 'model-usage', 'credit-usage', 'session-meta']);
 const chainTypes = new Set(['message', 'function_call', 'function_call_result', 'function_call_output', 'reasoning']);
-type Stamp = { file: string; identity: string; revision: string; size: number; digest: string; scanBytes: number; replay: { branch: boolean; tip: string | null } };
+type Stamp = { file: string; identity: string; revision: string; size: number; digest: string; replay: { branch: boolean; tip: string | null } };
 type Cursor = { v: 2; mode: 'page' | 'tail'; stamp: Stamp; offset: number; expected: string | null; branch: boolean; tip: string | null; pending: boolean };
 type ReplayPreparation = { stamp: Stamp; offset: number; hasParent: boolean; hasResend: boolean; hasFilter: boolean; tip: string | null; pending?: string | null };
 export type CodeBuddyTranscriptPreparation = { cursor?: string };
@@ -21,18 +21,17 @@ function decodeCursor(value: string): Cursor {
   if (!isRecord(parsed) || parsed.v !== 2 || (parsed.mode !== 'page' && parsed.mode !== 'tail') || !isRecord(parsed.stamp)
     || typeof parsed.stamp.file !== 'string' || typeof parsed.stamp.identity !== 'string' || typeof parsed.stamp.revision !== 'string' || typeof parsed.stamp.digest !== 'string'
     || typeof parsed.stamp.size !== 'number' || !Number.isSafeInteger(parsed.stamp.size) || parsed.stamp.size < 0
-    || typeof parsed.stamp.scanBytes !== 'number' || !Number.isSafeInteger(parsed.stamp.scanBytes) || parsed.stamp.scanBytes < 1
     || !isRecord(parsed.stamp.replay) || typeof parsed.stamp.replay.branch !== 'boolean' || (parsed.stamp.replay.tip !== null && typeof parsed.stamp.replay.tip !== 'string')
     || typeof parsed.offset !== 'number' || !Number.isSafeInteger(parsed.offset) || parsed.offset < 0 || parsed.offset > parsed.stamp.size
     || typeof parsed.branch !== 'boolean' || (parsed.expected !== null && typeof parsed.expected !== 'string')
     || (parsed.tip !== null && typeof parsed.tip !== 'string') || typeof parsed.pending !== 'boolean') throw new CodeBuddySourceError('invalid_request', 'Invalid CodeBuddy cursor.');
-  return { v: 2, mode: parsed.mode, stamp: { file: parsed.stamp.file, identity: parsed.stamp.identity, revision: parsed.stamp.revision, size: parsed.stamp.size, digest: parsed.stamp.digest, scanBytes: parsed.stamp.scanBytes, replay: { branch: parsed.stamp.replay.branch, tip: parsed.stamp.replay.tip } }, offset: parsed.offset, expected: parsed.expected, branch: parsed.branch, tip: parsed.tip, pending: parsed.pending };
+  return { v: 2, mode: parsed.mode, stamp: { file: parsed.stamp.file, identity: parsed.stamp.identity, revision: parsed.stamp.revision, size: parsed.stamp.size, digest: parsed.stamp.digest, replay: { branch: parsed.stamp.replay.branch, tip: parsed.stamp.replay.tip } }, offset: parsed.offset, expected: parsed.expected, branch: parsed.branch, tip: parsed.tip, pending: parsed.pending };
 }
-async function replayStep(state: ReplayPreparation, signal: AbortSignal): Promise<boolean> {
+async function replayStep(state: ReplayPreparation, signal: AbortSignal, maxBytes: number): Promise<boolean> {
   const start = state.offset;
   const { stamp } = state;
   const chunks: Buffer[] = [];
-  const page = await readJsonlFileForwardLines({ filePath: stamp.file, offsetBytes: start, maxBytes: stamp.scanBytes,
+  const page = await readJsonlFileForwardLines({ filePath: stamp.file, offsetBytes: start, maxBytes,
     maxOversizeLineBytes: Math.max(1, stamp.size), maxItems: Number.MAX_SAFE_INTEGER,
     fileSystem: {
       stat: async () => ({ size: stamp.size, mtimeMs: 0 }),
@@ -54,17 +53,19 @@ async function replayStep(state: ReplayPreparation, signal: AbortSignal): Promis
     },
   });
   if (page.nextOffsetBytes <= start && start < stamp.size) throw new CodeBuddySourceError('source_discontinuity', 'CodeBuddy replay made no progress.');
-  // Chain exact byte ranges at the shared scanner's complete-record frontier.
-  // The caller's byte allowance supplies the step size. Only this digest and
-  // replay scalars travel in the cursor; no source bodies or Hash object survive.
-  const hash = createHash('sha256').update(stamp.digest);
-  let remaining = page.nextOffsetBytes - start;
-  for (const chunk of chunks) {
-    hash.update(chunk.subarray(0, remaining));
-    remaining -= Math.min(remaining, chunk.length);
-    if (remaining === 0) break;
+  // Chain exact physical JSONL records, independently of the scan-page size.
+  // Each continuation can use its own current byte allowance. Only the digest
+  // and replay scalars travel in the cursor; no bodies or Hash object survive.
+  const bytes = Buffer.concat(chunks).subarray(0, page.nextOffsetBytes - start);
+  let recordStart = 0;
+  const commitDigest = (end: number) => {
+    stamp.digest = createHash('sha256').update(stamp.digest).update('\0').update(bytes.subarray(recordStart, end)).digest('base64url');
+    recordStart = end;
+  };
+  for (let index = 0; index < bytes.length; index++) {
+    if (bytes[index] === 10) commitDigest(index + 1);
   }
-  stamp.digest = hash.digest('base64url');
+  if (recordStart < bytes.length) commitDigest(bytes.length);
   state.offset = page.nextOffsetBytes;
   stamp.replay = { branch: state.pending !== undefined || state.hasParent && (state.hasResend || state.hasFilter),
     tip: state.pending === undefined ? state.tip : state.pending };
@@ -85,14 +86,16 @@ function encodePreparation(state: ReplayPreparation): string {
   return Buffer.from(JSON.stringify({ ...replay, page: encodeCursor({ v: 2, mode: 'page', stamp, offset,
     expected: null, branch: false, tip: null, pending: false }) })).toString('base64url');
 }
-async function verifyPrefix(stamp: Stamp, size: number, signal: AbortSignal): Promise<void> {
+async function verifyPrefix(stamp: Stamp, size: number, signal: AbortSignal, maxBytes: number): Promise<void> {
   const verification: ReplayPreparation = { stamp: { ...stamp, size, digest: '' }, offset: 0,
     hasParent: false, hasResend: false, hasFilter: false, tip: null };
-  while (verification.offset < size) await replayStep(verification, signal);
+  while (verification.offset < size) await replayStep(verification, signal, maxBytes);
   if (verification.stamp.digest !== stamp.digest) throw new CodeBuddySourceError('source_discontinuity', 'CodeBuddy transcript was rewritten.');
 }
-async function stampFile(file: string, signal: AbortSignal, prior?: Stamp,
-  preparation?: CodeBuddyTranscriptPreparation, control?: ExternalSessionContentSearchControl, scanBytes?: number): Promise<Stamp> {
+async function stampFile(file: string, signal: AbortSignal, options: {
+  prior?: Stamp; preparation?: CodeBuddyTranscriptPreparation; control?: ExternalSessionContentSearchControl; maxBytes: number;
+}): Promise<Stamp> {
+  const { prior, preparation, control, maxBytes } = options;
   signal.throwIfAborted();
   const info = await stat(file, { bigint: true }).catch((error: unknown) => {
     if (isRecord(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return null;
@@ -106,7 +109,7 @@ async function stampFile(file: string, signal: AbortSignal, prior?: Stamp,
   // Unchanged native files need only stat; changed stats still prove the exact
   // captured prefix so growth cannot conceal a rewrite of earlier messages.
   if (prior?.revision === revision) return prior;
-  if (prior) await verifyPrefix(prior, prior.size, signal);
+  if (prior) await verifyPrefix(prior, prior.size, signal, maxBytes);
   const size = prior?.size ?? Number(info.size);
   if (prior) return { ...prior, revision };
   // Native default replay retains ordinary disconnected history. Only an
@@ -114,17 +117,17 @@ async function stampFile(file: string, signal: AbortSignal, prior?: Stamp,
   // Discover that decision and the exact prefix digest in one shared-scanner
   // pass, retaining scalar metadata rather than the transcript's bodies.
   const state: ReplayPreparation = preparation?.cursor ? decodePreparation(preparation.cursor)
-    : { stamp: { file, identity, revision, size, digest: '', scanBytes: scanBytes ?? Math.max(1, size), replay: { branch: false, tip: null } },
+    : { stamp: { file, identity, revision, size, digest: '', replay: { branch: false, tip: null } },
       offset: 0, hasParent: false, hasResend: false, hasFilter: false, tip: null };
   if (state.stamp.file !== file || state.stamp.identity !== identity || info.size < BigInt(state.stamp.size))
     throw new CodeBuddySourceError('source_discontinuity', 'CodeBuddy transcript changed during replay.');
   if (state.stamp.revision !== revision) {
-    await verifyPrefix(state.stamp, state.offset, signal);
+    await verifyPrefix(state.stamp, state.offset, signal, maxBytes);
     state.stamp.revision = revision;
   }
   const step = async () => {
     if (state.offset >= state.stamp.size) return true;
-    const complete = await replayStep(state, signal);
+    const complete = await replayStep(state, signal, maxBytes);
     if (preparation) preparation.cursor = encodePreparation(state);
     return complete;
   };
@@ -174,7 +177,8 @@ export async function pageCodeBuddyTranscript(params: { file: string; cursor?: s
   preparation?: CodeBuddyTranscriptPreparation; control?: ExternalSessionContentSearchControl }): Promise<CodeBuddyTranscriptPage> {
   const previous = params.cursor ? decodeCursor(params.cursor) : null;
   if (previous && previous.mode !== 'page') throw new CodeBuddySourceError('invalid_request', 'Expected a CodeBuddy page cursor.');
-  const stamp = await stampFile(params.file, params.signal, previous?.stamp, params.preparation, params.control, params.maxSerializedBytes);
+  const stamp = await stampFile(params.file, params.signal, { prior: previous?.stamp, preparation: params.preparation,
+    control: params.control, maxBytes: params.maxSerializedBytes });
   let offset = previous?.offset ?? stamp.size;
   let expected = previous ? previous.expected : stamp.replay.tip;
   const branch = previous?.branch ?? stamp.replay.branch;
@@ -214,7 +218,7 @@ export async function pageCodeBuddyTranscript(params: { file: string; cursor?: s
   }
   if (exhaustedBatch) offset = page.nextEndOffsetBytes;
   if (offset === 0 && branch && expected !== null) partial = true;
-  await stampFile(params.file, params.signal, stamp);
+  await stampFile(params.file, params.signal, { prior: stamp, maxBytes: params.maxSerializedBytes });
   const state: Cursor = { v: 2, mode: 'page', stamp, offset, expected, branch, tip, pending: false };
   const tailCursor = encodeCursor({ ...state, mode: 'tail', offset: stamp.size, expected: null });
   return { items: newest.reverse(), nextCursor: offset > 0 ? encodeCursor(state) : null, tailCursor, partial, ...(title ? { title } : {}), ...(cwd ? { cwd } : {}) };
@@ -223,7 +227,7 @@ export async function pageCodeBuddyTranscript(params: { file: string; cursor?: s
 export async function readAfterCodeBuddyTranscript(params: { file: string; cursor: string; maxItems: number; maxSerializedBytes: number; signal: AbortSignal }): Promise<AgentExternalSessionsReadAfterTranscriptResult> {
   const previous = decodeCursor(params.cursor);
   if (previous.mode !== 'tail') throw new CodeBuddySourceError('invalid_request', 'Expected a CodeBuddy tail cursor.');
-  try { await stampFile(params.file, params.signal, previous.stamp); } catch (error) {
+  try { await stampFile(params.file, params.signal, { prior: previous.stamp, maxBytes: params.maxSerializedBytes }); } catch (error) {
     if (error instanceof CodeBuddySourceError) return { outcome: error.code === 'source_unavailable' ? 'source_unavailable' : 'source_replaced' } as const;
     throw error;
   }

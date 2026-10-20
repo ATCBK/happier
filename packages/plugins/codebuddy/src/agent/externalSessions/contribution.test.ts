@@ -80,9 +80,9 @@ describe('CodeBuddy native conversation reader', () => {
     expect(next.ok && next.value.nextCursor).not.toBe(first.value.nextCursor);
   });
 
-  it('resumes a large replay prepass across soft deadlines before publishing the selected branch', async () => {
+  it.each(['append', 'smaller-budget'] as const)('resumes a large replay prepass across soft deadlines before publishing the selected branch (%s)', async kind => {
     const t = await setup();
-    t.invocation.maxSerializedBytes = 64 * 1024;
+    t.invocation.maxSerializedBytes = kind === 'smaller-budget' ? 1024 * 1024 : 64 * 1024;
     await appendFile(t.file, Array.from({ length: 20_000 }, (_, index) => JSON.stringify({
       id: `abandoned-${index}`, parentId: index ? `abandoned-${index - 1}` : 'result1',
       type: 'message', role: 'assistant', content: `abandoned needle ${'x'.repeat(200)}`,
@@ -99,8 +99,9 @@ describe('CodeBuddy native conversation reader', () => {
     let pages = 0;
     do {
       const started = clock;
-      const result = await t.list('harbor question', cursor, started + 8);
-      expect(clock - started).toBeLessThanOrEqual(8);
+      const allowance = pages === 0 && kind === 'smaller-budget' ? 40 : 8;
+      const result = await t.list('harbor question', cursor, started + allowance);
+      expect(clock - started).toBeLessThanOrEqual(allowance);
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error('Replay failed');
       if (result.value.nextCursor) {
@@ -112,7 +113,10 @@ describe('CodeBuddy native conversation reader', () => {
       }
       cursor = result.value.nextCursor ?? undefined;
       pages += 1;
-      if (pages === 1) await appendFile(t.file, JSON.stringify({ type: 'custom-title', title: 'updated during preparation' }) + '\n');
+      if (pages === 1) {
+        if (kind === 'smaller-budget') t.invocation.maxSerializedBytes = 16 * 1024;
+        else await appendFile(t.file, JSON.stringify({ type: 'custom-title', title: 'updated during preparation' }) + '\n');
+      }
       if (pages > 200) throw new Error('Replay did not advance to completion');
     } while (cursor);
     expect(pages).toBeGreaterThan(1);
