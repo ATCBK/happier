@@ -40,6 +40,7 @@ let onArtifactRead: (() => void) | undefined;
 let beforeArtifactResponse: ((id: string) => Promise<void>) | undefined;
 let afterArtifactResponse: ((id: string) => void) | undefined;
 let artifactReadAvailable: boolean;
+let unavailableArtifactId: string | null;
 let admittedRoute: string;
 let catalogReads: number;
 let catalogReadAvailable: boolean;
@@ -91,6 +92,7 @@ beforeEach(async () => {
   beforeArtifactResponse = undefined;
   afterArtifactResponse = undefined;
   artifactReadAvailable = true;
+  unavailableArtifactId = null;
   catalogReads = 0;
   catalogReadAvailable = false;
   beforeCatalogResponse = undefined;
@@ -134,7 +136,7 @@ beforeEach(async () => {
       await beforeArtifactResponse?.(id);
       data = documents.find(document => document.id === id);
       if (!data) { status = 404; data = { error: 'artifact_not_found' }; }
-      if (!artifactReadAvailable && !admitted) { status = 503; data = { error: 'artifact_backend_unavailable' }; }
+      if ((!artifactReadAvailable || id === unavailableArtifactId) && !admitted) { status = 503; data = { error: 'artifact_backend_unavailable' }; }
     } else if (path === '/v1/account/encryption/currentness') {
       data = { mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null,
         contentKeyFingerprint: null, updatedAt: 1 };
@@ -723,12 +725,16 @@ it('keeps Profile and Session context pending with unavailable Account admission
   expect(notices).toEqual([]);
 });
 
-it('does not omit a known required Account attachment or publish optional notice on its unavailable read', async () => {
+it('does not omit a known required Account attachment and prepares it on retry after recovery', async () => {
   selectedProfileId = null;
   sessionEntryIds = [];
   const prepare = await resolver(true, false);
   artifactReadAvailable = false;
   await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ code: 'preparation_pending' });
+  expect(notices).toEqual([]);
+  artifactReadAvailable = true;
+  expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).toContain('CONTEXT_ACCOUNT');
+  expect(prepare.readStartupInstructions?.()).not.toBeNull();
   expect(notices).toEqual([]);
 });
 
@@ -782,9 +788,8 @@ it('intentionally suppresses admitted Memory-off content but still requires curr
   expect(notices).toEqual([]);
 });
 
-it('keeps an optional Account document pending on HTTP failure, skips only definitive absence, and recovers', async () => {
+it('continues with a typed notice when an optional Account document fails, then recovers without losing required context', async () => {
   selectedProfileId = null;
-  sessionEntryIds = [];
   const prepare = await resolver(true, false);
   const { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
     commitActivePromptLibraryCatalog } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
@@ -795,20 +800,31 @@ it('keeps an optional Account document pending on HTTP failure, skips only defin
       value: { v: 1, scope: { kind: 'coding' }, entries: [{ ...entry('account'), required: false }] } }) }],
       tombstones: [], diagnostics: [] } });
   expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).toContain('CONTEXT_ACCOUNT');
-  artifactReadAvailable = false;
-  await expect(prepare({ baseOverride: 'CONTEXT_BASE' })).rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
-  expect(prepare.readStartupInstructions?.()).toBeNull();
-  expect(prepare.readCodingPromptBehavior?.()).toBeNull();
-  expect(prepare.readComposition?.()).toBeNull();
-  artifactReadAvailable = true;
+  // Required Session context remains available; only this optional Account document fails.
+  unavailableArtifactId = 'account';
+  const unavailableResult = await prepare({ baseOverride: 'CONTEXT_BASE' });
+  expect(unavailableResult).not.toContain('CONTEXT_ACCOUNT');
+  expect(unavailableResult).toContain('CONTEXT_SESSION');
+  expect(notices.map(readSessionCapabilityNoticeV1)).toEqual([{ v: 1, items: [
+    { kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' },
+  ] }]);
+  expect(prepare.readStartupInstructions?.()).not.toBeNull();
+  expect(prepare.readCodingPromptBehavior?.()).not.toBeNull();
+  expect(prepare.readComposition?.()).not.toBeNull();
+  await prepare({ baseOverride: 'CONTEXT_BASE' });
+  expect(notices).toHaveLength(1);
+  unavailableArtifactId = null;
   const document = documents.find(candidate => candidate.id === 'account')!;
   documents = documents.filter(candidate => candidate.id !== 'account');
   const missing = await prepare({ baseOverride: 'CONTEXT_BASE', includeAdmittedInventory: true });
   expect(missing.text).not.toContain('CONTEXT_ACCOUNT');
-  expect(missing.admittedEntries).toMatchObject([{ outcome: 'unavailable', reason: 'not_found' }]);
+  expect(missing.admittedEntries).toEqual(expect.arrayContaining([
+    expect.objectContaining({ entryId: 'account', outcome: 'unavailable', reason: 'not_found' }),
+    expect.objectContaining({ entryId: 'session', outcome: 'ready' }),
+  ]));
   documents.push(document);
   expect(await prepare({ baseOverride: 'CONTEXT_BASE' })).toContain('CONTEXT_ACCOUNT');
-  expect(notices).toEqual([]);
+  expect(notices).toHaveLength(1);
 });
 
 it('consumes the strict daemon optional augmentation fact as one visible notice after required preparation succeeds', async () => {

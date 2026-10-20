@@ -33,7 +33,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
   });
   it('rejects a bundle whose header declares an unsupported schema even when SKILL.md is present', async () => {
     await expect(resolvePromptStackSystemAppendBlocksV1({
-      surface: 'coding', sessionEntries: [{ id: 'bundle', ref: { kind: 'bundle', artifactId: 'bundle' }, enabled: true, placement: 'system_append' }],
+      surface: 'coding', sessionEntries: [{ id: 'bundle', ref: { kind: 'bundle', artifactId: 'bundle' }, enabled: true, required: true, placement: 'system_append' }],
       readArtifact: async () => ({ id: 'bundle', revision: { headerVersion: 1, bodyVersion: 1 },
         header: { v: 1, kind: 'prompt_bundle.v2', title: 'Bundle', bundleSchemaId: 'dashboard.v1' },
         body: JSON.stringify({ v: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8', contentBase64: 'SGVsbG8=' }], createdAtMs: 1, updatedAtMs: 1 }),
@@ -76,7 +76,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     })).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'wrong_kind' });
   });
 
-  it('keeps unavailable optional entries pending while retaining required preparation failure and cancellation', async () => {
+  it('omits unavailable optional entries while retaining required preparation failure and cancellation', async () => {
     const scope = { serverId: 'home', accountId: 'account' };
     const readArtifact = async (ref: { artifactId: string }) => {
       if (ref.artifactId === 'optional') throw new Error('Home unavailable');
@@ -84,9 +84,10 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     };
     const input = { surface: 'coding' as const, scope,
       accountEntries: [entry('optional'), { ...entry('required'), required: true }], readArtifact };
-    await expect(resolvePromptStackSystemAppendBlocksV1(input)).rejects.toMatchObject({
-      code: 'preparation_pending', admittedEntries: [
+    expect(await resolvePromptStackSystemAppendBlocksV1(input)).toMatchObject({
+      blocks: ['required'], admittedEntries: [
         { entryId: 'optional', outcome: 'unavailable', reason: 'unavailable', revision: null },
+        { entryId: 'required', outcome: 'ready' },
       ],
     });
     await expect(resolvePromptStackSystemAppendBlocksV1({ ...input,
@@ -97,6 +98,23 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     await expect(resolvePromptStackSystemAppendBlocksV1({ ...input, signal: cancellation.signal,
       readArtifact: async () => { cancellation.abort(failure); throw failure; },
     })).rejects.toBe(failure);
+  });
+
+  it.each(['locked', 'malformed', 'wrong_kind'] as const)('omits optional %s content but preserves a required refusal and repaired retry', async reason => {
+    const selected = entry('selected');
+    const broken = reason === 'wrong_kind' ? { ...artifact('selected'), header: { v: 1, kind: 'other', title: 'Wrong kind' } }
+      : { ...artifact('selected'), body: '{invalid-json' };
+    const readArtifact = async () => {
+      if (reason === 'locked') throw Object.assign(new Error('Private encryption detail'), { code: 'artifact_encryption_material_unavailable' });
+      return broken;
+    };
+    expect(await resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', accountEntries: [selected], readArtifact }))
+      .toMatchObject({ blocks: [], admittedEntries: [{ entryId: 'selected', outcome: 'unavailable', reason }] });
+    await expect(resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', accountEntries: [{ ...selected, required: true }], readArtifact }))
+      .rejects.toMatchObject({ code: 'attachment_unavailable', reason, ref: selected.ref });
+    expect((await resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', accountEntries: [{ ...selected, required: true }],
+      readArtifact: async () => artifact('selected', 'Repaired context'),
+    })).blocks).toEqual(['Repaired context']);
   });
 
   it.each([true, false])('requires repair for retained Session Instructions pointing at memory when memoryEnabled=%s', async (memoryEnabled) => {
@@ -252,7 +270,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     ] });
   });
 
-  it.each(['coding', 'voice'] as const)('keeps unknown Account encryption mode pending until admitted on %s', async surface => {
+  it.each(['coding', 'voice'] as const)('never opens unknown-mode or mismatched content and respects requiredness on %s', async surface => {
     const scope = { serverId: 'home', accountId: 'account' };
     for (const memoryEnabled of [true, false]) {
       for (const required of [true, false]) {
@@ -264,17 +282,19 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
         const input = { surface, scope, memoryEnabled,
           sessionEntries: [{ ...entry('selected'), required }],
           readArtifactHeader: read, readArtifact: read };
-        await expect(resolvePromptStackSystemAppendBlocksV1(input)).rejects.toMatchObject({
-          code: 'preparation_pending', reason: 'unavailable', admittedEntries: [
-            { entryId: 'selected', outcome: 'unavailable', reason: 'unavailable', revision: null },
-          ],
-        });
+        const unavailable = resolvePromptStackSystemAppendBlocksV1(input);
+        if (required) await expect(unavailable).rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
+        else await expect(unavailable).resolves.toMatchObject({ blocks: [], admittedEntries: [
+          { entryId: 'selected', outcome: 'unavailable', reason: 'unavailable', revision: null },
+        ] });
         // Missing currentness is retryable; a confirmed mode mismatch still needs repair.
         for (const lockedCode of ['artifact_account_mode_mismatch', 'artifact_encryption_material_unavailable']) {
           errorCode = lockedCode;
-          await expect(resolvePromptStackSystemAppendBlocksV1(input)).rejects.toMatchObject({
-            code: 'attachment_unavailable', reason: 'locked',
-          });
+          const locked = resolvePromptStackSystemAppendBlocksV1(input);
+          if (required) await expect(locked).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'locked' });
+          else await expect(locked).resolves.toMatchObject({ blocks: [], admittedEntries: [
+            { entryId: 'selected', outcome: 'unavailable', reason: 'locked' },
+          ] });
         }
         errorCode = null;
         await expect(resolvePromptStackSystemAppendBlocksV1(input)).resolves.toMatchObject({
@@ -284,7 +304,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     }
   });
 
-  it.each(['coding', 'voice'] as const)('keeps transient optional header/body reads pending on %s', async surface => {
+  it.each(['coding', 'voice'] as const)('omits transient optional header/body failures on %s', async surface => {
     const scope = { serverId: 'home', accountId: 'account' };
     for (const memoryEnabled of [true, false]) {
       const args = { surface, scope, memoryEnabled,
@@ -297,8 +317,9 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
           if (ref.artifactId === 'optional') throw new Error('offline');
           return artifact(ref.artifactId);
         } };
-      await expect(resolvePromptStackSystemAppendBlocksV1(args)).rejects.toMatchObject({ code: 'preparation_pending',
-        admittedEntries: [{ entryId: 'optional', outcome: 'unavailable', reason: 'unavailable' }] });
+      await expect(resolvePromptStackSystemAppendBlocksV1(args)).resolves.toMatchObject({ blocks: ['required'],
+        admittedEntries: [{ entryId: 'optional', outcome: 'unavailable', reason: 'unavailable' },
+          { entryId: 'required', outcome: 'ready' }] });
       await expect(resolvePromptStackSystemAppendBlocksV1({ ...args,
         accountEntries: [{ ...entry('optional'), required: true }] })).rejects.toMatchObject({ reason: 'unavailable' });
       const controller = new AbortController();
@@ -367,6 +388,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
               id: 'e1',
               ref: { kind: 'doc', artifactId: 'd1' },
               enabled: true,
+              required: true,
               placement: 'system_append',
             },
           ],

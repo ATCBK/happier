@@ -216,6 +216,7 @@ describe('resolveEffectiveCodingPromptText', () => {
         id: 'retained-private-instructions',
         ref: { kind: 'doc', artifactId: 'private-prompt' },
         enabled: true,
+        required: true,
         placement: 'system_append',
       })],
       profileId: null,
