@@ -10,7 +10,8 @@ import { useDeviceType } from '@/utils/platform/responsive';
 
 import { buildProjectPaneScopeId } from './detail/projectPaneScope';
 import { buildProjectRouteHref, resolveProjectOpenHref, type ProjectAttachedDashboardSelection } from './detail/projectRouteState';
-import { createProjectCommitDetailsTab, createProjectFileDetailsTab } from './detail/projectDetailsTabBuilders';
+import { createProjectCommitDetailsTab } from './detail/projectDetailsTabBuilders';
+import { useWorkspaceFileOpener, type WorkspaceFileOpenOptions } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import type { FileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
 import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import type { FileFindSeed as FindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
@@ -38,6 +39,7 @@ export type OpenProject = ((workspaceRefId: string, options?: OpenProjectOptions
 
 export function useOpenProject(): OpenProject {
     const router = useRouter();
+    const { open: openFile } = useWorkspaceFileOpener();
     const deviceType = useDeviceType();
     const paneContext = useOptionalAppPaneContext();
     const { cockpitEnabled } = useMobileWorkspaceExperienceState();
@@ -88,12 +90,8 @@ export function useOpenProject(): OpenProject {
                 attachedDashboard: options.attachedDashboard }));
         }
         if (options?.initialResource) {
-            const tab = options.initialResource.kind === 'file'
-                ? createProjectFileDetailsTab(options.initialResource.path, options.initialResource.anchor, options.initialResource.anchorSource)
-                : createProjectCommitDetailsTab(options.initialResource.sha);
-            if (!tab) return false;
             const resource = options.initialResource;
-            let find: unknown;
+            let find: WorkspaceFileOpenOptions['find'];
             if (resource.kind === 'file' && resource.find) {
                 if (resource.path !== resource.find.target.path) return false;
                 find = { query: resource.find.query, options: resource.find.options, target: {
@@ -103,16 +101,24 @@ export function useOpenProject(): OpenProject {
                     ...(resource.find.target.anchor ? { anchor: resource.find.target.anchor } : {}),
                 } };
             }
+            if (resource.kind === 'file') {
+                return openFile({ kind: 'project', workspaceRefId: workspaceRef.id, serverId: workspaceRef.serverId,
+                    machineId: workspaceRef.machineId, rootPath: activeRootPath, path: resource.path }, {
+                    intent: 'pinned', ...(resource.anchor ? { anchor: resource.anchor } : {}),
+                    ...(resource.anchorSource ? { anchorSource: resource.anchorSource } : {}), ...(find ? { find } : {}),
+                });
+            }
+            if (!createProjectCommitDetailsTab(resource.sha)) return false;
             return await openHref(buildProjectRouteHref({
                     workspaceRefId: workspaceRef.id,
                     serverId: workspaceRef.serverId,
-                    segment: options.initialResource.kind === 'file' ? 'code' : 'changes',
+                    segment: 'changes',
                     activeRootPath,
                     defaultRootPath: workspaceRef.rootPath,
                     activeWorktreeId,
-                    initialResource: options.initialResource,
+                    initialResource: resource,
                     ...(deviceType === 'phone'
-                        ? { sourceSurface: options.initialResource.kind === 'file' ? 'browse' as const : 'git' as const }
+                        ? { sourceSurface: 'git' as const }
                         : {}),
                 }), find);
         }
@@ -136,7 +142,7 @@ export function useOpenProject(): OpenProject {
             const result = await execute({ actionId: 'workspace.tabs.open', input: { href, ...(find ? { find } : {}) } });
             return result.ok;
         }
-    }, [cockpitEnabled, deviceType, lastActiveRootPathByWorkspaceRefId, lastActiveWorktreeIdByWorkspaceRefId, lastMobileSurfaceByWorkspaceRefId, paneContext, publishIssue, router, workspaceRefs]);
+    }, [cockpitEnabled, deviceType, openFile, lastActiveRootPathByWorkspaceRefId, lastActiveWorktreeIdByWorkspaceRefId, lastMobileSurfaceByWorkspaceRefId, paneContext, publishIssue, router, workspaceRefs]);
     return React.useMemo(() => Object.defineProperties(open, {
         resolution: { configurable: true, get: () => issueRef.current },
         dismissResolution: { configurable: true, value: () => publishIssue(null) },

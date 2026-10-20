@@ -36,7 +36,6 @@ import type { TranscriptExperience } from '@/components/sessions/transcript/view
 import { SessionDetailsPanel } from '@/components/sessions/panes/SessionDetailsPanel';
 import {
     createSessionCommitDetailsTab,
-    createSessionFileDetailsTab,
     createSessionScmReviewDetailsTab,
     createSessionScmStashDetailsTab,
 } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
@@ -87,6 +86,7 @@ import {
 import { resolveSessionCockpitMobileCatalog } from './sessionCockpitMobileCatalog';
 import { SessionServicesSurfaceScreen } from './SessionServicesSurfaceScreen';
 import { useSessionCockpitSurfaceNavigation } from './SessionCockpitSurfaceNavigation';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 
 // The one Work tab the desktop sidebar mounts too.
 const SessionWorkView = retryableLazy<React.ComponentProps<typeof import('@/components/sessions/work/SessionWorkView')['SessionWorkView']>>(
@@ -137,6 +137,7 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
 
 const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurfaceScreenProps) => {
     const router = useRouter();
+    const { open: openWorkspaceFile } = useWorkspaceFileOpener();
     const deviceType = useDeviceType();
     // This native focus belongs to the cockpit's independent scene navigator,
     // not the outer Expo route. Both owners must admit effects for a hosted scene.
@@ -552,13 +553,14 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         target: Extract<SessionPaneUrlDetailsTarget, { kind: 'file' | 'commit' | 'scmReview' }>,
         intent?: { intent: 'pinned' },
     ) => {
+        if (target.kind === 'file') {
+            if (!sessionAddress) return;
+            void openWorkspaceFile({ kind: 'session', ...sessionAddress, path: target.path },
+                { intent: intent?.intent ?? 'preview', ...(props.surface === 'git' ? { view: 'changes' } : {}),
+                    ...(target.anchor ? { anchor: target.anchor } : {}), ...(target.anchorSource ? { anchorSource: target.anchorSource } : {}) });
+            return;
+        }
         deferOnWeb(() => {
-            if (target.kind === 'file') {
-                pane.openDetailsTab(createSessionFileDetailsTab(target.path), intent);
-                openDetailsSurface();
-                return;
-            }
-
             if (target.kind === 'commit') {
                 const tab = createSessionCommitDetailsTab(target.sha);
                 if (!tab) return;
@@ -571,7 +573,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
             pane.openDetailsTab(createSessionScmReviewDetailsTab(), intent);
             openDetailsSurface();
         });
-    }, [openDetailsSurface, pane]);
+    }, [openDetailsSurface, openWorkspaceFile, pane, props.surface, sessionAddress]);
 
     const openFileInDetails = React.useCallback((fullPath: string) => {
         openDetailsRoute({ kind: 'file', path: fullPath });

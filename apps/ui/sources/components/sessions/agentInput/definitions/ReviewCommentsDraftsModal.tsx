@@ -13,7 +13,7 @@ import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/rev
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { formatReviewCommentAnchorLabel } from '@/sync/domains/input/reviewComments/reviewCommentPresentation';
 import { t } from '@/text';
-import { buildSessionFileDeepLink } from '@/utils/url/sessionFileDeepLink';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import { resolveReviewCommentDraftAnchorsForPrompt } from '@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt';
 import { Icon } from '@/components/ui/icons/Icon';
 
@@ -45,6 +45,7 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
+    const { open: openFile } = useWorkspaceFileOpener();
     const {
         onClose,
         onDeleteDraft,
@@ -96,15 +97,10 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
     const jumpToDraft = React.useCallback((draft: ReviewCommentDraft) => {
         if (!sessionId || !props.navigation) return;
         onClose();
-        const href = buildSessionFileDeepLink({
-            sessionId,
-            serverId: props.reviewScope?.serverId,
-            filePath: draft.filePath,
-            source: draft.source,
-            anchor: draft.anchor,
-        });
-        props.navigation.push(href as never);
-    }, [onClose, props.navigation, props.reviewScope?.serverId, sessionId]);
+        void openFile({ kind: 'session', sessionId, path: draft.filePath,
+            ...(props.reviewScope?.serverId ? { serverId: props.reviewScope.serverId } : {}) },
+        { view: draft.source === 'diff' ? 'changes' : 'view', anchor: draft.anchor, anchorSource: draft.source });
+    }, [onClose, openFile, props.navigation, props.reviewScope?.serverId, sessionId]);
 
     const includedCount = drafts.filter(isReviewCommentDraftIncludedInPrompt).length;
 

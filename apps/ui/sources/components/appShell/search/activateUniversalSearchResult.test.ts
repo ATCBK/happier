@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { activateUniversalSearchResult, type UniversalSearchActivationOwners } from './activateUniversalSearchResult';
 import type { UniversalSearchTarget } from './universalSearchResult';
-import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { createFileFindSeedHandoff, openChatWithFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol/sessions/external/historicalImportIdentity';
+import { buildUniversalSearchSymbolResults } from './workspaceSymbolSearchResults';
+import { isUniversalSearchTargetCurrent } from './isUniversalSearchTargetCurrent';
 
 installFileFindAccountBoundaryMocks();
 
@@ -30,6 +31,26 @@ async function expectSavedWorkspaceResourceOpensInProject(
 }
 
 describe('activateUniversalSearchResult', () => {
+    it.each(['preview', 'beside'] as const)('opens a syntax outline result at its line through the shared file activation owner with %s intent', async (intent) => {
+        const scope = { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' };
+        const results = buildUniversalSearchSymbolResults([
+            { name: 'read', kind: 'function', line: 12, column: 4, depth: 1 },
+        ], { kind: 'workspaceFile', scope, path: 'src/box.ts', accountId: 'account-a',
+            serverId: null, workspaceRefId: 'wr_1', sessionId: null });
+        expect(results[0]?.target.kind).toBe('workspaceSymbol');
+        const openFile = vi.fn(async () => true);
+        expect(await activateUniversalSearchResult(results[0]!.target, {
+            navigateToSession: vi.fn(), push: vi.fn(), openProject: vi.fn(), openFile,
+            isTargetCurrent: target => isUniversalSearchTargetCurrent({
+                target, accountScope: { serverId: 'home-a', accountId: 'account-a', current: true },
+                workspaces: [{ id: 'wr_1', ...scope, createdAtMs: 1 }], settingsPages: new Map(),
+                resolveSessionWorkspaceTarget: () => null, isWorkspaceScopeReachable: () => true,
+            }),
+        }, { intent })).toEqual({ ok: true });
+        expect(openFile).toHaveBeenCalledWith({ kind: 'project', workspaceRefId: 'wr_1', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo', path: 'src/box.ts' },
+            { anchor: { kind: 'fileLine', startLine: 12 }, intent });
+    });
+
     it('carries a Messages query in destination memory and discards it on failed navigation', async () => {
         const handoff = createFileFindSeedHandoff();
         const authority = captureActiveServerAccountScopeLifetime();
@@ -96,47 +117,47 @@ describe('activateUniversalSearchResult', () => {
         }
         expect(navigateToSession).not.toHaveBeenCalled();
     });
-    it('discards destination Find memory when navigation fails or the project disappeared', async () => {
-        const handoff = createFileFindSeedHandoff();
+    it('reports file Action refusal and failure without invoking alternate navigation', async () => {
         const scope = { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' };
         const find = { query: 'needle', options: { matchCase: false, regex: false }, target: { kind: 'file' as const, path: 'src/a.ts' } };
-        const authority = captureActiveServerAccountScopeLifetime();
-        if (!authority) throw new Error('Expected real Account lifetime');
         for (const host of ['session', 'project'] as const) {
             const destination = { host, id: 'destination-a', accountId: 'account-a', path: 'src/a.ts', scope };
+            const navigateToSession = vi.fn();
+            const openProject = vi.fn();
             const outcome = await activateUniversalSearchResult({ kind: 'workspaceFile', path: destination.path, scope,
                 workspaceRefId: host === 'project' ? destination.id : null,
                 sessionId: host === 'session' ? destination.id : null, serverId: scope.serverId, accountId: destination.accountId, find }, {
-                navigateToSession: async () => { throw new Error('Destination navigation failed'); },
-                openProject: async () => false, push: () => {}, stageFileFindSeed: () => handoff.stage(destination, find, authority),
+                navigateToSession, openProject, push: () => {}, openFile: async () => {
+                    if (host === 'session') throw new Error('Destination navigation failed');
+                    return false;
+                },
             });
             expect(outcome).toEqual({ ok: false, reason: host === 'session' ? 'failed' : 'unavailable' });
-            expect(handoff.take(destination)).toBeNull();
+            expect(navigateToSession).not.toHaveBeenCalled();
+            expect(openProject).not.toHaveBeenCalled();
         }
     });
-    it('hands the exact session file target to pane memory while serializing only its anchor', async () => {
+    it.each(['preview', 'beside'] as const)('hands the qualified session file and private Find seed to the shared opener with %s intent', async (intent) => {
         const anchor = { kind: 'fileLine' as const, startLine: 12 };
         const find = { query: 'secret query', options: { matchCase: true, regex: false }, target: { kind: 'file' as const, path: 'src/index.ts', anchor } };
         const navigateToSession = vi.fn();
-        const stageFileFindSeed = vi.fn(() => () => {});
+        const openFile = vi.fn(async () => true);
         const target = { kind: 'workspaceFile' as const, path: 'src/index.ts', anchor, find,
             scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, workspaceRefId: null,
             sessionId: 'session-a', serverId: 'home-a', accountId: 'account-a' };
-        expect(await activateUniversalSearchResult(target, { navigateToSession, push: vi.fn(), openProject: async () => true, stageFileFindSeed })).toEqual({ ok: true });
-        expect(stageFileFindSeed).toHaveBeenCalledWith(target, find);
-        const query = navigateToSession.mock.calls[0][1].query;
-        expect(parseSessionPaneUrlState(query)?.details).toEqual({ kind: 'file', path: target.path, anchor });
-        expect(JSON.stringify(query)).not.toContain(find.query);
+        expect(await activateUniversalSearchResult(target, { navigateToSession, push: vi.fn(), openProject: async () => true, openFile }, { intent })).toEqual({ ok: true });
+        expect(openFile).toHaveBeenCalledWith({ kind: 'session', sessionId: 'session-a', serverId: 'home-a', path: target.path }, { intent, anchor, find });
+        expect(navigateToSession).not.toHaveBeenCalled();
     });
 
     it('keeps project file anchors and Find seeds on the canonical opener', async () => {
         const anchor = { kind: 'range' as const, filePath: 'src/index.ts', startLine: 12, endLine: 14 };
         const find = { query: 'needle', options: { matchCase: false, regex: false }, target: { kind: 'file' as const, path: 'src/index.ts', anchor } };
-        const openProject = vi.fn(async () => true);
+        const openFile = vi.fn(async () => true);
         await activateUniversalSearchResult({ kind: 'workspaceFile', path: 'src/index.ts', anchor, anchorSource: 'diff', find,
             scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, workspaceRefId: 'wr_1',
-            sessionId: null, serverId: 'home-a', accountId: 'account-a' }, { navigateToSession: vi.fn(), push: vi.fn(), openProject });
-        expect(openProject).toHaveBeenCalledWith('wr_1', { serverId: 'home-a', activeRootPath: '/repo', initialResource: { kind: 'file', path: 'src/index.ts', anchor, anchorSource: 'diff', find } });
+            sessionId: null, serverId: 'home-a', accountId: 'account-a' }, { navigateToSession: vi.fn(), push: vi.fn(), openProject: vi.fn(), openFile });
+        expect(openFile).toHaveBeenCalledWith({ kind: 'project', workspaceRefId: 'wr_1', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo', path: 'src/index.ts' }, { intent: 'preview', anchor, anchorSource: 'diff', find });
     });
     it('opens project results through the canonical project-opening owner', async () => {
         const push = vi.fn();
@@ -177,8 +198,9 @@ describe('activateUniversalSearchResult', () => {
         expect(outcome).toEqual({ ok: false, reason: 'unavailable' });
     });
 
-    it('opens a saved workspace file through the canonical project opener without a Session', async () => {
-        await expectSavedWorkspaceResourceOpensInProject({
+    it('opens a saved workspace file through the file Action without a Session', async () => {
+        const openFile = vi.fn(async () => true);
+        expect(await activateUniversalSearchResult({
             kind: 'workspaceFile',
             path: 'src/index.ts',
             scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' },
@@ -186,7 +208,8 @@ describe('activateUniversalSearchResult', () => {
             sessionId: null,
             serverId: 'home-a',
             accountId: 'account-a',
-        }, { kind: 'file', path: 'src/index.ts' });
+        }, { openFile, navigateToSession: vi.fn(), push: vi.fn(), openProject: vi.fn() })).toEqual({ ok: true });
+        expect(openFile).toHaveBeenCalledWith({ kind: 'project', workspaceRefId: 'wr_1', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo', path: 'src/index.ts' }, { intent: 'preview' });
     });
 
     it('opens a saved workspace commit through the canonical project opener without a Session', async () => {

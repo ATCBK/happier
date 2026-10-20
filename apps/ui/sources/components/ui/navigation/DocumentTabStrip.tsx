@@ -46,6 +46,7 @@ export type DocumentTabEntityDragDrop = DocumentTabEntityDragSource & Readonly<{
 type ScrollPropagationEvent = Readonly<{ stopPropagation?: () => void }>;
 type DocumentTabWebPressableProps = React.ComponentPropsWithRef<typeof Pressable> & Readonly<{
     onKeyDown?: React.KeyboardEventHandler<HTMLElement>;
+    onAuxClick?: React.MouseEventHandler<HTMLElement>;
 }>;
 
 const DocumentTabWebPressable = Pressable as unknown as React.ComponentType<DocumentTabWebPressableProps>;
@@ -495,6 +496,7 @@ export function DocumentTabStrip<T extends DocumentTabItem>(props: DocumentTabSt
                                 else tabFocusTargetsRef.current.delete(tab.key);
                             }}
                             onPress={() => props.onActivate(tab.key)}
+                            onAuxClick={Platform.OS === 'web' ? (event) => closeTabOnMiddleClick(event, tab.key, props.onClose) : undefined}
                             onKeyDown={Platform.OS === 'web'
                                 ? (event) => handleKeyDown(event, tabIndex)
                                 : undefined}
@@ -867,6 +869,13 @@ function stopPropagation(event: unknown) {
     }
 }
 
+function closeTabOnMiddleClick(event: React.MouseEvent<HTMLElement>, tabKey: string, onClose: (key: string) => void) {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onClose(tabKey);
+}
+
 function documentTabSourceId(bindingId: string, tabKey: string): string {
     return JSON.stringify(['document-tab', bindingId, tabKey, 'source']);
 }
@@ -956,6 +965,7 @@ function DocumentBarTab<T extends DocumentTabItem>(props: Readonly<{
             <DocumentTabWebPressable
                 ref={(target) => props.registerFocusTarget(target as { focus?: () => void } | null)}
                 onPress={() => strip.onActivate(tab.key)}
+                onAuxClick={Platform.OS === 'web' ? (event) => closeTabOnMiddleClick(event, tab.key, strip.onClose) : undefined}
                 onPressIn={() => { draggedDuringPress.current = false; }}
                 onFocus={(event) => setFocusVisible(isHappierFocusVisible(event?.target))}
                 onBlur={() => setFocusVisible(false)}

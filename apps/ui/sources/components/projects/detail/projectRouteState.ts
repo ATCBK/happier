@@ -1,9 +1,8 @@
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
-import { FILE_TARGET_ANCHOR_PARAM_KEYS, parseSessionFileDeepLinkAnchor, serializeFileTargetAnchor, type FileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
+import { FILE_TARGET_ANCHOR_PARAM_KEYS } from '@/utils/url/sessionFileDeepLink';
 import type { PaneDetailsStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import { buildActiveDetailsRouteParams, parseSessionPaneUrlState, serializeSessionPaneUrlState,
     SESSION_PANE_URL_PARAM_KEYS, type SessionPaneUrlDetailsTarget } from '@/components/sessions/panes/url/sessionPaneUrlState';
-import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import { PluginUiNewSessionSeedOriginV1Schema, StoredPluginUiNewSessionSeedOriginV1Schema, type PluginUiNewSessionSeedOriginV1 } from '@happier-dev/protocol/plugins/ui';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -24,7 +23,7 @@ import {
     type ProjectAttachedDashboardSelection,
 } from '@/components/workspaceCockpit/project/projectCockpitState';
 
-export type ProjectFileRouteTarget = Readonly<{ kind: 'file'; path: string; anchor?: FileTargetAnchor; anchorSource?: ReviewCommentSource }>;
+export type ProjectFileRouteTarget = Extract<SessionPaneUrlDetailsTarget, { kind: 'file' }>;
 
 /** Code's page location is separate from an optional file tab in Details. Paths are literal. */
 export function readProjectCodeRouteLocation(params: Readonly<Record<string, unknown>>): WorkspaceCodeLocation | null {
@@ -56,8 +55,8 @@ export function readProjectFileRouteTarget(params: Readonly<Record<string, unkno
     const path = typeof raw === 'string' ? raw : Array.isArray(raw)
         ? raw.find((value): value is string => typeof value === 'string' && value.length > 0) : null;
     if (!path) return null;
-    const parsed = parseSessionFileDeepLinkAnchor({ ...params, path });
-    return { kind: 'file', path, ...(parsed ? { anchor: parsed.anchor } : {}), ...(parsed?.source === 'diff' ? { anchorSource: parsed.source } : {}) };
+    const details = parseSessionPaneUrlState({ ...params, details: 'file', path })?.details;
+    return details?.kind === 'file' ? details : null;
 }
 
 export { PROJECT_PAGES, type ProjectPageV1 } from '@/components/workspaceCockpit/project/projectCockpitState';
@@ -275,8 +274,11 @@ export function buildProjectRouteHref(input: Readonly<{
     if (input.initialResource && input.details === undefined) {
         resourceParams[input.initialResource.kind === 'file' ? 'initialFile' : 'initialCommit'] =
             input.initialResource.kind === 'file' ? input.initialResource.path : input.initialResource.sha;
-        if (input.initialResource.kind === 'file' && input.initialResource.anchor) {
-            Object.assign(resourceParams, serializeFileTargetAnchor(input.initialResource.anchor, input.initialResource.anchorSource));
+        if (input.initialResource.kind === 'file') {
+            const fileParams = serializeSessionPaneUrlState({ details: input.initialResource });
+            for (const [key, value] of Object.entries(fileParams)) {
+                if (key !== 'details' && key !== 'path') resourceParams[key] = value;
+            }
         }
     }
     return resolveProjectRoutePathForSurface({

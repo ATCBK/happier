@@ -53,6 +53,8 @@ import { activeReviewFileKeyForWorkspace, requestActiveReviewFileForComparison }
 import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { ProjectSessionsWidgetBody } from './ProjectSessionsWidgetBody';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
+import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
 
 type Props = Readonly<{ id: BuiltinWidgetIdV1; workspace: WorkspaceAddressV1; checkout: WorkspaceRefV1; testID: string }>;
 
@@ -74,6 +76,7 @@ function useScope(workspace: WorkspaceAddressV1): WorkspaceScopeBase {
 
 function useProjectNavigation(workspace: WorkspaceAddressV1, checkout: WorkspaceRefV1) {
     const router = useRouter();
+    const { open: openWorkspaceFile } = useWorkspaceFileOpener();
     const routeParams = useLocalSearchParams<Record<string, string | string[] | undefined>>();
     const currentRoute = resolveProjectCockpitRouteFromPathname(usePathname());
     const routeWorkspaceRefId = readProjectRouteStringParam(routeParams.workspaceRefId) ?? currentRoute?.workspaceRefId ?? '';
@@ -88,18 +91,19 @@ function useProjectNavigation(workspace: WorkspaceAddressV1, checkout: Workspace
     const scope = useScope(workspace);
     const snapshot = useWorkspaceScmSnapshot(scope);
     const defaultRootPath = storedCheckout?.rootPath ?? workspace.rootPath;
-    const href = React.useCallback((segment: 'overview' | 'code' | 'changes', filePath?: string, rootPath = workspace.rootPath, worktreeId?: string | null, details?: SessionPaneUrlDetailsTarget, codeLocation?: WorkspaceCodeLocation) => buildProjectRouteHref({
+    const href = React.useCallback((segment: 'overview' | 'code' | 'changes', filePath?: string, rootPath = workspace.rootPath, worktreeId?: string | null, details?: SessionPaneUrlDetailsTarget, codeLocation?: WorkspaceCodeLocation) => filePath !== undefined
+        ? buildWorkspaceFileLink({ target: { kind: 'project', workspaceRefId: workspace.workspaceId, serverId: workspace.serverId,
+            machineId: workspace.machineId, rootPath }, path: filePath }) : buildProjectRouteHref({
         workspaceRefId: workspace.workspaceId, serverId: workspace.serverId, segment,
         routeParams: admittedRouteParams,
         activeRootPath: rootPath, defaultRootPath,
         activeWorktreeId: worktreeId ?? findVisibleRepoWorktreeByPath(snapshot?.repo.worktrees ?? [], rootPath)?.id,
-        ...(filePath !== undefined ? (segment === 'code'
-            ? { initialResource: null, codeLocation: { kind: 'file' as const, path: filePath } }
-            : { initialResource: { kind: 'file' as const, path: filePath } }) : {}),
         ...(codeLocation ? { initialResource: null, codeLocation } : {}),
         ...(details ? { details } : {}),
-    }), [workspace.workspaceId, workspace.serverId, workspace.rootPath, defaultRootPath, snapshot?.repo.worktrees, admittedRouteParams]);
-    const openFile = React.useCallback((path: string) => router.push(href('code', path) as Parameters<typeof router.push>[0]), [href, router]);
+    }), [workspace.workspaceId, workspace.serverId, workspace.machineId, workspace.rootPath, defaultRootPath, snapshot?.repo.worktrees, admittedRouteParams]);
+    const openFile = React.useCallback((path: string) => { void openWorkspaceFile({ kind: 'project', workspaceRefId: workspace.workspaceId,
+        serverId: workspace.serverId, machineId: workspace.machineId, rootPath: workspace.rootPath, path }); },
+    [openWorkspaceFile, workspace.workspaceId, workspace.serverId, workspace.machineId, workspace.rootPath]);
     return { href, openFile, router };
 }
 
@@ -158,6 +162,7 @@ function CodeBody(props: Props): React.ReactElement {
     return <WorkspaceCodeBrowserView testID={props.testID} scope={scope} paneScopeId={scopeId}
         rootLabel={resolveWorkspaceRefDisplayName(props.checkout)} presentation="widget" location={location}
         onNavigate={target => target.kind === 'folder' ? browser.setLocation(target) : navigation.openFile(target.path)}
+        onOpenFile={navigation.openFile}
         onOpenInCode={openCode} onOpenFilePinned={navigation.openFile} fileHref={path => navigation.href('code', path)} />;
 }
 

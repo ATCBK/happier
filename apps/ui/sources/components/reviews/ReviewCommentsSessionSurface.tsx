@@ -50,6 +50,8 @@ import { ReviewCommentDirectWriteGrantSheet } from './ReviewCommentDirectWriteGr
 import { ReviewCommentsHeaderButton } from './ReviewCommentsHeaderButton';
 import { ReviewCommentsHistoryView } from './ReviewCommentsHistoryView';
 import { resolveReviewCommentBodyPromptDefault, resolveReviewCommentSnapshot } from './content';
+import { resolveReviewCommentFileOpen } from './reviewCommentFileTarget';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import {
     ReviewCommentsPanel,
     type ReviewCommentBulkTransitionInput,
@@ -130,6 +132,16 @@ export function ReviewCommentsSessionSurface(props: ReviewCommentsSessionSurface
 
 function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceProps) {
     const { theme } = useUnistyles();
+    const { open: openWorkspaceFile, canOpen: canOpenWorkspaceFile } = useWorkspaceFileOpener();
+    const resolveFileOpen = React.useCallback((comment: ReviewCommentV1) => resolveReviewCommentFileOpen(comment, {
+        serverId: props.scope?.serverId, sessionId: props.sessionId, workspaceRefId: props.workspaceId, workspace: props.workspace,
+    }), [props.scope?.serverId, props.sessionId, props.workspace, props.workspaceId]);
+    const canOpenFile = React.useCallback((comment: ReviewCommentV1) => canOpenWorkspaceFile && resolveFileOpen(comment) !== null,
+        [canOpenWorkspaceFile, resolveFileOpen]);
+    const onOpenFile = React.useCallback((comment: ReviewCommentV1) => {
+        const file = resolveFileOpen(comment);
+        if (file) void openWorkspaceFile(file.target, file.options);
+    }, [openWorkspaceFile, resolveFileOpen]);
     const language = usePreferredLanguage();
     const labels = React.useMemo(() => buildReviewCommentLabels(), [language]);
     const headerLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), [language]);
@@ -483,6 +495,7 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                                 comments={panelComments}
                                 labels={historyLabels}
                                 cardActions={{
+                                    onOpenFile, canOpenFile,
                                     onTransition: (input) => runCommentMutation(input.comment, (comment) => transitionComment({ ...input, comment })),
                                     renderNotice: renderCardNotice,
                                 }}
@@ -497,6 +510,7 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                             stateOptions={ACTIVE_REVIEW_COMMENT_STATES}
                             onToggleState={toggleActiveStateFilter}
                             cardActions={{
+                                onOpenFile, canOpenFile,
                                 onEdit: (comment) => runCommentMutation(comment, editComment),
                                 onTransition: (input) => runCommentMutation(input.comment, (comment) => transitionComment({ ...input, comment })),
                                 onRedact: (comment) => runCommentMutation(comment, redactComment),

@@ -63,7 +63,7 @@ import { SessionRightPanelScriptsView, useSessionProjectCheckout } from './scrip
 import { SessionBrowseFilesSurface } from './surfaces/SessionBrowseFilesSurface';
 import { SessionGitSurface } from './surfaces/SessionGitSurface';
 import { SessionTerminalSurface } from './surfaces/SessionTerminalSurface';
-import { useSessionFileDetailsOpener } from './useSessionFileDetailsOpener';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import { useSessionTerminalAvailability } from '@/components/sessions/terminal/useSessionTerminalAvailability';
 import { useSessionBoardFeatureEnabled } from '@/components/sessions/board/useSessionBoardFeatureEnabled';
 import { SafeIonicons } from '@/components/ui/icons/SafeIonicons';
@@ -379,7 +379,15 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
     const openSurface = navigationBinding.openSurface;
     const pluginBinding = React.useMemo<BoundPluginSurfaceBinding>(() => ({ openSurface }), [openSurface]);
 
-    const { openFileInDetails, openFileInDetailsPinned } = useSessionFileDetailsOpener(props.scopeId);
+    const { open: openWorkspaceFile } = useWorkspaceFileOpener();
+    const openFileInDetails = React.useCallback((path: string) => {
+        if (!sessionAddress) return;
+        void openWorkspaceFile({ kind: 'session', ...sessionAddress, path });
+    }, [openWorkspaceFile, sessionAddress]);
+    const openFileInDetailsPinned = React.useCallback((path: string) => {
+        if (!sessionAddress) return;
+        void openWorkspaceFile({ kind: 'session', ...sessionAddress, path }, { intent: 'pinned' });
+    }, [openWorkspaceFile, sessionAddress]);
     const availableTabIds = React.useMemo(() => new Set(rightPanelTabs.map((tab) => tab.id)), [rightPanelTabs]);
     const openBoardItemInDetails = React.useCallback((itemId: string) => {
         pane.openDetailsTab(createSessionBoardDetailsTab({ kind: 'item', itemId }), { intent: 'pinned' });

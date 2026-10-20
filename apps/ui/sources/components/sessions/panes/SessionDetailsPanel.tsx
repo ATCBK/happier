@@ -23,15 +23,14 @@ import {
     resolveProviderSessionDetailsTabIconName,
 } from '@/agents/registry/sessionSubagentUiBehavior';
 import { t } from '@/text';
-import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { SidebarCollapseIcon, SidebarExpandIcon } from '@/components/navigation/shell/SidebarIcons';
 import { resolveOptionalSessionScreenTestId, useSessionScreenTestIdsEnabled } from '../shell/sessionScreenTestIds';
-import { createSessionBoardDetailsTab, createSessionFileDetailsTab } from './details/sessionDetailsTabBuilders';
+import { createSessionBoardDetailsTab } from './details/sessionDetailsTabBuilders';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import { SessionDetailsEmptyState } from './details/SessionDetailsEmptyState';
 import { SafeIonicons } from '@/components/ui/icons/SafeIonicons';
-import { usePaneFocusMode } from '@/components/appShell/panes/focusMode/usePaneFocusMode';
 import {
     createSessionDetailsSurfaceRenderers,
     resolveSessionDetailsSurfaceIconName,
@@ -72,6 +71,8 @@ import type { SessionBoardPrimaryMountResolver } from '@/sync/domains/session/bo
 import { SESSION_BOARD_DESTINATION } from '@/components/sessions/board/sessionBoardDestination';
 import { useMountedSessionBoardController } from '@/components/sessions/board/SessionBoardControllerProvider';
 import { isSessionBoardVisibleInDetails } from '@/components/sessions/board/sessionBoardDetailsVisibility';
+import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
+import { useWorkspaceFileWriteTabPresentation } from '@/components/workspaces/files/useWorkspaceFileWriteTabPresentation';
 
 export type SessionDetailsPanelProps = Readonly<{
     sessionId: string;
@@ -112,9 +113,9 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     const { theme } = useUnistyles();
     const insets = useChromeSafeAreaInsets();
     const pane = useAppPaneScope(props.scopeId);
+    const { open: openWorkspaceFile } = useWorkspaceFileOpener();
     const controlledDestination = props.destinationTab !== undefined;
     const requestClose = props.onRequestClose ?? pane.closeDetails;
-    const paneFocusMode = usePaneFocusMode(props.scopeId);
     const sessionScreenTestIdsEnabled = useSessionScreenTestIdsEnabled();
     const showHeaderActions = props.showHeaderActions !== false;
     const closeButtonAtStart = showHeaderActions && props.presentation === 'screen' && Platform.OS !== 'web';
@@ -131,6 +132,8 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         platform: props.platform,
     });
     const session = useSessionViewShellSession(props.sessionId, pluginRuntime.serverId);
+    const fileWriteScope = useWorkspaceScopeForSession(props.sessionId, pluginRuntime.serverId);
+    const resolveTabPresentation = useWorkspaceFileWriteTabPresentation(fileWriteScope);
     const boardFeatureEnabled = useSessionBoardFeatureEnabled(pluginRuntime.serverId);
     const deviceType = useDeviceType();
     const pluginRuntimeFormFactor = React.useMemo(
@@ -264,10 +267,11 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     }, [controlledDestination, pane.replaceDetailsTab, props.onOpenDestinationTab]);
 
     const openFileTab = React.useCallback((path: string, intent: 'default' | 'pinned' = 'default') => {
-        deferOnWeb(() => {
-            openDetailsTab(createSessionFileDetailsTab(path), { intent });
-        });
-    }, [openDetailsTab]);
+        const serverId = props.paneSurfaceScope?.serverId ?? props.routeServerId ?? pluginRuntime.serverId;
+        if (!serverId) return;
+        void openWorkspaceFile({ kind: 'session', sessionId: props.sessionId, serverId, path },
+            { intent: intent === 'pinned' ? 'pinned' : 'preview' });
+    }, [openWorkspaceFile, pluginRuntime.serverId, props.paneSurfaceScope?.serverId, props.routeServerId, props.sessionId]);
 
     const openBrowserLaunchpadTab = React.useCallback(() => {
         openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' });
@@ -363,7 +367,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             sessionScreenTestIdsEnabled,
             closeDetailsTab,
             openDetailsTab,
-            boardHost: paneFocusMode.active ? 'focusedDetails' : 'details',
+            boardHost: pane.scopeState?.mainHidden === true ? 'focusedDetails' : 'details',
             resolveBoardPrimaryHost: props.resolveBoardPrimaryHost,
         }) : [], [
         openBrowserViewTarget,
@@ -375,7 +379,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         openFileTab,
         closeDetailsTab,
         openDetailsTab,
-        paneFocusMode.active,
+        pane.scopeState?.mainHidden,
         props.resolveBoardPrimaryHost,
         peerMediationObservabilityState,
         pluginRuntime.machineId,
@@ -574,39 +578,13 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         if (!showHeaderActions) return null;
         return (
             <>
-                {Platform.OS === 'web' ? (
-                    <IconButton
-                        variant="plain"
-                        size={DETAILS_TAB_STRIP_METRICS.actionSizePx}
-                        tooltip={paneFocusMode.active ? t('session.detailsPanel.exitFocusModeA11y') : t('session.detailsPanel.enterFocusModeA11y')}
-                        onPress={paneFocusMode.toggle}
-                        testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-details-focus-toggle')}
-                        disabled={!paneFocusMode.canEnter}
-                        selected={paneFocusMode.active}
-                        accessibilityLabel={
-                            paneFocusMode.active
-                                ? t('session.detailsPanel.exitFocusModeA11y')
-                                : t('session.detailsPanel.enterFocusModeA11y')
-                        }
-                        icon={<Icon
-                            name={paneFocusMode.active ? 'arrows-in' : 'arrows-out'}
-                            size={DETAILS_TAB_STRIP_METRICS.actionGlyphPx}
-                            color={theme.colors.text.secondary}
-                        />}
-                    />
-                ) : null}
                 {closeButtonAtStart ? null : closeButton}
             </>
         );
     }, [
         closeButton,
         closeButtonAtStart,
-        paneFocusMode.active,
-        paneFocusMode.canEnter,
-        paneFocusMode.toggle,
-        sessionScreenTestIdsEnabled,
         showHeaderActions,
-        theme.colors.text.secondary,
     ]);
 
     const workspace = controlledDestination
@@ -621,6 +599,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             paddingTop={panelPaddingTop}
             headerPaddingTop={0}
             testIds={testIds}
+            resolveTabPresentation={resolveTabPresentation}
             resolveTabIconName={(tab) =>
                 resolveSessionDetailsSurfaceIconName({
                     tab,

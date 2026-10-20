@@ -1,6 +1,7 @@
 import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import type { OpenProjectOptions } from '@/components/projects/useOpenProject';
-import type { ChatFindSeed, FileFindSeed as FindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
+import type { ChatFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
+import type { WorkspaceFileOpenOptions, WorkspaceFileOpenTarget } from '@/components/workspaces/files/useWorkspaceFileOpener';
 
 import type { UniversalSearchTarget } from './universalSearchResult';
 import { memoryDocumentSearchHitHref } from '@/components/memory/memoryDocumentRoutes';
@@ -41,7 +42,8 @@ export type UniversalSearchActivationOwners = Readonly<{
     push: (path: string) => void;
     /** Canonical project opener, including persisted surface/worktree state. */
     openProject: (workspaceRefId: string, options?: OpenProjectOptions) => Promise<boolean>;
-    stageFileFindSeed?: (target: Extract<UniversalSearchTarget, { kind: 'workspaceFile' }>, seed: FindSeed) => (() => void) | null;
+    /** The shared workspace.tabs.open file Action, including destination Find custody. */
+    openFile?: (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions) => Promise<boolean>;
     /**
      * Re-resolves whether the exact target still exists for this reader RIGHT
      * NOW. Returning `false` keeps the surface coherent instead of navigating to
@@ -53,6 +55,7 @@ export type UniversalSearchActivationOwners = Readonly<{
 export async function activateUniversalSearchResult(
     target: UniversalSearchTarget,
     owners: UniversalSearchActivationOwners,
+    options?: Readonly<Pick<WorkspaceFileOpenOptions, 'intent'>>,
 ): Promise<UniversalSearchActivationOutcome> {
     if (owners.isTargetCurrent && !owners.isTargetCurrent(target)) {
         return { ok: false, reason: 'unavailable' };
@@ -92,39 +95,19 @@ export async function activateUniversalSearchResult(
                 owners.push(target.route);
                 return { ok: true };
             }
+            case 'workspaceSymbol':
             case 'workspaceFile': {
-                const cancelSeed = target.find ? owners.stageFileFindSeed?.(target, target.find) : undefined;
-                if (target.find && cancelSeed === null) return { ok: false, reason: 'unavailable' };
-                try {
-                    if (target.workspaceRefId) {
-                        const opened = await owners.openProject(target.workspaceRefId, {
-                            serverId: target.scope.serverId,
-                            activeRootPath: target.scope.rootPath,
-                            initialResource: { kind: 'file', path: target.path, ...(target.anchor ? { anchor: target.anchor } : {}),
-                                ...(target.anchorSource ? { anchorSource: target.anchorSource } : {}), ...(target.find ? { find: target.find } : {}) },
-                        });
-                        if (!opened) cancelSeed?.();
-                        return opened ? { ok: true } : { ok: false, reason: 'unavailable' };
-                    }
-                    // The canonical file-detail owner is the session pane's details
-                    // tab, addressed through the same URL state that owner already
-                    // parses — not a second file-opening path.
-                    if (!target.sessionId) { cancelSeed?.(); return { ok: false, reason: 'unavailable' }; }
-                    await owners.navigateToSession(target.sessionId, {
-                        ...(target.serverId ? { serverId: target.serverId } : {}),
-                        query: {
-                            ...serializeSessionPaneUrlState({
-                                rightTabId: 'files',
-                                details: { kind: 'file', path: target.path, ...(target.anchor ? { anchor: target.anchor } : {}),
-                                    ...(target.anchorSource ? { anchorSource: target.anchorSource } : {}) },
-                            }),
-                        },
-                    });
-                } catch (error) {
-                    cancelSeed?.();
-                    throw error;
-                }
-                return { ok: true };
+                const find = target.kind === 'workspaceFile' ? target.find : undefined;
+                const anchorSource = target.kind === 'workspaceFile' ? target.anchorSource : undefined;
+                if (!owners.openFile) return { ok: false, reason: 'unavailable' };
+                const address: WorkspaceFileOpenTarget | null = target.workspaceRefId
+                    ? { kind: 'project', workspaceRefId: target.workspaceRefId, serverId: target.scope.serverId,
+                        machineId: target.scope.machineId, rootPath: target.scope.rootPath, path: target.path }
+                    : target.sessionId ? { kind: 'session', sessionId: target.sessionId, serverId: target.serverId, path: target.path } : null;
+                if (!address) return { ok: false, reason: 'unavailable' };
+                return await owners.openFile(address, { intent: options?.intent ?? 'preview',
+                    ...(target.anchor ? { anchor: target.anchor } : {}), ...(anchorSource ? { anchorSource } : {}), ...(find ? { find } : {}) })
+                    ? { ok: true } : { ok: false, reason: 'unavailable' };
             }
             case 'workspaceCommit': {
                 if (target.workspaceRefId) {

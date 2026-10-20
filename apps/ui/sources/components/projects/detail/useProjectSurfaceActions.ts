@@ -9,7 +9,8 @@ import { useWorkspaceFilePaneNavigation } from '@/components/workspaces/files/us
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { t } from '@/text';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
-import { createProjectCommitDetailsTab, createProjectFileDetailsTab } from './projectDetailsTabBuilders';
+import { createProjectCommitDetailsTab } from './projectDetailsTabBuilders';
+import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import { useScmReviewTabState } from '@/components/sessions/files/comparison/useSessionScmReviewTabState';
 
 export function useProjectSurfaceActions(params: Readonly<{
@@ -20,22 +21,21 @@ export function useProjectSurfaceActions(params: Readonly<{
     onOpenChangesNavigate?: () => void;
 }>) {
     const pane = useAppPaneScope(params.scopeId);
+    const { open: openWorkspaceFile } = useWorkspaceFileOpener();
     const { setPersistedReviewTabState } = useScmReviewTabState(JSON.stringify([
         params.workspaceRef.serverId, params.workspaceRef.machineId, params.activeRootPath,
     ]), pane);
     const navigateToOpen = useNavigateToProjectOpen();
 
     const openFileInDetails = React.useCallback((fullPath: string) => {
-        deferOnWeb(() => {
-            pane.openDetailsTab(createProjectFileDetailsTab(fullPath));
-        });
-    }, [pane]);
+        void openWorkspaceFile({ kind: 'project', workspaceRefId: params.workspaceRef.id, serverId: params.workspaceRef.serverId,
+            machineId: params.workspaceRef.machineId, rootPath: params.activeRootPath, path: fullPath });
+    }, [openWorkspaceFile, params.activeRootPath, params.workspaceRef.id, params.workspaceRef.machineId, params.workspaceRef.serverId]);
 
     const openFileInDetailsPinned = React.useCallback((fullPath: string) => {
-        deferOnWeb(() => {
-            pane.openDetailsTab(createProjectFileDetailsTab(fullPath), { intent: 'pinned' });
-        });
-    }, [pane]);
+        void openWorkspaceFile({ kind: 'project', workspaceRefId: params.workspaceRef.id, serverId: params.workspaceRef.serverId,
+            machineId: params.workspaceRef.machineId, rootPath: params.activeRootPath, path: fullPath }, { intent: 'pinned' });
+    }, [openWorkspaceFile, params.activeRootPath, params.workspaceRef.id, params.workspaceRef.machineId, params.workspaceRef.serverId]);
 
     const openReviewAllChanges = React.useCallback(() => {
         deferOnWeb(() => {

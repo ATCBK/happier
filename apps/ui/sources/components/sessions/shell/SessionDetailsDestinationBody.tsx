@@ -109,12 +109,12 @@ export function SessionDetailsDestinationBody() {
         sourceSurface: typeof params.sourceSurface === 'string' ? params.sourceSurface : undefined,
     }), [params]);
     const selectedDetailsParams = React.useMemo<SessionDetailsRouteParamsShape>(() => {
-        const next = buildActiveDetailsRouteParams(detailsSelection.tabs, detailsSelection.activeKey);
+        const next = buildActiveDetailsRouteParams(detailsSelection.tabs, detailsSelection.activeKey, detailsState?.tabState);
         return {
             ...next,
             sourceSurface: typeof params.sourceSurface === 'string' ? params.sourceSurface : undefined,
         };
-    }, [detailsSelection.activeKey, detailsSelection.tabs, params.sourceSurface]);
+    }, [detailsSelection.activeKey, detailsSelection.tabs, detailsState?.tabState, params.sourceSurface]);
     const routeDetailsSignature = React.useMemo(
         () => createDetailsRouteParamsSignature(routeDetailsParams),
         [routeDetailsParams],
