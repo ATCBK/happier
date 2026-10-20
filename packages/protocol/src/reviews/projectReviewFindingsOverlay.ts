@@ -1,4 +1,7 @@
-import type { ExecutionRunStatus, ExecutionRunStructuredRunRef, ReviewCommentAnchorV1, ReviewFinding } from '../index.js';
+import type { ExecutionRunStatus } from '../execution/runs/listRequest.js';
+import type { ExecutionRunStructuredRunRef } from '../messages/structured/executionRunStructuredRunRef.js';
+import type { ReviewCommentAnchorV1 } from './comments/v1.js';
+import type { ReviewFinding } from './ReviewFinding.js';
 import type { ScmChangeOccurrence, ScmComparison, ScmComparisonFile, ScmDiffSummaryWalkthrough } from '../scm/index.js';
 
 /** Durable comments retain finding content and severity, but not the original category. Display only. */
