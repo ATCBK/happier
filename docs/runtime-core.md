@@ -205,8 +205,13 @@ does not acquire this transient recovery disposition.
 Metadata PATCH transport uses that mutation's caller lifetime and cancellation,
 including explicit Stop intent and terminal-control retirement. The generic
 Session HTTP read timeout does not shorten a metadata mutation. CLI and UI Stop
-both reach the owning daemon's physical Stop owner; persisting an explicit Stop
-hold must succeed before the CLI issues that physical operation. A lost receipt
+both reach the owning daemon's physical Stop owner. In development source, their
+Account front doors must persist the same explicit Stop hold before issuing the
+physical operation. UI uses the scoped Sync metadata tuple writer and preserves
+the admitted Action context; automation cannot acquire a person's hold. Failed
+or retired metadata authority prevents physical Stop, including the runner-RPC
+fallback. This adds no Account credential to restricted Session runners and no
+second Follow admission guard. A lost receipt
 or cancellation after emission remains uncertain and does not prove retirement.
 The daemon uses the admitted runner's matching Account credentials for its own
 Stop metadata and retirement, without rebuilding requester execution services.
