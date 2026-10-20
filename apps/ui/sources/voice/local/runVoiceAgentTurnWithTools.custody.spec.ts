@@ -10,6 +10,7 @@ import { ExecutionRunTurnStreamStartV2RequestSchema, ExecutionRunTurnStreamStart
   ExecutionRunTurnStreamCancelRequestSchema, ExecutionRunTurnStreamCancelResponseSchema,
   type ExecutionRunTurnStreamEvent } from '@happier-dev/protocol/execution/runs/streaming';
 import type { VoiceAssistantAction } from '@happier-dev/protocol';
+import { parseVoiceToolResultsFollowUp } from '@happier-dev/protocol/voice/toolResultsChannel';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 
@@ -254,5 +255,22 @@ describe('runVoiceAgentTurnWithTools local effect custody', () => {
     expect(targetPendingRequests()).toEqual([]);
     expect(result.toolResultBatches[0]?.[0]).toMatchObject({ t: 'sendSessionMessage',
       result: { ok: false, errorCode: 'session_not_found' } });
+  });
+
+  it('speaks only the outcome-informed follow-up when a requested send fails before dispatch', async () => {
+    await prepareSession();
+    queueSend('effect-truthful-failure', 'Cannot dispatch', { sessionId: 'missing-session' });
+    queueFinal('I could not send it.');
+    const spoken: string[] = [];
+    const result = await run('send it', { onAssistantTurn: async ({ assistantText }) => {
+      // The non-streaming TTS consumer awaits this callback before continuing.
+      expect(parseVoiceToolResultsFollowUp(wireTurns.at(-1)?.message)).toMatchObject({
+        toolResults: [expect.objectContaining({ t: 'sendSessionMessage', result: { ok: false, errorCode: 'session_not_found' } })],
+      });
+      expect(targetPendingRequests()).toEqual([]);
+      spoken.push(assistantText);
+    } });
+    expect(spoken).toEqual(['I could not send it.']);
+    expect(result.assistantTurns).toEqual(['I could not send it.']);
   });
 });

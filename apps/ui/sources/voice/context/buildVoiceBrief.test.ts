@@ -57,7 +57,7 @@ describe('Voice brief from the mounted Inbox', () => {
         }
         expect(brief.context).not.toContain(t('sessionWork.strip.stillWorking', { count: reports.total }));
     });
-    it('keeps originless workflow and automation work at their exact existing Run routes', () => {
+    it.each([true, false])('keeps originless work routes while sharing permitted redacted names (summary=%s)', (shareSessionSummary) => {
         const inbox = source();
         const row = { ...workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'run/a', state: 'interrupted' })),
             metadata: WorkflowRunPrivateMetadataV1Schema.parse({ kind: 'available', value: { title: 'Publish release notes' } }) };
@@ -66,10 +66,16 @@ describe('Voice brief from the mounted Inbox', () => {
             workflowAttention: { ...inbox.workflowAttention, serverId: 'home-b' },
             workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [row], automationRuns: [], automationServerId: null,
                 openApprovals: [], stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null }),
-            automationAttentionItems: [{ key: 'automation:run/b', title: 'Nightly dependency check', run: createAutomationRunFixture({ id: 'run/b', state: 'dispatch_failed' }), route }] }, settings: {} });
+            automationAttentionItems: [{ key: 'automation:run/b', title: 'Nightly dependency check /home/alice/private', run: createAutomationRunFixture({ id: 'run/b', state: 'dispatch_failed' }), route }] }, settings: { voice: { privacy: { shareSessionSummary, shareFilePaths: false } } } });
         expect(brief.items.find((item) => item.destination.kind === 'workflow')).toMatchObject({ title: 'Publish release notes', destination: { kind: 'workflow', runId: 'run/a' }, route: '/workflows/runs/run%2Fa?serverId=home-b' });
-        expect(brief.items.find((item) => item.destination.kind === 'automation')).toMatchObject({ title: 'Nightly dependency check', destination: { kind: 'automation', route }, route });
+        expect(brief.items.find((item) => item.destination.kind === 'automation')).toMatchObject({ title: 'Nightly dependency check /home/alice/private', destination: { kind: 'automation', route }, route });
         expect(brief.items).toHaveLength(5);
+        const spoken = JSON.parse(brief.context).items;
+        expect(spoken[1]).toEqual({ category: 'needs_you', ...(shareSessionSummary ? { title: 'Publish release notes' } : {}) });
+        expect(spoken.find((item: { title?: string }) => item.title?.startsWith('Nightly')))
+            .toEqual(shareSessionSummary ? { category: 'needs_you', title: 'Nightly dependency check <path_redacted>' } : undefined);
+        expect(brief.context).not.toContain('/home/alice');
+        expect(brief.context).not.toContain(route);
     });
     it('uses the Inbox’s readable session identity even when notification previews are status-only', () => {
         const inbox = source();

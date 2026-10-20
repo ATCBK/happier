@@ -285,6 +285,17 @@ describe('localVoiceTtsController', () => {
         }));
     });
 
+    it('reports segmented daemon playback failure through the typed TTS recovery owner', async () => {
+        encodedAudio.start.mockRejectedValueOnce(new Error('native_playback_failed'));
+        const onTtsFailed = vi.fn();
+        await createLocalVoiceTtsController().speak(neuralRequest({ onTtsFailed }));
+        expect(onTtsFailed).toHaveBeenCalledWith(expect.objectContaining({
+            kind: 'tts_failed', reason: 'native_playback_failed', recoverable: true,
+        }));
+        expect(machineRpc.mock.calls.some(([request]) => request.method === 'daemon.voiceInference.tts.stream.cancel')).toBe(true);
+        expect(speechBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+    });
+
     it.each(['disabled', 'unavailable'] as const)(
         'reports %s execution policy without invoking any TTS implementation', async state => {
             // A warm ready observation is retained during transient failure. These vectors

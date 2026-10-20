@@ -19,6 +19,23 @@ function parseFollowUpJson(prompt: string): { toolResults: LocalVoiceAgentToolRe
 }
 
 describe('runVoiceAgentTurnWithTools follow-up prompt privacy', () => {
+  it('preserves owner-selected catalogs, paging facts and long valid text without a Voice volume policy', () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({ modelId: `model-${index}`, label: `Model ${index}` }));
+    const longText = 'Valid response detail '.repeat(30);
+    const prompt = buildToolResultsFollowUpPrompt([
+      { t: 'listAgentModels', args: { limit: 12 }, result: { items, hasMore: true, nextCursor: 'catalog-page-2', totalCount: 24 } },
+      { t: 'listAgentBackends', args: {}, result: { items: items.map((item, index) => ({
+        agentId: `agent-${index}`, targetKey: `backend:agent-${index}`, label: item.label,
+      })), hasMore: false } },
+      { t: 'listRecentPaths', args: {}, result: { items: Array.from({ length: 12 }, () => longText),
+        uiConnectedService: 'private', flavorAliases: ['private-alias'] } },
+    ], { shareFilePaths: true, shareSessionSummary: true, sharePermissionRequests: true, shareDeviceInventory: true });
+    const parsed = parseFollowUpJson(prompt);
+    expect(parsed.toolResults[0]?.result).toMatchObject({ items, hasMore: true, nextCursor: 'catalog-page-2', totalCount: 24 });
+    expect(parsed.toolResults[1]?.result).toMatchObject({ items: expect.any(Array), hasMore: false });
+    expect((parsed.toolResults[1]?.result as { items: unknown[] }).items).toHaveLength(12);
+    expect(parsed.toolResults[2]?.result).toEqual({ items: Array.from({ length: 12 }, () => longText) });
+  });
   it('preserves exact Provider connection identity in compact model-list follow-up results', () => {
     const prompt = buildToolResultsFollowUpPrompt([{
       t: 'listAgentModels',

@@ -73,7 +73,7 @@ function emitRecognition(name: string, event: unknown = {}): void {
 // partial-module cycle through the eagerly constructed local Voice engine.
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 await loadSyncSingletonForTests();
-const { getSharedVoicePcmCapture, getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
+const { createVoiceFileRecording, getSharedVoicePcmCapture, getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
 const capture = getSharedVoicePcmCapture();
 const coordinator = getSharedVoiceAudioSessionCoordinator();
 if (!capture || !coordinator) throw new Error('Installed native audio SDK capture unavailable');
@@ -769,6 +769,40 @@ describe('createLocalVoiceCaptureOwner', () => {
         expect(browser.micTrack.enabled).toBe(false);
         emitRecognition('result', { isFinal: true, results: [{ transcript: 'muted text' }] });
         await expect(owner.stopCapture({ provider: 'device', sessionId: 'session-1' })).resolves.toMatchObject({ text: '' });
+        await owner.stopSession();
+    });
+
+    it('awaits native recorded-input unmute and keeps the acknowledged mute when resume fails', async () => {
+        (Platform as { OS: string }).OS = 'ios';
+        const resume = createDeferred<void>();
+        const nativeMute = vi.fn(async ({ muted }: { muted: boolean }) => { if (!muted) await resume.promise; });
+        const recording = createExpoAudioRecordingMicSession({
+            requestPermission: sdk.permission,
+            createNativeFileRecording: () => createVoiceFileRecording({ ...nativeAudio.nativeModule,
+                startFileRecording: async () => ({ recordingId: 'resume-failure' }),
+                setFileRecordingMuted: nativeMute,
+                stopFileRecording: async () => ({ uri: null }),
+            }),
+        });
+        recordingSessions.push(recording);
+        const owner = createLocalVoiceCaptureOwner({ getSettings: () => ({}), onCaptureStarted() {}, onCaptureError() {} }, {
+            createRecordingMicSession: () => recording,
+        });
+        await owner.startCapture({ handsFree: false, provider: 'recorded_audio', sessionId: 'recorded-mute' });
+        await owner.setMuted({ sessionId: 'recorded-mute', muted: true });
+        expect(recording.isMuted()).toBe(true);
+        let settled = false;
+        const unmuting = owner.setMuted({ sessionId: 'recorded-mute', muted: false });
+        const outcome = unmuting.then(() => { settled = true; return null; }, error => { settled = true; return error; });
+        await vi.waitFor(() => expect(nativeMute).toHaveBeenCalledWith({ recordingId: 'resume-failure', muted: false }));
+        try {
+            expect(settled).toBe(false);
+            expect(recording.isMuted()).toBe(true);
+        } finally {
+            resume.reject(new Error('file_recording_resume_failed'));
+        }
+        await expect(outcome).resolves.toMatchObject({ message: 'file_recording_resume_failed' });
+        expect(recording.isMuted()).toBe(true);
         await owner.stopSession();
     });
 

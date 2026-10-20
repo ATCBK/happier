@@ -11,6 +11,18 @@ import { listVoicePromptHotPathSpecs } from '@happier-dev/protocol/actions/actio
 import { createXaiRealtimeProtocolAdapter, createXaiSessionUpdate, encodeXaiToolResult } from './protocol.js';
 
 describe('xAI Realtime protocol adapter', () => {
+  it.each([
+    ['rate_limit_exceeded', { type: 'provider_error', code: 'rate_limited', terminal: false }],
+    ['server_error', { type: 'provider_error', code: 'provider_response_invalid', terminal: false }],
+    ['private-provider-data', { type: 'provider_error', code: 'provider_response_invalid', terminal: false }],
+    ['invalid_token', { type: 'auth_expired' }],
+  ] as const)('projects %s once without exposing provider text', (code, expected) => {
+    const adapter = createXaiRealtimeProtocolAdapter({ prepare: async () => ({ kind: 'declined', code: 'unused' }) });
+    const frame = { type: 'error', event_id: 'error-1', error: { code, message: 'private-provider-message' } };
+    expect(adapter.decodeControl(frame)).toEqual([expected]);
+    expect(adapter.decodeControl(frame)).toEqual([]);
+  });
+
   it('preserves generated session.spawn_new tool metadata without a live-value depth quota', () => {
     const spec = getActionSpec('session.spawn_new');
     const parameters = zodSchemaToJsonSchemaObject(spec.inputSchema);

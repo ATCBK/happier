@@ -15,6 +15,35 @@ vi.mock('react-native', async () => {
 });
 
 describe('modelPacks installer (native)', () => {
+  it.each(['voices', 'defaultVoiceId', 'frontend'] as const)('updates runtime metadata (%s) even when model files are unchanged', async (field) => {
+    const { fs, files } = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = { packId: 'metadata-update', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      voices: [{ id: 'voice-a', title: 'A', sid: 0 }, { id: 'voice-b', title: 'B', sid: 1 }],
+      defaultVoiceId: 'voice-a', frontend: { lang: 'en-us' },
+      files: [{ path: 'model.onnx', url: 'https://example.com/model.onnx', sizeBytes: bytes.length,
+        sha256: '4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a' }] };
+    const metaUri = 'file:///docs/happier/voice/modelPacks/metadata-update/pack.json';
+    files.set(metaUri, new TextEncoder().encode(JSON.stringify({ manifest })));
+    files.set('file:///docs/happier/voice/modelPacks/metadata-update/model.onnx', bytes);
+    const changes = { voices: [{ id: 'voice-a', title: 'A corrected', sid: 1 }, { id: 'voice-b', title: 'B', sid: 0 }],
+      defaultVoiceId: 'voice-b', frontend: { lang: 'fr-fr' } };
+    const updated = { ...manifest, [field]: changes[field] };
+    const fetchImpl = async (url: string) => url.includes('manifest.json')
+      ? Response.json(updated) : new Response(bytes);
+    const overrides = { fs, fetch: fetchImpl, download: createMemNativeDownload(fs, fetchImpl),
+      invalidatePackRuntime: async () => {} };
+    const request = { packId: manifest.packId, manifestUrl: 'https://example.com/manifest.json',
+      timeoutMs: null, signal: new AbortController().signal };
+
+    expect(await checkModelPackUpdateAvailable(request, overrides)).toMatchObject({ updateAvailable: true });
+    const installed = await ensureModelPackInstalled({ ...request, mode: 'download_if_missing',
+      updatePolicy: 'manual_update_if_available' }, overrides);
+    expect(installed.manifest).toEqual(updated);
+    expect(JSON.parse(new TextDecoder().decode(files.get(metaUri)))).toMatchObject({ manifest: updated });
+    expect(await checkModelPackUpdateAvailable(request, overrides)).toMatchObject({ updateAvailable: false });
+  });
+
   it.each(['corrupt', 'unreadable'] as const)('reports %s receipt fallback without exposing its contents', async (failure) => {
     const { fs, files, root } = createMemFs();
     const packId = 'receipt-warning';

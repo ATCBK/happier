@@ -493,7 +493,7 @@ describe('DaemonTtsController', () => {
         expect(next).toHaveBeenCalledTimes(2);
         expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(1);
         failFirstPlayback();
-        await speaking;
+        await expect(speaking).rejects.toThrow('playback failed');
         // The real client refuses a later next once playback failure retires
         // its lifetime; the old injected client reached a third call instead.
         expect(next).toHaveBeenCalledTimes(2);
@@ -563,7 +563,7 @@ describe('DaemonTtsController', () => {
         });
         await secondPlaybackStarted;
         rejectFirstConfirmation();
-        await speaking;
+        await expect(speaking).rejects.toThrow('confirmation failed');
 
         expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(2);
         expect(ackSegment).toHaveBeenCalledTimes(1);
@@ -659,7 +659,7 @@ describe('DaemonTtsController', () => {
             }),
         });
 
-        await controller.speak({
+        await expect(controller.speak({
             sessionId: 'session-1',
             text: 'hello daemon',
             packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
@@ -667,7 +667,7 @@ describe('DaemonTtsController', () => {
             speed: 1,
             registerPlaybackStopper: (_stopper: () => void) => () => {},
             onSpeaking,
-        });
+        })).rejects.toThrow('playback failed');
 
         expect(onSpeaking).not.toHaveBeenCalled();
         expect(ackSegment).not.toHaveBeenCalled();
@@ -717,7 +717,7 @@ describe('DaemonTtsController', () => {
             playAudioBytesWithStopper,
         });
 
-        await controller.speak({
+        await expect(controller.speak({
             sessionId: 'session-1',
             text: 'hello daemon',
             packId: 'kokoro-82m-v1.0-onnx-q8-wasm',
@@ -725,7 +725,7 @@ describe('DaemonTtsController', () => {
             speed: 1,
             registerPlaybackStopper: (_stopper: () => void) => () => {},
             onSpeaking: vi.fn(),
-        });
+        })).rejects.toThrow('playback failed');
 
         expect(playAudioBytesWithStopper).toHaveBeenCalledTimes(1);
         expect(ackSegment).not.toHaveBeenCalled();

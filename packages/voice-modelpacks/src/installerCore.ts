@@ -298,8 +298,8 @@ async function downloadFileResumable(opts: {
   signal: AbortSignal;
   /** `verifiedForFile` is set once bytes are hashed; a restarted pass reports it from 0 again. */
   onFileProgress: (loadedForFile: number, verifiedForFile?: number) => void;
-  /** Previously reported existing bytes were discarded and must no longer contribute to progress. */
-  onExistingRejected: () => void;
+  /** Withdraw discarded file bytes, or only hash progress when a full response replaces a Range prefix. */
+  onProgressReset: (scope: 'file' | 'verification') => void;
   urlPolicy?: ModelPackUrlPolicy;
   transferUrl?: string;
 }): Promise<void> {
@@ -330,7 +330,7 @@ async function downloadFileResumable(opts: {
       throwIfAborted(signal);
       if (reported !== streamed || streamed !== existing) {
         await staging.resetPartial(entry.path);
-        opts.onExistingRejected();
+        opts.onProgressReset('file');
         return downloadFileResumable({ ...opts, onFileProgress: opts.onFileProgress });
       } else {
         loaded = streamed;
@@ -339,7 +339,7 @@ async function downloadFileResumable(opts: {
       // Cancelling verification does not invalidate the existing resumable prefix.
       throwIfAborted(signal);
       await staging.resetPartial(entry.path);
-      opts.onExistingRejected();
+      opts.onProgressReset('file');
       if (error instanceof ModelPackInstallError) {
         throw error;
       }
@@ -348,7 +348,7 @@ async function downloadFileResumable(opts: {
   } else if (existing > expectedSize) {
     // Corrupt/overlong partial — start over.
     await staging.resetPartial(entry.path);
-    opts.onExistingRejected();
+    opts.onProgressReset('file');
   }
 
   // Already complete? Verify hash and skip the network entirely.
@@ -358,7 +358,7 @@ async function downloadFileResumable(opts: {
       return;
     }
     await staging.resetPartial(entry.path);
-    opts.onExistingRejected();
+    opts.onProgressReset('file');
     // Fall through to a clean re-download.
     return downloadFileResumable({ ...opts, onFileProgress: opts.onFileProgress });
   }
@@ -384,6 +384,7 @@ async function downloadFileResumable(opts: {
       await staging.resetPartial(entry.path);
       loaded = 0;
       hasher = host.createHasher();
+      opts.onProgressReset('verification');
     }
 
     await consumeStream({
@@ -546,10 +547,12 @@ export async function installModelPackWithHost(opts: {
           }
           await downloadFileResumable({
             host: opts.host, packId, staging, entry, signal: pack.signal, urlPolicy: opts.urlPolicy, transferUrl,
-            onExistingRejected: () => {
-              loadedTotal -= loadedThisFile;
+            onProgressReset: (scope) => {
+              if (scope === 'file') {
+                loadedTotal -= loadedThisFile;
+                loadedThisFile = 0;
+              }
               verifiedTotal -= verifiedThisFile;
-              loadedThisFile = 0;
               verifiedThisFile = 0;
               report(entry.path);
             },

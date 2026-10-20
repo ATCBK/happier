@@ -171,6 +171,12 @@ export function createXaiRealtimeProtocolAdapter(input: Readonly<{
         const code = text(record(event.error)?.code) ?? '';
         if (/(?:client_secret|auth|token).*(?:expired|invalid)|(?:expired|invalid).*(?:client_secret|auth|token)/iu.test(code)) {
           result.push({ type: 'auth_expired' });
+        } else {
+          // Provider messages and unknown codes are not safe diagnostics.
+          // Recovery remains with the host's canonical provider-error policy.
+          result.push({ type: 'provider_error',
+            code: code === 'rate_limit_exceeded' ? 'rate_limited' : 'provider_response_invalid',
+            terminal: false });
         }
       }
       const itemId = text(event.item_id) ?? text(event.response_id);

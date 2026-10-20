@@ -133,6 +133,54 @@ afterEach(async () => {
 });
 
 describe('registerMachineVoiceInferenceStreamingRpcHandlers', () => {
+  it('cancels a pending JSON start and retires native preparation that completes after request abort', async () => {
+    let finishPreparation!: () => void;
+    const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+    let observePreparation!: () => void;
+    const preparing = new Promise<void>(resolve => { observePreparation = resolve; });
+    let nativeSignal: AbortSignal | null | undefined;
+    const cancel = vi.fn(async () => {});
+    const close = vi.fn(async () => {});
+    const createStreamingTranscriptionSession = vi.fn(async (input: Parameters<NonNullable<VoiceInferenceRuntime['createStreamingTranscriptionSession']>>[0]) => {
+      nativeSignal = input.signal;
+      observePreparation();
+      await preparation;
+      return {
+        appendPcm16: async () => ({ events: [] }),
+        finish: async () => ({ text: '', language: 'en', events: [] }),
+        cancel, close,
+      };
+    });
+    const worker = await createWorker({ createStreamingTranscriptionSession });
+    const manager = createRpcHandlerManager();
+    registrations.push(registerMachineVoiceInferenceStreamingRpcHandlers({ rpcHandlerManager: manager, voiceInferenceWorker: worker }));
+    const abort = new AbortController();
+    const request = DaemonVoiceInferenceSttStreamStartRequestSchema.parse({
+      requestId: 'cancel-pending-json', packId, language: 'en', streamingMode: 'runtime',
+    });
+    const starting = manager.invokeLocal(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, request, { signal: abort.signal });
+    try {
+      await preparing;
+      abort.abort();
+      expect(nativeSignal?.aborted).toBe(true);
+    } finally {
+      finishPreparation();
+    }
+    const response = DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await starting);
+    expect(response).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    expect(cancel).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    // The cancelled attempt releases the existing request/compute custody.
+    const retry = DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await manager.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, request,
+    ));
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error('Cancelled start retained request custody');
+    expect(DaemonVoiceInferenceSttStreamCancelResponseSchema.parse(await manager.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CANCEL, { streamId: retry.streamId, generation: retry.generation },
+    ))).toMatchObject({ ok: true });
+  });
+
   it('drains compatibility PCM in sequence when RPC authorization settles out of order', async () => {
     const received: number[] = [];
     const worker = await createWorker({

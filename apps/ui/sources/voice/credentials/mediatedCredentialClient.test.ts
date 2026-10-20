@@ -118,6 +118,16 @@ describe('createVoiceClientAccountOperationExecutor', () => {
     expect(line).not.toContain('machine_unavailable');
   });
 
+  it('keeps a transport timeout retryable instead of asking to replace valid credentials', async () => {
+    const materialize = materializer(async () => {
+      throw Object.assign(new Error('RPC timed out'), { code: 'machine_rpc_timeout' });
+    });
+    await expect(materialize({
+      operationId: 'mint-client-secret', parameters: {}, selection,
+      signal: new AbortController().signal,
+    })).rejects.toMatchObject({ code: 'service_temporarily_unavailable' });
+  });
+
   it('never logs the ephemeral operation response', async () => {
     const materialize = materializer(async () => ({
       ok: true,
