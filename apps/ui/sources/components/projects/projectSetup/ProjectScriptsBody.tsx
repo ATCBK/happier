@@ -536,8 +536,9 @@ function WorkersSummarySection(
             ? t(destination.selection === 'ask' ? 'projectWorkers.scriptsRowAsk' : 'projectWorkers.scriptsRowAutomatic', { pool: label.name ?? '' })
             : label.name ?? '',
         });
+  // One navigation row names itself ("Workers"); a section title above it would only repeat the word.
   return (
-    <ItemGroup title={t('projectWorkers.title')}>
+    <ItemGroup>
       <Item
         testID={props.testID}
         icon={<Icon name="stack" size={18} color={theme.colors.text.secondary} />}

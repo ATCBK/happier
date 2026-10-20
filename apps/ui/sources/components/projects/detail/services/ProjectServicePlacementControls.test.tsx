@@ -916,7 +916,11 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     await vi.waitFor(() => expect(screen.findByTestId('placement.move.inspect')).toBeTruthy());
     expect(screen.findByTestId('detail.placement.move.inspect')).toBeTruthy();
     expect(observers - discoveryObservers).toBe(1);
-    expect(screen.getTextContent()).toContain('Copying current files');
+    // The Move names itself and its current phase in the app's words; the producer's English phase
+    // label is not shown beside them.
+    expect(screen.getTextContent()).toContain('projectServices.moving');
+    expect(screen.getTextContent()).toContain('projectWorkers.copying');
+    expect(screen.getTextContent()).not.toContain('Copying current files');
     await screen.pressByTestIdAsync('placement.move.stop');
     await vi.waitFor(() => expect(screen.getTextContent()).toContain('projectServices.cancelPending'));
     expect(actionOperationStore.getSnapshot().operationsByKey.values().next().value?.snapshot.state).toBe('running');
