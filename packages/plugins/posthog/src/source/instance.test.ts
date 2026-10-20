@@ -11,6 +11,7 @@ import {
 const CONFIGURATION: PosthogConfigurationToken = {
     v: 1,
     organizationUuid: '00000000-0000-4000-8000-0000000000a1',
+    include: { kind: 'selected', unitIds: ['00000000-0000-4000-8000-0000000000d1'] },
     environments: [{
         teamPathId: 4821,
         teamUuid: '00000000-0000-4000-8000-0000000000d1',
@@ -23,7 +24,8 @@ const CONFIGURATION: PosthogConfigurationToken = {
 
 describe('PostHog configured-instance codec', () => {
     it('reads historical environment sets as selected immutable ids and emits the canonical include shape', () => {
-        const decoded = decodePosthogConfiguration({ v: 1, token: JSON.stringify(CONFIGURATION) });
+        const { include: _include, ...historical } = CONFIGURATION;
+        const decoded = decodePosthogConfiguration({ v: 1, token: JSON.stringify(historical) });
         expect(decoded).toMatchObject({ include: {
             kind: 'selected', unitIds: ['00000000-0000-4000-8000-0000000000d1'],
         } });

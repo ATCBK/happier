@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
     TriageGetResultV1Schema, TriageListInstancesResultV1Schema, TriageScanResultV1Schema,
+    TriageListScopeUnitsResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import { getJiraEntry, listJiraInstances, scanJiraSource } from './operations.js';
@@ -99,6 +100,57 @@ describe('Jira source through provider HTTP', () => {
         expect(await scanJiraSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 1 } }, h.context))
             .toMatchObject({ kind: 'failed', failure: { code: 'jira/configurationInvalid' } });
         expect(h.request).not.toHaveBeenCalled();
+    });
+
+    it('enforces project selection on exact reads before allowing a site-routed write', async () => {
+        let edited = false;
+        const configured = { ...instance, localInstanceKey: origin, configuration: { v: 1 as const,
+            token: JSON.stringify({ v: 2, scope: { kind: 'selected', unitIds: ['10002'] }, involvement: 'all' }) } };
+        const h = host((url, body) => {
+            if (body) { edited = true; return { status: 204, body: null }; }
+            return { body: url.pathname.endsWith('/editmeta') ? { fields: { summary: { operations: ['set'] } } }
+                : { ...issue, fields: { ...issue.fields, summary: edited ? 'Changed' : issue.fields.summary } } };
+        });
+        expect(await getJiraEntry({ v: 1, instance: configured, localRef: ref }, h.context))
+            .toMatchObject({ kind: 'unresolved', failure: { code: 'jira/entryMoved' } });
+        expect(await editJiraIssue({ v: 1, instance: configured, localRef: ref, fields: { title: 'Changed' } }, h.context))
+            .toMatchObject({ kind: 'failed', failure: { code: 'jira/entryMoved' } });
+        expect(edited).toBe(false);
+    });
+
+    it('lists searched project choices through the activated safe scope Action and projects configured choices without provider access', async () => {
+        type Handler = (input: unknown, context: PluginInvocationContext) => Promise<unknown>;
+        const handlers = new Map<string, Handler>();
+        JIRA_PLUGIN.activate({ actions: { register: (id: string, handler: Handler) => handlers.set(id, handler) },
+            connectedAccounts: { register: () => {} },
+        } as unknown as PluginApi);
+        const contribution = PLUGIN_MANIFEST.contributes.targetedPluginContributions[0];
+        const read = handlers.get(contribution?.operations.listScopeUnits ?? '');
+        expect(read).toBeDefined();
+        if (read === undefined) throw new Error('Jira scope Action was not activated');
+        const draft = { v: 1, binding: instance.binding, localInstanceKey: origin, keyStability: 'locatorDerived',
+            configuration: { v: 1, token: JSON.stringify({ v: 2, scope: { kind: 'selected', unitIds: ['10000'] }, involvement: 'mine',
+                scopeUnits: [{ id: '10000', label: 'Platform', secondaryText: 'ABC' }] }) },
+            locator: { v: 1, displayLabel: 'Work Jira' } };
+        const h = host((url) => {
+            expect(url.pathname).toBe('/rest/api/3/project/search');
+            expect(url.searchParams.get('query')).toBe('Platform');
+            expect(url.searchParams.get('maxResults')).toBeNull();
+            const second = url.searchParams.get('startAt') === '1';
+            return { body: { startAt: second ? 1 : 0, maxResults: 1, isLast: second,
+                values: [{ id: second ? '10002' : '10000', name: second ? 'Platform mobile' : 'Platform', key: second ? 'MOB' : 'ABC' }] } };
+        });
+        const first = TriageListScopeUnitsResultV1Schema.parse(await read({ v: 1, draft, query: 'Platform' }, h.context));
+        expect(first).toMatchObject({ kind: 'page', status: 'partial', units: [{ id: '10000', label: 'Platform', secondaryText: 'ABC' }] });
+        if (first.kind !== 'page' || first.status !== 'partial' || !first.nextCursor) throw new Error('Project continuation missing');
+        expect(TriageListScopeUnitsResultV1Schema.parse(await read({ v: 1, draft, query: 'Platform', cursor: first.nextCursor }, h.context)))
+            .toMatchObject({ kind: 'page', status: 'complete', units: [{ id: '10002', label: 'Platform mobile' }] });
+        h.request.mockClear(); h.materializeListedAccount.mockClear();
+        expect(await read({ v: 1, draft, mode: 'configured' }, h.context))
+            .toEqual({ kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['10000'] },
+                units: [{ id: '10000', label: 'Platform', secondaryText: 'ABC' }] });
+        expect(h.request).not.toHaveBeenCalled();
+        expect(h.materializeListedAccount).not.toHaveBeenCalled();
     });
     it('loads complete editable values and never invents a value for an omitted provider field', async () => {
         const h = host((url) => ({ body: url.pathname.endsWith('/transitions') ? { transitions: [] }
