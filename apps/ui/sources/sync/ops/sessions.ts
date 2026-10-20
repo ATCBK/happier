@@ -10,6 +10,9 @@ import { resolveTerminalSpawnOptions } from '../domains/settings/terminalSetting
 import { readForkSessionRpcTimeoutMsFromEnv, readSpawnSessionRpcTimeoutMsFromEnv } from '../domains/session/spawn/spawnSessionRpcTimeout';
 import { randomUUID } from '@/platform/randomUUID';
 import { storage } from '../domains/state/storage';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { resolveSessionArchiveServerId } from '@/sync/domains/session/listing/sessionArchiveState';
 import { readMachineDaemonCliVersionForServerScope } from '../domains/machines/readMachineDaemonCliVersionForServerScope';
 import { nowServerMs } from '../runtime/time';
 import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
@@ -843,10 +846,10 @@ async function archiveRequestWithContext(params: Readonly<{
     });
 }
 
-async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: number | null): Promise<void> {
+async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: number | null, serverId: string): Promise<void> {
     const updatedAt = nowServerMs();
     const session = storage.getState().sessions[sessionId];
-    if (session) {
+    if (session && areServerProfileIdentifiersEquivalent(serverId, getActiveServerSnapshot().serverId)) {
         storage.getState().applySessions([
             {
                 ...session,
@@ -865,7 +868,7 @@ async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: numb
                 updatedAt,
             },
         },
-    ]);
+    ], serverId);
 }
 
 export async function sessionArchiveWithServerScope(
@@ -873,7 +876,8 @@ export async function sessionArchiveWithServerScope(
     opts?: Readonly<{ serverId?: string | null }>,
 ): Promise<SessionArchiveResponse> {
     try {
-        const response = await archiveRequestWithContext({ sessionId, serverId: opts?.serverId ?? null, action: 'archive' });
+        const serverId = resolveSessionArchiveServerId(opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId));
+        const response = await archiveRequestWithContext({ sessionId, serverId, action: 'archive' });
         if (!response.ok) {
             const message = await response.text().catch(() => '');
             if (response.status === 409) {
@@ -881,9 +885,11 @@ export async function sessionArchiveWithServerScope(
             }
             return { success: false, message: message || 'Failed to archive session' };
         }
-        const json = await response.json().catch(() => ({}));
-        const archivedAt = typeof (json as any)?.archivedAt === 'number' ? (json as any).archivedAt : null;
-        await applyArchivedAtToLocalSession(sessionId, archivedAt);
+        const json: unknown = await response.json().catch(() => null);
+        const archivedAt = json !== null && typeof json === 'object' && 'archivedAt' in json && typeof json.archivedAt === 'number'
+            ? json.archivedAt
+            : null;
+        await applyArchivedAtToLocalSession(sessionId, archivedAt, serverId);
         return { success: true, archivedAt };
     } catch (error) {
         return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
@@ -895,13 +901,14 @@ export async function sessionUnarchiveWithServerScope(
     opts?: Readonly<{ serverId?: string | null }>,
 ): Promise<SessionArchiveResponse> {
     try {
-        const response = await archiveRequestWithContext({ sessionId, serverId: opts?.serverId ?? null, action: 'unarchive' });
+        const serverId = resolveSessionArchiveServerId(opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId));
+        const response = await archiveRequestWithContext({ sessionId, serverId, action: 'unarchive' });
         if (!response.ok) {
             const message = await response.text().catch(() => '');
             return { success: false, message: message || 'Failed to unarchive session' };
         }
         await response.json().catch(() => null);
-        await applyArchivedAtToLocalSession(sessionId, null);
+        await applyArchivedAtToLocalSession(sessionId, null, serverId);
         return { success: true, archivedAt: null };
     } catch (error) {
         return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };

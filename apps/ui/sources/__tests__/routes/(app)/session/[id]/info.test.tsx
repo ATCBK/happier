@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { createStorageModuleStub, createStorageStoreProxy } from '@/dev/testkit/mocks/storage';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
@@ -14,6 +14,7 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let mockSessionId = 'session-1';
+const realStorageRef = vi.hoisted(() => ({ current: null as typeof import('@/sync/domains/state/storageStore')['storage'] | null }));
 let mockServerId: string | undefined;
 let mockSession: any = null;
 let isDataReady = true;
@@ -43,7 +44,6 @@ const sessionDeleteSpy = vi.fn(async () => ({ success: true }));
 const modalAlertSpy = vi.fn();
 const modalConfirmSpy = vi.fn(async () => true);
 const modalPromptSpy = vi.fn(async () => 'urgent, review');
-const applySessionListRenderablePatchesSpy = vi.fn();
 const createDefaultActionExecutorSpy = vi.fn<(options: unknown) => unknown>();
 const completeSessionForkNavigationSpy = vi.fn<(params: unknown) => Promise<void>>(async () => undefined);
 const setPinnedSessionKeysV1Spy = vi.fn();
@@ -165,16 +165,14 @@ installSessionRouteCommonModuleMocks({
             },
         }).module;
     },
-    storageModule: async (importOriginal) =>
-        createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                storage: {
-                    getState: () => ({
-                        settings: { ...settingsDefaults, actionsSettingsV1: actionsSettings },
-                        applySessionListRenderablePatches: applySessionListRenderablePatchesSpy,
-                    }),
-                } as any,
+    storageModule: async () => {
+        const store = createStorageStoreProxy(() => {
+            if (!realStorageRef.current) throw new Error('Real storage must be initialized before rendering');
+            return realStorageRef.current;
+        });
+        return createStorageModuleStub({
+                storage: store,
+                getStorage: () => store,
                 useSession: (sessionId: string) => useSessionSpy(sessionId),
                 useIsDataReady: () => isDataReady,
                 useLocalSetting: <K extends keyof LocalSettings>(name: K): LocalSettings[K] => {
@@ -211,8 +209,8 @@ installSessionRouteCommonModuleMocks({
                     }
                     return [null, vi.fn()];
                 },
-            },
-        }),
+        });
+    },
 });
 
 vi.mock('@expo/vector-icons', () => ({
@@ -418,9 +416,15 @@ vi.mock('@/sync/domains/profiles/profileUtils', () => ({ resolveProfileById: () 
 vi.mock('@/components/profiles/profileDisplay', () => ({ getProfileDisplayName: () => 'profile' }));
 vi.mock('@/components/ui/layout/layout', () => ({ layout: { screenPaddingHorizontal: 16 } }));
 
+const { storage } = await import('@/sync/domains/state/storageStore');
+realStorageRef.current = storage;
+const { default: Screen } = await import('@/app/(app)/session/[id]/info');
+
 describe('/session/[id]/info', () => {
     beforeEach(() => {
+        storage.setState(storage.getInitialState(), true);
         actionsSettings = settingsDefaults.actionsSettingsV1;
+        storage.getState().applySettingsLocal({ actionsSettingsV1: actionsSettings });
         mockSessionId = 'session-1';
         mockServerId = undefined;
         mockSession = null;
@@ -525,7 +529,7 @@ describe('/session/[id]/info', () => {
     });
 
     async function renderInfoScreen() {
-        const Screen = (await import('@/app/(app)/session/[id]/info')).default;
+        storage.getState().applySettingsLocal({ actionsSettingsV1: actionsSettings });
         return renderScreen(<Screen />);
     }
 
@@ -600,7 +604,6 @@ describe('/session/[id]/info', () => {
             metadata: {},
         };
 
-        const Screen = (await import('@/app/(app)/session/[id]/info')).default;
         const screen = await renderScreen(<Screen />);
         expect(createDefaultActionExecutorSpy).toHaveBeenCalledTimes(1);
 
@@ -675,7 +678,6 @@ describe('/session/[id]/info', () => {
             metadata: {},
         };
 
-        const Screen = (await import('@/app/(app)/session/[id]/info')).default;
         const screen = await renderScreen(<Screen />);
         useSessionStatusSpy.mockClear();
 
@@ -708,7 +710,6 @@ describe('/session/[id]/info', () => {
             metadata: {},
         };
 
-        const Screen = (await import('@/app/(app)/session/[id]/info')).default;
         const screen = await renderScreen(<Screen />);
         expect(itemListRenderSpy).toHaveBeenCalled();
         itemListRenderSpy.mockClear();
@@ -2102,6 +2103,28 @@ describe('/session/[id]/info', () => {
 
         expect(screen.findByTestId('sessionInfo.stopSession')?.props.loading).toBe(true);
         expect(screen.findByTestId('sessionInfo.archiveSession')?.props.loading).toBe(true);
+    });
+
+    it('reflects an archive started elsewhere and prevents another stop or archive', async () => {
+        mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
+        mockSession = {
+            id: 'session-1', active: true, accessLevel: null,
+            createdAt: 1, updatedAt: 1, seq: 1, metadata: {}, archivedAt: null,
+        };
+        const operation = storage.getState().beginSessionArchive('session-1', 'server-b');
+        if (!operation) throw new Error('Expected archive admission');
+        try {
+            const screen = await renderInfoScreen();
+            expect(screen.findByTestId('sessionInfo.stopSession')?.props.disabled).toBe(true);
+            expect(screen.findByTestId('sessionInfo.archiveSession')?.props.loading).toBe(true);
+            await screen.pressByTestIdAsync('sessionInfo.archiveSession');
+            expect(sessionStopSpy).not.toHaveBeenCalled();
+            expect(sessionArchiveSpy).not.toHaveBeenCalled();
+            expect(safeRouterBackSpy).not.toHaveBeenCalled();
+        } finally {
+            storage.getState().finishSessionArchive(operation);
+        }
     });
 
     it('does not offer archive for active shared sessions even when the viewer has admin access', async () => {

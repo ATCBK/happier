@@ -1562,6 +1562,7 @@ export function buildSessionListShellViewItemSignature(item: SessionListViewItem
     item.session.active === true ? '1' : '0',
     item.session.archivedAt ?? '',
     item.session.keepVisibleWhenInactive === true ? '1' : '0',
+    item.session.archiving === true ? '1' : '0',
     item.session.pendingCount ?? '',
     item.session.pendingBlockedCount ?? '',
     metadata?.name ?? '',

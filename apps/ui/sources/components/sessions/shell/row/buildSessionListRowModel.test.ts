@@ -454,11 +454,11 @@ describe('buildSessionListRowModel', () => {
         expect(model.status.state).toBe('thinking');
     });
 
-    it('presents a pending archive from the store renderable as an archiving status row', () => {
+    it('preserves shared archive progress when live runtime fields overlay the list row', () => {
         const rowSession = createRenderable('s1', { active: true, activeAt: NOW_MS - 10 });
         const model = buildSessionListRowModel({
-            item: createSessionItem(rowSession, { groupKind: 'date', workingPlacementReason: 'working-retained' }),
-            state: { renderable: { ...rowSession, archiving: true } },
+            item: createSessionItem({ ...rowSession, archiving: true }, { groupKind: 'date', workingPlacementReason: 'working-retained' }),
+            state: { renderable: rowSession },
             isFirst: true,
             isLast: true,
             isSingle: true,

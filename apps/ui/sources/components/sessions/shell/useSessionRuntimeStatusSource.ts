@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { storage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
 
 type SessionRuntimeStatusFields = Pick<
     Session,
@@ -81,15 +82,14 @@ export function useSessionRuntimeStatusSource(
         }),
     );
 
-    // The archive pending state is owned by the session-list renderable (`sessionStopArchiveFlow`).
-    const archiving = storage((state) => state.sessionListRenderables[sessionId]?.archiving === true);
+    const archiving = useSessionArchivePending(sessionId, session.serverId);
 
     return React.useMemo(() => {
         if (!runtimeFields && subscribeToRuntimeActivity && !archiving) return session;
         return {
             ...session,
             ...runtimeFields,
-            ...(archiving ? { archiving } : {}),
+            archiving,
             ...(subscribeToRuntimeActivity
                 ? {}
                 : {

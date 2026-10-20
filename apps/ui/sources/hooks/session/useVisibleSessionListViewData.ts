@@ -1,4 +1,7 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import { storage } from '@/sync/domains/state/storage';
+import { projectSessionArchivesToListViewData } from '@/sync/domains/session/listing/sessionArchiveState';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { SessionListViewItem, useLocalSetting, useOpenApprovalSessionIds, useSessionListViewData, useSessionListViewDataByServerId, useSessionOrganizationProjection, useSetting } from '@/sync/domains/state/storage';
 import { buildSessionListShellViewItemSignature } from '@/sync/store/hooks';
@@ -811,17 +814,22 @@ function useSessionListDataState(
         ? selection.allowedServerIds
         : EMPTY_SELECTED_SESSION_LIST_SERVER_IDS;
     const dataByServerId = useSessionListViewDataByServerId(selectedServerIdsForCache);
+    const archiveOperations = storage(useShallow((state) => {
+        const serverIds = selection.enabled ? selection.allowedServerIds : [selection.activeServerId];
+        return serverIds.flatMap((serverId) => Object.values(state.sessionArchiveOperations?.[serverId] ?? {}));
+    }));
 
     const source = React.useMemo(() => {
-        return resolveSessionListSourceData({
+        return projectSessionArchivesToListViewData(resolveSessionListSourceData({
             enabled: selection.enabled,
             activeServerId: selection.activeServerId,
             activeData,
             byServerId: dataByServerId,
             selectedServerIds: selection.allowedServerIds,
-        });
+        }), archiveOperations, selection.activeServerId);
     }, [
         activeData,
+        archiveOperations,
         dataByServerId,
         selectedServerIdsKey,
         selection.activeServerId,

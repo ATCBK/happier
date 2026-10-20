@@ -71,6 +71,7 @@ export type SessionActionExecutionInput = Readonly<{
 export type SessionActionExecutionOperations = Readonly<{
     stopArchiveFlow?: (params: {
         sessionId: string;
+        serverId?: string | null;
         hideInactiveSessions: boolean;
         isPinned: boolean;
         archiveAfterStop: 'always' | 'never';
@@ -78,7 +79,7 @@ export type SessionActionExecutionOperations = Readonly<{
         archiveSession: () => Promise<SessionActionOperationResult>;
         stopErrorMessage: string;
         archiveErrorMessage: string;
-    }) => Promise<void>;
+    }) => Promise<void | false>;
     stopSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
     archiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
     unarchiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
@@ -109,7 +110,6 @@ export type SessionActionExecutionOperations = Readonly<{
         readState: 'read' | 'unread',
         opts?: Readonly<{ serverId?: string | null }>,
     ) => Promise<SessionActionOperationResult>;
-    clearSessionVisibleWhenInactive?: (sessionId: string) => void;
 }>;
 
 export type SessionActionExecutionContext = Readonly<{

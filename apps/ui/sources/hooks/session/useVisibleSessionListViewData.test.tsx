@@ -8,6 +8,8 @@ import type { SessionListRenderableSession } from '@/sync/domains/session/listin
 import type { SessionOrganizationProjection } from '@/sync/domains/session/organization';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { useVisibleSessionListViewData as useReminderListViewData } from './useVisibleSessionListViewData';
+import { storage } from '@/sync/domains/state/storageStore';
+import { act } from 'react-test-renderer';
 
 function makeRenderableSession(id: string, overrides: Partial<SessionListRenderableSession> = {}): SessionListRenderableSession {
     return {
@@ -250,6 +252,32 @@ describe('useVisibleSessionListViewData', () => {
 
         expect(second).toBe(first);
         await hook.unmount();
+    });
+
+    it('keeps only the correctly scoped inactive archive visible until its operation settles', async () => {
+        sourceData.hideInactiveSessions = true;
+        const row = sourceData.activeData.find((item) => item.type === 'session');
+        if (!row || row.type !== 'session') throw new Error('Expected a session row');
+        sourceData.activeData = [
+            ...sourceData.activeData,
+            { ...row, serverId: 'server-b' },
+        ];
+        storage.setState({ sessionArchiveOperations: {
+            'server-a': { 'session-a': { sessionId: 'session-a', serverId: 'server-a' } },
+        } });
+        const { useVisibleSessionListViewData } = await import('./useVisibleSessionListViewData');
+        const hook = await renderHook(() => useVisibleSessionListViewData());
+        try {
+            const visible = hook.getCurrent()?.filter((item) => item.type === 'session');
+            expect(visible?.map((item) => item.serverId)).toEqual(['server-a']);
+            expect(visible?.[0]?.session.archiving).toBe(true);
+            await act(async () => { storage.setState({ sessionArchiveOperations: {} }); });
+            await flushHookEffects();
+            expect(hook.getCurrent()?.filter((item) => item.type === 'session')).toEqual([]);
+        } finally {
+            storage.setState({ sessionArchiveOperations: {} });
+            await hook.unmount();
+        }
     });
 
     it('skips visible-row signature scans when recomputing to the same visible row references', async () => {

@@ -124,6 +124,7 @@ function resolveSessionListRowSession(
         storeSession.hasPendingUserActionRequests ?? (rowRenderable.hasPendingUserActionRequests === true);
     const keepVisibleWhenInactive =
         rowRenderable.keepVisibleWhenInactive === true || storeSession.keepVisibleWhenInactive === true;
+    const archiving = rowRenderable.archiving === true;
     const rowPendingBlockedCount = normalizeFiniteCount(rowRenderable.pendingBlockedCount);
     const storePendingBlockedCount = normalizeFiniteCount(storeSession.pendingBlockedCount);
     const pendingBlockedCount = storePendingBlockedCount ?? rowPendingBlockedCount;
@@ -141,6 +142,7 @@ function resolveSessionListRowSession(
         hasPendingPermissionRequests === storeSession.hasPendingPermissionRequests
         && hasPendingUserActionRequests === storeSession.hasPendingUserActionRequests
         && keepVisibleWhenInactive === storeSession.keepVisibleWhenInactive
+        && archiving === (storeSession.archiving === true)
         && pendingBlockedCount === normalizeFiniteCount(storeSession.pendingBlockedCount)
         && meaningfulActivityAt === (storeSession.meaningfulActivityAt ?? null)
     ) {
@@ -149,6 +151,7 @@ function resolveSessionListRowSession(
 
     return {
         ...storeSession,
+        archiving,
         hasPendingPermissionRequests,
         hasPendingUserActionRequests,
         keepVisibleWhenInactive,

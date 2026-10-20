@@ -228,6 +228,7 @@ The current development server has separate session and machine presence owners:
 - Released `session-alive` events enter `sources/app/session/runtimeActivity/socketEvents.ts`. The adapter delegates authorization, registration, and conditional liveness writes to `createSessionPublisherPresence`; machine batching is not a second session-presence writer.
 - `publishSessionPublisherLifecycleUpdate` invalidates account badges through the existing debounced refresh owner whenever it publishes reachability, including registration, close, and timeout. Activity-only updates retain their explicit badge-change signal. Closing reachability does not clear pending approval or user-action counts; those remain request-owner facts.
 - Session heartbeat coalescing retains the latest server-received observation. Its next flush deadline is the earlier of 60 seconds after the preceding write settles and half the configured session expiry after that write's observation time. This preserves the default write budget while bounding durable observation age for short expiries. Delayed writes retain the observation time rather than inventing a newer heartbeat. Close/disconnect clears pending work, and generation/fence checks prevent a replaced publisher from refreshing its successor. Database failures remain observable and use the adapter's retry backoff; coalescing cannot guarantee liveness during an outage.
+- Stop completion uses the publisher's acknowledged runtime-activity close or the fenced explicit machine-stop finalizer after the daemon reports a proven stop. An accepted stop request, an opaque encrypted RPC reply, and an ordinary socket disconnect do not prove that the runner exited. Ordinary disconnect makes runtime activity unobserved; it does not mark the session inactive or end its turn. Archive continues to require the server's authoritative inactive state.
 - `runPresenceTimeoutTick` reads durable timestamps and conditionally expires the observed session fence. Session and machine expiry default to ten minutes, with a separate timeout-loop tick; these are not a ten-minute flush timer. Runtime activity snapshots describe agent activity separately from reachability.
 
 These are development-source semantics, not a claim that every published server already contains them.
@@ -244,6 +245,17 @@ detail rebuilds therefore cannot replace newer completion facts. Encrypted
 metadata and transcript hydration remain demand-driven. The socket urgency
 classifier publishes turn-status and runtime-status changes immediately through
 its existing urgent path; timestamp-only activity retains its existing window.
+
+Archive progress in the development UI belongs to transient operation state in
+the session store, keyed by server and session. Single-session and bulk actions
+claim the same operation after confirmation and before starting work. Rows and
+action controls derive pending status from that owner, so replacing a list row
+does not admit duplicate work or lose progress. Switching servers preserves
+pending operations; logging out clears them. Archive and unarchive success
+update the request's captured server scope, including when completion arrives
+after the user switches servers. A missing runner permits an archive attempt,
+but a server `session_active` conflict still fails immediately; it is not proof
+that the session stopped.
 
 The development UI reconciles session-owned roster activity through its existing
 runtime presentation and freshness clock. Losing the owner makes stale activity

@@ -1,4 +1,5 @@
 import { runTasksWithLimit } from '@/sync/runtime/orchestration/runTasksWithLimit';
+import { resolveSessionArchiveServerId } from '@/sync/domains/session/listing/sessionArchiveState';
 import {
     archiveSessionWithPendingState,
     isSessionArchivePending,
@@ -372,7 +373,10 @@ async function executeArchiveAction(params: Readonly<{
 
     return executeNetworkTargets({
         actionId: SESSION_BULK_ACTION_IDS.archive,
-        targets: params.targets,
+        targets: params.targets.map((target) => ({
+            ...target,
+            serverId: resolveSessionArchiveServerId(target.serverId),
+        })),
         context: params.context,
         runTarget: async (target) => {
             if (target.archived === true) {
@@ -390,7 +394,7 @@ async function executeArchiveAction(params: Readonly<{
             }
 
             // An archive of this session is already in flight; a second one would race its lifecycle.
-            if (isSessionArchivePending(target.sessionId)) {
+            if (isSessionArchivePending(target.sessionId, target.serverId)) {
                 return createTargetResult(target, 'skipped', {
                     reasonCode: 'archive_in_progress',
                     reason: 'Session is already being archived',
@@ -405,7 +409,7 @@ async function executeArchiveAction(params: Readonly<{
                     });
                 }
 
-                await stopSessionAndMaybeArchive({
+                const result = await stopSessionAndMaybeArchive({
                     target,
                     sessionId: target.sessionId,
                     hideInactiveSessions: params.context.hideInactiveSessions === true,
@@ -416,12 +420,15 @@ async function executeArchiveAction(params: Readonly<{
                     stopErrorMessage: params.context.stopErrorMessage ?? DEFAULT_STOP_ERROR_MESSAGE,
                     archiveErrorMessage: params.context.archiveErrorMessage ?? DEFAULT_ARCHIVE_ERROR_MESSAGE,
                 });
+                if (result === false) return createTargetResult(target, 'skipped', { reasonCode: 'archive_in_progress', reason: 'Session is already being archived' });
                 return createTargetResult(target, 'succeeded');
             }
 
+            const result = await archiveSessionWithPendingState(target.sessionId, async () => await archiveSession(target), target.serverId);
+            if (result === false) return createTargetResult(target, 'skipped', { reasonCode: 'archive_in_progress', reason: 'Session is already being archived' });
             return resultFromMutation(
                 target,
-                await archiveSessionWithPendingState(target.sessionId, async () => await archiveSession(target)),
+                result,
                 DEFAULT_ARCHIVE_ERROR_MESSAGE,
             );
         },

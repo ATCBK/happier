@@ -368,10 +368,12 @@ test.describe('ui e2e: session list multi-select actions', () => {
 
     const archiveGate = createDeferred();
     let delayedFirstArchive = false;
+    let pendingSessionId: string | null = null;
     const archiveUrl = (url: URL) => /^\/v2\/sessions\/[^/]+\/archive$/.test(url.pathname);
     await page.route(archiveUrl, async (route) => {
       if (!delayedFirstArchive) {
         delayedFirstArchive = true;
+        pendingSessionId = new URL(route.request().url()).pathname.split('/')[3] ?? null;
         await archiveGate.promise;
       }
       await route.continue();
@@ -382,6 +384,10 @@ test.describe('ui e2e: session list multi-select actions', () => {
       const progress = page.getByTestId(testIds.selectionProgress);
       await expect(progress).toBeVisible({ timeout: 60_000 });
       expect(delayedFirstArchive).toBe(true);
+      expect(pendingSessionId).not.toBeNull();
+      const pendingStatus = page.getByTestId(`session-list-status-subtitle-text-${pendingSessionId}-working`);
+      await expect(pendingStatus).toBeVisible({ timeout: 60_000 });
+      await expect(pendingStatus).toContainText(/archiving/i);
 
       archiveGate.resolve();
 

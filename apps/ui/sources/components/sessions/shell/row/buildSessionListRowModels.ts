@@ -190,6 +190,7 @@ function buildInputSignature(input: Readonly<{
     appendSignaturePart(parts, item.attentionPromotionReason);
     appendSignaturePart(parts, item.workingPlacementReason);
     appendSignaturePart(parts, item.variant);
+    appendSignaturePart(parts, item.session.archiving === true ? 1 : 0);
     appendSignaturePart(parts, item.serverId);
     appendSignaturePart(parts, item.serverName);
     appendSignaturePart(parts, input.adjacency.isFirst ? 1 : 0);

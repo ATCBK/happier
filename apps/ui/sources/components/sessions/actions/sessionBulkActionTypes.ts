@@ -111,7 +111,7 @@ export type SessionBulkStopAndArchiveOperation = (
         stopErrorMessage: string;
         archiveErrorMessage: string;
     }>,
-) => Promise<void>;
+) => Promise<void | false>;
 
 export type SessionBulkActionCancelSignal = Readonly<{
     isCancelled: () => boolean;
