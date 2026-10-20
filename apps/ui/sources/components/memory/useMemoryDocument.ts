@@ -181,15 +181,24 @@ export function useMemoryDocument(
       try {
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         account = await captureLazyActionAccountContext(homeId, controller.signal);
-        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-        const result = await createDefaultActionExecutor().execute('memory.read', {
+        const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const readAccount = { ...account };
+        const readArtifactContent = account.readArtifactContent;
+        // Observe the admitted Action's existing read, rather than fetching the body again for audience metadata.
+        const observed: { artifact: Awaited<ReturnType<LazyActionAccountContext['readArtifactContent']>> } = { artifact: null };
+        readAccount.readArtifactContent = async (...args: Parameters<LazyActionAccountContext['readArtifactContent']>) => {
+          const artifact = await readArtifactContent(...args);
+          if (args[0] === artifactId) observed.artifact = artifact;
+          return artifact;
+        };
+        const result = await executeDefaultActionInCapturedAccount(readAccount, 'memory.read', {
           ref: { kind: 'doc', artifactId, serverId: homeId },
           ...(topic === undefined ? {} : { topic }),
         }, { surface: 'ui', authority: 'present_user', serverId: homeId,
           expectedAccountId: account.accountId, signal: controller.signal });
         if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
         const read = MemoryDocReadResultV1Schema.parse(result.result);
-        const artifact = await account.readArtifactContent(artifactId, { signal: controller.signal });
+        const artifact = observed.artifact;
         if (!artifact) throw Object.assign(new Error('memory_doc_not_found'), { code: 'memory_doc_not_found' });
         const access = artifact.access ?? null;
         // Finite observations must not prepare/publish the Artifact and invalidate their own read.

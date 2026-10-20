@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { MemoryDocumentSearchCoverageV1, MemorySearchResultHitV1 } from '@happier-dev/protocol/memory/memorySearch';
 
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -50,6 +50,7 @@ const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 let administration: Awaited<ReturnType<typeof createMachineAdministrationFixture>>;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let webLocks: ReturnType<typeof installWebLockManagerMock>;
+let caseSignal: AbortSignal;
 const baseline = storage.getState();
 const transcript: MemorySearchResultHitV1 = {
     sessionId: 'past-session', seqFrom: 1, seqTo: 2, createdAtFromMs: 1, createdAtToMs: 2,
@@ -67,7 +68,8 @@ const status = {
     tier1DbPath: null, deepDbPath: '/memory/deep.sqlite', tier1DbBytes: null, deepDbBytes: 1,
 };
 
-beforeEach(async () => {
+beforeEach(async ({ signal }) => {
+    caseSignal = signal;
     webLocks = installWebLockManagerMock();
     await homes.reset();
     storage.setState(baseline, true);
@@ -103,7 +105,7 @@ afterEach(async () => {
     webLocks.restore();
 });
 
-async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: readonly MemorySearchResultHitV1[]) {
+async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: readonly MemorySearchResultHitV1[], query = 'fact') {
     machineRpc.mockImplementation(async (request: Readonly<{ method: string }>) => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS
         ? { ...status, ...(coverage ? { documentSearchSupported: true } : {}) }
         : { v: 1, ok: true, hits, ...(coverage ? { documents: coverage } : {}) });
@@ -111,10 +113,12 @@ async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: rea
         <MemorySearchPanel testID="search" serverId={administration.serverIds[0]!} />
     </InjectedAuthProvider>);
     await flushHookEffects();
-    await act(async () => {
-        await vi.waitFor(() => expect(screen.findByTestId('search.input')?.props.editable).toBe(true));
+    await waitForHomeGovernance(async () => {
+        caseSignal.throwIfAborted();
+        await flushHookEffects();
+        expect(screen.findByTestId('search.input')?.props.editable).toBe(true);
     });
-    await act(async () => screen.findByTestId('search.input')!.props.onChangeText('fact'));
+    await act(async () => screen.findByTestId('search.input')!.props.onChangeText(query));
     await act(async () => {
         await vi.waitFor(() => expect(machineRpc.mock.calls.some(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)).toBe(true));
     });
@@ -123,6 +127,67 @@ async function search(coverage: MemoryDocumentSearchCoverageV1 | null, hits: rea
 }
 
 describe('MemorySearchPanel corpus coverage', () => {
+    it.each(['A', '猫'])('searches the admitted one-character query %s', async query => {
+        const screen = await search({ state: 'ready' }, [document], query);
+        expect(machineRpc.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.[0].payload)
+            .toMatchObject({ query });
+        expect(screen.findByTestId('search.remembered.0')).not.toBeNull();
+    });
+    it('keeps empty queries idle, debounces and cancels superseded reads, and shows pending searches while retaining hits', async () => {
+        const pending = createDeferred<unknown>();
+        const nextPending = createDeferred<unknown>();
+        machineRpc.mockImplementation(async (request: Readonly<{ method: string; payload?: { query?: string } }>) => {
+            if (request.method === RPC_METHODS.DAEMON_MEMORY_STATUS) return { ...status, documentSearchSupported: true };
+            if (request.payload?.query === 'A') return pending.promise;
+            if (request.payload?.query === 'B') return nextPending.promise;
+            return { v: 1, ok: true, hits: [document], documents: { state: 'ready' } };
+        });
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection!.credentials}>
+            <MemorySearchPanel testID="pending-search" serverId={administration.serverIds[0]!} />
+        </InjectedAuthProvider>);
+        await waitForHomeGovernance(async () => {
+            caseSignal.throwIfAborted();
+            await flushHookEffects();
+            expect(screen.findByTestId('pending-search.input')?.props.editable).toBe(true);
+        });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            await act(async () => screen.findByTestId('pending-search.input')!.props.onChangeText(' '));
+            await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+            expect(machineRpc).not.toHaveBeenCalled();
+            await act(async () => screen.findByTestId('pending-search.input')!.props.onChangeText('A'));
+            await act(async () => { await vi.advanceTimersByTimeAsync(249); });
+            expect(machineRpc).not.toHaveBeenCalled();
+            await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+            const first = machineRpc.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SEARCH)?.[0];
+            expect(first?.payload).toMatchObject({ query: 'A' });
+            expect(screen.getTextContent()).toContain('universalSearch.searchingGroup');
+            expect(screen.getTextContent()).not.toContain('memoryContext.memory.resultCount');
+            expect(screen.findByTestId('pending-search.empty')).toBeNull();
+            await act(async () => screen.findByTestId('pending-search.input')!.props.onChangeText('猫'));
+            expect(first.signal.aborted).toBe(true);
+            await act(async () => pending.resolve({ v: 1, ok: true, hits: [], documents: { state: 'ready' } }));
+            await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+            expect(screen.findByTestId('pending-search.remembered.0')).not.toBeNull();
+            expect(screen.getTextContent()).toContain('memoryContext.memory.resultCount');
+            expect(screen.getTextContent()).not.toContain('universalSearch.searchingGroup');
+            await act(async () => screen.findByTestId('pending-search.input')!.props.onChangeText('B'));
+            await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+            expect(screen.findByTestId('pending-search.remembered.0')).not.toBeNull();
+            expect(screen.getTextContent()).toContain('universalSearch.searchingGroup');
+            expect(screen.getTextContent()).not.toContain('memoryContext.memory.resultCount');
+            await act(async () => nextPending.resolve({ v: 1, ok: true, hits: [], documents: { state: 'ready' } }));
+            expect(screen.findByTestId('pending-search.remembered.0')).toBeNull();
+            expect(screen.findByTestId('pending-search.empty')).not.toBeNull();
+            expect(screen.getTextContent()).toContain('memoryContext.memory.resultCount');
+            expect(screen.getTextContent()).not.toContain('universalSearch.searchingGroup');
+        } finally {
+            vi.useRealTimers();
+            pending.resolve({ v: 1, ok: true, hits: [] });
+            nextPending.resolve({ v: 1, ok: true, hits: [] });
+            await act(async () => screen.unmount());
+        }
+    });
     it.each([false, true])('searches only the qualified Project through its Context entry (Source read-only: %s)', async (sourceReadOnly) => {
         const serverId = administration.serverIds[0]!;
         const projectRef = { serverId, projectKey: 'payments' };
