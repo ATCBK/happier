@@ -24,8 +24,8 @@ describe('archiveSessionReports', () => {
         expect(Modal.alert).toHaveBeenCalledWith(t('common.error'), t('sessionInfo.failedToArchiveSession'));
     });
     it('presents the owner result without discovering or mutating cached reports', async () => {
-        const known = createSessionFixture({ id: 'known', serverId: 'home-a', metadata: { name: 'Known session' } });
-        const foreign = createSessionFixture({ id: 'unknown', serverId: 'home-b', metadata: { name: 'Another Home' } });
+        const known = createSessionFixture({ id: 'known', serverId: 'home-a', metadata: { path: '/repo', host: 'test', name: 'Known session' } });
+        const foreign = createSessionFixture({ id: 'unknown', serverId: 'home-b', metadata: { path: '/repo', host: 'test', name: 'Another Home' } });
         getStorage().setState({ sessions: { known, foreign }, sessionListRowsByServerId: {
             'home-a': { known: buildSessionListRenderableFromSession(known) },
             'home-b': { unknown: buildSessionListRenderableFromSession(foreign) },
