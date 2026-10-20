@@ -2639,9 +2639,9 @@ status, counts and coverage, never transcript or file text. `noMountedSurface`
 is distinct from a mounted surface with zero matches. This client-placed Action
 does not create a headless search engine in the CLI, daemon or Home.
 
-Accepted Project/file Find navigation uses `workspace.tabs.open` with a private,
+Accepted Session/Project file Find navigation uses `workspace.tabs.open` with a private,
 strictly qualified launch seed. The mounted Workspace Action validates the
-Project destination and current Home/Account authority, stages the seed in the
+Session or Project destination, addressed file and current Home/Account authority, stages the seed in the
 existing one-shot file Find handoff, and only then opens the route. Query text is
 never serialized into the URL or tab state. Session chat Find keeps the same
 private handoff and lifecycle under the same Workspace Action owner.
