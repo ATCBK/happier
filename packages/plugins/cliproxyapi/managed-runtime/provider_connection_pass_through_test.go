@@ -32,13 +32,16 @@ func providerSourceHeader(t *testing.T, source ProviderConnectionRequestSource) 
 func TestProviderConnectionPassThroughAcceptsCanonicalSourceWithoutLocalCapacityCaps(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {
-		name      string
-		addresses int
-		headers   int
-		value     string
-		reject    bool
+		name            string
+		addresses       int
+		headers         int
+		value           string
+		descriptorChars int
+		reject          bool
 	}{
 		{name: "all admitted DNS answers", addresses: 17},
+		{name: "source just below SVC09 header value boundary", addresses: 1, headers: 2, descriptorChars: 8191},
+		{name: "source at SVC09 header value boundary", addresses: 1, headers: 2, descriptorChars: 8192},
 		{name: "canonical escaped public headers", addresses: 1, headers: 64},
 		{name: "canonical character bound for Latin-1 public headers", addresses: 1, headers: 1, value: strings.Repeat("é", 2500)},
 		{name: "rejects values beyond canonical character bound", addresses: 1, headers: 1, value: strings.Repeat("a", 4097), reject: true},
@@ -60,6 +63,18 @@ func TestProviderConnectionPassThroughAcceptsCanonicalSourceWithoutLocalCapacity
 					value = strings.Repeat("\"", 4096)
 				}
 				source.PublicHeaders[fmt.Sprintf("x-public-%d", index)] = value
+			}
+			if testCase.descriptorChars > 0 {
+				source.PublicHeaders["x-public-0"] = strings.Repeat("x", 4096)
+				source.PublicHeaders["x-public-1"] = ""
+				raw, err := json.Marshal(source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				source.PublicHeaders["x-public-1"] = strings.Repeat("x", testCase.descriptorChars*3/4-len(raw))
+				if got := len(providerSourceHeader(t, source)); got != testCase.descriptorChars {
+					t.Fatalf("expected carrier boundary descriptor, got %d", got)
+				}
 			}
 			router := gin.New()
 			router.Use(ProviderConnectionPassThroughMiddleware(ProviderConnectionPassThroughConfiguration{Protocol: ProtocolOpenAIResponses, DownstreamBasePath: "/v1"}, nil))
