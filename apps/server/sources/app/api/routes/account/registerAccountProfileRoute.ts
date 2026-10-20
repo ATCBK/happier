@@ -4,12 +4,12 @@ import { type Fastify } from "../../types";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { buildAccountConnectedServicesProjection } from "./connectedServicesProjection";
-import { afterTx, inTx } from "@/storage/inTx";
+import { afterTx, inReadSnapshot, inTx, transactionResult } from "@/storage/inTx";
 import { buildLinkedIdentityManagementProjectionInTx } from "@/app/auth/providers/accountLinkedIdentityManagement";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 import { AccountNameUpdateRequestV1Schema, AccountNameUpdateResponseV1Schema } from "@happier-dev/protocol/account/profile";
 import { projectAccountNameToLegacyFieldsV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
-import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, enqueueAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { buildUpdateAccountUpdate, eventRouter } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 
@@ -23,21 +23,25 @@ export function registerAccountProfileRoute(app: Fastify): void {
         },
     }, async (request, reply) => {
         const name = await inTx(async (tx) => {
-            await acquireAccountChangePublicationLocksInTx(tx, [request.userId], { includeSingleAccount: true, intent: 'exclusive' });
-            const account = await tx.account.update({
-                where: { id: request.userId },
-                data: { name: request.body.name },
-                select: { name: true },
+            await acquireAccountChangePublicationLocksInTx(tx, [request.userId], { includeSingleAccount: true });
+            let updatedName = request.body.name;
+            enqueueAccountChangePublication(tx, [request.userId], async publicationTx => {
+                const account = await publicationTx.account.update({
+                    where: { id: request.userId },
+                    data: { name: request.body.name },
+                    select: { name: true },
+                });
+                updatedName = account.name;
             });
             const cursor = await markAccountChanged(tx, {
                 accountId: request.userId, kind: 'account', entityId: 'self', hint: { name: true },
             });
             afterTx(tx, () => eventRouter.emitUpdate({
                 userId: request.userId,
-                payload: buildUpdateAccountUpdate(request.userId, { name: account.name }, cursor.resolveCursor(), randomKeyNaked(12)),
+                payload: buildUpdateAccountUpdate(request.userId, { name: updatedName }, cursor.resolveCursor(), randomKeyNaked(12)),
                 recipientFilter: { type: 'user-scoped-only' },
             }));
-            return account.name;
+            return transactionResult(() => updatedName);
         });
         return reply.send({ name, ...projectAccountNameToLegacyFieldsV1(name), timestamp: Date.now() });
     });
@@ -50,7 +54,7 @@ export function registerAccountProfileRoute(app: Fastify): void {
         const requestHomeEnv = await readRequestHomeEnv(request);
         const userId = request.userId;
         const connectedServiceAccountGroupsEnabled = isServerFeatureEnabledForRequest("connectedServices.accountGroups", requestHomeEnv);
-        const { user, connectedServiceProjection, linkedProviders, linkedIdentityManagementV1 } = await inTx(async tx => {
+        const { user, connectedServiceProjection, linkedProviders, linkedIdentityManagementV1 } = await inReadSnapshot(async tx => {
             const user = await tx.account.findUniqueOrThrow({
                 where: { id: userId },
                 select: {
@@ -77,7 +81,7 @@ export function registerAccountProfileRoute(app: Fastify): void {
                 linkedProviders: currentLinkedProviders,
                 linkedIdentityManagementV1: currentManagement,
             };
-        }, { readOnly: true, isolationLevel: "Serializable" /* Account presentation, linked identities and credential projections must form one capture. */ });
+        });
         return reply.send({
             id: userId,
             timestamp: Date.now(),

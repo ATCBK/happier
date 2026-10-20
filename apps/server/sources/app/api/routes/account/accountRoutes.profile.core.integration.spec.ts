@@ -4,6 +4,7 @@ import { AccountProfileResponseSchema, ConnectedServiceAuthGroupPolicyV1Schema }
 import { db } from "@/storage/db";
 import { auth } from "@/app/auth/auth";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { accountRoutes } from "./accountRoutes";
 import {
@@ -88,7 +89,7 @@ describe("Account profile (integration)", () => {
 
     it("projects a stored 0.2 Antigravity profile and revision through qualified V4 without scalar peer leakage", async () => {
         const account = await db.account.create({
-            data: { publicKey: "pk-profile-antigravity-predecessor" },
+            data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" },
             select: { id: true },
         });
         // The predecessor row retains its scalar identity and sealed v2 metadata.

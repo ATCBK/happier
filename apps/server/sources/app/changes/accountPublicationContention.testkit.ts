@@ -8,6 +8,7 @@ export function observeLazyPrismaQuery(
     query: unknown,
     createObservation: () => QueryObservation,
     beforeQuery?: () => Promise<void>,
+    aroundQuery?: (consume: () => Promise<unknown>) => Promise<unknown>,
 ): unknown {
     if (!query || typeof query !== 'object' || typeof Reflect.get(query, 'then') !== 'function') return query;
     let running: Promise<unknown> | undefined;
@@ -25,9 +26,10 @@ export function observeLazyPrismaQuery(
         }
     });
     // Keep the benchmark's no-hook timing and native consumption path intact.
+    const execute = () => aroundQuery ? aroundQuery(consume) : consume();
     const run = () => running ??= beforeQuery
-        ? Promise.resolve().then(beforeQuery).then(consume)
-        : consume();
+        ? Promise.resolve().then(beforeQuery).then(execute)
+        : execute();
     return new Proxy(query, {
         get(target, property) {
             if (property === 'then' || property === 'catch' || property === 'finally') {
@@ -40,7 +42,7 @@ export function observeLazyPrismaQuery(
             // Relation methods create another lazy Prisma query; transaction
             // requests keep their original receiver and transaction arguments.
             return typeof value === 'function'
-                ? (...args: unknown[]) => observeLazyPrismaQuery(Reflect.apply(value, target, args), createObservation, beforeQuery)
+                ? (...args: unknown[]) => observeLazyPrismaQuery(Reflect.apply(value, target, args), createObservation, beforeQuery, aroundQuery)
                 : value;
         },
     });
