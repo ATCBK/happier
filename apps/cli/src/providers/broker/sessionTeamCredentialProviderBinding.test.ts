@@ -12,7 +12,7 @@ import { setProviderExperimentalConfirmationV1 } from '@happier-dev/protocol/pro
 import { getProviderExperimentalConfirmationCatalogSourceKeyV1 } from '@happier-dev/protocol/providers/settings/v1';
 import { ProviderModelBindingSourceV1Schema, ProviderModelConfirmationSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
 import { resolveTeamCredentialModelCompatibility } from './teamCredentialModelCompatibility';
-import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { commitActiveProviderConnectionsCatalog, getActiveAccountSettingsSnapshotLifetimeToken, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 
@@ -143,10 +143,14 @@ describe('Session Team credential Provider binding', () => {
         retire: async () => undefined, close: async () => undefined }),
     });
     await expect(open()).rejects.toMatchObject({ code: 'provider_compatibility_unverified' });
+    if (compatibility.result.status !== 'experimental') throw new Error('Expected experimental worker binding');
     settings = setProviderExperimentalConfirmationV1(settings, { ...row.confirmationSource,
-      agentTargetKey: row.selection.agentTargetKey, modelId: null,
+      agentTargetKey: row.selection.agentTargetKey,
+      modelId: compatibility.result.confirmationScope.kind === 'model' ? row.descriptor.id : null,
       compatibilityFingerprint: compatibility.compatibilityFingerprint, confirmedAt: 1 });
-    publish();
+    expect(commitActiveProviderConnectionsCatalog({ scopeKey: 'recipient-account',
+      lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
+      catalog: { status: 'ready', revision: 2, catalog: splitProviderSettingsV1(settings).catalog } })).toBe(true);
     const opened = await open();
     await opened.cleanup();
     await expect(open(lease({ ...adapter, adapterVersion: 2 }))).rejects.toMatchObject({ code: 'provider_compatibility_unverified' });
