@@ -165,6 +165,20 @@ it('offers no Edit task when the admitted source has no edit role', async () => 
   expect(saved).toEqual([]);
 });
 
+it.each([true, false])('blocks task edits during a Machine outage even with retained admitted source facts (pending: %s)', async (pending) => {
+  const { fixture, saved } = await mountEditor();
+  const source = createTriageSourceV1Fixture();
+  const entry = testkitEntryRef();
+  await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
+    targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, entry.kindId, 'edit'),
+    machineConnectionPending: pending, machineExecutionReady: false,
+  })); });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
+  expect(document.querySelector('[aria-label="Notes"]')).toBeNull();
+  expect((await fixture.getByRole('button', { name: 'Edit task' })).state?.disabled).toBe(true);
+  expect(saved).toEqual([]);
+});
+
 it('edits the full body independently of truncated display facts and sends only the changed field', async () => {
   const { fixture, saved } = await mountEditor({ truncated: true });
   await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
