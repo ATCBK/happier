@@ -129,7 +129,7 @@ describe('CodeBlockView (web)', () => {
     it('uses Shiki tokens when advanced highlighting is enabled', async () => {
         // Earlier mark cases populate the real cache, while Vitest clears SDK spy history.
         // Evict that theme through its existing owner before asserting engine initialization.
-        const { clearShikiCacheForKey, resolveHappierShikiThemeId } = await import('../highlighting/shiki/shikiTokenize.web');
+        const { clearShikiCacheForKey, resolveHappierShikiThemeId } = await import('../highlighting/shiki/shikiTokenize');
         clearShikiCacheForKey(resolveHappierShikiThemeId({
             isDark: false,
             colors: createThemeFixture(themeOverrides).colors,

@@ -7,8 +7,8 @@ import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { CodeLinesViewCore, type CodeLinesViewProps } from './CodeLinesViewCore';
 import { resolveEffectiveSyntaxHighlighting } from './resolveEffectiveSyntaxHighlighting';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import type { ShikiInlineToken } from '@/components/ui/code/highlighting/shiki/shikiTokenize.web';
-import { shikiTokenizeLines } from '@/components/ui/code/highlighting/shiki/shikiTokenize.web';
+import type { ShikiInlineToken } from '@/components/ui/code/highlighting/shiki/shikiTokenize';
+import { shikiTokenizeLines } from '@/components/ui/code/highlighting/shiki/shikiTokenize';
 
 export function CodeLinesView(props: CodeLinesViewProps) {
     const { theme } = useUnistyles();

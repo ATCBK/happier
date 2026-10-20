@@ -1,79 +1,78 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
+import { CodeLinesView, type CodeLinesViewProps } from '@/components/ui/code/view/CodeLinesView';
 
-import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
+const initialState = storage.getState();
+const codeLinesViewType = Reflect.get(CodeLinesView, 'type') ?? CodeLinesView;
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-let lastLines: any[] | null = null;
-let lastCodeLinesViewProps: Record<string, any> | null = null;
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    useSetting: (key: string) => {
-        if (key === 'filesDiffFoldingEnabled') return true;
-        if (key === 'filesDiffFoldingContextThreshold') return 6;
-        if (key === 'filesDiffFoldingContextRadius') return 2;
-        return undefined;
-    },
-});
-});
-
-vi.mock('@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting', () => ({
-    useCodeLinesSyntaxHighlighting: () => ({
-        mode: 'off',
-        language: null,
-        maxBytes: 1_000_000,
-        maxLines: 10_000,
-        maxLineLength: 10_000,
-    }),
-}));
-
-vi.mock('@/components/ui/code/view/CodeLinesView', () => ({
-    CodeLinesView: (props: any) => {
-        lastCodeLinesViewProps = props;
-        lastLines = props.lines;
-        return React.createElement('CodeLinesView', props);
-    },
-}));
+function viewProps(screen: Awaited<ReturnType<typeof renderScreen>>): CodeLinesViewProps {
+    const view = screen.findAllByType(codeLinesViewType)[0];
+    if (!view) throw new Error('Expected the real CodeLinesView');
+    return view.props;
+}
 
 function buildDemoUnifiedDiff(): string {
-    const lines: string[] = [];
-    lines.push('@@ -1,15 +1,15 @@');
-    for (let i = 1; i <= 10; i++) {
-        lines.push(` line${i}`);
-    }
-    lines.push('-line11');
-    lines.push('+line11changed');
-    for (let i = 12; i <= 15; i++) {
-        lines.push(` line${i}`);
-    }
-    lines.push('');
-    return lines.join('\n');
+    return ['@@ -1,15 +1,15 @@', ...Array.from({ length: 10 }, (_, index) => ` line${index + 1}`),
+        '-line11', '+line11changed', ...Array.from({ length: 4 }, (_, index) => ` line${index + 12}`), ''].join('\n');
 }
 
 describe('HappierUnifiedDiffViewer (folding)', () => {
-    it('collapses long context blocks when folding is enabled', async () => {
-        lastLines = null;
+    beforeEach(() => {
+        storage.setState({ settings: { ...storage.getState().settings, filesDiffFoldingEnabled: true,
+            filesDiffFoldingContextThreshold: 6, filesDiffFoldingContextRadius: 2, filesDiffSyntaxHighlightingMode: 'off' } });
+    });
+    afterEach(() => {
+        standardCleanup();
+        storage.setState(initialState, true);
+    });
+
+    it('keeps folds and caller content together when hunk review and comments are active', async () => {
         const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
+        const caller = vi.fn((line: CodeLine) => <React.Fragment key={line.id}>comment</React.Fragment>);
+        const screen = await renderScreen(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={buildDemoUnifiedDiff()}
+            hunks={{}} renderAfterLine={caller} onPressAddComment={() => {}} isCommentActive={() => false} />);
+        const props = viewProps(screen);
+        expect(props.lines.some((line) => line.renderCodeText === 'line5')).toBe(false);
+        const line = props.lines.find((line) => line.renderCodeText === 'line2')!;
+        const content = await renderScreen(<>{props.renderAfterLine?.(line)}</>);
+        expect(caller).toHaveBeenCalledWith(line);
+        expect(content.findAll((node) => typeof node.props?.onPressExpand === 'function')).toHaveLength(1);
+    });
 
-        await renderScreen(<HappierUnifiedDiffViewer
-                    mode="unified"
-                    unifiedDiff={buildDemoUnifiedDiff()}
-                    filePath="src/demo.ts"
-                />);
+    it('keeps an active comment visible while another context region stays folded', async () => {
+        const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
+        const patch = buildDemoUnifiedDiff().replace('15 +1,15', '25 +1,25')
+            + Array.from({ length: 10 }, (_, index) => ` line${index + 16}\n`).join('');
+        const screen = await renderScreen(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={patch}
+            onPressAddComment={() => {}} isCommentActive={(line) => line.renderCodeText === 'line5'}
+            renderAfterLine={(line) => line.renderCodeText === 'line5' ? <>active-comment</> : null} />);
+        expect(viewProps(screen).lines.some((line) => line.renderCodeText === 'line5')).toBe(true);
+        expect(viewProps(screen).lines.some((line) => line.renderCodeText === 'line20')).toBe(false);
+        expect(screen.getTextContent()).toContain('active-comment');
+    });
 
-        if (!Array.isArray(lastLines)) throw new Error('Expected CodeLinesView lines');
-        const lines = lastLines as unknown as unknown[];
-        const texts = lines.map((line) => (line as any).renderCodeText);
-        expect(texts).toContain('line1');
-        expect(texts).toContain('line2');
-        expect(texts).toContain('line9');
-        expect(texts).toContain('line10');
+    it('does not claim Find opened a passage already held open by a comment', async () => {
+        const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
+        let refold: (() => string) | undefined;
+        await renderScreen(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={buildDemoUnifiedDiff()}
+            isCommentActive={(line) => line.renderCodeText === 'line5'} findActive scrollToLineId="c:5"
+            registerFindRefold={(handler) => { refold = handler; return () => {}; }} />);
+        expect(refold?.()).toBe('noRevealedFold');
+    });
+
+    it('collapses long context blocks when folding is enabled', async () => {
+        const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
+        const screen = await renderScreen(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={buildDemoUnifiedDiff()} filePath="src/demo.ts" />);
+        const texts = viewProps(screen).lines.map((line) => line.renderCodeText);
+        expect(texts).toEqual(expect.arrayContaining(['line1', 'line2', 'line9', 'line10']));
         expect(texts).not.toContain('line3');
         expect(texts).not.toContain('line8');
     });
@@ -84,61 +83,35 @@ describe('HappierUnifiedDiffViewer (folding)', () => {
             + Array.from({ length: 10 }, (_, index) => ` line${index + 16}\n`).join('');
         const patch = repeated ? demo.replace(/ line[3-8]\n/g, ' repeated\n') : demo;
         const passage = repeated ? 'repeated' : 'line5';
-        const screen = await renderScreen(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={patch} filePath="src/demo.ts" />);
-        const props = lastCodeLinesViewProps!;
-        const line = (lastLines as CodeLine[]).find((line) => line.renderCodeText === 'line2')!;
-        const toggle = props.renderAfterLine(line) as React.ReactElement<{ onPressExpand: () => void }>;
+        const screen = await renderScreen(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={patch} filePath="src/demo.ts" />);
+        const props = viewProps(screen);
+        const line = props.lines.find((line) => line.renderCodeText === 'line2')!;
+        const toggle = props.renderAfterLine?.(line) as React.ReactElement<{ onPressExpand: () => void }>;
         await act(async () => { toggle.props.onPressExpand(); });
-        expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(true);
+        expect(viewProps(screen).lines.some((line) => line.renderCodeText === passage)).toBe(true);
 
         const shifted = patch.replace('@@ -1,25 +1,25 @@', '@@ -1,25 +1,28 @@\n+insertedA\n+insertedB') + '+new ending\n';
-        await screen.update(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={shifted} filePath="src/demo.ts" />);
-        expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(true);
-        expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === 'line20')).toBe(false);
-        await screen.update(<HappierUnifiedDiffViewer mode="unified" unifiedDiff={shifted} filePath="src/other.ts" />);
-        expect((lastLines as CodeLine[]).some((line) => line.renderCodeText === passage)).toBe(false);
+        await screen.update(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={shifted} filePath="src/demo.ts" />);
+        expect(viewProps(screen).lines.some((line) => line.renderCodeText === passage)).toBe(true);
+        expect(viewProps(screen).lines.some((line) => line.renderCodeText === 'line20')).toBe(false);
+        await screen.update(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={shifted} filePath="src/other.ts" />);
+        expect(viewProps(screen).lines.some((line) => line.renderCodeText === passage)).toBe(false);
     });
 
     it('uses precomputed unified diff lines when provided', async () => {
-        lastLines = null;
-        lastCodeLinesViewProps = null;
         const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
-        const precomputedLines = [{
-            id: 'a:1',
-            sourceIndex: 0,
-            kind: 'add',
-            oldLine: null,
-            newLine: 1,
-            renderPrefixText: '+',
-            renderCodeText: 'from precomputed lines',
-            renderIsHeaderLine: false,
-            selectable: true,
-        }];
-
-        await renderScreen(<HappierUnifiedDiffViewer
-                    mode="unified"
-                    unifiedDiff={buildDemoUnifiedDiff()}
-                    filePath="src/demo.ts"
-                    precomputedLines={precomputedLines as any}
-                />);
-
-        const renderedLines = lastLines as any[] | null;
-        if (!renderedLines) throw new Error('Expected CodeLinesView lines');
-        expect(renderedLines.map((line) => line.renderCodeText)).toEqual(['from precomputed lines']);
+        const precomputedLines: readonly CodeLine[] = [{ id: 'a:1', sourceIndex: 0, hunkIndex: null, kind: 'add',
+            oldLine: null, newLine: 1, renderPrefixText: '+', renderCodeText: 'from precomputed lines',
+            renderIsHeaderLine: false, selectable: true }];
+        const screen = await renderScreen(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={buildDemoUnifiedDiff()}
+            filePath="src/demo.ts" precomputedLines={precomputedLines} />);
+        expect(viewProps(screen).lines.map((line) => line.renderCodeText)).toEqual(['from precomputed lines']);
     });
 
     it('passes inactive comment affordance visibility to the code lines view', async () => {
-        lastCodeLinesViewProps = null;
         const { HappierUnifiedDiffViewer } = await import('./HappierUnifiedDiffViewer');
-
-        await renderScreen(<HappierUnifiedDiffViewer
-                    mode="unified"
-                    unifiedDiff={buildDemoUnifiedDiff()}
-                    filePath="src/demo.ts"
-                    showInactiveCommentAffordance={false}
-                />);
-
-        const codeLinesViewProps = lastCodeLinesViewProps as Record<string, unknown> | null;
-        expect(codeLinesViewProps?.showInactiveCommentAffordance).toBe(false);
+        const screen = await renderScreen(<HappierUnifiedDiffViewer virtualized={false} mode="unified" unifiedDiff={buildDemoUnifiedDiff()}
+            filePath="src/demo.ts" showInactiveCommentAffordance={false} />);
+        expect(viewProps(screen).showInactiveCommentAffordance).toBe(false);
     });
 });

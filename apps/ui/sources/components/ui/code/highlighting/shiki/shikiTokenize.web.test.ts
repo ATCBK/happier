@@ -48,7 +48,7 @@ function createDeferred<T>() {
 async function importFreshModule() {
     vi.resetModules();
     createHighlighterSpy.mockClear();
-    return await import('./shikiTokenize.web');
+    return await import('./shikiTokenize');
 }
 
 describe('shikiTokenizeLines dynamic theme cache', () => {

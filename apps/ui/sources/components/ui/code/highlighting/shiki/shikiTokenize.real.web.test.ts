@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { clearShikiCacheForKey, resolveHappierShikiThemeId, shikiTokenizeLines } from './shikiTokenize.web';
+import { clearShikiCacheForKey, resolveHappierShikiThemeId, shikiTokenizeLines } from './shikiTokenize';
 
 describe('shikiTokenizeLines with the real highlighter', () => {
     it('exposes grammar tokens independently of color-token merging', async () => {
-        const owner = await import('./shikiTokenize.web');
+        const owner = await import('./shikiTokenize');
         expect(owner).toHaveProperty('shikiTokenizeScopeLines');
         const { shikiTokenizeScopeLines } = owner;
         const rows = await shikiTokenizeScopeLines({ isDark: false, language: 'typescript', lines: ['export class Box {', '    read(): void {}', '}'] });
