@@ -5,7 +5,7 @@ import {
   type TriageConfiguredSourceInstanceV1, type TriageSourceEntryLocalRefV1,
 } from '@happier-dev/triage-protocol/v1';
 import { settleAtMostOnceProviderWrite } from '@happier-dev/triage-sources/runtime';
-import { LINEAR_CREATE_FIELDS, LINEAR_EDIT_FIELDS, LINEAR_PLUGIN_ID, LINEAR_SOURCE_ID, LinearCommentInputSchema, type LinearIssue } from './contracts.js';
+import { LINEAR_CREATE_FIELDS, LINEAR_EDIT_FIELDS, LINEAR_PLUGIN_ID, LINEAR_SOURCE_ID, LinearCommentInputSchema, linearIncludesTeam, type LinearIssue } from './contracts.js';
 import { failureFrom, linearFailure, record, requestLinearGraphql } from './api.js';
 import { admitLinearInstance, collectLinearDetail, projectLinearIssue, readLinearIssue } from './source.js';
 
@@ -40,6 +40,7 @@ function nativeFields(fields: TriageTaskFieldsV1): Record<string, unknown> {
 
 function fieldsMatch(issue: LinearIssue, fields: TriageTaskFieldsV1): boolean {
   return (fields.title === undefined || issue.title === fields.title)
+    && (fields.scopeId === undefined || issue.team.id === fields.scopeId)
     && (fields.body === undefined || (issue.description === null ? '' : issue.description) === fields.body)
     && (fields.assigneeIds === undefined || (issue.assignee?.id ?? null) === (fields.assigneeIds[0] ?? null))
     && (fields.projectId === undefined || (issue.project?.id ?? null) === fields.projectId)
@@ -103,15 +104,17 @@ export async function createLinearIssue(input: unknown, context: PluginInvocatio
   if (refusal || parsed.kindId !== 'issue') return { kind: 'refused', reason: refusal ?? 'linear/kindUnsupported' };
   try {
     const { account, configuration } = admitLinearInstance(parsed.instance);
-    if (parsed.fields.scopeId !== undefined && parsed.fields.scopeId !== configuration.teamId) return { kind: 'refused', reason: 'linear/teamMismatch' };
+    const teamId = parsed.fields.scopeId ?? (configuration.teams.kind === 'selected' && configuration.teams.unitIds.length === 1 ? configuration.teams.unitIds[0] : undefined);
+    if (teamId === undefined) return { kind: 'refused', reason: 'linear/teamRequired' };
+    if (!linearIncludesTeam(configuration, teamId)) return { kind: 'refused', reason: 'linear/teamMismatch' };
     const data = await requestLinearGraphql({ context, account, operationName: 'LinearTeam',
-      query: 'query LinearTeam($id: String!) { team(id: $id) { id } }', variables: { id: configuration.teamId } });
-    if (record(data.team).id !== configuration.teamId) throw linearFailure('teamMismatch');
+      query: 'query LinearTeam($id: String!) { team(id: $id) { id } }', variables: { id: teamId } });
+    if (record(data.team).id !== teamId) throw linearFailure('teamMismatch');
     return await settleWrite(() => dispatchMutation(parsed.instance, 'LinearCreate',
       'mutation LinearCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id } } }',
-      { input: { teamId: configuration.teamId, ...nativeFields(parsed.fields), ...(parsed.fields.labelIds === undefined ? {} : { labelIds: parsed.fields.labelIds }) } }, 'issueCreate', 'issue', context),
+      { input: { teamId, ...nativeFields(parsed.fields), ...(parsed.fields.labelIds === undefined ? {} : { labelIds: parsed.fields.labelIds }) } }, 'issueCreate', 'issue', context),
     async (result) => result.kind !== 'accepted' ? { kind: 'uncertain', ...(result.kind === 'unknown' ? { failure: result.failure } : {}) }
-      : confirmIssue({ instance: parsed.instance, localRef: { kindId: 'issue', collisionScope: 'linear', entryId: result.id } }, parsed.fields, context));
+      : confirmIssue({ instance: parsed.instance, localRef: { kindId: 'issue', collisionScope: 'linear', entryId: result.id } }, { ...parsed.fields, scopeId: teamId }, context));
   } catch (error) { return { kind: 'failed', failure: failureFrom(error, context.signal) }; }
 }
 

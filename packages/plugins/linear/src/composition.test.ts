@@ -29,10 +29,12 @@ describe('public Linear source composition', () => {
       expect(h.materializeListedAccount).not.toHaveBeenCalled();
       const first = TriageListScopeUnitsResultV1Schema.parse(await kit.invokeAction(action, { v: 1, draft, query: 'ops' }));
       expect(first).toMatchObject({ kind: 'page', status: 'partial', units: [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS' }],
-        nextCursor: { v: 1, token: 'teams-next' } });
+        nextCursor: { v: 1, token: expect.any(String) } });
       if (first.kind !== 'page' || first.status !== 'partial') throw new Error('expected a continuation');
       expect(await kit.invokeAction(action, { v: 1, draft, query: 'ops', cursor: first.nextCursor }))
         .toMatchObject({ kind: 'page', status: 'complete', units: [{ id: 'team-3', label: 'Ops Europe' }] });
+      expect(await kit.invokeAction(action, { v: 1, draft, query: 'engineering', cursor: first.nextCursor }))
+        .toMatchObject({ kind: 'failed', failure: { code: 'linear/continuationChanged' } });
       expect(LINEAR_PLUGIN.manifest.contributes.actions.find((entry) => entry.id === action))
         .toMatchObject({ dangerLevel: 'safe', surfaces: expect.arrayContaining(['agent', 'mcp', 'cli', 'ui']) });
     } finally { await kit.dispose(); }

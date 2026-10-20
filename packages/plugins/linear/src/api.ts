@@ -92,7 +92,7 @@ export function connection(value: unknown): Readonly<{ nodes: unknown[]; after?:
 // https://linear.app/developers/pagination and /rate-limiting
 export const LINEAR_PAGE_SIZE = 50;
 export const LINEAR_ISSUE_FIELDS = `
-  id identifier title url createdAt updatedAt priority priorityLabel dueDate estimate
+  id identifier title url createdAt updatedAt completedAt priority priorityLabel dueDate estimate
   team { id key name } state { id name type } assignee { id name } creator { id name }
   project { id name } cycle { id name number } parent { id identifier title }
   subscribers(first: 1, filter: { id: { eq: $viewerId } }) { nodes { id } }

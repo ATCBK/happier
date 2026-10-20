@@ -1,17 +1,16 @@
 import * as React from 'react';
-import { Button, Form, Item, ItemGroup, Select, usePluginTranslation } from '@happier-dev/plugin-ui';
+import { Item, ItemGroup, Select, usePluginTranslation } from '@happier-dev/plugin-ui';
 import { TriageSourceInstanceConfigurationV1Schema } from '@happier-dev/triage-protocol/v1';
-import { createTriageSourceSettingsSurface, type TriageSourceSettingsDraftEditorPropsV1 } from '@happier-dev/triage-sources/ui';
-import { LINEAR_PLUGIN_ID, LINEAR_SERVICE_ID, LINEAR_PURPOSE, LINEAR_ACTIONS, LinearConfigurationSchema } from '../contracts.js';
+import { createTriageSourceSettingsSurface, type TriageSourceSettingsDraftFieldsPropsV1 } from '@happier-dev/triage-sources/ui';
+import { LINEAR_PLUGIN_ID, LINEAR_SERVICE_ID, LINEAR_PURPOSE, LINEAR_ACTIONS, LinearConfigurationSchema,
+  readLinearConfiguration, linearConfiguredTeamUnits } from '../contracts.js';
 
-function DraftEditor({ draft, busy, onSubmit, onCancel }: TriageSourceSettingsDraftEditorPropsV1): React.ReactElement {
+function DraftFields({ draft, busy, onChange }: TriageSourceSettingsDraftFieldsPropsV1): React.ReactElement {
   const text = usePluginTranslation();
-  const configuration = React.useMemo(() => LinearConfigurationSchema.parse(JSON.parse(draft.configuration.token)), [draft.configuration.token]);
-  const [involvement, setInvolvement] = React.useState(configuration.involvement);
-  React.useEffect(() => setInvolvement(configuration.involvement), [configuration]);
+  const configuration = React.useMemo(() => readLinearConfiguration(draft.configuration.token), [draft.configuration.token]);
   return <>
     <ItemGroup><Item title={text('plugins.linear.settings.issues', 'Issues')} fieldAccessory accessoryOutsidePressable accessory={<Select
-      presentation="field" label={text('plugins.linear.settings.issues', 'Issues')} disabled={busy} value={involvement}
+      presentation="field" label={text('plugins.linear.settings.issues', 'Issues')} disabled={busy} value={configuration.involvement}
       options={[
         { value: 'mine', label: text('plugins.linear.settings.mine', 'My issues') },
         { value: 'assignee', label: text('plugins.linear.settings.assignee', 'Assigned to me') },
@@ -20,14 +19,9 @@ function DraftEditor({ draft, busy, onSubmit, onCancel }: TriageSourceSettingsDr
         { value: 'everyone', label: text('plugins.linear.settings.everyone', 'All team issues') },
       ]} onChange={(value) => {
         const parsed = LinearConfigurationSchema.safeParse({ ...configuration, involvement: value });
-        if (parsed.success) setInvolvement(parsed.data.involvement);
+        if (parsed.success) onChange({ ...draft, configuration: TriageSourceInstanceConfigurationV1Schema.parse({ v: 1, token: JSON.stringify(parsed.data) }) });
       }}
     />} /></ItemGroup>
-    {/* The shared section action cluster: Save leads, Cancel follows, and a long translation wraps instead of clipping. */}
-    <Form.Actions><Button title={text('plugins.linear.settings.save', 'Save')} disabled={busy} onPress={() => {
-      const next = TriageSourceInstanceConfigurationV1Schema.parse({ v: 1, token: JSON.stringify({ ...configuration, involvement }) });
-      void onSubmit({ ...draft, configuration: next });
-    }} /><Button variant="secondary" title={text('plugins.linear.settings.cancel', 'Cancel')} disabled={busy} onPress={onCancel} /></Form.Actions>
   </>;
 }
 
@@ -36,5 +30,19 @@ export const renderSurface = createTriageSourceSettingsSurface({
   connectedAccountPurpose: LINEAR_PURPOSE,
   listInstancesLocalActionId: LINEAR_ACTIONS.listInstances, sourceDisplayName: 'Linear',
   configuredInstanceKeyStability: 'stable',
-  DraftEditor,
+  DraftFields,
+  scopeSelection: {
+    unitLabel: 'Teams', listScopeUnitsLocalActionId: LINEAR_ACTIONS.listScopeUnits,
+    readSelection(draft) {
+      try { return readLinearConfiguration(draft.configuration.token).teams; } catch { return null; }
+    },
+    writeSelection(draft, teams, units) {
+      try {
+        const previous = readLinearConfiguration(draft.configuration.token);
+        const configuration = LinearConfigurationSchema.parse({ ...previous, teams, teamUnits: units });
+        return { ...draft, configuration: TriageSourceInstanceConfigurationV1Schema.parse({ v: 1,
+          token: JSON.stringify({ ...configuration, teamUnits: linearConfiguredTeamUnits(configuration) }) }) };
+      } catch { return null; }
+    },
+  },
 });

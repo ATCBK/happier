@@ -6,6 +6,8 @@ import {
   TriageSourceFailureV1Schema,
   TriageConfiguredSourceConnectedAccountInstanceV1Schema, TriageSourceEntryLocalRefV1Schema,
   TriageEntryLocatorV1Schema,
+  TriageSourceScopeSelectionV1Schema, TriageSourceScopeUnitV1Schema,
+  type TriageSourceScopeUnitV1,
 } from '@happier-dev/triage-protocol/v1';
 
 export const LINEAR_PLUGIN_ID = 'happier.linear';
@@ -18,6 +20,7 @@ export const LINEAR_ACTIONS = {
   listInstances: 'linear/list-instances', scan: 'linear/scan', get: 'linear/get',
   detail: 'linear/detail', create: 'linear/create', edit: 'linear/edit',
   transition: 'linear/transition', comment: 'linear/comment',
+  listScopeUnits: 'linear/list-scope-units',
 } as const;
 
 const text = defineProtocolString();
@@ -36,7 +39,7 @@ export const LinearIssueSchema = defineProtocolObject({
   state: defineProtocolObject({ id, name: text, type: text }, { policy: 'additive-open/drop' }),
   priority: defineProtocolNumber(), priorityLabel: text, assignee: person, creator: person, project: person,
   cycle: defineProtocolUnion([defineProtocolObject({ id, name: nullableText, number: defineProtocolNumber() }, { policy: 'additive-open/drop' }), defineProtocolLiteral(null)]),
-  dueDate: nullableText, estimate: nullableNumber, parent: nullableRelated,
+  dueDate: nullableText, completedAt: nullableText.optional(), estimate: nullableNumber, parent: nullableRelated,
   description: nullableText.optional(),
   subscribers: defineProtocolObject({ nodes: defineProtocolArray(defineProtocolObject({ id }, { policy: 'additive-open/drop' })) }, { policy: 'additive-open/drop' }),
 }, { policy: 'additive-open/drop' });
@@ -44,14 +47,39 @@ export type LinearIssue = ReturnType<typeof LinearIssueSchema.parse>;
 export const LINEAR_CREATE_FIELDS = ['title', 'body', 'assigneeIds', 'labelIds', 'scopeId', 'projectId', 'priority', 'dueDate', 'estimate', 'parent'] as const;
 export const LINEAR_EDIT_FIELDS = LINEAR_CREATE_FIELDS.filter((field) => field !== 'scopeId');
 
-export const LinearConfigurationSchema = defineProtocolObject({
-  v: defineProtocolLiteral(1), teamId: id,
-  involvement: defineProtocolUnion([
+const involvement = defineProtocolUnion([
     defineProtocolLiteral('mine'), defineProtocolLiteral('assignee'), defineProtocolLiteral('author'),
     defineProtocolLiteral('subscribed'), defineProtocolLiteral('everyone'),
-  ]),
+  ]);
+const LegacyLinearConfigurationSchema = defineProtocolObject({
+  v: defineProtocolLiteral(1), teamId: id, involvement,
+}, { policy: 'closed' });
+export const LinearConfigurationSchema = defineProtocolObject({
+  v: defineProtocolLiteral(1), teams: TriageSourceScopeSelectionV1Schema, involvement,
+  teamUnits: defineProtocolArray(TriageSourceScopeUnitV1Schema).optional(),
 }, { policy: 'closed' });
 export type LinearConfiguration = ReturnType<typeof LinearConfigurationSchema.parse>;
+export function readLinearConfiguration(token: string): LinearConfiguration {
+  const raw: unknown = JSON.parse(token);
+  const current = LinearConfigurationSchema.safeParse(raw);
+  if (current.success) return current.data;
+  const legacy = LegacyLinearConfigurationSchema.parse(raw);
+  return { v: 1, teams: { kind: 'selected', unitIds: [legacy.teamId] }, involvement: legacy.involvement };
+}
+export function linearIncludesTeam(configuration: LinearConfiguration, teamId: string): boolean {
+  return configuration.teams.kind === 'all' || configuration.teams.unitIds.includes(teamId);
+}
+export function linearConfiguredTeamUnits(configuration: LinearConfiguration): TriageSourceScopeUnitV1[] {
+  if (configuration.teams.kind === 'all') return [];
+  return configuration.teams.unitIds.map((id) => {
+    const unit = configuration.teamUnits?.find((candidate) => candidate.id === id);
+    // Teams do not own distinct entry collision scopes. Retained labels are presentation only.
+    return { id, label: unit?.label ?? id, ...(unit?.secondaryText === undefined ? {} : { secondaryText: unit.secondaryText }) };
+  });
+}
+export const LinearTeamCursorSchema = defineProtocolObject({
+  v: defineProtocolLiteral(1), after: id, query: text,
+}, { policy: 'closed' });
 export const LinearContinuationSchema = defineProtocolObject({
   v: defineProtocolLiteral(1), digest: id, after: id, viewerId: id,
   limit: defineProtocolNumber({ integer: true, minimum: 1 }),
