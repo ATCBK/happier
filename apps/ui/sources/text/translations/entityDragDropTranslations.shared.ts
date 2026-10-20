@@ -50,6 +50,8 @@ export const en = {
         refusedPutUnder: ({ item, target }: { item: string; target: string }) => `Couldn’t put ${item} under ${target}`,
         refused: ({ verb }: { verb: string }) => `${verb} didn’t go through`,
         unknown: ({ verb }: { verb: string }) => `Not sure “${verb}” went through`,
+        pendingTitle: 'Couldn’t move it',
+        pendingDetail: 'Happier was still checking that place. Try again.',
         dismiss: 'Dismiss',
     },
     reasons: {
