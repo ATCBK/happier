@@ -395,6 +395,7 @@ async function prepareForegroundProviderLaunch(input: Readonly<{
     })
   ).decision.state === 'enabled';
   return await prepareDirectProviderLaunch({
+    signal: dependencies.signal,
     selection: request.selection,
     backendTarget: request.backendTarget,
     machineId: request.machineId,

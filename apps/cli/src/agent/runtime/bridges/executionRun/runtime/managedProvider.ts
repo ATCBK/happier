@@ -24,7 +24,7 @@ export type ExecutionRunManagedProviderSourceOpener = (input: Readonly<{
     readAccountSettingsSnapshot(): Promise<ActiveAccountSettingsSnapshot | null>;
     resolveManagedPurposeBindingIntent: ResolveManagedProviderPurposeBindingIntent;
     signal: AbortSignal;
-    isCurrent(): boolean | Promise<boolean>;
+    isCurrent(signal?: AbortSignal): boolean | Promise<boolean>;
 }>) => Promise<ProviderBrokerAccountConnectionAccess | null>;
 
 /** The actual admitted controller supplies this witness. An occurrence is not
@@ -88,9 +88,10 @@ export function createExecutionRunManagedProviderEndpointPreparer(input: Readonl
         };
         const onAbort = () => { void cleanup().catch(() => undefined); };
         registerCleanup(cleanup);
-        const revalidateBeforeCommit = async () => {
-            if (!signal.aborted && await isCurrent() && await opened.revalidate(signal)
-                && !signal.aborted && await isCurrent()) return { ok: true as const };
+        const revalidateBeforeCommit = async (commitSignal?: AbortSignal) => {
+            const currentSignal = commitSignal ? AbortSignal.any([signal, commitSignal]) : signal;
+            if (!currentSignal.aborted && await isCurrent() && await opened.revalidate(currentSignal)
+                && !currentSignal.aborted && await isCurrent()) return { ok: true as const };
             await cleanup();
             return { ok: false as const, error: unavailable() };
         };

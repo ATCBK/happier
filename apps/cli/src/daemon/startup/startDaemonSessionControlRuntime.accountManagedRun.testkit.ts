@@ -156,7 +156,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
               if (!contributes.providersByContributionKey) throw new Error('Missing committed Provider projection');
               return await read({ ...contributes, providersByContributionKey: contributes.providersByContributionKey });
             },
-          resolveBindingIntent: input.resolveManagedPurposeBindingIntent, admitConsumer: async () => await input.isCurrent(),
+          resolveBindingIntent: input.resolveManagedPurposeBindingIntent, admitConsumer: async (_request, signal) => await input.isCurrent(signal),
           projectModels: request => models.projectModelsForAccount(request, { getAccountSettingsSnapshot: () => owned,
             resolveManagedPurposeBindingIntent: input.resolveManagedPurposeBindingIntent, signal: input.signal, isCurrent: input.isCurrent }),
         })({ ...input.request, signal: input.signal });
