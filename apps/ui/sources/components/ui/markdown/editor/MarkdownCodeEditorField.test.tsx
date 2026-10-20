@@ -24,10 +24,12 @@ vi.mock('@/components/ui/code/editor/CodeEditor', async () => {
     const React = await import('react');
     return {
         CodeEditor: React.forwardRef((props: any, ref: any) => {
+            const value = React.useRef(props.value);
+            value.current = props.value;
             React.useImperativeHandle(ref, () => ({
-                getValue: () => props.value,
+                getValue: () => value.current,
                 flushPendingChange: async () => undefined,
-            }));
+            }), []);
             return React.createElement('CodeEditor', props);
         }),
     };
@@ -86,7 +88,8 @@ const hookState = vi.hoisted(() => ({
 }));
 
 vi.mock('./useMarkdownEditMode', () => ({
-    useMarkdownEditMode: () => hookState.value,
+    useMarkdownEditMode: (input: { value: string }) => ({ ...hookState.value, seedText: input.value,
+        showRich: hookState.value.markdownEditMode === 'rich' && hookState.value.richEligible }),
 }));
 
 import { MarkdownCodeEditorField } from './MarkdownCodeEditorField';

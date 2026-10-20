@@ -2,11 +2,15 @@ import * as React from 'react';
 import { View } from 'react-native';
 
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
-import { CodeEditor } from '@/components/ui/code/editor/CodeEditor';
-import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import { CodeEditorWithFind } from '@/components/ui/code/editor/CodeEditorWithFind';
+import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import type { EditorChangeMarkerSeed } from '@/components/ui/code/editor/editorChangeMarkers';
+import type { EditorChangeMarkersController } from '@/components/ui/code/editor/useEditorChangeMarkers';
+import type { FileFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
 import { RichMarkdownEditorPanel } from '@/components/ui/markdown/editor/RichMarkdownEditorPanel';
 import { useMarkdownEditMode } from '@/components/ui/markdown/editor/useMarkdownEditMode';
+import type { MarkdownLiveValueStore } from './useMarkdownLiveValue';
 import type { MarkdownEditorController } from '@/components/ui/markdown/editor/markdownEditorTypes';
 import { MarkdownEditModeMenu } from '@/components/ui/markdown/editorChrome/MarkdownEditModeMenu';
 import { MarkdownEditorToolbar } from '@/components/ui/markdown/editorChrome/MarkdownEditorToolbar';
@@ -36,7 +40,7 @@ export type MarkdownCodeEditorFieldProps = Readonly<{
     resetKey: string;
     filePath?: string;
     language?: string | null;
-    editorRef?: React.Ref<CodeEditorHandle>;
+    editorRef?: React.Ref<TextEditorHandle>;
     readOnly?: boolean;
     /**
      * Soft-wrap long lines in the RAW editor (ignored in rich mode, which always
@@ -50,6 +54,21 @@ export type MarkdownCodeEditorFieldProps = Readonly<{
     /** The source only, with no rich mode and no mode menu: for a page that offers its own Preview (a skill's instructions). */
     sourceOnly?: boolean;
     testID?: string;
+    liveValue?: MarkdownLiveValueStore;
+    findSurfaceId?: string;
+    active?: boolean;
+    focusRootRef?: React.RefObject<React.ElementRef<typeof View> | null>;
+    findSeed?: FileFindSeed | null;
+    onFindSeedConsumed?: () => void;
+    showLineNumbers?: boolean;
+    changeDebounceMs?: number;
+    bridgeMaxChunkBytes?: number;
+    onReady?: () => void;
+    initialLine?: number;
+    lineNumberDigits?: number;
+    reviewLaneWidth?: number;
+    changeMarkers?: EditorChangeMarkerSeed;
+    onChangeMarkersChange?: (controller: EditorChangeMarkersController | null) => void;
 }>;
 
 const TOOLBAR_SLOT_STYLE = { flex: 1, minWidth: 0, overflow: 'hidden' } as const;
@@ -74,33 +93,30 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
     const parentRefHolder = React.useRef(props.editorRef);
     parentRefHolder.current = props.editorRef;
 
-    const editorHandleRef = React.useMemo<React.MutableRefObject<CodeEditorHandle | null>>(() => {
-        let value: CodeEditorHandle | null = null;
-        const assignParent = (handle: CodeEditorHandle | null) => {
+    const editorHandleRef = React.useMemo<React.MutableRefObject<TextEditorHandle | null>>(() => {
+        let value: TextEditorHandle | null = null;
+        const assignParent = (handle: TextEditorHandle | null) => {
             const parentRef = parentRefHolder.current;
             if (typeof parentRef === 'function') {
                 parentRef(handle);
             } else if (parentRef && typeof parentRef === 'object') {
-                (parentRef as React.MutableRefObject<CodeEditorHandle | null>).current = handle;
+                parentRef.current = handle;
             }
         };
         return {
             get current() {
                 return value;
             },
-            set current(handle: CodeEditorHandle | null) {
+            set current(handle: TextEditorHandle | null) {
                 value = handle;
                 assignParent(handle);
             },
         };
     }, []);
 
-    // Callback ref for the raw `CodeEditor` (which uses an imperative-handle ref).
-    const setEditorHandle = React.useCallback((handle: CodeEditorHandle | null) => {
-        editorHandleRef.current = handle;
-    }, [editorHandleRef]);
-
     const {
+        seedText,
+        showRich: richModeVisible,
         markdownEditMode,
         richEligible,
         richEligibilityPending,
@@ -115,13 +131,11 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
         baseResetKey: props.resetKey,
         editorHandleRef,
         onValueChange: props.onChange,
+        liveValue: props.liveValue,
+        active: props.active,
     });
 
-    // Keep an already-mounted rich surface through an asynchronous HTML check;
-    // replacing it with loading could drop its still-debounced input.
-    const committedRich = React.useRef(false);
-    const showRich = props.sourceOnly !== true && markdownEditMode === 'rich' && (richEligible || (richEligibilityPending && committedRich.current));
-    React.useEffect(() => { committedRich.current = showRich; }, [showRich]);
+    const showRich = props.sourceOnly !== true && richModeVisible;
 
     // Live controller of the embedded rich surface — set when the rich panel
     // mounts, cleared when it unmounts (or when we switch to raw). Drives the
@@ -191,10 +205,12 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                     <RichMarkdownEditorPanel
                         resetKey={resetKey}
                         editorRef={editorHandleRef}
-                        value={props.value}
+                        value={seedText}
                         onChange={props.onChange}
                         onUnavailable={onUnavailable}
                         readOnly={props.readOnly}
+                        changeDebounceMs={props.changeDebounceMs}
+                        bridgeMaxChunkBytes={props.bridgeMaxChunkBytes}
                         // Inline toolbar lives in our header — suppress the
                         // panel's footer toolbar so the chrome doesn't double up.
                         hideFooterToolbar
@@ -202,15 +218,29 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                         onControllerChange={handleRichControllerChange}
                     />
                 ) : (
-                    <CodeEditor
-                        ref={setEditorHandle}
+                    <CodeEditorWithFind
+                        editorRef={editorHandleRef}
                         resetKey={resetKey}
-                        value={props.value}
+                        value={seedText}
                         language={language}
                         onChange={props.onChange}
                         readOnly={props.readOnly}
                         wrapLines={props.wrapLines ?? true}
-                        showLineNumbers={false}
+                        showLineNumbers={props.showLineNumbers ?? false}
+                        filePath={props.filePath}
+                        surfaceId={props.findSurfaceId}
+                        active={props.active}
+                        focusRootRef={props.focusRootRef}
+                        findSeed={props.findSeed}
+                        onFindSeedConsumed={props.onFindSeedConsumed}
+                        changeMarkers={props.changeMarkers}
+                        onChangeMarkersChange={props.onChangeMarkersChange}
+                        changeDebounceMs={props.changeDebounceMs}
+                        bridgeMaxChunkBytes={props.bridgeMaxChunkBytes}
+                        onReady={props.onReady}
+                        initialLine={props.initialLine}
+                        lineNumberDigits={props.lineNumberDigits}
+                        reviewLaneWidth={props.reviewLaneWidth}
                         presentation={props.presentation}
                         testID={props.testID ? `${props.testID}:source` : undefined}
                     />

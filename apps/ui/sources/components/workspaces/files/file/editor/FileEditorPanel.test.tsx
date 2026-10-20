@@ -38,9 +38,10 @@ vi.mock('react-native-webview', async () => {
 });
 
 import { FileEditorPanel } from './FileEditorPanel';
+import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
 
 describe('file editor Find host', () => {
-    it('keeps an inactive seed, then queues the correct file into the real native facet and renders live status once', async () => {
+    it.each(['code', 'markdown'])('keeps an inactive seed, then queues %s into the real native facet and renders live status once', async (kind) => {
         webView.post.mockClear();
         const editorRef = { current: null as CodeEditorHandle | null };
         const consume = vi.fn();
@@ -51,23 +52,27 @@ describe('file editor Find host', () => {
         const element = (active: boolean, filePath: string) => <KeyboardShortcutProvider handlers={{}}>
             <PluginSurfaceFocusEligibilityProvider active={true}>
                 <Probe />
-                <FileEditorPanel theme={createThemeFixture()} editorRef={editorRef} resetKey="a.ts"
+                {kind === 'code' ? <FileEditorPanel theme={createThemeFixture()} editorRef={editorRef} resetKey="a.ts"
                     surfaceId="file:editor" filePath={filePath} active={active}
                     value={'first\\n\r\nsecond\\n'} language="typescript" onChange={() => {}}
-                    findSeed={seed} onFindSeedConsumed={consume} />
+                    findSeed={seed} onFindSeedConsumed={consume} /> :
+                    <MarkdownCodeEditorField editorRef={editorRef} resetKey="a.ts" sourceOnly
+                        findSurfaceId="file:editor" filePath={filePath} active={active}
+                        value={'first\\n\r\nsecond\\n'} language="markdown" onChange={() => {}}
+                        findSeed={seed} onFindSeedConsumed={consume} />}
             </PluginSurfaceFocusEligibilityProvider>
         </KeyboardShortcutProvider>;
         const screen = await renderScreen(element(false, 'a.ts'));
         expect(consume).not.toHaveBeenCalled();
         expect(open('file:editor')).toBe(false);
-        await act(async () => { screen.tree.update(element(true, 'other.ts')); });
+        await screen.update(element(true, 'other.ts'));
         expect(consume).not.toHaveBeenCalled();
-        await act(async () => { screen.tree.update(element(true, 'a.ts')); });
+        await screen.update(element(true, 'a.ts'));
         expect(consume).toHaveBeenCalledTimes(1);
         expect(editorRef.current!.find!.isOpen()).toBe(true);
         const emit = (type: string, payload: object) => webView.onMessage!({ nativeEvent: { data: JSON.stringify({ v: 1, type, payload }) } });
         await act(async () => { emit('ready', { ok: true }); });
-        expect(webView.post.mock.calls.map(([raw]) => JSON.parse(String(raw))).at(-1)).toEqual({
+        expect(webView.post.mock.calls.map(([raw]) => JSON.parse(String(raw))).filter((envelope) => envelope.type === 'find.set').at(-1)).toEqual({
             v: 1, type: 'find.set', payload: { query: '\\n', options: seed.options, target: { line: 2 } },
         });
         await act(async () => { emit('find.status', { query: seed.query, options: seed.options,

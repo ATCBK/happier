@@ -4,6 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet } from 'react-native';
+import { storage as settingsStorage } from '@/sync/domains/state/storageStore';
+import { RichMarkdownEditorPanel } from '@/components/ui/markdown/editor/RichMarkdownEditorPanel';
+import { CodeEditorWithFind } from '@/components/ui/code/editor/CodeEditorWithFind';
+import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
+import { MarkdownEditModeMenu } from '@/components/ui/markdown/editorChrome/MarkdownEditModeMenu';
+import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
@@ -81,7 +87,8 @@ vi.mock('@/sync/runtime/getSyncSingleton', () => ({
     getSyncSingleton: () => ({ mutateAccountSettingsOnce: openableContentViewerState.mutateSettings }),
 }));
 
-vi.mock('@/components/workspaces/files/file/FileContentPanel', () => ({
+vi.mock('@/components/workspaces/files/file/FileContentPanel', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/components/workspaces/files/file/FileContentPanel')>(),
     FileContentPanel: (props: any) => React.createElement('FileContentPanel', props),
 }));
 
@@ -89,9 +96,17 @@ vi.mock('@/components/workspaces/files/file/editor/FileEditorPanel', () => ({
     FileEditorPanel: (props: any) => React.createElement('FileEditorPanel', props),
 }));
 
-vi.mock('@/components/ui/markdown/editor/RichMarkdownEditorPanel', () => ({
-    RichMarkdownEditorPanel: (props: any) => React.createElement('RichMarkdownEditorPanel', props),
-}));
+// Metro's platform projection and the native WebView are the genuine engine boundary.
+vi.mock('@/components/ui/code/editor/CodeEditor', async () => import('@/components/ui/code/editor/CodeEditor.native'));
+const webViewBoundary = vi.hoisted(() => ({ onMessage: null as null | ((event: { nativeEvent: { data: string } }) => void) }));
+vi.mock('react-native-webview', async () => {
+    const React = await import('react');
+    return { WebView: React.forwardRef((props: { onMessage: typeof webViewBoundary.onMessage }, ref) => {
+        webViewBoundary.onMessage = props.onMessage;
+        React.useImperativeHandle(ref, () => ({ postMessage() {}, requestFocus() {} }));
+        return React.createElement('WebView');
+    }) };
+});
 
 vi.mock('@/components/workspaces/files/file/FileScreenState', () => ({
     FileLoadingState: (props: any) => React.createElement('FileLoadingState', props),
@@ -162,13 +177,21 @@ vi.mock('@/hooks/workspaces/scm/useWorkspaceFileScmStageActions', () => ({
     }),
 }));
 
+const markdownBuffer = vi.hoisted(() => ({ text: '# Title\n\nbody', listeners: new Set<() => void>() }));
 const editorState = vi.hoisted(() => ({
     editorSurfaceEnabled: true,
     editorResetKey: 0,
     editorOriginalText: '# Title\n\nbody',
     editorSeedText: '# Title\n\nbody',
-    editorHandleRef: { current: null },
-    onEditorChange: vi.fn(),
+    editorHandleRef: { current: null as TextEditorHandle | null },
+    onEditorChange: vi.fn((text: string) => {
+        markdownBuffer.text = text;
+        markdownBuffer.listeners.forEach((listener) => listener());
+    }),
+    liveValue: {
+        get: () => markdownBuffer.text,
+        subscribe: (listener: () => void) => { markdownBuffer.listeners.add(listener); return () => { markdownBuffer.listeners.delete(listener); }; },
+    },
     getEditorText: () => '# Title\n\nbody',
     editorDirty: false,
     editorTooLarge: false,
@@ -183,20 +206,6 @@ const editorState = vi.hoisted(() => ({
 
 vi.mock('@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState', () => ({
     useWorkspaceFileEditorState: () => editorState,
-}));
-
-const markdownEditModeState = vi.hoisted(() => ({
-    markdownEditMode: 'rich' as 'raw' | 'rich',
-    richEligible: true,
-    richDisabledReason: undefined as string | undefined,
-    seedText: '# Title\n\nbody',
-    resetKey: '0:rich:0',
-    onToggle: vi.fn(),
-    onUnavailable: vi.fn(),
-}));
-
-vi.mock('@/components/workspaces/files/details/workspaceFileDetails/useMarkdownFileEditMode', () => ({
-    useMarkdownFileEditMode: () => markdownEditModeState,
 }));
 
 const refreshSpy = vi.fn(async (_input?: any) => ({
@@ -266,9 +275,14 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
 beforeEach(() => {
     refreshSpy.mockClear();
     featureState.markdownRichEditor = true;
-    markdownEditModeState.markdownEditMode = 'rich';
-    markdownEditModeState.richEligible = true;
-    markdownEditModeState.richDisabledReason = undefined;
+    settingsStorage.setState((state) => ({ settings: { ...state.settings,
+        markdownDefaultEditMode: 'rich', filesMarkdownRichEditorMaxBytes: 1_000_000,
+        filesMarkdownRichEditorHtmlRoundTripMaxBytes: 200_000,
+    } }));
+    editorState.editorSeedText = '# Title\n\nbody';
+    markdownBuffer.text = editorState.editorSeedText;
+    editorState.editorResetKey = 0;
+    editorState.editorHandleRef.current = null;
     editorState.isEditingFile = true;
     openableContentViewerState.stage.mockReset();
     openableContentViewerState.stage.mockReturnValue({
@@ -941,71 +955,104 @@ describe('WorkspaceFileDetailsView (markdown edit mode)', () => {
 
     it('renders the RichMarkdownEditorPanel when mode is rich and the file is eligible', async () => {
         const tree = await mountView();
-        expect(tree.findAllByType('RichMarkdownEditorPanel' as any).length).toBe(1);
+        expect(tree.findAllByType(MarkdownCodeEditorField).length).toBe(1);
+        expect(tree.findAllByType(RichMarkdownEditorPanel).length).toBe(1);
         expect(tree.findAllByType('FileEditorPanel' as any).length).toBe(0);
     });
 
     it('seeds the rich panel from the hook seedText and resetKey', async () => {
         const tree = await mountView();
-        const panel = tree.findByType('RichMarkdownEditorPanel' as any);
+        const panel = tree.findByType(RichMarkdownEditorPanel);
         expect(panel.props.value).toBe('# Title\n\nbody');
         expect(panel.props.resetKey).toBe('0:rich:0');
     });
 
-    it('renders the raw FileEditorPanel when mode is raw', async () => {
-        markdownEditModeState.markdownEditMode = 'raw';
+    it('renders the shared raw editor when the setting is raw', async () => {
+        settingsStorage.setState((state) => ({ settings: { ...state.settings, markdownDefaultEditMode: 'raw' } }));
         const tree = await mountView();
-        expect(tree.findAllByType('FileEditorPanel' as any).length).toBe(1);
-        expect(tree.findAllByType('RichMarkdownEditorPanel' as any).length).toBe(0);
+        expect(tree.findAllByType(CodeEditorWithFind).length).toBe(1);
+        expect(tree.findAllByType(RichMarkdownEditorPanel).length).toBe(0);
     });
 
-    it('renders the raw FileEditorPanel when mode is rich but the file is ineligible', async () => {
-        markdownEditModeState.richEligible = false;
-        markdownEditModeState.richDisabledReason = 'footnotes';
+    it('keeps unsupported Markdown in the shared raw editor', async () => {
+        editorState.editorSeedText = 'A note[^1]\n\n[^1]: unsupported\n';
+        markdownBuffer.text = editorState.editorSeedText;
         const tree = await mountView();
-        expect(tree.findAllByType('FileEditorPanel' as any).length).toBe(1);
-        expect(tree.findAllByType('RichMarkdownEditorPanel' as any).length).toBe(0);
+        expect(tree.findAllByType(CodeEditorWithFind).length).toBe(1);
+        expect(tree.findAllByType(RichMarkdownEditorPanel).length).toBe(0);
+        expect(tree.findByType(MarkdownEditModeMenu).props.richDisabledReason).toBe('footnotes');
     });
 
-    it('passes the markdown toggle props to the FileActionToolbar', async () => {
+    it('preserves raw edits when they become eligible and switches only on an explicit Rich request', async () => {
+        vi.useFakeTimers();
+        try {
+            editorState.editorSeedText = 'A note[^1]\n\n[^1]: unsupported\n';
+            markdownBuffer.text = editorState.editorSeedText;
+            const tree = await mountView();
+            const edited = '# Clean draft typed in raw';
+            await act(async () => {
+                webViewBoundary.onMessage!({ nativeEvent: { data: JSON.stringify({ v: 1, type: 'docChanged', payload: { doc: edited } }) } });
+                // The native editor's existing default change debounce is 250 ms.
+                await vi.advanceTimersByTimeAsync(250);
+            });
+            expect(tree.findAllByType(CodeEditorWithFind)).toHaveLength(1);
+            expect(tree.findByType(MarkdownEditModeMenu).props.mode).toBe('raw');
+            expect(editorState.editorHandleRef.current?.getValue()).toBe(edited);
+            await act(async () => { tree.findByType(MarkdownEditModeMenu).props.onChange('rich'); });
+            expect(tree.findByType(RichMarkdownEditorPanel).props.value).toBe(edited);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('retains the active rich document when live eligibility changes', async () => {
+        vi.useFakeTimers();
+        try {
+            const tree = await mountView();
+            const edited = 'A note[^1]\n\n[^1]: still in the rich buffer\n';
+            await act(async () => {
+                webViewBoundary.onMessage!({ nativeEvent: { data: JSON.stringify({ v: 1, type: 'docChanged', payload: { doc: edited } }) } });
+                await vi.advanceTimersByTimeAsync(250);
+            });
+            expect(tree.findAllByType(RichMarkdownEditorPanel)).toHaveLength(1);
+            expect(editorState.editorHandleRef.current?.getValue()).toBe(edited);
+            expect(tree.findByType(MarkdownEditModeMenu).props.richEligible).toBe(false);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('offers exactly one mode control owned by the shared field', async () => {
         const tree = await mountView();
         const toolbar = tree.findByType('FileActionToolbar' as any);
-        expect(toolbar.props.showMarkdownEditToggle).toBe(true);
+        expect(toolbar.props.showMarkdownEditToggle).not.toBe(true);
         expect(toolbar.props.showWrapLinesToggle).toBe(true);
-        expect(toolbar.props.markdownEditMode).toBe('rich');
-        expect(typeof toolbar.props.onMarkdownEditMode).toBe('function');
+        expect(tree.findAllByType(MarkdownEditModeMenu)).toHaveLength(1);
+        expect(tree.findByType(MarkdownEditModeMenu).props.mode).toBe('rich');
     });
 
     it('does not offer the markdown toggle when the rich editor feature is disabled', async () => {
         // When the flag is off the hook reports ineligible; the view must not show
         // the toggle and must fall back to the raw editor.
         featureState.markdownRichEditor = false;
-        markdownEditModeState.richEligible = false;
-        markdownEditModeState.markdownEditMode = 'rich';
         const tree = await mountView();
         const toolbar = tree.findByType('FileActionToolbar' as any);
-        expect(toolbar.props.showMarkdownEditToggle).toBe(false);
-        expect(tree.findAllByType('FileEditorPanel' as any).length).toBe(1);
-        expect(tree.findAllByType('RichMarkdownEditorPanel' as any).length).toBe(0);
+        expect(toolbar.props.showMarkdownEditToggle).not.toBe(true);
+        expect(tree.findAllByType(MarkdownEditModeMenu)).toHaveLength(0);
+        expect(tree.findAllByType(CodeEditorWithFind).length).toBe(1);
+        expect(tree.findAllByType(RichMarkdownEditorPanel).length).toBe(0);
     });
 
-    it('passes the authoritative richEligible to the FileActionToolbar (N2)', async () => {
-        markdownEditModeState.richEligible = true;
+    it('passes authoritative eligibility to the shared field mode control', async () => {
         const tree = await mountView();
-        const toolbar = tree.findByType('FileActionToolbar' as any);
-        expect(toolbar.props.markdownRichEligible).toBe(true);
+        expect(tree.findByType(MarkdownEditModeMenu).props.richEligible).toBe(true);
     });
 
     it('does not show the toggle and stays raw for an editable .mdx file (S3 / R-A1)', async () => {
         // `.mdx` is raw/preview-only in Phase 1: even with the feature on and the
         // hook reporting rich, the view must not surface the toggle and must
         // render the raw editor.
-        markdownEditModeState.markdownEditMode = 'rich';
-        markdownEditModeState.richEligible = true;
         const tree = await mountView('GUIDE.mdx');
         const toolbar = tree.findByType('FileActionToolbar' as any);
-        expect(toolbar.props.showMarkdownEditToggle).toBe(false);
-        expect(tree.findAllByType('FileEditorPanel' as any).length).toBe(1);
-        expect(tree.findAllByType('RichMarkdownEditorPanel' as any).length).toBe(0);
+        expect(toolbar.props.showMarkdownEditToggle).not.toBe(true);
+        expect(tree.findAllByType(MarkdownEditModeMenu)).toHaveLength(0);
+        expect(tree.findAllByType(CodeEditorWithFind).length + tree.findAllByType('FileEditorPanel' as any).length).toBe(1);
+        expect(tree.findAllByType(RichMarkdownEditorPanel).length).toBe(0);
     });
 });

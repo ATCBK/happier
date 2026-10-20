@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { JSDOM } from 'jsdom';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,7 +7,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { KeyboardShortcutProvider, useKeyboardShortcutHandlers, useFindSurfaceRegistration, useEmbeddedFindKeyboard, useNativeKeyboardInput, useKeyboardCommand } from './KeyboardShortcutProvider';
+import { KeyboardShortcutProvider, useKeyboardShortcutHandlers, useFindSurfaceRegistration, useEmbeddedFindKeyboard, useEmbeddedEditorKeyboard, useNativeKeyboardInput, useKeyboardCommand } from './KeyboardShortcutProvider';
 import { useInboxItemNavigation } from '@/hooks/inbox/useInboxItemNavigation';
 import type { InboxItem } from '@/components/inbox/inboxItems';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
@@ -16,6 +17,12 @@ import { SessionCockpitSurfaceNavigationProvider } from '@/components/workspaceC
 import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments/useReviewComposerHandoff';
 import { ESCAPE_LAYER_PRIORITIES, registerEscapeLayer } from './escape';
 import type { NativeHardwareKeyboardEvent } from '@/components/sessions/agentInput/subscribeToIosHardwareShiftEnter';
+import { useEditorChangeMarkers, type EditorChangeMarkersController } from '@/components/ui/code/editor/useEditorChangeMarkers';
+import { buildEditorChangeMarkers } from '@/components/ui/code/editor/editorChangeMarkers';
+import { createCodeMirrorDecorations } from '@/components/ui/code/editor/bridge/codeMirrorDecorations';
+import type { CodeEditorHandle, TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import * as cmState from '@codemirror/state';
+import * as cmView from '@codemirror/view';
 
 const testState = vi.hoisted(() => ({
     platformOS: 'web',
@@ -70,6 +77,136 @@ vi.mock('expo-modules-core', async (importOriginal) => ({
 }));
 
 describe('KeyboardShortcutProvider', () => {
+    it('invalidates an open change peek after an engine edit and refuses its stale draft revert', async () => {
+        const markers = buildEditorChangeMarkers('f', null, '@@ -3 +3 @@\n-old\n+new\n');
+        const runtime = createCodeMirrorDecorations({ ...cmState, ...cmView });
+        let state = cmState.EditorState.create({ doc: 'first\nnew\nnew\nlast\n', extensions: runtime.extensions });
+        let press: Parameters<CodeEditorHandle['onDecorationPress']>[0] | undefined;
+        let controller: EditorChangeMarkersController | undefined;
+        const editor: TextEditorHandle = {
+            getValue: () => state.doc.toString(),
+            flushPendingChange: async () => { controller?.onDocumentChange(state.doc.toString()); },
+            setDecorations: (layer, items) => { state = state.update({ effects: runtime.set.of({ layer, items }) }).state; },
+            onDecorationPress: (listener) => { press = listener; return () => { press = undefined; }; },
+            runCommand: (command) => {
+                if (typeof command === 'object' && 'replaceDocument' in command) state = state.update({ changes: { from: 0, to: state.doc.length, insert: command.replaceDocument } }).state;
+            },
+        };
+        function Editor() {
+            controller = useEditorChangeMarkers({ editor, active: true, seedKey: 'saved', markers });
+            return <Child />;
+        }
+        await renderScreen(<KeyboardShortcutProvider handlers={{}}><Editor /></KeyboardShortcutProvider>);
+        await act(async () => { press?.('change', runtime.items(state, 'change')[0]!); });
+        const stale = controller!.selected!;
+        state = state.update({ changes: { from: 0, insert: 'before\n' } }).state;
+        const edited = state.doc.toString();
+        await act(async () => { expect(await controller!.revertInDraft(stale)).toEqual({ ok: false, reason: 'moved_on' }); });
+        expect(controller!.selected).toBeNull();
+        expect(state.doc.toString()).toBe(edited);
+        await act(async () => { press?.('change', runtime.items(state, 'change')[0]!); });
+        await act(async () => { expect((await controller!.revertInDraft(controller!.selected!)).ok).toBe(true); });
+        expect(state.doc.toString()).toBe('before\nfirst\nnew\nold\nlast\n');
+    });
+    it('routes focused editor change commands and keeps markers seeded until the saved version changes', async () => {
+        const markers = buildEditorChangeMarkers('file.ts', null, '@@ -1 +1 @@\n-old\n+new\n');
+        const firstCommand = vi.fn();
+        const secondCommand = vi.fn();
+        const firstSeed = vi.fn();
+        const secondSeed = vi.fn();
+        const makeEditor = (runCommand: typeof firstCommand, setDecorations: typeof firstSeed) => ({
+            getValue: () => 'new\n', flushPendingChange: async () => {}, runCommand, setDecorations,
+            onDecorationPress: () => () => {},
+        });
+        const first = makeEditor(firstCommand, firstSeed);
+        const second = makeEditor(secondCommand, secondSeed);
+        let execute: ReturnType<typeof useKeyboardCommand> | undefined;
+        function Editors({ focused, version }: { focused: 1 | 2; version: string }) {
+            useEditorChangeMarkers({ editor: first, active: focused === 1, seedKey: version, markers });
+            useEditorChangeMarkers({ editor: second, active: focused === 2, seedKey: version, markers });
+            execute = useKeyboardCommand();
+            return <Child />;
+        }
+        const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}><Editors focused={1} version="saved-a" /></KeyboardShortcutProvider>);
+        await act(async () => { expect(execute?.('files.editor.change.next')).toBe(true); });
+        expect(firstCommand).toHaveBeenLastCalledWith('nextChange');
+        expect(secondCommand).not.toHaveBeenCalled();
+        firstSeed.mockClear(); secondSeed.mockClear();
+        await screen.update(<KeyboardShortcutProvider handlers={{}}><Editors focused={2} version="saved-a" /></KeyboardShortcutProvider>);
+        expect(firstSeed).not.toHaveBeenCalled();
+        expect(secondSeed).not.toHaveBeenCalled();
+        await act(async () => { expect(execute?.('files.editor.change.previous')).toBe(true); });
+        expect(secondCommand).toHaveBeenLastCalledWith('prevChange');
+        await screen.update(<KeyboardShortcutProvider handlers={{}}><Editors focused={2} version="saved-b" /></KeyboardShortcutProvider>);
+        expect(secondSeed).toHaveBeenLastCalledWith('change', markers);
+    });
+    it('recovers registered review keys from a hidden focused textarea before its capture handler', async () => {
+        const dom = new JSDOM('<section><textarea></textarea></section>');
+        vi.stubGlobal('window', dom.window);
+        vi.stubGlobal('document', dom.window.document);
+        const textarea = dom.window.document.querySelector('textarea')!;
+        const section = dom.window.document.querySelector('section')!;
+        const captured = vi.fn();
+        const next = vi.fn();
+        textarea.addEventListener('keydown', captured, true);
+        const screen = await renderScreen(<KeyboardShortcutProvider handlers={{ 'review.change.next': next }}><Child /></KeyboardShortcutProvider>);
+        const press = () => {
+            const event = new dom.window.KeyboardEvent('keydown', { key: 'j', code: 'KeyJ', bubbles: true, cancelable: true });
+            textarea.dispatchEvent(event);
+            return event;
+        };
+        await act(async () => { textarea.focus(); });
+        expect(press().defaultPrevented).toBe(false);
+        expect(next).not.toHaveBeenCalled();
+        captured.mockClear();
+        section.style.display = 'none';
+        expect(press().defaultPrevented).toBe(true);
+        expect(captured).not.toHaveBeenCalled();
+        expect(next).toHaveBeenCalledOnce();
+        await screen.unmount();
+        dom.window.close();
+    });
+    it('forwards configured Ask and Save chords from embedded editors only while their handlers are registered', async () => {
+        testState.platformOS = 'ios';
+        storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutOverridesV1: {
+            'editor.selection.ask': [{ binding: 'Mod+P' }], 'files.editor.save': [{ binding: 'Mod+Shift+S' }],
+        } } });
+        let editor: ReturnType<typeof useEmbeddedEditorKeyboard> | undefined;
+        let terminal: ReturnType<typeof useEmbeddedFindKeyboard> | undefined;
+        const ask = vi.fn();
+        const save = vi.fn();
+        function Embedded({ selected }: { selected: boolean }) {
+            useKeyboardShortcutHandlers(selected ? { 'editor.selection.ask': ask, 'files.editor.save': save } : {});
+            editor = useEmbeddedEditorKeyboard();
+            terminal = useEmbeddedFindKeyboard();
+            return <Child />;
+        }
+        const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}><Embedded selected /></KeyboardShortcutProvider>);
+        expect(editor?.signatures).toContain('p|shift=false|ctrl=false|meta=true|alt=false');
+        expect(terminal?.signatures).not.toContain('p|shift=false|ctrl=false|meta=true|alt=false');
+        expect(editor?.signatures).toContain('s|shift=true|ctrl=false|meta=true|alt=false');
+        expect(terminal?.signatures).not.toContain('s|shift=true|ctrl=false|meta=true|alt=false');
+        const event = { key: 'p', code: 'KeyP', repeat: false, modifiers: { shift: false, ctrl: false, meta: true, alt: false } };
+        await act(async () => { expect(editor?.dispatch(event)).toBe(true); });
+        expect(ask).toHaveBeenCalledOnce();
+        const saveEvent = { key: 's', code: 'KeyS', repeat: false, modifiers: { shift: true, ctrl: false, meta: true, alt: false } };
+        await act(async () => { expect(editor?.dispatch(saveEvent)).toBe(true); });
+        expect(save).toHaveBeenCalledOnce();
+        await screen.update(<KeyboardShortcutProvider handlers={{}}><Embedded selected={false} /></KeyboardShortcutProvider>);
+        expect(editor?.signatures).not.toContain('p|shift=false|ctrl=false|meta=true|alt=false');
+        expect(editor?.dispatch(event)).toBe(false);
+        expect(editor?.signatures).not.toContain('s|shift=true|ctrl=false|meta=true|alt=false');
+        expect(editor?.dispatch(saveEvent)).toBe(false);
+    });
+
+    it('captures selection Ask before a web editor consumes its keydown', async () => {
+        const ask = vi.fn();
+        await renderScreen(<KeyboardShortcutProvider handlers={{ 'editor.selection.ask': ask }}><Child /></KeyboardShortcutProvider>);
+        const event = createKeyboardEvent({ key: 'i', code: 'KeyI', altKey: true });
+        window.dispatchEvent(event);
+        expect(ask).toHaveBeenCalledOnce();
+        expect(event.stopImmediatePropagation).toHaveBeenCalledOnce();
+    });
     it('opens the exact selected Inbox source anchor through its registered command without settling Needs you', async () => {
         const focus = { kind: 'session', serverId: 'home-a', id: 'source', jumpSeq: 18 } as const;
         const items: readonly InboxItem[] = [{ key: 'source', producer: 'live', type: 'decision', view: 'needs_you',

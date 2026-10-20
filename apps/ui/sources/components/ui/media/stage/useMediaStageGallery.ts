@@ -19,5 +19,5 @@ export function useMediaStageGallery(items: readonly MediaStageItem[], initialIn
     }, [gallery]);
     const previous = React.useCallback(() => setIndex(current => Math.max(0, current - 1)), []);
     const next = React.useCallback(() => setIndex(current => Math.min(gallery.items.length - 1, current + 1)), [gallery]);
-    return { items: gallery.items, index, currentItem: gallery.items[index], select, previous, next };
+    return { items: gallery.items, index, currentItem: gallery.items[index]!, select, previous, next };
 }

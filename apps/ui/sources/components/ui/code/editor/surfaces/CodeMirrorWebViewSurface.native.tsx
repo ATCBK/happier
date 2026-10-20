@@ -18,6 +18,14 @@ function createMessageId(): string {
     return Math.random().toString(36).slice(2);
 }
 
+function readEditorPosition(payload: unknown) {
+    if (!payload || typeof payload !== 'object' || !('line' in payload) || !('character' in payload)) return null;
+    const { line, character } = payload;
+    if (typeof line !== 'number' || !Number.isInteger(line) || line < 1
+        || typeof character !== 'number' || !Number.isInteger(character) || character < 0) return null;
+    return { line, character };
+}
+
 export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeMirrorWebViewSurface(
     props,
     ref,
@@ -68,6 +76,9 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
         query: '', options: { matchCase: false, regex: false }, status: { kind: 'idle' },
     });
     const findListenersRef = React.useRef(new Set<() => void>());
+    const cursorRef = React.useRef<ReturnType<NonNullable<CodeEditorHandle['getCursorPosition']>>>(null);
+    const pointerListenersRef = React.useRef(new Set<Parameters<NonNullable<CodeEditorHandle['onPointerPosition']>>[0]>());
+    const activationListenersRef = React.useRef(new Set<Parameters<NonNullable<CodeEditorHandle['onActivatePosition']>>[0]>());
     const historyRef = React.useRef<CodeEditorHistory>({ canUndo: false, canRedo: false });
     const historyListenersRef = React.useRef(new Set<(state: CodeEditorHistory) => void>());
     const pendingRevealRef = React.useRef<null | { line: number; focus?: boolean; select?: boolean; behavior?: 'smooth' | 'instant' }>(
@@ -222,6 +233,15 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
                 decorationListenersRef.current.add(listener);
                 return () => { decorationListenersRef.current.delete(listener); };
             },
+            onPointerPosition: (listener) => {
+                pointerListenersRef.current.add(listener);
+                return () => { pointerListenersRef.current.delete(listener); };
+            },
+            onActivatePosition: (listener) => {
+                activationListenersRef.current.add(listener);
+                return () => { activationListenersRef.current.delete(listener); };
+            },
+            getCursorPosition: () => cursorRef.current,
         }),
         [find, flushPendingChange, postEnvelope],
     );
@@ -270,6 +290,8 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
         return () => {
             readyRef.current = false;
             focusedRef.current = false;
+            cursorRef.current = null;
+            for (const listener of pointerListenersRef.current) listener(null);
             publishSelection(null);
             for (const pending of pendingDocRequestRef.current.values()) {
                 clearTimeout(pending.timeoutId);
@@ -299,6 +321,33 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
                     }
                     const decoded = decodeChunkedEnvelope({ message: parsed });
                     if (!decoded) return;
+
+                    if (decoded.type === 'cursor') {
+                        const position = readEditorPosition(decoded.payload);
+                        if (position || decoded.payload === null) cursorRef.current = position;
+                        return;
+                    }
+                    if (decoded.type === 'activate') {
+                        const position = readEditorPosition(decoded.payload);
+                        if (position) for (const listener of activationListenersRef.current) listener(position);
+                        return;
+                    }
+                    if (decoded.type === 'pointer') {
+                        if (decoded.payload === null) {
+                            for (const listener of pointerListenersRef.current) listener(null);
+                            return;
+                        }
+                        const position = readEditorPosition(decoded.payload);
+                        const payload = decoded.payload;
+                        if (!position || !payload || typeof payload !== 'object' || !('rect' in payload)) return;
+                        const rect = payload.rect;
+                        if (!rect || typeof rect !== 'object' || !('x' in rect) || !('y' in rect) || !('width' in rect) || !('height' in rect)) return;
+                        const { x, y, width, height } = rect;
+                        if (typeof x !== 'number' || typeof y !== 'number' || typeof width !== 'number' || typeof height !== 'number'
+                            || ![x, y, width, height].every(Number.isFinite)) return;
+                        for (const listener of pointerListenersRef.current) listener({ ...position, rect: { x, y, width, height } });
+                        return;
+                    }
 
                     if (decoded.type === 'ready') {
                         readyRef.current = true;
@@ -368,6 +417,8 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
                     }
                     if (decoded.type === 'error') {
                         readyRef.current = false;
+                        cursorRef.current = null;
+                        for (const listener of pointerListenersRef.current) listener(null);
                         publishSelection(null);
                         if (findOpenRef.current) publishFind({ ...findSnapshotRef.current, status: { kind: 'unavailable', reason: 'unsupportedEngine' } });
                         return;
