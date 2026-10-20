@@ -767,7 +767,12 @@ export class ApiMachineClient {
     } | null = null;
     private sessionMessageReplyRecoverySupported = false;
     private advertisedOperationProtocolCapabilitiesGeneration: number | null = null;
-    private machineControlReadinessFailureGeneration: number | null = null;
+    /**
+     * A publication that did not land is retried on the live socket. Socket.IO
+     * ping/pong and the socket's own disconnect remain the only liveness
+     * signal: a slow or rejected acknowledgement never ends the connection.
+     */
+    private readonly machineControlReadinessRetry = createConnectedServicesProjectionRetryScheduler();
     private machineControlRunningGeneration: number | null = null;
     private machineControlReadinessPublication: Readonly<{
         generation: number;
@@ -838,6 +843,7 @@ export class ApiMachineClient {
                 socket: this.socket,
             });
         this.rpcHandlerManager.onSocketDisconnect();
+        this.machineControlReadinessRetry.cancel();
         this.stopKeepAlive();
         this.socket = null;
     }
@@ -1037,7 +1043,7 @@ export class ApiMachineClient {
             }
             return true;
         })().catch((error) => {
-            logger.warn('[API MACHINE] Failed to publish machine-control readiness; session spawn stays unadvertised until the next registration acknowledgement or reconnect', {
+            logger.warn('[API MACHINE] Failed to publish machine-control readiness; session spawn stays unadvertised until the retry on this connection lands', {
                 message: error instanceof Error ? error.message : String(error),
             });
             return false;
@@ -1061,25 +1067,30 @@ export class ApiMachineClient {
             && this.currentConnectionState.lastErrorMessage === state.lastErrorMessage;
     }
 
-    private reportMachineControlReadinessPublicationFailure(params: Readonly<{
+    private retryMachineControlReadinessPublication(params: Readonly<{
         socket: Socket<ServerToDaemonEvents, DaemonToServerEvents>;
         transportGeneration: number;
     }>): void {
-        if (
-            this.socket !== params.socket
-            || params.socket.connected !== true
-            || this.activeTransportGeneration !== params.transportGeneration
-            || this.machineControlReadinessFailureGeneration === params.transportGeneration
-        ) return;
-        const supervisor = this.connectionSupervisor;
-        const scope = supervisor?.captureProbeReportScope?.();
-        if (!supervisor?.reportProbeResult || !scope) return;
-        this.machineControlReadinessFailureGeneration = params.transportGeneration;
-        supervisor.reportProbeResult({
-            status: 'retry_later',
-            reason: 'probe_failed',
-            errorMessage: 'Machine capability publication did not establish readiness',
-        }, scope);
+        const { socket, transportGeneration } = params;
+        const isCurrentTransport = () => (
+            this.socket === socket
+            && this.activeTransportGeneration === transportGeneration
+            && socket.connected === true
+        );
+        if (!isCurrentTransport()) return;
+        this.machineControlReadinessRetry.schedule(async () => {
+            if (!isCurrentTransport()) return;
+            const result = await this.publishMachineControlReadinessWhenReady({
+                socket,
+                transportGeneration,
+                timeoutMs: 0,
+            });
+            // Unready registrations are driven by their own acknowledgements; only a
+            // publication that failed after readiness was proven is retried here.
+            if (result.readiness.status === 'ready' && !result.ready && isCurrentTransport()) {
+                throw new Error('Machine capability publication did not establish readiness');
+            }
+        });
     }
 
     private isActiveTransportGeneration(generation: number): boolean {
@@ -1251,7 +1262,7 @@ export class ApiMachineClient {
                     timeoutMs: 0,
                 }).then((result) => {
                     if (result.readiness.status === 'ready' && !result.ready) {
-                        this.reportMachineControlReadinessPublicationFailure({ socket, transportGeneration });
+                        this.retryMachineControlReadinessPublication({ socket, transportGeneration });
                     }
                 });
             },
@@ -4092,7 +4103,7 @@ export class ApiMachineClient {
                                 && !registrationResult.ready
                                 && isCurrentTransport()
                             ) {
-                                this.reportMachineControlReadinessPublicationFailure({
+                                this.retryMachineControlReadinessPublication({
                                     socket,
                                     transportGeneration,
                                 });
@@ -4479,6 +4490,7 @@ export class ApiMachineClient {
         this.activeTransportGeneration += 1;
         this.teardownActiveSocket();
         this.connectedServicesProjectionRetry.close();
+        this.machineControlReadinessRetry.close();
         if (this.connectionSupervisor) {
             await this.connectionSupervisor.stop();
         }
