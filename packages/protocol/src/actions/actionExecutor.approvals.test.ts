@@ -224,6 +224,34 @@ function sharedRequesterCurrentUiContext(input: unknown): ActionExecutorContext 
 }
 
 describe('createActionExecutor (approvals)', () => {
+  it.each(['policy', 'explicit'] as const)('keeps unknown requester attribution while awaiting ordinary %s consent', async route => {
+    const requests: ApprovalRequest[] = [];
+    const effects: ActionExecutorContext[] = [];
+    const executor = createExecutor({
+      approvalsCreate: async ({ request }) => { requests[0] = ApprovalRequestV2Schema.parse(request); return { artifactId: 'unknown-requester' }; },
+      approvalsGet: async () => requests[0] ?? null,
+      approvalsUpdate: async ({ request }) => { requests[0] = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+      sessionSendMessage: async ({ context }) => { effects.push(context); return { status: 'accepted', localId: 'unknown-input' }; },
+    });
+    const input = { sessionId: 's1', message: 'hello' };
+    const source = sharedRequesterContext('session.message.send', input);
+    const context = { ...source, actionRequestAttributionV1: { ...source.actionRequestAttributionV1!, requester: null } };
+    const created = route === 'policy'
+      ? await executor.execute('session.message.send', input, context)
+      : await executor.execute('approval.request.create', { actionId: 'session.message.send', actionArgs: input,
+        summary: 'Send message', createdBy: { surface: 'agent' } }, context);
+    expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { artifactId: 'unknown-requester' } });
+    expect(requests[0]).toMatchObject({ status: 'open', executionOriginV1: { actionRequestAttributionV1: { requester: null } } });
+    expect(requests[0]).not.toHaveProperty('requesterConfirmation');
+    expect(effects).toEqual([]);
+    expect(await executor.execute('approval.request.decide', { artifactId: 'unknown-requester', decision: 'approve' }, {
+      surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'server-1',
+      serverIdentityId: 'stable-home', runtimeAccountId: 'alice',
+    })).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+    expect(effects).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ executionOriginV1: { actionRequestAttributionV1: { requester: null } } });
+  });
+
   it('defaults the admitted shared request outward effect to requester confirmation and respects its Action waiver', async () => {
     let stored: ApprovalRequest | null = null;
     const effects: ActionExecutorContext[] = [];

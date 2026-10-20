@@ -3342,6 +3342,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const appOwnedReplay = actionId !== null && origin?.success && originIsCurrent
       && !requiresExactDaemonApprovalReplay(request)
       && (replayPlacement === 'account' || replayPlacement === 'client')
+      // A decision may come from a surface that cannot invoke the Action
+      // itself. In that case retain the validated originating context.
+      && isActionSpecSurfacedOn(getActionSpec(actionId), args.ctx.surface === 'cli' ? 'cli' : 'ui')
       && isPresentUserHostInvocation(args.ctx);
     // A Machine target authored with the creator's device-local profile follows
     // this already-verified Account replay Home. Never rewrite the stored/signed
@@ -4757,7 +4760,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const approvalActionArgs = preparedApproval.actionArgs;
         const requesterConfirmation = sharedRequesterRequest
           ? buildApprovalRequesterConfirmationV1({ context: ctx, actionId, input: approvalActionArgs }) : null;
-        if (sharedRequesterRequest && !requesterConfirmation) {
+        // An unknown cause still needs policy consent, but cannot name a
+        // requester Account. Keep its attribution unknown on the ordinary
+        // approval; only a known foreign requester requires this exact binding.
+        if (sharedRequesterRequest && ctx.actionRequestAttributionV1?.requester && !requesterConfirmation) {
           return { ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable' };
         }
         const executionOriginV1 = buildApprovalExecutionOriginV1({
@@ -10718,7 +10724,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           && isSharedRequesterActionV1(ctx);
         const requesterConfirmation = sharedRequesterRequest
           ? buildApprovalRequesterConfirmationV1({ context: ctx, actionId: targetActionId, input: approvalActionArgs }) : null;
-        if (sharedRequesterRequest && !requesterConfirmation) {
+        if (sharedRequesterRequest && ctx.actionRequestAttributionV1?.requester && !requesterConfirmation) {
           return { ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable' };
         }
         const executionOriginV1 = buildApprovalExecutionOriginV1({

@@ -5579,6 +5579,9 @@ Actions policy. A known cross-Account requester gets a signed
 `requesterConfirmation` binding the request, exact Action/input digest, admitting
 Bot Session and execution Account. The original executor checks a current
 authenticated decision from that requester; another person cannot substitute.
+An unknown requester keeps the ordinary Account approval flow and its unknown
+attribution. It cannot acquire a requester-specific binding, and the person
+approving the effect does not become the attributed requester.
 The existing Artifact recipient path adds the entitled requester as a preview
 recipient. The original admitted executor runs the effect with the credentials
 selected and rechecked by the existing credential owner; it does not substitute
