@@ -7,6 +7,11 @@ import { t } from '@/text';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 
+/** Shared imperative entry for range-based Ask (including Problems), using the same draft store. */
+export function upsertWorkspaceReviewCommentDraft(scope: WorkspaceScopeBase, draft: ReviewCommentDraft): void {
+    storage.getState().upsertWorkspaceReviewCommentDraft(buildWorkspaceCacheKey(scope), draft);
+}
+
 export function useWorkspaceReviewCommentDraftHandlers(scope: WorkspaceScopeBase | null | undefined): Readonly<{
     onUpsertReviewCommentDraft: (draft: ReviewCommentDraft) => void;
     onDeleteReviewCommentDraft: (commentId: string) => void;
@@ -23,9 +28,9 @@ export function useWorkspaceReviewCommentDraftHandlers(scope: WorkspaceScopeBase
     }, [scope]);
 
     const onUpsertReviewCommentDraft = React.useCallback((draft: ReviewCommentDraft) => {
-        if (!cacheKey) return;
-        storage.getState().upsertWorkspaceReviewCommentDraft(cacheKey, draft);
-    }, [cacheKey]);
+        if (!cacheKey || !scope) return;
+        upsertWorkspaceReviewCommentDraft(scope, draft);
+    }, [cacheKey, scope]);
 
     const onDeleteReviewCommentDraft = React.useCallback((commentId: string) => {
         if (!cacheKey) return;
