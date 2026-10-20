@@ -169,6 +169,58 @@ func TestPinnedSDKMixedServingUsesFinalLeaseAfterExecutorShaping(t *testing.T) {
 	assertNoRuntimeStateFiles(t, runtimeDir)
 }
 
+// A family-looking name is not a registered model. Characterize the actual
+// pinned public SDK route before exposing a newer model in source catalogs.
+func TestPinnedSDKUnregisteredCodexModelsDoNotReachUpstream(t *testing.T) {
+	for _, model := range []string{"gpt-6-luna", "gpt-6.1-sol"} {
+		t.Run(model, func(t *testing.T) {
+			cfg := Config{
+				Host: "127.0.0.1", Port: reserveLoopbackPort(t), RuntimeDir: t.TempDir(),
+				DownstreamBearer: "downstream-session-bearer",
+				AuthEntries:      []AuthEntry{testAuthEntry("codex", ProviderCodex, "openai-upstream")},
+				Protocols:        []ProviderProtocol{ProtocolOpenAIResponses}, ModelListEnabled: true,
+			}
+			broker := &sequenceBroker{leases: []OAuthBearerLease{validLease("controlled-codex", nil)}}
+			upstream := &protocolFixtureRoundTripper{}
+			gateway, err := newGatewayForConformance(cfg, testRuntimeIdentity(), broker, upstream, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancel, runResult := runGateway(t, gateway)
+			defer stopGateway(t, cancel, runResult)
+			awaitManagedHealthIdentity(t, cfg)
+			if catalogContains(gateway.Catalog(), ProviderCodex, model) {
+				t.Fatalf("%s unexpectedly registered", model)
+			}
+			response := postJSON(t, cfg, "/v1/responses", fmt.Sprintf(`{"model":%q,"input":"hello"}`, model))
+			body := readResponse(t, response)
+			t.Logf("model=%s status=%d body=%s upstream_requests=%d credential_lookups=%d", model, response.StatusCode, body, len(upstream.requests()), len(broker.purposes()))
+			if response.StatusCode != http.StatusBadGateway {
+				t.Fatalf("unregistered model accepted: status=%d body=%s", response.StatusCode, body)
+			}
+			var failure struct {
+				Error struct {
+					Type string `json:"type"`
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(body), &failure); err != nil || failure.Error.Type != "server_error" || failure.Error.Code != "internal_server_error" {
+				t.Fatalf("unexpected SDK refusal: %s", body)
+			}
+			if len(upstream.requests()) != 0 || len(broker.purposes()) != 0 {
+				t.Fatal("unregistered model reached credential or upstream boundary")
+			}
+			// The same gateway and controlled boundary accept a registered model;
+			// a broken route or unavailable fixture cannot satisfy this check.
+			known := postJSON(t, cfg, "/v1/responses", `{"model":"gpt-5.5","input":"hello"}`)
+			knownBody := readResponse(t, known)
+			if known.StatusCode != http.StatusOK || len(upstream.requests()) != 1 || len(broker.purposes()) != 1 {
+				t.Fatalf("registered model failed: status=%d body=%s upstream_requests=%d credential_lookups=%d", known.StatusCode, knownBody, len(upstream.requests()), len(broker.purposes()))
+			}
+		})
+	}
+}
+
 func assertGeneratedCatalogMatchesRegisteredSDK(t *testing.T, catalog []CatalogModel) {
 	t.Helper()
 	source, err := os.ReadFile("../src/provider/staticModels.generated.ts")
