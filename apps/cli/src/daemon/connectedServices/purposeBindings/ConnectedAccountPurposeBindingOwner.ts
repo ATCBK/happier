@@ -24,11 +24,10 @@ import type { PluginContributionIdentityV1, ConnectedServiceCredentialRevisionV1
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
-import { refreshActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
+import { readActiveConnectedAccountCatalog, refreshActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import {
   getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken,
-  readConnectedAccountCatalogFromSnapshot,
   subscribeActiveAccountSettingsSnapshotChanges,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type {
@@ -2029,8 +2028,9 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
   const readCatalog = async (operation: ReturnType<typeof captureOperation>, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     await operation.verifyCurrent(signal);
-    let catalog = readConnectedAccountCatalogFromSnapshot(readSnapshot(), 'purposes');
-    if (catalog.status === 'loading') catalog = await refreshActiveConnectedAccountCatalog({
+    // A UI/Action write can be acknowledged before its change hint arrives.
+    // Reuse the catalog's fresh-read owner before authorizing a purpose.
+    const catalog = await readActiveConnectedAccountCatalog({
       credentials: await credentialsForOperation(operation, signal), key: 'purposes', signal, operationContext: input.operationContext });
     await operation.verifyCurrent(signal);
     if (catalog.status !== 'ready') throw unavailable(catalog.status === 'unavailable' ? catalog.reason : 'loading');

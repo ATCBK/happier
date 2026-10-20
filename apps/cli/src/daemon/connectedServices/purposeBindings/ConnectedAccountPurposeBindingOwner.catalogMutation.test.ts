@@ -6,6 +6,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import * as persistence from '@/persistence';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createActiveAccountSettingsConnectedAccountPurposeBindingStore, createConnectedAccountPurposeBindingOwner } from './ConnectedAccountPurposeBindingOwner';
+import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
 
 const credentials = { token: 'purpose-row-writer', encryption: null };
 const purpose = { consumer: { pluginId: 'happier.voice.test', localId: 'speech' }, purpose: 'voice-api' };
@@ -79,6 +80,24 @@ describe('connected purpose row mutation', () => {
     });
     return { read: () => ({ record, revision, raw }) };
   }
+
+  it('reads an acknowledged selection before its change hint reaches this daemon', async () => {
+    const server = boundary('updated');
+    const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials });
+    const writer = createCliConnectedAccountCatalogStore({ credentials });
+    await expect(writer.writeRecord({ expectedRevision: server.read().revision,
+      record: { key: 'purposes', value: { v: 1, bindings: [binding] } },
+    })).resolves.toMatchObject({ status: 'updated', revision: 4 });
+    expect(getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog).toMatchObject({
+      status: 'ready', revision: 3, record: { value: { bindings: [] } },
+    });
+    await expect(store.read()).resolves.toEqual({ v: 1, bindings: [binding] });
+    await expect(writer.writeRecord({ expectedRevision: 4,
+      record: { key: 'purposes', value: { v: 1, bindings: [] } },
+    })).resolves.toMatchObject({ status: 'updated', revision: 5 });
+    expect(getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog).toMatchObject({ revision: 4 });
+    await expect(store.read()).resolves.toEqual({ v: 1, bindings: [] });
+  });
 
   it('publishes the durable opened row after ACK without mirroring or advancing preferences', async () => {
     const server = boundary('updated');
