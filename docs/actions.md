@@ -53,9 +53,11 @@ Action. Its optional `workspace: {machineId, rootPath}` explicitly selects the
 source instead of an ambient Session; omitting it retains the admitted Session
 source. The UI reads through the existing confined workspace transfer under
 the captured Home/Account. Source paths, Machine and workspace identity stay
-in private revision provenance, not the public header or shared content. A
-Session-bound CLI host cannot serve an explicit Machine workspace and returns
-`artifact_source_unavailable` rather than publishing its ambient Session's file.
+in private revision provenance, not the public header or shared content.
+CLI hosts route an explicit workspace to that exact Machine through the same
+publication Action. The receiving host proves its local Machine identity and
+uses the existing confined workspace transfer and Artifact publication owners;
+it never publishes the invoking host's ambient Session file instead.
 Generated Action references own the exact input; File-page rendering and live
 validation remain program integration work.
 
