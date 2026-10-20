@@ -158,7 +158,10 @@ terminal-anchor authority; clearing it cannot discard a committed reply. A
 foreground turn that emitted text but has no acknowledged reply sequence fails
 transcript custody instead of publishing a successful empty result. Workflow
 readers keep missing text in result-unavailable attention; an explicit pass
-retains its distinct no-answer outcome. A settled attempt alone is not commit
+retains its distinct no-answer outcome. Recovery publishes that same attention
+on the original invocation without advancing the Workflow or settling its input
+custody; an outstanding Stop remains pending until its own outcome is known.
+A settled attempt alone is not commit
 evidence. The Session client keeps the existing
 outbox and close/cancellation lifetimes; sidechain output retains its own path.
 The [Session result reader](pending-delivery.md#correlated-session-answers-03-development)
