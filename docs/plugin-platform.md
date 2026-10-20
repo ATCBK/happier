@@ -697,6 +697,30 @@ approval/terminal admission, and durable webhook endpoint exact-materialization
 contracts remain unchanged. Routing continuity does not automatically repair
 an endpoint's physical target; real placement/transport/credential/config changes
 retain Channels' transfer and endpoint-convergence owners.
+
+In unreleased 0.3 source, Channels' existing testkit also owns the reusable
+`defineProviderConformanceJourneys` suite in
+`packages/plugins/channels/src/testkit/providerConformance.ts`. The native
+Telegram, Discord and Email adapters are exercised by
+`packages/plugins/channels/src/providerConformance.test.ts`. A new adapter
+(including Slack Socket Mode) supplies its registered provider, retained
+connection fixture and host execution origin; native message constructors and
+captured outbound request fields; parent/thread endpoints and immutable actors;
+baseline, continuity-loss and recovery drivers; and its declared native text
+limit, if any. `receive` must pass native events through real provider codecs
+and the existing journey fixture's poll or authenticated ingress entry. `gap`
+must derive provider continuity-loss evidence rather than write core status.
+The suite owns admission, replay, router children, reply projection, native
+chunking/currentness, mention suppression and provenance assertions. Adapters
+never reproduce those decisions. Native acceptance hooks permit authority
+revocation between chunks. Extra topic vectors supply only native inputs and
+expected addressing; provider-specific edge cases remain in their owner suites.
+An unmet fix dependency must stay explicitly pending with its lane pointer,
+never disappear behind a silent skip. Email declares no native text limit, so
+its journeys prove a single long delivery and pre-effect revocation instead of
+inventing a chunk size. The existing protocol `testing/v1` manifest/schema
+checks and CLI host-composition fixtures keep their own distinct boundaries.
+
 In 0.3 development, connection management projects the connection-owned
 `configurationRevision` as `revision`. Setup, binding/pairing, Test, Retry,
 transfer and recovery requests guard that logical subject. Poll failures and
@@ -1144,9 +1168,18 @@ resolves skill selection in the host, materializes read-only content through
 the daemon, and gives Claude and Codex their session-only native path. The shared
 `testing` launch observer and skill delivery contract exercise native launch,
 disable overlays and unsupported variants; they also serve tool-policy tests.
+For Gemini's private-home launch, the same kit reads the delivered bundle and
+copied disable settings from that home, including supporting files and native
+home preservation; an argv directory reference is not required for this layout.
 Agents without a native knob receive the index only through a declared Action
 channel and read content with the safe `skills.read` Action. These are current
 development-source contracts, not release or vendor-tenant certification.
+
+An Agent whose native plugin scanner rejects links can declare
+`capabilities.skills.materialization: 'copy'`. The host forwards this to the
+daemon's existing skill-store copy path; absence keeps the platform's normal
+layout. Auggie's custom ACP leaf consumes that same daemon-owned `pluginRoot`
+as a local marketplace, with no second materializer or native-folder write.
 
 Skill catalog facets use Protocol's `SkillCatalogItemV1` directly; there is no
 parallel SDK item shape. Agent facets produce their native catalog facts, while
@@ -1293,6 +1326,15 @@ Generic Plugin purpose selection, activation and materialization cannot select
 this host grant, even by claiming the same purpose address. The private subject
 uses the existing purpose, capability and refresh owners; it is not another
 public SDK target or an executable Plugin declaration.
+
+In 0.3 development, a late 401 for a replaced credential remains a stale
+context. For the same admitted account and group generation, the request-auth
+owner may ask the existing refresh coordinator to check the replacement's
+independent expiry; a still-fresh replacement is reused even inside the normal
+early-refresh window. An expired MCP token with refresh material reports
+`expired`, while missing refresh material requires reconnect. Freshness checks
+and current-token rejection recovery share the existing operation owner but
+cannot absorb each other's result when revisions reuse the same bearer.
 
 In 0.3 development source, MCP capability issuance shares the admitted
 requester's proof across nested catalog and grant readers within each existing
@@ -3503,6 +3545,23 @@ MCP, Agent and plugin surfaces. Publication and loaded-runtime validation are
 not established by source tests; passive plugin watching remains unsupported.
 
 ## Linked Session Work presentation (0.3 development)
+
+In unreleased 0.3 source, the same mounted Session snapshot also supplies
+`hasUnreadMessages` from the canonical Session-list viewer/read-state owner and
+`latestActivity`. Activity is a closed `ready` (`text`, `createdAt`), `empty`,
+`hidden`, or `unavailable` result. An older host may omit these fields; omission
+establishes neither an empty Session nor read state. Reading or watching never
+marks a Session read.
+
+The host reads the existing exact-Account external-shareable transcript witness,
+opens content under its Session mode, and uses the Protocol semantic projector
+shared with the CLI. Only approved user/final-assistant text can become activity;
+private list previews, drafts, tool content and permission summaries are not
+fallbacks. Time comes from the approved item's exact source row, not Session
+update time. Missing witnesses, unresolved publication or a partial semantic page
+that cannot establish the latest item yield `unavailable`. This extends the
+existing admitted `readSession`/`watchSession` methods for installed plugins as
+well as bundled plugins; it creates no additional content grant or preview store.
 
 The mounted UI host's `readSession`/`watchSession` contract includes a required
 closed `workStatus: { bucket, tone, word }` projection beside the closed Session
