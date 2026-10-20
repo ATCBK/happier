@@ -605,7 +605,7 @@ export function createHappierMcpServer(
         getInitiatingActionCaller,
         ...(boundCallerSessionId ? { startedBy: 'agent' } : {}),
       });
-  const accountExecutor = createSessionAccountActionExecutor({ base: localExecutor, client });
+  const accountExecutor = createSessionAccountActionExecutor({ base: localExecutor, client, hasAccountAuthority: credentials !== null });
   const toolExecutionSignal = opts?.toolExecutionSignal ?? client.getHostTurnAbortSignal?.() ?? undefined;
   const executor = toolExecutionSignal ? {
     execute: (actionId: ActionId, input: unknown, context?: ActionExecutorContext) => accountExecutor.execute(actionId, input, {

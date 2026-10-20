@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { AgentRuntimeDaemonServiceRequestV1Schema, type AgentRuntimeDaemonServiceRequestV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
@@ -353,6 +354,7 @@ describe('daemon Session Account authority', () => {
       instructions: 'Reply with exactly the reading check result.', manager: true } },
     { label: 'malformed inherited choice', input: { directory: { kind: 'path', path: '/tmp' }, agentTarget: null } },
     { label: 'unknown field', input: { directory: { kind: 'path', path: '/tmp' }, unknown: true } },
+    { label: 'invalid directory discriminator', input: { directory: { kind: 'local', path: '/private/submitted-path' } } },
   ])('reports malformed Session spawn input before attempting external authorization: $label', async ({ input: invalidInput }) => {
     vi.spyOn(axios, 'get').mockResolvedValue({ status: 200,
       data: { session: createSessionRecordFixture({ id: 'bob-session', share: null }) } });
@@ -367,8 +369,13 @@ describe('daemon Session Account authority', () => {
       createExecutor: () => createActionExecutor(createCliActionDeps({ token: 'alice-daemon-token', sessionId: '', mode: 'plain', ctx: null })),
     });
     const spawn: Operation = { ...operation, actionId: 'session.spawn_new', input: invalidInput };
-    expect(await execute(spawn, { sessionId: 'bob-session', isCurrent: async () => true }))
-      .toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+    const failure = ActionExecuteFailureSchema.parse(await execute(spawn, { sessionId: 'bob-session', isCurrent: async () => true }));
+    expect(failure).toMatchObject({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters',
+      details: { issues: expect.arrayContaining([expect.objectContaining({ code: expect.any(String), path: expect.any(Array) })]) } });
+    if (invalidInput.directory && typeof invalidInput.directory === 'object' && invalidInput.directory.kind === 'local') {
+      expect(failure.details).toEqual({ issues: [{ code: 'invalid_union', path: ['directory', 'kind'], acceptedValues: ['path', 'managed'] }] });
+    }
+    expect(JSON.stringify(failure)).not.toContain('/private/submitted-path');
     expect(await execute(spawn, { sessionId: 'bob-session', isCurrent: async () => false }))
       .toMatchObject({ ok: false, errorCode: 'target_unavailable', details: { reason: 'runtime_authority_unavailable' } });
   });

@@ -13,6 +13,8 @@ import { dispatchCurrentAgentRuntimeDaemonServiceRequest,
   isCurrentRunnerAgentRuntimeDaemonServiceAuthorityTransition } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
 import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceTurnWitness';
 import { NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionBoundaryError';
+import { WorkflowProjectTargetV1Schema } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
+import { requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
 
 type ActionExecutor = Readonly<{
   execute(actionId: ActionId, input: unknown, context?: ActionExecutorContext): Promise<ActionExecuteResult>;
@@ -32,6 +34,8 @@ const BOUND_SESSION_RPC_READS: ReadonlySet<ActionId> = new Set([
 export function createSessionAccountActionExecutor(params: Readonly<{
   base: ActionExecutor;
   client: HappyMcpSessionClient;
+  /** Credentialed hosts already have the shared exact-Machine Action adapter. */
+  hasAccountAuthority?: boolean;
 }>): ActionExecutor {
   return {
     execute: async (actionId, input, context) => {
@@ -49,6 +53,7 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       // Contributed ids remain with the existing plugin catalog/execution owner.
       const builtIn = ActionIdSchema.safeParse(actionId);
       const spec = builtIn.success ? getActionSpec(builtIn.data) : null;
+      if (requiresExplicitScmMachineTarget(actionId)) return await params.base.execute(actionId, input, context);
       const executionPlacement = spec ? resolveActionExecutionPlacementForInput(spec, input) : null;
       const requestedSessionId = input && typeof input === 'object' && 'sessionId' in input
         && typeof input.sessionId === 'string' ? input.sessionId.trim() : params.client.sessionId;
@@ -79,6 +84,9 @@ export function createSessionAccountActionExecutor(params: Readonly<{
         // Admission inspects the executing Machine's workspace and plugin
         // runtime before sealing Account storage; a Session runner has neither.
         && builtIn.data !== 'workflow.run.start'
+        // SCM uses the target daemon's admitted backends. Restricted runners
+        // reach the credentialed shared adapter through this existing capability.
+        && !(builtIn.data.startsWith('scm.') && !params.hasAccountAuthority)
         // Machine plugin policy and lifecycle belong to the daemon's canonical
         // plugin-change owner, never to the restricted Session runner.
         && !(isPluginDevLoopActionIdV1(builtIn.data) && executionPlacement === 'machine')
@@ -104,6 +112,10 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       const binding = params.client.getSessionActionConfirmationBinding?.();
       const executionRun = binding?.run;
       if (binding && executionRun && (binding.turnId !== hostWitness.turnId || !binding.isCurrent())) return unavailable();
+      const location = actionId.startsWith('scm.') ? params.client.getCurrentSessionLocation?.() : null;
+      const scmWorkspace = actionId.startsWith('scm.')
+        ? WorkflowProjectTargetV1Schema.safeParse({ machineId: location?.machineId, directory: location?.path }) : null;
+      if (scmWorkspace && !scmWorkspace.success) return unavailable();
       let witness;
       try { witness = projectAgentRuntimeDaemonServiceTurnWitnessV1(hostWitness); }
       catch { return unavailable(); }
@@ -134,6 +146,7 @@ export function createSessionAccountActionExecutor(params: Readonly<{
           createRequest: (capability) => ({ v: 1,
             context: { token: capability, sessionId: params.client.sessionId },
             operation: { kind: 'action.execute', requestId, actionId, input, witness,
+              ...(scmWorkspace?.success ? { scmWorkspace: scmWorkspace.data } : {}),
               ...(context?.reviewCommentPrincipal ? { reviewCommentPrincipal: context.reviewCommentPrincipal } : {}),
               ...(executionRun ? { executionRun: { runId: executionRun.runId, occurrenceId: executionRun.occurrenceId } } : {}),
               surface: context?.surface === 'mcp' ? 'mcp' : 'agent',

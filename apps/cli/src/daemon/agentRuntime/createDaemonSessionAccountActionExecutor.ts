@@ -12,6 +12,7 @@ import type { AgentRuntimeDaemonServiceRequestV1 } from '@/agent/runtime/session
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { resolveSessionRoleRpcOrigin } from '@/session/actions/sessionRoleRpcOrigin';
 import { resolveActionOriginationPreferenceFailureV1 } from '@happier-dev/protocol/actions/executor/actionOriginationPreferences';
+import { actionInputValidationFailure } from '@happier-dev/protocol/actions/executor/actionInputValidation';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -31,6 +32,7 @@ import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply
 import { prepareDocDiscussionMutationV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
 import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
+import { bindScmActionToSessionWorkspace, requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
 
 type SessionActionOperation = Extract<AgentRuntimeDaemonServiceRequestV1['operation'], { kind: 'action.execute' }>;
 type SessionActionAuthority = Readonly<{ sessionId: string; isCurrent(): Promise<boolean>; signal?: AbortSignal }>;
@@ -187,8 +189,21 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
     // start owner resolves them. Malformed known fields still fail before Home proof.
     const inputSchema = operation.actionId === 'session.spawn_new'
       ? SessionSpawnNewAgentAuthoringInputV2Schema : getActionSpec(operation.actionId).inputSchema;
-    if (!inputSchema.safeParse(operation.input ?? {}).success) {
-      return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    const parsedInput = inputSchema.safeParse(operation.input ?? {});
+    if (!parsedInput.success) return actionInputValidationFailure(parsedInput.error);
+    if (operation.actionId.startsWith('scm.')) {
+      if (requiresExplicitScmMachineTarget(operation.actionId)) {
+        return { ok: false, errorCode: 'machine_not_selected', error: 'machine_not_selected' };
+      }
+      const workspace = operation.scmWorkspace;
+      if (!workspace || workspace.machineId !== params.machineId) return refuse('external_authorization_preparation_failed');
+      const input = operation.input;
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+      }
+      // Sign and approve the same host-bound input that the Machine executes.
+      operation = { ...operation, input: StrictJsonValueSchema.parse(bindScmActionToSessionWorkspace(
+        operation.actionId, input as Readonly<Record<string, unknown>>, workspace.directory, authority.sessionId)) };
     }
     const preferenceFailure = resolveActionOriginationPreferenceFailureV1(operation.actionId, {
       managedMachineCreationEnabled: actionSettingsProvider.getAccountSettings()?.managedMachineCreationEnabled,
@@ -237,7 +252,10 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
     let external: Awaited<ReturnType<NonNullable<typeof params.prepareExternalActionAuthorization>>>;
     try {
       const credentials = params.credentials;
-      const workflowTarget = operation.actionId === 'workflow.run.start' && credentials
+      const scmWorkspace = operation.actionId.startsWith('scm.') ? operation.scmWorkspace : undefined;
+      const workflowTarget = scmWorkspace ? { kind: 'machine' as const,
+        machineId: scmWorkspace.machineId, project: scmWorkspace }
+        : operation.actionId === 'workflow.run.start' && credentials
         ? await readRequesterHomeWithinActionLifetime(async () => !await authority.isCurrent() ? undefined
           : await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => resolveCliActionCallerWorkflowTarget({
           credentials, context,
@@ -260,6 +278,11 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
       throw error;
     }
     if (external === null) return refuse('external_authorization_refused', authority.signal?.aborted ? 'cancelled' : 'target_unavailable');
+    if (operation.actionId.startsWith('scm.') && operation.scmWorkspace && external
+      && (external.target.kind !== 'machine' || external.target.machineId !== operation.scmWorkspace.machineId
+        || !sameStrictJsonValue(external.target.project, operation.scmWorkspace))) {
+      return refuse('external_authorization_binding_mismatch');
+    }
     if (requiresMachineAuthorization && !external) return refuse('external_authorization_missing', authority.signal?.aborted ? 'cancelled' : 'target_unavailable');
     if (requiresMachineAuthorization && external && (external.authorization.binding.actionId !== operation.actionId
       || external.authorization.binding.requestId !== operation.requestId

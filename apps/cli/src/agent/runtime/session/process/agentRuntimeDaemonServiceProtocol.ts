@@ -21,6 +21,7 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import { TeamCredentialRouteV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
+import { WorkflowProjectTargetV1Schema } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
 import { McpRequestAuthOpenV1Schema, McpRequestAuthCloseV1Schema, McpRequestAuthResultV1Schema, McpRequestAuthClosedV1Schema } from '@/mcp/runtime/mcpRequestAuth';
 import { RUNNER_PLUGIN_MCP_OPERATIONS, RUNNER_PLUGIN_MCP_RESULTS } from './runnerPluginMcpProtocol';
 
@@ -167,6 +168,8 @@ export const AgentRuntimeDaemonServiceRequestV1Schema = z.strictObject({
       surface: z.optional(z.enum(['agent', 'mcp'])),
       reviewCommentPrincipal: z.optional(asHostProtocolZod(ReviewCommentPrincipalHeaderV1Schema)),
       executionRun: z.optional(z.strictObject({ runId: OpaqueIdSchema, occurrenceId: OpaqueIdSchema })),
+      /** Host-selected Session/Run workspace, separate from authored SCM input. */
+      scmWorkspace: z.optional(asHostProtocolZod(WorkflowProjectTargetV1Schema)),
       requestId: OpaqueIdSchema,
       actionId: asHostProtocolZod(ActionIdSchema),
       input: z.unknown(),

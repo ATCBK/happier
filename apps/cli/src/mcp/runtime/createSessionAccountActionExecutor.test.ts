@@ -19,6 +19,14 @@ const createRestrictedExecutor = () => createCliActionExecutor({
 });
 
 describe('Session MCP Account routing', () => {
+  it('does not turn an implicit Session workspace into Machine-wide saved inventory authority', async () => {
+    const executor = createSessionAccountActionExecutor({ base: createRestrictedExecutor(), client: {
+      sessionId: 'caller-session', getServerBinding: () => ({ serverId: 'home', serverUrl: 'https://home.test' }),
+      rpcHandlerManager: { invokeLocal: async () => null, registerHandler() {} }, updateMetadata() {},
+    } });
+    expect(await executor.execute('scm.diffSummary.result.list', {}, { surface: 'agent', defaultSessionId: 'caller-session' }))
+      .toMatchObject({ ok: false, errorCode: 'machine_not_selected' });
+  });
   it('refuses unavailable daemon authority instead of executing with the session bearer', async () => {
     vi.stubEnv('HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE', '');
     const executor = createSessionAccountActionExecutor({
@@ -39,6 +47,9 @@ describe('Session MCP Account routing', () => {
     { actionId: 'notifications.notify_me' as const, input: { message: 'Notify' }, uncertain: true },
     { actionId: 'session.list' as const, input: {}, uncertain: false },
     { actionId: 'session.activity.get' as const, input: { sessionId: 'caller-session' }, uncertain: false },
+    { actionId: 'scm.diff.file' as const, input: { cwd: '/run/workspace', path: 'file.ts' }, uncertain: false },
+    { actionId: 'scm.file.read' as const, input: { cwd: '/run/workspace', path: 'file.ts', selector: { side: 'before', area: 'pending' } }, uncertain: false },
+    { actionId: 'scm.blame.get' as const, input: { cwd: '/run/workspace', path: 'file.ts' }, uncertain: false },
     { actionId: 'session.transcript.get' as const, input: { sessionId: 'caller-session', limit: 10 }, uncertain: false },
     { actionId: 'session.notes.set' as const, input: { sessionId: 'led-child', notes: 'Delegated notes' }, uncertain: false },
     { actionId: 'session.roles.apply_to_reports' as const, input: { sessionId: 'caller-session' }, uncertain: false },
@@ -98,6 +109,7 @@ describe('Session MCP Account routing', () => {
       const executor = createSessionAccountActionExecutor({ base: createRestrictedExecutor(), client: {
         sessionId: 'caller-session', getServerBinding: () => ({ serverId: 'home', serverUrl: 'https://home.test' }),
         rpcHandlerManager: { invokeLocal: async () => null, registerHandler() {} }, updateMetadata() {},
+        getCurrentSessionLocation: () => ({ machineId: 'shared-machine', path: '/run/workspace' }),
         getActiveTurnAdmissionWitness: () => witness,
         ...(actionId === 'session.list' ? { getSessionActionConfirmationBinding: () => ({ turnId: witness.turnId,
           lifetimeSignal: new AbortController().signal, isCurrent: () => true,
@@ -111,6 +123,7 @@ describe('Session MCP Account routing', () => {
         : { ok: true, result: { attemptedChannels: 1, deliveredChannels: 1 } });
       expect(requests[0]).toEqual({ v: 1, context: { token: 'A'.repeat(43), sessionId: 'caller-session' },
         operation: { kind: 'action.execute', surface: 'agent', requestId: 'request-1', actionId,
+          ...(actionId.startsWith('scm.') ? { scmWorkspace: { machineId: 'shared-machine', directory: '/run/workspace' } } : {}),
           ...(actionId === 'session.list' ? { executionRun: { runId: 'child-run', occurrenceId: 'child-occurrence' } } : {}),
           input, witness: { ...witness, workDepth: 6 }, toolCallId: 'tool-1' } });
       expect(requests).toHaveLength(1);

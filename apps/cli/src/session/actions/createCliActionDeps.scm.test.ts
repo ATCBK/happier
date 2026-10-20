@@ -19,6 +19,8 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -139,10 +141,13 @@ describe('exact-machine SCM Action targeting', () => {
       const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
       const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-machine-session-' });
       const sessionId = 'c111111111111111111111111';
+      let admitted: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
       try {
         env.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: 'session-review-home' });
         reloadConfiguration();
         await updateSettings(settings => ({ ...settings, machineIdByServerId: { 'session-review-home': 'machine' } }));
+        admitted = await createAdmittedPluginRuntimeFixture({ happyHomeDir: home, controller: pluginReloadController,
+          runtimeOptions: { pluginIds: ['happier.scm.backend.git'] } });
         await writeFile(join(fixture.rootPath, fixture.trackedPath), 'Session-bound pending change\n');
         // The HTTP boundary supplies current access; Action qualification, Git capture
         // and retained comparison storage run unchanged beneath it.
@@ -165,6 +170,7 @@ describe('exact-machine SCM Action targeting', () => {
                 unifiedDiff: expect.stringContaining('Session-bound pending change') }) })] } } }
           : { success: false, errorCode: 'DIFF_UNAVAILABLE' } });
       } finally {
+        await admitted?.dispose();
         env.restore(); reloadConfiguration();
         await rm(fixture.rootPath, { recursive: true, force: true });
       }

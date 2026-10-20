@@ -89,6 +89,25 @@ or inactive-Session resume route. The receiving daemon still proves locality
 and admission. An unavailable owner returns the existing admission failure;
 the caller's local daemon does not become a replacement execution target.
 
+Session-backed SCM backend operations in 0.3 development use the same exact
+target-Machine route as explicit Machine Actions. The shared CLI adapter resolves
+the Session's Machine and workspace; a bound Run keeps its own host-provided
+working directory. The receiving daemon executes against its admitted SCM
+backends, including external plugins. Session runners do not create an SCM
+registry. Restricted runners reach the credentialed adapter through the existing
+Session capability channel, retaining their turn and Run witness.
+The host-selected workspace travels outside authored SCM input and becomes the
+existing Machine target's directory. SCM ingress intersects that directory with
+Machine filesystem policy on the receiving filesystem, including symlinks.
+
+Saved review-result reads, revision edits, refinement/discussion and reviewed
+marks over retained evidence keep their existing local Home, Session-access and
+saved-scope checks. Live capture, generation, commit-plan application and live
+content-key marks need the daemon's installed backend owner. Machine-wide saved
+inventory still requires an explicit Machine target.
+Prepared review-workspace materialization remains at the host-stamped source
+plugin owner; it has no public CLI, Agent, MCP or Machine RPC entry point.
+
 In 0.3 development source, Claude's contributed Create agent team and Launch
 teammate Actions are discoverable and callable from CLI and MCP with a current
 Session, as well as UI and Agent tools. They use the existing Session input

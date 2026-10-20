@@ -33,7 +33,7 @@ describe('Session comparison discard Machine placement', () => {
     const receiver = createTestGitRpcManager({ workingDirectory: fixture.rootPath });
     const request = { cwd: fixture.rootPath, workEvidence: { sessionId } };
     try {
-      const transport = vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async input => {
+      const transport = vi.spyOn(machineRpc, 'callExactMachineRpc').mockImplementation(async input => {
         expect(input.authorization).toEqual({ kind: 'session.write', sessionId });
         for (const authorization of [undefined, { kind: 'session.write' as const, sessionId: 'foreign-session' }]) {
           expect(await receiver.call(input.method, input.request, authorization))
