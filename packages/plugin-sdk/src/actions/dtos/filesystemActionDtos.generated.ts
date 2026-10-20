@@ -7,6 +7,8 @@ export type FilesystemActionInputById = {
     readonly "daemon.filesystem.readFile": {
         rootPath: string;
         path: string;
+        offset?: number | undefined;
+        length?: number | undefined;
     };
     readonly "daemon.filesystem.writeFile": {
         rootPath: string;
@@ -112,6 +114,7 @@ export type FilesystemActionInputById = {
             sha256?: string | undefined;
         };
         overwrite: boolean;
+        expectedHash?: string | null | undefined;
     };
     readonly "daemon.filesystem.download": {
         rootPath: string;
@@ -142,6 +145,8 @@ export type FilesystemActionResultById = {
     readonly "daemon.filesystem.readFile": {
         success: true;
         content: string;
+        sizeBytes?: number | undefined;
+        eof?: boolean | undefined;
     } | {
         success: false;
         error: string;

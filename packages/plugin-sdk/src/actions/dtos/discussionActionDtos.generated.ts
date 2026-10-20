@@ -1258,7 +1258,7 @@ export type DiscussionActionInputById = {
                         kind: 'source_unavailable';
                     } | {
                         kind: 'broker_unavailable';
-                        reason?: 'application_unavailable' | 'model_unavailable' | undefined;
+                        reason?: 'application_unavailable' | 'model_unavailable' | 'projection_unavailable' | 'response_invalid' | 'not_granted' | 'incompatible' | 'catalog_empty' | undefined;
                     } | {
                         kind: 'update_required';
                     } | {
@@ -6617,7 +6617,7 @@ export type DiscussionActionResultById = {
                         kind: 'source_unavailable';
                     } | {
                         kind: 'broker_unavailable';
-                        reason?: 'application_unavailable' | 'model_unavailable' | undefined;
+                        reason?: 'application_unavailable' | 'model_unavailable' | 'projection_unavailable' | 'response_invalid' | 'not_granted' | 'incompatible' | 'catalog_empty' | undefined;
                     } | {
                         kind: 'update_required';
                     } | {

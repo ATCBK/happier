@@ -228,6 +228,8 @@ export type MachineVitalsActionResultById = {
             swp: number | null;
             rx: number | null;
             tx: number | null;
+            rxObservedMs?: number | undefined;
+            txObservedMs?: number | undefined;
         } | null)[];
         today: {
             rxBytes: number;

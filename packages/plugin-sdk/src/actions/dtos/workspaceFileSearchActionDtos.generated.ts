@@ -13,6 +13,35 @@ export type WorkspaceFileSearchActionInputById = {
         includeHidden?: boolean | undefined;
         contextLines?: number | undefined;
     };
+    readonly "workspace.files.replace.preview": {
+        machineId: string;
+        rootPath: string;
+        query: string;
+        replacement: string;
+        includeHidden?: boolean | undefined;
+        contextLines?: number | undefined;
+        cursor?: {
+            path: string;
+        } | undefined;
+        matchCase?: boolean | undefined;
+        regex?: boolean | undefined;
+    };
+    readonly "workspace.files.replace": {
+        machineId: string;
+        rootPath: string;
+        files: {
+            path: string;
+            expectedHash: string;
+            excludedMatches?: {
+                line: number;
+                column16: number;
+            }[] | undefined;
+        }[];
+        query: string;
+        replacement: string;
+        matchCase?: boolean | undefined;
+        regex?: boolean | undefined;
+    };
 };
 export type WorkspaceFileSearchActionResultById = {
     readonly "workspace.files.search": {
@@ -34,5 +63,54 @@ export type WorkspaceFileSearchActionResultById = {
         ok: false;
         code: 'invalid_pattern' | 'root_not_allowed' | 'root_not_found' | 'ripgrep_unavailable' | 'ripgrep_failed';
         message?: string | undefined;
+    };
+    readonly "workspace.files.replace.preview": {
+        ok: true;
+        files: {
+            path: string;
+            hash: string;
+            matchCount: number;
+            matches: {
+                replacedText: string;
+                line: number;
+                column16: number;
+                length16: number;
+                text: string;
+                before: string[];
+                after: string[];
+            }[];
+        }[];
+        skipped: {
+            notText: number;
+        };
+        hasMore: boolean;
+        coverage: 'complete' | 'partial';
+        cursor?: {
+            path: string;
+        } | undefined;
+    } | {
+        ok: false;
+        code: 'invalid_pattern' | 'root_not_allowed' | 'root_not_found' | 'ripgrep_unavailable' | 'ripgrep_failed';
+        message?: string | undefined;
+    };
+    readonly "workspace.files.replace": {
+        ok: true;
+        results: {
+            path: string;
+            status: 'skipped' | 'replaced' | 'restored' | 'changed' | 'failed';
+            hash?: string | undefined;
+            matchCount?: number | undefined;
+            edits?: {
+                startUtf16: number;
+                deleteLength: number;
+                insertText: string;
+                originalText: string;
+            }[] | undefined;
+            reason?: string | undefined;
+        }[];
+        cancelled?: string[] | undefined;
+    } | {
+        ok: false;
+        code: 'invalid_pattern' | 'root_not_allowed' | 'invalid_request';
     };
 };

@@ -239,6 +239,53 @@ export type ScmDiffSummaryActionInputById = {
         };
         changeRefs: string[];
         sessionId?: string | undefined;
+    } | {
+        v: 2;
+        cwd: string;
+        source: {
+            kind: 'turnCheckpoint';
+            sessionId?: string;
+            turnId?: string;
+            checkpointReceiptId?: string;
+            evidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled';
+        } | {
+            kind: 'session';
+            sessionId: string;
+        } | {
+            kind: 'workingTree';
+        } | {
+            kind: 'branch';
+            head: string;
+            base: string;
+        } | {
+            kind: 'commit';
+            commit: string;
+            parent?: string;
+        } | {
+            kind: 'pullRequest';
+            locator: {
+                providerId: string;
+                repository: string;
+                number: number;
+                baseOid?: string;
+                headOid?: string;
+                sourceAction?: {
+                    action: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
+                };
+            };
+        };
+        changeKeys: string[];
+        sessionId?: string | undefined;
     };
     readonly "scm.diffSummary.reviewed.unmark": {
         cwd: string;
@@ -291,6 +338,53 @@ export type ScmDiffSummaryActionInputById = {
             };
         };
         changeRefs: string[];
+        sessionId?: string | undefined;
+    } | {
+        v: 2;
+        cwd: string;
+        source: {
+            kind: 'turnCheckpoint';
+            sessionId?: string;
+            turnId?: string;
+            checkpointReceiptId?: string;
+            evidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled';
+        } | {
+            kind: 'session';
+            sessionId: string;
+        } | {
+            kind: 'workingTree';
+        } | {
+            kind: 'branch';
+            head: string;
+            base: string;
+        } | {
+            kind: 'commit';
+            commit: string;
+            parent?: string;
+        } | {
+            kind: 'pullRequest';
+            locator: {
+                providerId: string;
+                repository: string;
+                number: number;
+                baseOid?: string;
+                headOid?: string;
+                sourceAction?: {
+                    action: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
+                };
+            };
+        };
+        changeKeys: string[];
         sessionId?: string | undefined;
     };
     readonly "scm.diffSummary.result.read": {
@@ -470,7 +564,7 @@ export type ScmDiffSummaryActionResultById = {
         };
         candidateTreeOid?: string | undefined;
         error?: string | undefined;
-        errorCode?: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'ROOT_NOT_FOUND' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED' | undefined;
+        errorCode?: 'CHANGE_MOVED_ON' | 'FILE_CHANGED' | 'COMPARISON_UNAVAILABLE' | 'DISCARD_UNSUPPORTED' | 'unsupported' | 'not_found' | 'too_large' | 'blob_unavailable' | 'NOT_REPOSITORY' | 'INVALID_PATH' | 'ROOT_NOT_FOUND' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED' | undefined;
     };
     readonly "scm.diffSummary.capture": {
         success: true;
@@ -1005,11 +1099,6 @@ export type ScmDiffSummaryActionResultById = {
             success: true;
             resultId: string;
             comparisonId: string;
-            marksCleanup?: {
-                success: boolean;
-                errorCode?: string | undefined;
-                error?: string | undefined;
-            } | undefined;
         }[];
         failures: {
             success: false;
@@ -3753,8 +3842,8 @@ export type ScmDiffSummaryActionResultById = {
         success: true;
         record: {
             v: 1;
-            comparisonId: string;
-            reviewedChangeRefs: string[];
+            scopeId: string;
+            reviewedChangeKeys: string[];
         };
         version: number;
     } | {
@@ -3763,8 +3852,8 @@ export type ScmDiffSummaryActionResultById = {
         error: string;
         record?: {
             v: 1;
-            comparisonId: string;
-            reviewedChangeRefs: string[];
+            scopeId: string;
+            reviewedChangeKeys: string[];
         } | undefined;
         version?: number | undefined;
     };
@@ -3772,8 +3861,8 @@ export type ScmDiffSummaryActionResultById = {
         success: true;
         record: {
             v: 1;
-            comparisonId: string;
-            reviewedChangeRefs: string[];
+            scopeId: string;
+            reviewedChangeKeys: string[];
         };
         version: number;
     } | {
@@ -3782,8 +3871,8 @@ export type ScmDiffSummaryActionResultById = {
         error: string;
         record?: {
             v: 1;
-            comparisonId: string;
-            reviewedChangeRefs: string[];
+            scopeId: string;
+            reviewedChangeKeys: string[];
         } | undefined;
         version?: number | undefined;
     };
@@ -5434,11 +5523,6 @@ export type ScmDiffSummaryActionResultById = {
         success: true;
         resultId: string;
         comparisonId: string;
-        marksCleanup?: {
-            success: boolean;
-            errorCode?: string | undefined;
-            error?: string | undefined;
-        } | undefined;
     };
     readonly "scm.diffSummary.refine": {
         success: false;

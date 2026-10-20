@@ -155,6 +155,7 @@ export type MachineProcessesActionResultById = {
                 memoryKind: 'rss' | 'footprint' | 'private' | 'working_set' | null;
                 level: 'unknown' | 'proven' | 'likely' | 'left_behind';
                 parentRowId?: string | undefined;
+                displayName?: string | undefined;
                 role?: 'agent' | 'tool_shell' | 'test_runner' | 'type_checker' | 'dev_server' | 'language_server' | 'mcp_server' | 'browser' | 'database' | undefined;
                 browserEngine?: 'chromium' | 'firefox' | 'webkit' | undefined;
                 browserHelper?: boolean | undefined;
@@ -237,6 +238,7 @@ export type MachineProcessesActionResultById = {
             };
             confirmedAtMs: number;
             parentRowId?: string | undefined;
+            displayName?: string | undefined;
             role?: 'agent' | 'tool_shell' | 'test_runner' | 'type_checker' | 'dev_server' | 'language_server' | 'mcp_server' | 'browser' | 'database' | undefined;
             browserEngine?: 'chromium' | 'firefox' | 'webkit' | undefined;
             browserHelper?: boolean | undefined;
@@ -323,6 +325,7 @@ export type MachineProcessesActionResultById = {
             memoryKind: 'rss' | 'footprint' | 'private' | 'working_set' | null;
             level: 'unknown' | 'proven' | 'likely' | 'left_behind';
             parentRowId?: string | undefined;
+            displayName?: string | undefined;
             role?: 'agent' | 'tool_shell' | 'test_runner' | 'type_checker' | 'dev_server' | 'language_server' | 'mcp_server' | 'browser' | 'database' | undefined;
             browserEngine?: 'chromium' | 'firefox' | 'webkit' | undefined;
             browserHelper?: boolean | undefined;
