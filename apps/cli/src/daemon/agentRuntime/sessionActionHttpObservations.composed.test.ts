@@ -68,6 +68,8 @@ import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/reso
 import { inheritedCodexInput } from '@/session/actions/sessionSpawnNew.agent.testkit';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionCurrentSessionScopeFailureDetailsV1Schema } from '@happier-dev/protocol/actions/executor/sessionListAccess';
+import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
+import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply';
 
 const processIdentity = vi.hoisted(() => vi.fn());
 vi.mock('@/daemon/processIdentity', () => ({ readProcessIdentityByPid: processIdentity }));
@@ -251,6 +253,57 @@ async function fixture(metadataLayout: 0 | 1 = 1, observeSubtreeQuery?: () => Pr
     omitCallerWorkspace: () => { callerWorkspaceMissing = true; },
     close: async () => { restore(); await app.close(); } };
 }
+
+it('admits the addressed reply policy read under its original signed Account root', async () => {
+  const f = await fixture();
+  const discussionId = 'addressed-discussion';
+  const path = `/v1/discussions/${discussionId}/participants`;
+  let answerPolicy: 'when_addressed' | 'drafts_for_approval' = 'when_addressed';
+  // Only the resource database response is fixed. Authentication, Home root
+  // issuance, signatures, HTTP admission and the real reply binder all run.
+  f.app.get('/v1/discussions/:discussionId/participants', { preHandler: f.app.authenticate,
+    config: { allowApiToken: true } }, async () => ({ discussionId, ownerAccountId: storage.account.id,
+    access: 'owner', grants: [], participants: [{ participant: { kind: 'session', sessionId },
+      answerPolicy, createdAt: 1 }] }));
+  try {
+    const input = { discussionId, localId: 'explicit-reply', replyTarget: { kind: 'message', messageId: 'question' },
+      content: { v: 1, parts: [{ t: 'text', text: 'The quoted arithmetic is correct.' }] } };
+    const op = f.operation('discussion.reply', input);
+    const prepared = await f.prepare(op, { v: 1, caller: op.witness.agentStartCaller,
+      sourceTurnId: 'turn', sourceInputId: 'input', callerPermissionMode: null, requestId: op.requestId });
+    if (!prepared) throw new Error('Missing original Discussion reply root');
+    const source = { sourceSessionId: sessionId, sourceTurnId: 'turn', sourceInputId: 'input', via: 'action' as const,
+      discussionAddressing: { discussionId, messageId: 'question', throughSeq: 2, participantSessionId: sessionId } };
+    const context = { surface: 'agent' as const, authority: 'account_automation' as const, serverId,
+      defaultSessionId: sessionId, actionCaller: op.witness.agentStartCaller, sessionInputSource: source,
+      externalActionExecutionAuthorization: prepared.authorization, externalActionTarget: prepared.target };
+    const { discussionAction } = createDiscussionActionDeps({ credentials: f.credentials, serverId,
+      serverHttpBaseUrl, serverIdentityId: storage.state.homeId,
+      externalActionMachineRequestPrivateKey: installation.secretKey,
+      externalActionMachineInstallationId: storage.state.installationId,
+      resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
+        features: { sessions: { enabled: true, conversations: { enabled: true } },
+          sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+      }) }),
+    });
+    const bound = await bindDiscussionDraftReply({ actionId: op.actionId, input, context, serverId, discussionAction });
+    const reads = f.observations.filter(row => row.path === path);
+    expect({ bound, reads }).toMatchObject({ bound: { actionId: 'discussion.reply', input, context },
+      reads: [{ method: 'GET', path, status: 200, signed: true, bearer: false }] });
+    expect(bound).not.toHaveProperty('failure');
+    // The original root remains unchanged after the persisted participant
+    // policy changes. A signed recheck must refuse, not normalize new operands
+    // beneath the old signature or reuse the earlier policy observation.
+    answerPolicy = 'drafts_for_approval';
+    const changed = await bindDiscussionDraftReply({ actionId: op.actionId, input, context, serverId, discussionAction });
+    expect(changed).toMatchObject({ actionId: 'discussion.reply', input, context,
+      failure: { ok: false, errorCode: 'discussion_content_unavailable' } });
+    expect(f.observations.filter(row => row.path === path)).toEqual([
+      { method: 'GET', path, status: 200, signed: true, bearer: false },
+      { method: 'GET', path, status: 200, signed: true, bearer: false },
+    ]);
+  } finally { await f.close(); }
+});
 
 it.each([503, 401, 403] as const)('keeps Home mint availability distinct from authorization denial (%s), then recovers', async status => {
   const f = await fixture();
