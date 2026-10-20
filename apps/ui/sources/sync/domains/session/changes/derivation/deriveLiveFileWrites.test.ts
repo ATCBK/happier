@@ -52,6 +52,13 @@ describe('deriveLiveFileWrites', () => {
         expect([...writes.keys()]).toEqual(['src/One.ts']);
         expect(writes.get('src/One.ts')?.region).toEqual({ startLine: 8, endLine: 10 });
     });
+
+    it('takes Patch regions from the canonical lossless hunk engine', () => {
+        const writes = deriveLiveFileWrites([call('patch', 'Patch', { changes: [{ path: 'src/app.ts', kind: { type: 'update' },
+            diff: '@@ -3 +8,2 @@\n-a\n+b\n+c',
+        }] })], options);
+        expect(writes.get('src/app.ts')?.region).toEqual({ startLine: 8, endLine: 9 });
+    });
 });
 
 describe('deriveSettledFileWrites', () => {

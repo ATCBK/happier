@@ -1,0 +1,62 @@
+import * as React from 'react';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { deriveLiveFileWrites, type LiveFileWrite } from '../derivation/deriveLiveFileWrites';
+import { useFileWriteSessionSnapshots, readFileWriteSessionMessages, type FileWriteSessionSnapshot } from './fileWriteSessionSnapshots';
+import { projectUiSessionRuntimeAwareness, readSessionRuntimePresentationFreshnessExpirations } from '@/sync/domains/session/attention/runtimePresentation';
+import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListRuntimeClock';
+
+const EMPTY: ReadonlyMap<string, LiveFileWrite> = Object.freeze(new Map<string, LiveFileWrite>());
+
+function equalWrite(left: LiveFileWrite | undefined, right: LiveFileWrite): boolean {
+    return left?.toolCallId === right.toolCallId && left.sessionId === right.sessionId
+        && left.kind === right.kind && left.startedAt === right.startedAt
+        && left.region?.startLine === right.region?.startLine && left.region?.endLine === right.region?.endLine;
+}
+
+/** Both session and workspace consumers read the same canonical effective activity answer. */
+export function useLiveFileWritesFromSessionSnapshots(snapshots: readonly FileWriteSessionSnapshot[], workspaceRoot: string | null): ReadonlyMap<string, LiveFileWrite> {
+    const projected = React.useRef(new Map<string, Readonly<{
+        transcript: FileWriteSessionSnapshot['transcript']; root: string | null; writes: ReadonlyMap<string, LiveFileWrite>;
+    }>>());
+    const readNextRefreshAtMs = React.useCallback((nowMs: number) => {
+        let next: number | null = null;
+        for (const snapshot of snapshots) {
+            for (const expiry of readSessionRuntimePresentationFreshnessExpirations(snapshot.session, nowMs)) {
+                if (expiry > nowMs && (next === null || expiry < next)) next = expiry;
+            }
+        }
+        return next;
+    }, [snapshots]);
+    const nowMs = useSessionListRuntimeDeadlineNowMs(readNextRefreshAtMs, snapshots.length > 0);
+    const next = React.useMemo(() => {
+        const writes = new Map<string, LiveFileWrite>();
+        for (const snapshot of snapshots) {
+            // Protocol's owner defeats stale thinking with terminal turns, offline state and crashes.
+            const activity = projectUiSessionRuntimeAwareness({ ...snapshot.session, nowMs });
+            if (!activity.live || (!activity.working && !activity.backgroundActive)) continue;
+            const root = workspaceRoot ?? snapshot.workspaceRoot;
+            let projection = projected.current.get(snapshot.session.id);
+            if (!projection || projection.transcript !== snapshot.transcript || projection.root !== root) {
+                projection = { transcript: snapshot.transcript, root, writes: deriveLiveFileWrites(readFileWriteSessionMessages(snapshot), { workspaceRoot: root, sessionId: snapshot.session.id }) };
+                projected.current.set(snapshot.session.id, projection);
+            }
+            for (const [path, write] of projection.writes) {
+                if ((writes.get(path)?.startedAt ?? -Infinity) <= write.startedAt) writes.set(path, write);
+            }
+        }
+        const attached = new Set(snapshots.map(snapshot => snapshot.session.id));
+        for (const id of projected.current.keys()) if (!attached.has(id)) projected.current.delete(id);
+        return writes;
+    }, [snapshots, workspaceRoot, nowMs]);
+    const retained = React.useRef(EMPTY);
+    if (retained.current.size !== next.size || [...next].some(([path, write]) => !equalWrite(retained.current.get(path), write))) {
+        retained.current = next.size === 0 ? EMPTY : Object.freeze(new Map([...next].map(([path, write]) => [path,
+            equalWrite(retained.current.get(path), write) ? retained.current.get(path)! : write,
+        ])));
+    }
+    return retained.current;
+}
+
+export function useSessionLiveFileWrites(address: SessionAddress | null, workspaceRoot: string | null = null): ReadonlyMap<string, LiveFileWrite> {
+    return useLiveFileWritesFromSessionSnapshots(useFileWriteSessionSnapshots({ address }), workspaceRoot);
+}

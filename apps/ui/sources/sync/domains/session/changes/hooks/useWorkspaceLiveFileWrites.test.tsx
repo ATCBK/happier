@@ -3,10 +3,10 @@ import { createReducer } from '@happier-dev/session-core/reducer';
 import type { Message, ToolCallMessage, ToolCall } from '@happier-dev/session-core/messages';
 import { act, createSessionFixture, createMachineFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
-import type { SessionMessages } from '@/sync/store/domains/messages';
 import { useSessionLiveFileWrites } from './useSessionLiveFileWrites';
 import { useWorkspaceLiveFileWrites } from './useWorkspaceLiveFileWrites';
 import { useWorkspaceFileWriteSettlements } from './useWorkspaceFileWriteSettlements';
+import { useWorkspaceFileWriteTabPresentation } from '@/components/workspaces/files/useWorkspaceFileWriteTabPresentation';
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => ({ serverId: 'home-a', serverUrl: 'https://example.com', generation: 1 }),
@@ -14,6 +14,7 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
 
 const scope = { serverId: 'home-a', machineId: 'machine-1', rootPath: '/repo' };
 const original = storage.getState();
+type SessionMessages = ReturnType<typeof storage.getState>['sessionMessages'][string];
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 function call(id: string, path: string, state: ToolCall['state'] = 'running'): ToolCallMessage {
@@ -32,7 +33,7 @@ function transcript(messages: Message[], version = 1, isLoaded = true): SessionM
 
 function session(id = 'session-1', overrides: Parameters<typeof createSessionFixture>[0] = {}) {
     return createSessionFixture({ id, serverId: 'home-a', active: true, activeAt: Date.now(),
-        thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'running',
+        thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'in_progress',
         metadata: { path: '/repo', host: 'test', machineId: 'machine-1' }, ...overrides });
 }
 
@@ -45,6 +46,19 @@ beforeEach(() => {
 afterEach(async () => { await standardCleanup(); storage.setState(original); });
 
 describe('live file-write hooks', () => {
+    it('uses the shared tab status for a live file and retains non-file presentation', async () => {
+        storage.setState({ sessionMessages: { 'session-1': transcript([call('tab-write', 'src/one.ts')]) } });
+        const fallback = { faviconUrl: 'https://example.com/favicon.png', status: { tone: 'attention' as const, label: 'Needs input' } };
+        const resolveFallback = () => fallback;
+        const hook = await renderHook(() => useWorkspaceFileWriteTabPresentation(scope, resolveFallback));
+        const resolve = hook.getCurrent();
+        const file = { key: 'file:src/one.ts', kind: 'file', title: 'one.ts', resource: { kind: 'file', path: 'src/one.ts' }, isPinned: false, isPreview: true };
+        expect(resolve(file)).toMatchObject({ faviconUrl: fallback.faviconUrl, status: { tone: 'working' } });
+        expect(resolve({ ...file, kind: 'browser', resource: {} })).toBe(fallback);
+        await act(async () => storage.setState({ sessionMessages: { 'session-1': transcript([call('tab-write', 'src/one.ts', 'completed')], 2) } }));
+        expect(hook.getCurrent()(file)).toBe(fallback);
+    });
+
     it('gates stuck running calls through canonical effective activity and keeps stable results on unrelated updates', async () => {
         storage.setState({ sessionMessages: { 'session-1': transcript([call('write-1', 'src/one.ts')]) } });
         let renders = 0;
@@ -53,6 +67,9 @@ describe('live file-write hooks', () => {
         expect([...first.keys()]).toEqual(['src/one.ts']);
         const initialRenders = renders;
         await act(async () => storage.setState({ isDataReady: !storage.getState().isDataReady }));
+        expect(hook.getCurrent()).toBe(first);
+        expect(renders).toBe(initialRenders);
+        await act(async () => storage.setState(state => ({ sessions: { 'session-1': { ...state.sessions['session-1'], updatedAt: 99 } } })));
         expect(hook.getCurrent()).toBe(first);
         expect(renders).toBe(initialRenders);
         await act(async () => storage.setState({ sessions: { 'session-1': session('session-1', { thinking: false, latestTurnStatus: 'completed' }) } }));
@@ -74,6 +91,22 @@ describe('live file-write hooks', () => {
         expect([...hook.getCurrent().keys()]).toEqual(['a.ts', 'b.ts']);
         const qualified = await renderHook(() => useSessionLiveFileWrites({ serverId: 'home-a', sessionId: 'wrongHome' }, '/repo'));
         expect(qualified.getCurrent().size).toBe(0);
+    });
+
+    it('infers the session workspace for absolute tool paths when no root override is supplied', async () => {
+        storage.setState({ sessionMessages: { 'session-1': transcript([call('absolute', '/repo/src/one.ts')]) } });
+        const hook = await renderHook(() => useSessionLiveFileWrites({ serverId: 'home-a', sessionId: 'session-1' }));
+        expect([...hook.getCurrent().keys()]).toEqual(['src/one.ts']);
+    });
+
+    it('keeps a live background agent write after the primary turn completes', async () => {
+        const task = createToolCallMessageFixture({ id: 'task', tool: { ...call('task', 'ignored.ts').tool, name: 'Task', input: {} },
+            children: [call('background', 'background.ts')] });
+        storage.setState({ sessions: { 'session-1': session('session-1', {
+            thinking: false, latestTurnStatus: 'completed', runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+        }) }, sessionMessages: { 'session-1': transcript([task]) } });
+        const hook = await renderHook(() => useWorkspaceLiveFileWrites(scope));
+        expect([...hook.getCurrent().keys()]).toEqual(['background.ts']);
     });
 });
 

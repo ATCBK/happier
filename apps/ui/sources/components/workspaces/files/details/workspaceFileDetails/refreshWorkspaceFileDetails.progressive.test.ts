@@ -62,6 +62,27 @@ describe('file details independent acquisition', () => {
         expect(transport.diff).not.toHaveBeenCalled();
         expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
     });
+    it('keeps SVG text and its diff while exposing its preview MIME', async () => {
+        workspaceFileDetailsActionBoundary.read.mockResolvedValue({ success: true, content: 'PHN2ZyAvPg==' });
+        const result = await refreshWorkspaceFileDetails({ ...input, filePath: 'icon.svg' });
+        expect(result).toMatchObject({
+            diffContent: patch,
+            fileContent: { content: '<svg />', isBinary: false, binaryMime: 'image/svg+xml' },
+        });
+    });
+    it('honors the SCM binary verdict over an SVG extension', async () => {
+        const result = await refreshWorkspaceFileDetails({ ...input, filePath: 'icon.svg', isBinaryContent: true });
+        expect(result).toMatchObject({ diffContent: null, fileContent: { content: '', isBinary: true } });
+        expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
+        expect(transport.diff).not.toHaveBeenCalled();
+    });
+    it.each([['spec.pdf', 'application/pdf'], ['song.mp3', 'audio/mpeg']])(
+        'admits %s to the shared preview budget without reading text', async (filePath, binaryMime) => {
+            const result = await refreshWorkspaceFileDetails({ ...input, filePath, maxImagePreviewBytes: 8000000 });
+            expect(result).toMatchObject({ error: null, fileContent: { isBinary: true, binaryMime } });
+            expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
+        },
+    );
     it('does not download editor text for a diff-only request with a useful patch', async () => {
         const result = await refreshWorkspaceFileDetails({ ...input, includeFile: false });
         expect(result).toMatchObject({ status: 'ready', diffContent: patch, fileContent: null });

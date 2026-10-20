@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { resolveDetailsTabOpenAs, type LastPreviewOpen } from '@/components/appShell/panes/hooks/resolveDetailsTabOpenAs';
+import { createToolCallMessageFixture } from '@/dev/testkit';
+import { deriveLiveFileWrites } from '@/sync/domains/session/changes/derivation/deriveLiveFileWrites';
 import { createTrackAgentEditsController, type TrackAgentEditsInput, type TrackPauseReason, type TrackRegion, type TrackWrite } from './trackAgentEditsController';
 
 function write(startedAt: number, region: TrackRegion = { startLine: 14, endLine: 16 }, sessionId = 'session'): TrackWrite & Readonly<{ kind: 'modify' }> {
@@ -19,6 +21,19 @@ function setup() {
 }
 
 describe('Track agent edits controller', () => {
+    it('consumes P3’s real projection without allowing a nested subagent write to move Track', () => {
+        const main = createToolCallMessageFixture({ tool: { name: 'Write', input: { file_path: 'main.ts', content: 'main' },
+            state: 'running', id: 'main-write', createdAt: 1, startedAt: 1, completedAt: null, description: null } });
+        const child = createToolCallMessageFixture({ tool: { name: 'Write', input: { file_path: 'child.ts', content: 'child' },
+            state: 'running', id: 'child-write', createdAt: 2, startedAt: 2, completedAt: null, description: null } });
+        const task = createToolCallMessageFixture({ tool: { name: 'Task', input: {}, state: 'running', id: 'task',
+            createdAt: 1, startedAt: 1, completedAt: null, description: null }, children: [child] });
+        const writes = deriveLiveFileWrites([main, task], { workspaceRoot: '/repo', sessionId: 'session' });
+        const { controller, update, openPreview } = setup();
+        update({ writes });
+        expect(controller.getSnapshot().target?.path).toBe('main.ts');
+        expect(openPreview.mock.calls.map(([target]) => target.path)).toEqual(['main.ts']);
+    });
     it('follows the latest main-session path once and reveals region changes without reopening or pinning the preview', () => {
         const { controller, update, openPreview, revealRegion } = setup();
         update();
