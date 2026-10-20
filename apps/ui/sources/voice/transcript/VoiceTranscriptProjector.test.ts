@@ -102,17 +102,23 @@ describe('VoiceTranscriptProjector', () => {
                 });
                 return persisted;
             } });
-        const input = { conversationSessionId: 'conversation', text: 'Continued on this device',
+        const input = { conversationSessionId: 'conversation', text: 'Continued on this device', localId: 'voice-note:retryable', createdAt: 100,
             continuation: { v: 1 as const, deviceId: 'device', conversation: { serverId: 'home', sessionId: 'conversation' } } };
-        const note = projector.projectNoteText(input);
-        expect(note?.meta).toMatchObject({ happier: { kind: 'voice_note.v1', payload: { v: 1, continuation: input.continuation } } });
+        const settlement = projector.projectNoteText(input);
+        expect(settlement).toBeInstanceOf(Promise);
+        let settled = false;
+        void Promise.resolve(settlement).then(() => { settled = true; });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        const meta = buildVoiceTranscriptNoteMeta({ continuation: input.continuation });
         expect(requests).toEqual([expect.objectContaining({ messageRole: 'agent', content: { t: 'plain', v: {
-            role: 'agent', meta: note?.meta, content: { type: 'output', data: { type: 'assistant',
+            role: 'agent', meta, content: { type: 'output', data: { type: 'assistant',
                 uuid: expect.any(String), message: { role: 'assistant', content: [{ type: 'text', text: 'Voice continued.' }] },
             } },
         } } })]);
         expect(readStoredSessionMessages(storage.getState(), 'conversation')).toEqual([]);
-        acknowledgement.resolve(Response.json({ didWrite: true, message: { id: 'ack-note', localId: note?.localId, seq: 1, createdAt: 100 } }));
+        acknowledgement.resolve(Response.json({ didWrite: true, message: { id: 'ack-note', localId: input.localId, seq: 1, createdAt: 100 } }));
+        const note = await settlement;
         await persisted;
         expect(selectVoiceTranscriptEntriesForConversationSession(storage.getState(), 'conversation')).toEqual([
             expect.objectContaining({ id: note?.localId, kind: 'note' }),
