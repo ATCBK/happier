@@ -95,6 +95,47 @@ function Body(
 }
 
 describe('Usage page batch', () => {
+  it('keeps a Project setup preview out of the mounted Account page batch', async () => {
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-preview-isolation.test', accountId: 'account-a' }],
+      route: request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined });
+    const serverId = home.homes.a!.id;
+    publishAppliedActiveServerSnapshot({ serverId, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' }, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
+    const { WidgetSetupPreview } = await import('@/components/widgets/surface/WidgetSetupPreview');
+    const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { readWidgetDescriptor } = await import('@/components/widgets/widgetCatalog');
+    const candidate = readWidgetDescriptor(null, { kind: 'builtin', id: 'usage_daily' })!;
+    const seen = new Map<string, UsageWidgetBodyModel>();
+    let slices: ReturnType<typeof useUsageWidgetBatchSlices> = [];
+    function Probe() { slices = useUsageWidgetBatchSlices(); return <Body name="account" metric="tokens" seen={seen} />; }
+    const input = { ...scope, projects: ['destination-project'], metric: 'tokens' };
+    const runtime = { pluginUiProjection: null, pluginBrowserProjection: null, phase: 'current' as const, interactionEnabled: true,
+      machineId: null, serverId, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(),
+      reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables: () => {} };
+    const view = (preview: boolean) => <InjectedAuthProvider credentials={credentials}><AppShellPluginUiProjectionValueProvider value={runtime}><CoreCollectionScope>
+      <UsageWidgetBatchProvider clauses={clauses}><Probe />{preview ? <WidgetSetupPreview candidate={candidate}
+        scope={{ serverId, accountId: 'account-a', owner: { kind: 'project', projectId: 'destination-project' } }}
+        providedContext={{ projects: [['destination-project']] }} draft={{ bindings: {
+          ...Object.fromEntries(Object.entries(input).map(([path, value]) => [path, { kind: 'value' as const, value }])),
+          projects: { kind: 'context', slot: 'projects' },
+        } }} testID="project-preview" /> : null}</UsageWidgetBatchProvider>
+    </CoreCollectionScope></AppShellPluginUiProjectionValueProvider></InjectedAuthProvider>;
+    const screen = await renderScreen(view(false));
+    try {
+      await expect.poll(() => seen.get('account')?.slice?.accounting?.totals.eventCount).toBe(1);
+      const entry = seen.get('account')!.slice!.key;
+      await screen.update(view(true));
+      await expect.poll(() => home!.requests.filter(request => request.path === '/v2/usage/query').some(request =>
+        UsageAnalyticsQueryRequestSchema.parse(request.body).filters?.projectKeys?.includes('destination-project'))).toBe(true);
+      expect(slices.map(slice => slice.key)).toEqual([entry]);
+      expect(slices[0]?.requestedQuery.projects).toEqual([]);
+      await screen.update(view(false));
+      expect(slices.map(slice => slice.key)).toEqual([entry]);
+    } finally { await screen.unmount(); }
+  });
   it('feeds Sources panels from one admitted accounting Resource through their real builtin dispatch', async () => {
     const value: UsageAnalyticsQueryResponse = { ...accounting,
       totals: { ...accounting.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } },

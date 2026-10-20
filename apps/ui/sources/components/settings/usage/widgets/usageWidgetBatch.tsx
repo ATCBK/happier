@@ -63,6 +63,11 @@ const UsageWidgetBatchContext = React.createContext<UsageWidgetBatch | null>(
   null,
 );
 
+/** A setup preview belongs to its destination, independently of the page beneath it. */
+export function UsageWidgetBatchBoundary(props: Readonly<{ children: React.ReactNode }>) {
+  return <UsageWidgetBatchContext.Provider value={null}>{props.children}</UsageWidgetBatchContext.Provider>;
+}
+
 /**
  * One plan from the bodies' own platform-resolved inputs. The widget binder has already applied each
  * widget's value → group → page precedence; this only keys and batches the resulting queries.
