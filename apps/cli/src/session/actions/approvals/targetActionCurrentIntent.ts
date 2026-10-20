@@ -3,7 +3,7 @@ import { TargetActionApprovalRequestV1Schema, StoredTargetActionApprovalRequestV
 import type { PluginLocalizedStringV2, TargetActionApprovalRequestV1 } from '@happier-dev/protocol';
 import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult } from '@/plugins/runtime/invocation/actionExecutor';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
-import { targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
+import { targetActionApprovalSubjectsEqual } from '@happier-dev/protocol/approvals/targetActionApprovalRequestTransition';
 import { projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { admitApprovalRequesterDecisionV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { projectTargetActionApprovalInvocationV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
@@ -55,7 +55,7 @@ function createTargetActionApprovalRequestCandidate(
     input: projected.input,
     secretInputPaths: action.secretInputPaths ?? [],
     ...(action.secretInputLabels === undefined ? {} : { secretInputLabels: action.secretInputLabels }),
-    ...(projected.confidentialPaths.length || requesterConfirmation && requestedSurface === 'plugin'
+    ...(currentIntent.approvalInputCustody === 'live_only' || projected.confidentialPaths.length || requesterConfirmation && requestedSurface === 'plugin'
       ? { approvalInputCustody: 'live_only' } : {}),
     ...(action.accountId ? { accountId: action.accountId } : {}),
     ...(action.resourceId ? { resourceId: action.resourceId } : {}),

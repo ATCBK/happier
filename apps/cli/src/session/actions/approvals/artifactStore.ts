@@ -29,7 +29,7 @@ import { readAccountPluginSkills } from '@/prompts/skills/library/readAccountPlu
 import type { SkillActionPortV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
-import { targetActionApprovalRequestsEqual, targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
+import { admitTargetActionApprovalTransition } from '@happier-dev/protocol/approvals/targetActionApprovalRequestTransition';
 import {
   executionRunHostActionApprovalRequestsEqual,
   executionRunHostActionApprovalSubjectsEqual,
@@ -298,35 +298,12 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       if (!artifact) return { ok: false, errorCode: 'not_found', error: 'artifact_not_found' };
       const existingHeader = artifact.header;
       const existingRequest = readTargetActionApprovalArtifact(existingHeader, artifact.body);
-      if (!existingRequest || !targetActionApprovalSubjectsEqual(existingRequest, request)) {
+      if (!existingRequest) {
         return { ok: false, errorCode: 'subject_mismatch', error: 'target_action_approval_subject_mismatch' };
       }
-      if (targetActionApprovalRequestsEqual(existingRequest, request)) {
-        if (existingRequest.status === 'executing') {
-          return { ok: false, errorCode: 'invalid_transition', error: 'target_action_approval_invalid_transition' };
-        }
-        return { ok: true };
-      }
-      const isOpenDecision = existingRequest.status === 'open'
-        && (request.status === 'approved' || request.status === 'rejected' || request.status === 'canceled');
-      const isApprovedExecution = existingRequest.status === 'approved'
-        && request.status === 'executing'
-        && request.decision?.kind === 'approve'
-        && request.execution === undefined;
-      // The replay owner can refuse a stale origin before claiming execution.
-      const isApprovedStale = existingRequest.status === 'approved'
-        && request.status === 'failed'
-        && request.decision?.kind === 'approve'
-        && request.execution?.ok === false
-        && request.execution.errorCode === 'approval_stale';
-      const isExecutingTerminal = existingRequest.status === 'executing'
-        && (request.status === 'executed' || request.status === 'failed')
-        && request.decision?.kind === 'approve'
-        && request.execution !== undefined;
-      if ((!isOpenDecision && !isApprovedExecution && !isApprovedStale && !isExecutingTerminal)
-        || request.updatedAtMs < existingRequest.updatedAtMs) {
-        return { ok: false, errorCode: 'invalid_transition', error: 'target_action_approval_invalid_transition' };
-      }
+      const transition = admitTargetActionApprovalTransition(existingRequest, request);
+      if (!transition.ok) return transition;
+      if (transition.unchanged) return { ok: true };
       const updated = await accountArtifactStore.update({ artifactId, expectedRevision: artifact.revision,
         header: buildTargetActionApprovalArtifactHeaderV1(request), body: JSON.stringify(request) });
       return updated.ok ? { ok: true } : updated;

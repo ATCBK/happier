@@ -6,6 +6,32 @@ import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/acti
 const developmentCustody = { kind: 'development', registeredRootId: 'root-7' } as const;
 
 describe('target action current-intent adapter', () => {
+  it('claims the live approval before returning execution custody and persists its terminal receipt', async () => {
+    let stored: TargetActionApprovalRequestV1 | null = null;
+    const adapter = createTargetActionCurrentIntentAdapter({
+      create: async request => {
+        stored = { ...request, status: 'approved', updatedAtMs: 2,
+          decision: { kind: 'approve', decidedAtMs: 2 } };
+        return { artifactId: 'live-execution-claim' };
+      },
+      read: async () => stored,
+      update: async ({ request }) => { stored = request; return { ok: true }; },
+      now: () => 3,
+    });
+    const admitted = await adapter({
+      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7',
+        sourceCustody: developmentCustody, dangerLevel: 'writesRemote', scopes: ['global'], surfaces: ['agent'],
+        hostAccess: [], input: { value: 'write' }, policyFingerprint: 'b'.repeat(64),
+        confirmation: { title: 'Apply change' } },
+      fingerprint: 'a'.repeat(64), surface: 'agent', approvalInputCustody: 'live_only',
+    });
+    expect(admitted.status).toBe('approved');
+    expect(stored).toMatchObject({ status: 'executing', decision: { kind: 'approve' } });
+    if (admitted.status !== 'approved' || !admitted.settleExecution) throw new Error('Missing live execution custody');
+    await admitted.settleExecution({ artifactId: 'live-execution-claim', execution: { ok: true, effectAttempted: true } });
+    expect(stored).toMatchObject({ status: 'executed', execution: { ok: true, effectAttempted: true } });
+  });
+
   it('refuses confidential admission before creating an orphan receipt when its terminal writer is unavailable', async () => {
     const create = vi.fn();
     const adapter = createTargetActionCurrentIntentAdapter({ create, read: async () => null });
