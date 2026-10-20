@@ -9,6 +9,7 @@ import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, v
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { SkillSourceFolderNameV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { linkDirectoryChildren } from '@happier-dev/plugin-sdk/fs';
+import { logger } from '@/ui/logger';
 
 const segment = z.string().check(z.minLength(1), z.refine(value => value !== '.' && value !== '..' && !/[\\/\0]/u.test(value)));
 const digestSchema = z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/u));
@@ -18,6 +19,7 @@ export const SkillOwnerKeySchema = z.string().check(z.refine(value => {
 }));
 export const EnsureSkillSessionDirInputSchema = z.strictObject({
     ownerKey: SkillOwnerKeySchema,
+    materialization: z.optional(z.literal('copy')),
     items: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), name: segment, sourceFolderName: z.optional(SkillSourceFolderNameV1Schema), digest: digestSchema,
         files: z.array((<T extends z.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptBundleEntryV1Schema)) })),
     nativeDisables: z.array(z.strictObject({ name: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)) })),
@@ -26,7 +28,7 @@ export const EnsureSkillSessionDirInputSchema = z.strictObject({
     { message: 'Delivered skill names and folders must be unique' }));
 export type SkillSessionDirItem = Readonly<{ skillId: string; name: string; sourceFolderName?: string; digest: string; files: PromptBundleEntryV1[] }>;
 export type SkillSessionItem = Readonly<{ skillId: string; name: string; sourceFolderName?: string; digest: string }>;
-export type EnsureSkillSessionDirInput = Readonly<{ ownerKey: string; items: readonly SkillSessionDirItem[];
+export type EnsureSkillSessionDirInput = Readonly<{ ownerKey: string; materialization?: 'copy'; items: readonly SkillSessionDirItem[];
     nativeDisables: readonly Readonly<{ name: string; path: string }>[] }>;
 export const EnsureSkillSessionDirResultSchema = z.strictObject({ pluginRoot: z.string().check(z.minLength(1)), skillsRoot: z.string().check(z.minLength(1)),
     failed: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), reason: z.literal('materialize_failed'), detail: z.optional(z.string()) })) });
@@ -105,8 +107,11 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
         } catch { return { reliable: false, paths }; }
     };
     const readLibraryDigests = async (request: CollectionInput): Promise<readonly string[] | null> => {
-        try { return request.libraryDigests !== undefined ? request.libraryDigests : await input.readLibraryDigests?.() ?? null; }
-        catch { return null; }
+        let digests: readonly string[] | null;
+        try { digests = request.libraryDigests !== undefined ? request.libraryDigests : await input.readLibraryDigests?.() ?? null; }
+        catch { digests = null; }
+        if (digests === null) logger.warnLocalFile('[SKILLS] Skill cache collection skipped', { reason: 'library_inventory_unavailable' });
+        return digests;
     };
     const collect = async (libraryDigests: readonly string[]): Promise<void> => {
         const roots = await readRoots();
@@ -163,7 +168,13 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 const unchanged = previous && JSON.stringify(previous) === JSON.stringify(items);
                 const entriesPresent = await exists(skillsRoot) && (await readdir(skillsRoot)).length === items.length
                     && (await Promise.all(items.map(item => exists(join(skillsRoot, item.sourceFolderName ?? item.name))))).every(Boolean);
-                if (unchanged && entriesPresent) return { pluginRoot, skillsRoot, failed };
+                const copy = platform === 'win32' || admitted.materialization === 'copy';
+                const copiesPresent = !copy || entriesPresent && (await Promise.all(items.map(async item => {
+                    const entry = join(skillsRoot, item.sourceFolderName ?? item.name, 'SKILL.md');
+                    return await exists(entry) && !(await lstat(entry)).isSymbolicLink();
+                }))).every(Boolean);
+                const marketplaceManifest = join(pluginRoot, '.augment-plugin', 'marketplace.json');
+                if (unchanged && entriesPresent && copiesPresent && await exists(marketplaceManifest)) return { pluginRoot, skillsRoot, failed };
                 await mkdir(pluginRoot, { recursive: true, mode: 0o700 });
                 await mkdir(skillsRoot, { recursive: true, mode: 0o700 });
                 await chmod(skillsRoot, 0o700);
@@ -174,7 +185,7 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                         const source = materialized.get(item.name)!;
                         // A real folder under the source name (or declared name without a source tree), so sibling paths resolve even where the
                         // platform follows links before `..`; on POSIX its children link to the immutable cache entry.
-                        if (platform === 'win32') await cp(source, temporary, { recursive: true });
+                        if (copy) await cp(source, temporary, { recursive: true });
                         else await linkDirectoryChildren({ source, destination: temporary });
                         await makeReadOnly(temporary);
                         await removeOwnedTree(destination);
@@ -192,6 +203,11 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 if (!await exists(pluginManifest)) {
                     await mkdir(dirname(pluginManifest), { recursive: true, mode: 0o700 });
                     await writeFile(pluginManifest, JSON.stringify({ name: 'happier', version: '1.0.0', description: 'Your Happier skills' }), { mode: 0o444 });
+                }
+                // Both vendor formats reference this same daemon-owned tree; no plugin stages a second copy.
+                if (!await exists(marketplaceManifest)) {
+                    await mkdir(dirname(marketplaceManifest), { recursive: true, mode: 0o700 });
+                    await writeFile(marketplaceManifest, JSON.stringify({ name: 'happier', plugins: [{ name: 'happier', source: '.' }] }), { mode: 0o444 });
                 }
                 const temporaryManifest = join(pluginRoot, `.session-${randomUUID()}.json`);
                 try {

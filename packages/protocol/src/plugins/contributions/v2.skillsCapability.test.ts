@@ -17,6 +17,7 @@ function agent(capability: unknown = skills, sessionDelivery: unknown = delivery
 describe('Agent skills declarations', () => {
   it('admits matching declarative session delivery, including skills-only behavior', () => {
     expect(PluginAgentContributionV2Schema.safeParse(agent()).success).toBe(true);
+    expect(PluginAgentContributionV2Schema.safeParse(agent({ ...skills, materialization: 'copy' })).success).toBe(true);
     expect(PluginAgentContributionV2Schema.safeParse(agent(skills, {
       kind: 'defaults_file_env', envKey: 'AGENT_DEFAULTS',
       directoriesKeyPath: ['skills', 'directories'], disabledKeyPath: ['skills', 'disabled'],

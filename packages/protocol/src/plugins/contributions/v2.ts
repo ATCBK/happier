@@ -332,12 +332,6 @@ export const PluginAgentAcpSkillsSessionDeliveryV2Schema = lazyZodSchema(() => z
   z.strictObject({
     kind: z.literal('native_config_skills_dir'),
     subdirectory: z.string().check(z.minLength(1), z.refine(value => !value.includes('/') && isPortableRelativePath(value), 'Native skills subdirectories must be portable path segments.')),
-    /** A native home overlay when skills do not share a JSON MCP configuration. */
-    nativeConfigRoot: z.optional(z.strictObject({
-      configRootEnvKey: PluginAgentAcpPlatformValueV2Schema,
-      homeRelativeConfigRoot: PluginAgentAcpPlatformSegmentsV2Schema,
-      directory: z.array(z.string().check(z.minLength(1), z.refine(value => !value.includes('/') && isPortableRelativePath(value), 'Native config directories must be portable path segments.'))),
-    })),
   }),
 ]));
 export type PluginAgentAcpSkillsSessionDeliveryV2 = z.infer<typeof PluginAgentAcpSkillsSessionDeliveryV2Schema>;
@@ -384,11 +378,9 @@ export const PluginAgentAcpDefinitionV2Schema = lazyZodSchema(() => z.strictObje
   ), 'ACP definitions must declare at least one behavior.'), z.refine((value) => value.mcp?.nativeSessionConfig === undefined || value.mcp.policy === 'drop', {
     path: ['mcp'],
     message: 'Native session MCP config delivery requires the `drop` input policy.',
-  }), z.refine((value) => {
-    const delivery = value.skills?.sessionDelivery;
-    if (delivery?.kind !== 'native_config_skills_dir') return true;
-    return (delivery.nativeConfigRoot !== undefined) !== (value.mcp?.nativeSessionConfig !== undefined);
-  }, { path: ['skills', 'sessionDelivery'], message: 'Native skills directory delivery requires exactly one native session config root.' })));
+  }), z.refine((value) => value.skills?.sessionDelivery.kind !== 'native_config_skills_dir' || value.mcp?.nativeSessionConfig !== undefined, {
+    path: ['skills', 'sessionDelivery'], message: 'Native skills directory delivery requires a native session config root.',
+  })));
 export type PluginAgentAcpDefinitionV2 = z.infer<typeof PluginAgentAcpDefinitionV2Schema>;
 
 export const PluginAgentRuntimeAcpV2Schema = lazyZodSchema(() => z.strictObject({
@@ -458,6 +450,8 @@ export type PluginAgentToolsCapabilityV2 = z.infer<typeof PluginAgentToolsCapabi
 /** Session-private skill delivery and the Agent's declared native discovery roots. */
 export const PluginAgentSkillsCapabilityV2Schema = lazyZodSchema(() => z.strictObject({
   delivery: z.enum(['session_dir', 'none']),
+  /** Use the daemon's real-file layout when the Agent's plugin scanner rejects symlinks. */
+  materialization: z.optional(z.literal('copy')),
   nativeDisable: z.enum(['supported', 'unsupported']),
   liveReload: z.enum(['supported', 'unsupported']),
   usageEvidence: z.optional(z.enum(['reported', 'none'])),

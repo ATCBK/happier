@@ -19,6 +19,7 @@ export async function prepareSessionSkillPlan(input: Readonly<{
   agentHasActionChannel: boolean;
   directory: string | null;
   additionalProjectDirectories?: readonly string[];
+  purpose?: 'preview' | 'start' | 'reapply';
   home?: string;
   signal?: AbortSignal;
   assertCurrent: () => Promise<void>;
@@ -75,11 +76,15 @@ export async function prepareSessionSkillPlan(input: Readonly<{
     const item = { ...content.frontmatter, skillId: skill.skillId, description: content.frontmatter.description ?? '', digest: content.digest };
     items.push(item); contents.set(item.skillId, { item, body: content.body });
   }
-  const nativeSkills = await traceSkillPreparationPhase('native_scan', () => scanNativeSkillRoots({ nativeRoots: input.agentSkills.nativeRoots, directory: input.directory, home: input.home,
-    additionalProjectDirectories: input.additionalProjectDirectories }));
+  // Only an admitted fresh start with no consumer can omit native facts. Previews
+  // still need them, and reapply may have an earlier delivery to clear.
+  const nativeSkills = input.purpose === 'start' && !input.selected.items.some(item => item.selected)
+    && input.selected.excludeNativeSkillNames.length === 0 ? null
+    : await traceSkillPreparationPhase('native_scan', () => scanNativeSkillRoots({ nativeRoots: input.agentSkills.nativeRoots, directory: input.directory, home: input.home,
+      additionalProjectDirectories: input.additionalProjectDirectories }));
   await input.assertCurrent();
   const plan = resolveSessionSkillPlanV1({ items, selected: input.selected.items, excludeNativeSkillNames: input.selected.excludeNativeSkillNames,
-    agentSkills: input.agentSkills, agentHasActionChannel: input.agentHasActionChannel, nativeSkills });
+    agentSkills: input.agentSkills, agentHasActionChannel: input.agentHasActionChannel, nativeSkills: nativeSkills ?? { status: 'ok', names: [] } });
   for (const item of plan.items) if (unreadable.has(item.skillId)) { item.state = 'unavailable'; item.reason = 'content_unreadable'; }
   return { plan, contents, nativeSkills };
 }

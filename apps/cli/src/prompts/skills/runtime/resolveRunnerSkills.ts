@@ -54,6 +54,7 @@ export type RunnerSkillsResult = Readonly<{
 export type RunnerSkillsTransports = Readonly<{
   artifacts?: SkillArtifactStore;
   ensureSessionDir?: (input: Readonly<{
+    materialization?: 'copy';
     ownerKey: string; items: readonly Readonly<{ skillId: string; name: string; sourceFolderName?: string; digest: string; files: import('@happier-dev/protocol/prompts/library/promptBundleSchemas').PromptBundleEntryV1[] }>[];
     nativeDisables: readonly Readonly<{ name: string; path: string }>[];
   }>) => Promise<Readonly<{ pluginRoot: string; skillsRoot: string; failed: readonly Readonly<{ skillId: string; reason: 'materialize_failed'; detail?: string }>[] }>>;
@@ -157,7 +158,9 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
     });
     await current();
     const { plan, contents, nativeSkills } = await traceSkillPreparationPhase('plan', () => prepareSessionSkillPlan({ artifacts, selected, agentSkills, pluginSkills,
-      agentHasActionChannel: input.agentHasActionChannel, directory: input.directory, additionalProjectDirectories, home: input.home, assertCurrent: current }));
+      purpose: input.lifecycle ?? 'start', agentHasActionChannel: input.agentHasActionChannel, directory: input.directory,
+      additionalProjectDirectories, home: input.home, assertCurrent: current }));
+    if (nativeSkills === null) return { reach, plan, indexItems: [] };
     // Startup can deliver readable items, but a failed live read cannot withdraw the retained folder's content.
     if (input.lifecycle === 'reapply' && plan.items.some(item => item.reason === 'content_unreadable')) {
       return { reach, plan, indexItems: [], unavailable: true, unavailableReason: 'content_unreadable' };
@@ -178,6 +181,7 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
         if (!identity.success) throw Object.assign(new Error('Skill parent identity is unavailable'), { code: 'skills_unavailable' });
         return ensureSkillSessionDirHttp(content, {}, identity.data);
       }))({ ownerKey: input.ownerKey,
+        ...(agentSkills.materialization ? { materialization: agentSkills.materialization } : {}),
         items: delivered().map(item => ({ skillId: item.skillId, name: item.name, digest: item.digest,
           ...(contents.get(item.skillId)!.item.sourceFolderName ? { sourceFolderName: contents.get(item.skillId)!.item.sourceFolderName } : {}),
           files: projectPromptBundleActionEntriesV1(contents.get(item.skillId)!.body.entries) })), nativeDisables }));

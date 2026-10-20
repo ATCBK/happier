@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as fs from 'node:fs/promises';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { CLAUDE_PLUGIN } from '@happier-dev/plugins-claude/manifest';
 import { projectAgentPreflightSessionControlsCatalogEntry } from '@/plugins/projection/registry/agentCatalogEntryHooks';
@@ -32,6 +33,12 @@ import {
   AgentRuntimeDaemonSessionOpenAttestationRequestV1Schema,
   projectAgentRuntimeDaemonSessionOpenAttestationRequestV1,
 } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
+
+// Count the genuine filesystem boundary while preserving its real reads and every internal owner.
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readdir: vi.fn(actual.readdir) };
+});
 
 const dirs: string[] = [];
 const stores: ReturnType<typeof createSkillStore>[] = [];
@@ -79,6 +86,85 @@ async function fixture() {
   return { home, directory, input, artifacts, store, readIds };
 }
 describe('runner skill resolution', () => {
+  it('uses the daemon copy path for Agents whose plugin scanner rejects links', async () => {
+    const f = await fixture();
+    const input = { ...f.input, contributes: { catalogEntriesById: { test: {
+      skills: { ...f.input.contributes!.catalogEntriesById.test!.skills!, materialization: 'copy' as const },
+    } } } };
+    const transports = { artifacts: f.artifacts, ensureSessionDir: (request: Parameters<typeof f.store.ensureSkillSessionDir>[0]) => f.store.ensureSkillSessionDir(request) };
+    const linked = await resolveRunnerSkills(f.input, transports);
+    expect(linked.delivery).toBeDefined();
+    const result = await resolveRunnerSkills(input, transports);
+    expect(result.unavailable).toBeUndefined();
+    const root = result.delivery!.pluginRoot;
+    const name = result.delivery!.items[0]!.name;
+    expect((await fs.lstat(join(root, 'skills', name, 'SKILL.md'))).isSymbolicLink()).toBe(false);
+    expect(JSON.parse(await fs.readFile(join(root, '.augment-plugin', 'marketplace.json'), 'utf8')))
+      .toEqual({ name: 'happier', plugins: [{ name: 'happier', source: '.' }] });
+    const before = await fs.stat(join(root, 'session.json'));
+    await resolveRunnerSkills(input, transports);
+    expect((await fs.stat(join(root, 'session.json'))).mtimeMs).toBe(before.mtimeMs);
+  });
+  it('skips unused native reads and folder creation only for an authoritative empty fresh start', async () => {
+    const f = await fixture();
+    const nativeRoot = join(f.home, '.native');
+    await mkdir(nativeRoot);
+    const input = { ...f.input, accountSnapshot: { ...f.input.accountSnapshot!, promptLibraryCatalog: {
+      status: 'ready' as const, rows: [{ revision: 1, record: { key: 'skill-rules' as const, value: { v: 1 as const, rules: [] } } }],
+      tombstones: [], diagnostics: [],
+    } }, contributes: { catalogEntriesById: { test: {
+      skills: { ...f.input.contributes!.catalogEntriesById.test!.skills!, nativeRoots: { user: [['.native']] } },
+    } } } };
+    const reads = vi.mocked(fs.readdir);
+    reads.mockClear();
+    let materializations = 0;
+    const transports = { artifacts: f.artifacts, ensureSessionDir: async (request: Parameters<typeof f.store.ensureSkillSessionDir>[0]) => {
+      materializations++; return f.store.ensureSkillSessionDir(request);
+    } };
+    const startedAt = performance.now();
+    const fresh = await resolveRunnerSkills(input, transports);
+    const nativeReads = reads.mock.calls.filter(([path]) => String(path) === nativeRoot).length;
+    console.info('empty-start preparation', { nativeReads, materializations, durationMs: performance.now() - startedAt });
+    expect({ nativeReads, materializations }).toEqual({ nativeReads: 0, materializations: 0 });
+    expect(fresh.unavailable).toBeUndefined();
+    expect(fresh.delivery).toBeUndefined();
+    expect(f.readIds).toEqual([]);
+
+    await rm(nativeRoot, { recursive: true });
+    await writeFile(nativeRoot, 'An unreadable native directory');
+    const preview = await prepareSessionSkillPlan({ inventory: [], artifacts: f.artifacts,
+      selected: { items: [], excludeNativeSkillNames: [] },
+      agentSkills: input.contributes.catalogEntriesById.test.skills, agentHasActionChannel: true,
+      directory: f.directory, home: f.home, assertCurrent: async () => {} });
+    expect(preview.nativeSkills?.status).toBe('failed');
+    const unknown = await resolveRunnerSkills({ ...input, accountSnapshot: { ...input.accountSnapshot,
+      promptLibraryCatalog: { status: 'unavailable', reason: 'invalid-stored-content' },
+    } }, transports);
+    expect(unknown).toMatchObject({ unavailable: true, unavailableReason: 'invalid-stored-content' });
+    const disable = await resolveRunnerSkills({ ...input, sessionMetadata: { skillSelectionV1: {
+      v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native'],
+    } } }, transports);
+    expect(disable).toMatchObject({ unavailable: true, unavailableReason: 'native_scan_failed' });
+    const reapply = await resolveRunnerSkills({ ...input, lifecycle: 'reapply' }, transports);
+    expect(reapply).toMatchObject({ unavailable: true, unavailableReason: 'native_scan_failed' });
+    await rm(nativeRoot);
+    const seeded = await resolveRunnerSkills({ ...input, sessionMetadata: { skillSelectionV1: {
+      v: 1, forceIncludeSkillIds: ['library'], forceExcludeSkillIds: [], excludeNativeSkillNames: [],
+    } } }, transports);
+    expect(seeded.delivery?.items).toContainEqual(expect.objectContaining({ skillId: 'library' }));
+    const cleared = await resolveRunnerSkills({ ...input, lifecycle: 'reapply' }, transports);
+    expect(materializations).toBe(2);
+    expect(cleared.delivery?.items).toEqual([]);
+    expect(await readdir(cleared.delivery!.skillsRoot)).toEqual([]);
+    const nativeSkill = join(nativeRoot, 'native', 'SKILL.md');
+    await mkdir(join(nativeRoot, 'native'), { recursive: true });
+    await writeFile(nativeSkill, '---\nname: native\n---\nNative instructions');
+    const disableOnly = await resolveRunnerSkills({ ...input, sessionMetadata: { skillSelectionV1: {
+      v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native'],
+    } } }, transports);
+    expect(disableOnly.delivery).toMatchObject({ items: [], nativeDisables: [{ name: 'native', path: nativeSkill }] });
+    expect(materializations).toBe(3);
+  });
   it.each([
     ['upload', 'source-b', false], ['upload', 'declared-b', false], ['upload', 'declared-b', true],
     ['link', 'source-b', false], ['link', 'declared-b', false], ['registry', 'declared-b', false], ['folder-link', 'declared-b', false],
@@ -403,7 +489,7 @@ describe('runner skill resolution', () => {
     expect(resolved.delivery?.items).toEqual([expect.objectContaining({ skillId: 'library' })]);
     const sibling = `${directory}2`; await mkdir(sibling);
     const adjacent = await resolveRunnerSkills({ ...input, directory: sibling, accountSnapshot }, { artifacts, ensureSessionDir: value => store.ensureSkillSessionDir(value) });
-    expect(adjacent.delivery?.items).toEqual([]);
+    expect(adjacent.delivery).toBeUndefined();
     expect(skills.rules[0]!.target.workspaceRoot).toBe(linked);
   });
   it.each(['rule', 'session'] as const)('delivers selected skill references without opening the unrelated Account inventory (%s demand)', async demand => {

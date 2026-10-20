@@ -60,7 +60,7 @@ export const AUGGIE_PLUGIN = definePlugin({
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
           surfaces: ['externalSessions'],
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          skills: { delivery: 'session_dir', materialization: 'copy', nativeDisable: 'unsupported', liveReload: 'unsupported',
             nativeRoots: { user: [['.augment', 'skills'], ['.claude', 'skills'], ['.agents', 'skills']], project: [['.augment', 'skills'], ['.claude', 'skills'], ['.agents', 'skills']] } },
           sessions: {
             open: ['create', 'resume'],
