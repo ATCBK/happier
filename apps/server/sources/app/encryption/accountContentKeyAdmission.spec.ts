@@ -1,10 +1,12 @@
 import { signAccountContentKeyBindingV1 } from "@happier-dev/protocol";
+import * as bindingCrypto from "@happier-dev/protocol/crypto/accountContentKeyBindingV1";
 import { describe, expect, it, vi } from "vitest";
 import tweetnacl from "tweetnacl";
 
 import {
     admitAccountContentKey,
     deriveAccountEncryptionCurrentnessFromRow,
+    verifyAccountContentKeyBinding,
 } from "./accountContentKeyAdmission";
 
 function createBinding() {
@@ -71,6 +73,67 @@ function createAccountClient(params: Readonly<{
 }
 
 describe("accountContentKeyAdmission", () => {
+    it("reuses only the exact last verified public binding across fresh currentness derivations", () => {
+        const binding = createBinding();
+        // Transparent instrumentation: the real Protocol verifier and crypto run.
+        const verify = vi.spyOn(bindingCrypto, "verifyAccountContentKeyBindingV1");
+        try {
+            for (let read = 0; read < 25; read += 1) {
+                expect(deriveAccountEncryptionCurrentnessFromRow({
+                    encryptionMode: "e2ee",
+                    publicKey: binding.accountPublicKeyHex,
+                    contentPublicKey: new Uint8Array(binding.contentPublicKey),
+                    contentPublicKeySig: new Uint8Array(binding.contentPublicKeySignature),
+                }).status).toBe("ready");
+            }
+            expect(verify).toHaveBeenCalledTimes(1);
+            expect(deriveAccountEncryptionCurrentnessFromRow({
+                encryptionMode: "unknown",
+                publicKey: binding.accountPublicKeyHex,
+                contentPublicKey: binding.contentPublicKey,
+                contentPublicKeySig: binding.contentPublicKeySignature,
+            })).toEqual({ status: "inconsistent", reason: "invalid_encryption_mode" });
+            const plain = deriveAccountEncryptionCurrentnessFromRow({
+                encryptionMode: "plain",
+                publicKey: binding.accountPublicKeyHex,
+                contentPublicKey: binding.contentPublicKey,
+                contentPublicKeySig: binding.contentPublicKeySignature,
+            });
+            expect(plain.status === "ready" && plain.currentness.encryptionMode).toBe("plain");
+        } finally {
+            verify.mockRestore();
+        }
+    });
+
+    it("does not lend verification to changed or mutated anchor, key, signature or returned bytes", () => {
+        const binding = createBinding();
+        const params = {
+            accountSigningPublicKey: new Uint8Array(Buffer.from(binding.accountPublicKeyHex, "hex")),
+            contentPublicKey: binding.contentPublicKey,
+            contentPublicKeySignature: binding.contentPublicKeySignature,
+        };
+        for (const field of ["accountSigningPublicKey", "contentPublicKey", "contentPublicKeySignature"] as const) {
+            expect(verifyAccountContentKeyBinding(params)).not.toBeNull();
+            const changed = new Uint8Array(params[field]);
+            changed[0] ^= 1;
+            expect(verifyAccountContentKeyBinding({ ...params, [field]: changed })).toBeNull();
+            params[field][0] ^= 1;
+            expect(verifyAccountContentKeyBinding(params)).toBeNull();
+            params[field][0] ^= 1;
+        }
+        const verified = verifyAccountContentKeyBinding(params);
+        expect(verified).not.toBeNull();
+        verified?.contentPublicKey.fill(0);
+        verified?.contentPublicKeySignature.fill(0);
+        const again = verifyAccountContentKeyBinding(params);
+        expect(again?.contentPublicKey).toEqual(binding.contentPublicKey);
+        expect(again?.contentPublicKeySignature).toEqual(binding.contentPublicKeySignature);
+        expect(verifyAccountContentKeyBinding({
+            ...params,
+            contentPublicKeySignature: new Uint8Array(0),
+        })).toBeNull();
+    });
+
     it("rejects a correctly signed low-order content key before persistence", async () => {
         const binding = createLowOrderBinding();
         const client = createAccountClient({

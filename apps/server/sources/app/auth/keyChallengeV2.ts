@@ -1,4 +1,5 @@
 import * as privacyKit from "privacy-kit";
+import tweetnacl from "tweetnacl";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod/mini";
 import { canonicalizeKeyChallengeV2AudienceOrigin, type KeyChallengeV2IssueResponse } from '@happier-dev/protocol/auth/keyChallenge';
@@ -268,7 +269,6 @@ export async function verifyKeyChallengeSignature(
     signature: Uint8Array,
     publicKey: Uint8Array,
 ): Promise<boolean> {
-    const tweetnacl = (await import("tweetnacl")).default;
     if (signature.length !== tweetnacl.sign.signatureLength || publicKey.length !== tweetnacl.sign.publicKeyLength) return false;
     return tweetnacl.sign.detached.verify(signingInput, signature, publicKey);
 }

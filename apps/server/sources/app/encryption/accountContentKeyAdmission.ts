@@ -83,6 +83,23 @@ function decodeAccountSigningPublicKey(
     return copyBytes(Buffer.from(publicKeyHex, "hex"));
 }
 
+// Repeated admissions often carry the same public proof. Keep only the last
+// successful tuple, with owned bytes: its cryptographic relationship cannot
+// expire, while Account mode, current binding and access remain fresh decisions
+// at their existing owners. A different tuple still uses the Protocol verifier.
+let lastVerifiedBinding: Readonly<{
+    accountSigningPublicKey: Uint8Array;
+    binding: VerifiedAccountContentKeyBinding;
+}> | null = null;
+
+function copyVerifiedBinding(binding: VerifiedAccountContentKeyBinding): VerifiedAccountContentKeyBinding {
+    return {
+        contentPublicKey: copyBytes(binding.contentPublicKey),
+        contentPublicKeySignature: copyBytes(binding.contentPublicKeySignature),
+        contentPublicKeyFingerprint: binding.contentPublicKeyFingerprint,
+    };
+}
+
 /**
  * Server-side adapter over the canonical Protocol binding verifier. Protocol
  * owns the binding bytes, key validation, and fingerprint; this module keeps
@@ -94,17 +111,28 @@ export function verifyAccountContentKeyBinding(params: Readonly<{
     contentPublicKey: Uint8Array;
     contentPublicKeySignature: Uint8Array;
 }>): VerifiedAccountContentKeyBinding | null {
+    if (
+        lastVerifiedBinding
+        && bytesEqual(lastVerifiedBinding.accountSigningPublicKey, params.accountSigningPublicKey)
+        && bytesEqual(lastVerifiedBinding.binding.contentPublicKey, params.contentPublicKey)
+        && bytesEqual(lastVerifiedBinding.binding.contentPublicKeySignature, params.contentPublicKeySignature)
+    ) {
+        return copyVerifiedBinding(lastVerifiedBinding.binding);
+    }
+    const accountSigningPublicKey = copyBytes(params.accountSigningPublicKey);
     const verified = verifyAccountContentKeyBindingV1({
-        accountSigningPublicKey: params.accountSigningPublicKey,
+        accountSigningPublicKey,
         contentPublicKey: params.contentPublicKey,
         signature: params.contentPublicKeySignature,
     });
     if (!verified) return null;
-    return {
+    const binding = {
         contentPublicKey: verified.contentPublicKey,
         contentPublicKeySignature: verified.signature,
         contentPublicKeyFingerprint: verified.contentPublicKeyFingerprint,
     };
+    lastVerifiedBinding = { accountSigningPublicKey, binding };
+    return copyVerifiedBinding(binding);
 }
 
 export function verifyAccountContentKeyBindingForAccountPublicKey(
