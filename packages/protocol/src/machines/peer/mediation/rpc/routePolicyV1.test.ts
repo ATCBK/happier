@@ -544,6 +544,21 @@ describe('MachineRpcRoutePolicyV1', () => {
     });
   });
 
+  it('classifies language intelligence reads and restart at their Machine transport authority', async () => {
+    const protocol = await importRpcPolicy();
+    if ('importError' in protocol) throw protocol.importError;
+    for (const method of ['daemon.lsp.sync.v1', 'daemon.lsp.query.v1', 'daemon.lsp.watch.v1']) {
+      expect(protocol.resolveMachineRpcRoutePolicy(method)).toMatchObject({
+        routeClass: 'server_required', serverRequiredReason: 'ambiguous', rpcClassification: 'internal_only',
+        scope: { accountRequired: true, machineRequired: true, serverRequired: true },
+      });
+    }
+    expect(protocol.resolveMachineRpcRoutePolicy('daemon.lsp.restart.v1')).toMatchObject({
+      routeClass: 'server_required', serverRequiredReason: 'destructive_or_recovery_mutation',
+      rpcClassification: 'action_spec_bound', actionSpecId: 'code.restart',
+    });
+  });
+
   it('keeps durable session writes and unknown methods server-routed by default', async () => {
     const protocol = await importRpcPolicy();
     expect(protocol).toHaveProperty('resolveMachineRpcRoutePolicy');

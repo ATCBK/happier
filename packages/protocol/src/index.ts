@@ -3527,6 +3527,7 @@ export {
   type DaemonWorkspaceFileSearchResponse,
   type WorkspaceFileSearchFileV1,
 } from './machines/workspaceFiles.js';
+export * from './machines/languageIntelligence.js';
 export {
   computeFileReplacement,
   decodeReplaceFileText,

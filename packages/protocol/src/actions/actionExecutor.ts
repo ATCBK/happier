@@ -1,6 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { actionInputValidationFailure } from './executor/actionInputValidation.js';
-import { CodeIntelligenceActionInputSchema } from './codeIntelligenceActionFamily.js';
+import { CodeIntelligenceActionInputSchema, CodeIntelligenceFileActionInputSchema, CodeIntelligenceRestartActionInputSchema } from './codeIntelligenceActionFamily.js';
+import { DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema, type DaemonLspQueryRequest } from '../machines/languageIntelligence.js';
 import { queryCodeIntelligenceFallback } from '../machines/codeIntelligenceFallback.js';
 import { ActionInvokeInputSchema } from './actionInvokeInput.js';
 import { PetChooseInputV1Schema } from '../pets/selection.js';
@@ -8993,13 +8994,45 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
-        if (actionId === 'code.definition.get' || actionId === 'code.references.list') {
-          if (!deps.workspaceFilesSearch) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
-          const { machineId, ...input } = CodeIntelligenceActionInputSchema.parse(parsed.data);
-          const search = deps.workspaceFilesSearch;
-          return completeActionResult(await queryCodeIntelligenceFallback({ ...input,
-            kind: actionId === 'code.definition.get' ? 'definition' : 'references',
-          }, request => search({ machineId, ...request }, ctx)));
+        if (actionId === 'code.restart') {
+          if (!deps.languageIntelligenceRestart) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          const { machineId, ...request } = CodeIntelligenceRestartActionInputSchema.parse(parsed.data);
+          const response = await deps.languageIntelligenceRestart({ machineId, request }, ctx);
+          if ('ok' in response && response.ok === false) return completeActionResult(response);
+          return completeActionResult(DaemonLspRestartResponseSchema.parse(response));
+        }
+        if (actionId === 'code.hover.get' || actionId === 'code.definition.get' || actionId === 'code.references.list'
+          || actionId === 'code.symbols.list' || actionId === 'code.diagnostics.list') {
+          if (!deps.languageIntelligenceQuery) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+          const positional = actionId === 'code.hover.get' || actionId === 'code.definition.get' || actionId === 'code.references.list';
+          const input = positional ? CodeIntelligenceActionInputSchema.parse(parsed.data) : CodeIntelligenceFileActionInputSchema.parse(parsed.data);
+          const { machineId, rootPath, path, languageId } = input;
+          let position: DaemonLspQueryRequest['position'];
+          if (positional) {
+            const address = CodeIntelligenceActionInputSchema.parse(input);
+            if ((address.symbol === undefined) === (address.character === undefined)
+              || (address.occurrence !== undefined && address.symbol === undefined)) {
+              return completeActionResult({ status: 'error', errorCode: 'invalid_position' });
+            }
+            position = address.symbol !== undefined
+              ? { line: address.line - 1, symbol: address.symbol, ...(address.occurrence !== undefined ? { occurrence: address.occurrence } : {}) }
+              : { line: address.line - 1, character: address.character! };
+          }
+          const kind = actionId === 'code.hover.get' ? 'hover' : actionId === 'code.definition.get' ? 'definition'
+            : actionId === 'code.references.list' ? 'references' : actionId === 'code.symbols.list' ? 'documentSymbols' : 'diagnostics';
+          const rawResponse = await deps.languageIntelligenceQuery({ machineId, request: { rootPath, path, kind,
+            text: 'disk', ...(position ? { position } : {}), ...(languageId ? { languageId } : {}) } }, ctx);
+          if ('ok' in rawResponse && rawResponse.ok === false) return completeActionResult(rawResponse);
+          const response = DaemonLspQueryResponseSchema.parse(rawResponse);
+          if (response.status === 'unavailable' && response.reason === 'no_capable_server'
+            && (kind === 'definition' || kind === 'references') && position && 'symbol' in position && deps.workspaceFilesSearch) {
+            const search = deps.workspaceFilesSearch;
+            return completeActionResult(await queryCodeIntelligenceFallback({ rootPath, path, kind, line: position.line + 1,
+              symbol: position.symbol, ...(languageId ? { languageId } : {}) }, request => search({ machineId, ...request }, ctx)));
+          }
+          const output = getActionSpec(actionId).outputSchema?.safeParse(response);
+          return output?.success ? completeActionResult(output.data)
+            : { ok: false, errorCode: 'invalid_response', error: 'invalid_response' };
         }
 
         if (actionId === 'workspace.files.search') {

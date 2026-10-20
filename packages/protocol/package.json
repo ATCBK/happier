@@ -1275,6 +1275,11 @@
       "types": "./dist/actions/executor/actionOriginationPreferences.d.ts",
       "default": "./dist/actions/executor/actionOriginationPreferences.js"
     },
+    "./actions/executor/actionInputValidation": {
+      "happier-source": "./src/actions/executor/actionInputValidation.ts",
+      "types": "./dist/actions/executor/actionInputValidation.d.ts",
+      "default": "./dist/actions/executor/actionInputValidation.js"
+    },
     "./actions/specs/projectWorkers": {
       "happier-source": "./src/actions/specs/projectWorkers.ts",
       "types": "./dist/actions/specs/projectWorkers.d.ts",
@@ -6958,6 +6963,11 @@
       "happier-source": "./src/machines/fileLanguage.ts",
       "types": "./dist/machines/fileLanguage.d.ts",
       "default": "./dist/machines/fileLanguage.js"
+    },
+    "./machines/languageIntelligence": {
+      "happier-source": "./src/machines/languageIntelligence.ts",
+      "types": "./dist/machines/languageIntelligence.d.ts",
+      "default": "./dist/machines/languageIntelligence.js"
     },
     "./machines/workspaceFiles": {
       "happier-source": "./src/machines/workspaceFiles.ts",

@@ -7,18 +7,39 @@ import { isPluginSurfaceExcludedActionId } from './pluginActionSurface.js';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '../machines/workspaceFiles.js';
 
 describe('search-backed code Actions', () => {
+  it('queries disk text by one-based line and preserves typed semantic outcomes', async () => {
+    const id = ActionIdSchema.parse('code.hover.get');
+    const requests: unknown[] = [];
+    const fileHash = 'a'.repeat(64);
+    let response: unknown = { status: 'ok', kind: 'hover', fileHash,
+      sections: [{ serverId: 'test.language', label: 'Language', markdown: 'type Name' }] };
+    const executor = createActionExecutor({ languageIntelligenceQuery: async (args: unknown) => {
+      requests.push(args); return response;
+    } } as unknown as ActionExecutorDeps);
+    const input = { machineId: 'machine', rootPath: '/repo', path: 'a.ts', line: 4, symbol: 'Name', occurrence: 2 };
+    expect(await executor.execute(id, input, { surface: 'agent' })).toMatchObject({ ok: true, result: { status: 'ok', fileHash } });
+    expect(requests).toEqual([{ machineId: 'machine', request: { rootPath: '/repo', path: 'a.ts', kind: 'hover',
+      position: { line: 3, symbol: 'Name', occurrence: 2 }, text: 'disk' } }]);
+    for (const outcome of [{ status: 'loading' }, { status: 'unavailable', reason: 'server_missing' },
+      { status: 'error', errorCode: 'unsaved_editor_changes', diskHash: fileHash },
+      { status: 'error', errorCode: 'symbol_not_found', candidates: ['Other'] }]) {
+      response = outcome;
+      expect(await executor.execute(id, input, { surface: 'mcp' })).toEqual({ ok: true, result: outcome });
+    }
+  });
+
   it('searches declarations through the real executor and strict workspace search contract', async () => {
     const id = ActionIdSchema.parse('code.definition.get');
     const requests: unknown[] = [];
     // The remote Machine search is the system boundary; Action admission and query projection are real.
-    const executor = createActionExecutor({ workspaceFilesSearch: async ({ machineId, ...request }) => {
+    const executor = createActionExecutor({ languageIntelligenceQuery: async () => ({ status: 'unavailable', reason: 'no_capable_server' }), workspaceFilesSearch: async ({ machineId, ...request }) => {
       expect(machineId).toBe('machine');
       requests.push(DaemonWorkspaceFileSearchRequestSchema.parse(request));
       const candidates = ['other/far.ts', 'src/near.ts', 'src/current.ts'].map(path => ({ path, matches: [
         { line: 4, column16: 8, length16: 14, text: 'export function greet() {}', before: [], after: [] },
       ] }));
       return DaemonWorkspaceFileSearchResponseSchema.parse({ ok: true, files: candidates, hasMore: true, coverage: 'partial' });
-    } } satisfies Pick<ActionExecutorDeps, 'workspaceFilesSearch'> as unknown as ActionExecutorDeps);
+    } } satisfies Pick<ActionExecutorDeps, 'workspaceFilesSearch' | 'languageIntelligenceQuery'> as unknown as ActionExecutorDeps);
     const result = await executor.execute(id, { machineId: 'machine', rootPath: '/repo', path: 'src/current.ts', line: 8,
       symbol: 'greet', languageId: 'typescript' }, { surface: 'agent' });
     expect(result).toMatchObject({ ok: true, result: { status: 'ok', source: 'text_matches', hasMore: true, coverage: 'partial',
@@ -31,18 +52,22 @@ describe('search-backed code Actions', () => {
 
   it('preserves unavailable search and rejects a missing symbol instead of guessing a column', async () => {
     const id = ActionIdSchema.parse('code.references.list');
-    const executor = createActionExecutor({ workspaceFilesSearch: async () => ({ ok: false, code: 'root_not_found' }) } as unknown as ActionExecutorDeps);
+    const executor = createActionExecutor({ languageIntelligenceQuery: async () => ({ status: 'unavailable', reason: 'no_capable_server' }), workspaceFilesSearch: async () => ({ ok: false, code: 'root_not_found' }) } as unknown as ActionExecutorDeps);
     const input = { machineId: 'machine', rootPath: '/repo', path: 'a.ts', line: 1, symbol: 'name' };
     await expect(executor.execute(id, input, { surface: 'mcp' })).resolves.toMatchObject({ ok: true,
       result: { status: 'unavailable', reason: 'root_not_found' } });
-    expect(getActionSpec(id).inputSchema.safeParse({ ...input, symbol: undefined, character: 0 }).success).toBe(false);
+    expect(getActionSpec(id).inputSchema.safeParse({ ...input, symbol: undefined, character: 0 }).success).toBe(true);
+    expect(await executor.execute(id, { ...input, symbol: undefined }, { surface: 'agent' }))
+      .toEqual({ ok: true, result: { status: 'error', errorCode: 'invalid_position' } });
+    expect(await executor.execute(id, { ...input, symbol: undefined, character: 0 }, { surface: 'agent' }))
+      .toEqual({ ok: true, result: { status: 'unavailable', reason: 'no_capable_server' } });
   });
 
   it('keeps both safe reads available to plugins and honors explicit approval settings', () => {
-    for (const rawId of ['code.definition.get', 'code.references.list']) {
+    for (const rawId of ['code.hover.get', 'code.definition.get', 'code.references.list', 'code.symbols.list', 'code.diagnostics.list', 'code.restart']) {
       const id = ActionIdSchema.parse(rawId);
       const spec = getActionSpec(id);
-      expect(spec).toMatchObject({ sideEffectClass: 'read', safety: 'safe', approval: { result: 'required' }, executionPlacement: 'machine' });
+      expect(spec).toMatchObject({ sideEffectClass: id === 'code.restart' ? 'write' : 'read', safety: 'safe', approval: { result: 'required' }, executionPlacement: 'machine' });
       expect(isPluginSurfaceExcludedActionId(id)).toBe(false);
       expect(spec.pluginCallerPolicy).toBeUndefined();
       for (const surface of ['ui', 'agent', 'mcp', 'cli', 'plugin'] as const) {
@@ -50,5 +75,18 @@ describe('search-backed code Actions', () => {
       }
       expect(isApprovalRequiredByActionsSettings(id, { v: 1, actions: { [id]: { approvalRequiredSurfaces: ['agent'] } } }, { surface: 'agent' })).toBe(true);
     }
+  });
+
+  it('keeps the language-server selector distinct from the Home and validates semantic hashes', async () => {
+    const requests: unknown[] = [];
+    const executor = createActionExecutor({
+      languageIntelligenceRestart: async (args: unknown, context: unknown) => { requests.push({ args, context }); return { status: 'ok' }; },
+      languageIntelligenceQuery: async () => ({ status: 'ok', kind: 'hover', sections: [] }),
+    } as unknown as ActionExecutorDeps);
+    expect(await executor.execute('code.restart', { machineId: 'machine', rootPath: '/repo', serverId: 'language.definition' },
+      { surface: 'ui', authority: 'present_user', serverId: 'home' })).toEqual({ ok: true, result: { status: 'ok' } });
+    expect(requests).toMatchObject([{ args: { machineId: 'machine', request: { rootPath: '/repo', serverId: 'language.definition' } }, context: { serverId: 'home' } }]);
+    expect(await executor.execute('code.hover.get', { machineId: 'machine', rootPath: '/repo', path: 'a.ts', line: 1, character: 0 },
+      { surface: 'agent' })).toMatchObject({ ok: false, errorCode: 'invalid_response' });
   });
 });

@@ -1,4 +1,5 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { DaemonLspQueryRequest, DaemonLspQueryResponse, DaemonLspRestartRequest, DaemonLspRestartResponse } from '../../machines/languageIntelligence.js';
 import type { WorkspaceFilesReplacePreviewActionInput, WorkspaceFilesReplaceActionInput } from '../actionSpecs.js';
 import type { DaemonWorkspaceFileReplacePreviewResponse, DaemonWorkspaceFileReplaceApplyResponse } from '../../machines/workspaceFiles.js';
 import type { PetChooseInputV1 } from '../../pets/selection.js';
@@ -1723,6 +1724,8 @@ export type ActionExecutorDeps = Readonly<{
   machinesAgentsList?: (args: MachinesAgentsListInput & Readonly<{ draftDefinitions?: readonly MachineAcpInventoryDefinition[] }>, context: ActionExecutorContext) => Promise<MachinesAgentsListOutput | ActionExecuteFailure>;
   workflowEventsList?: (args: WorkflowEventsListInputV1, context: ActionExecutorContext) => Promise<WorkflowEventsListOutputV1 | ActionExecuteFailure>;
   workspaceFilesSearch?: (args: PublicActionInputById['workspace.files.search'], context: ActionExecutorContext) => Promise<DaemonWorkspaceFileSearchResponse | ActionExecuteFailure>;
+  languageIntelligenceQuery?: (args: Readonly<{ machineId: string; request: DaemonLspQueryRequest }>, context: ActionExecutorContext) => Promise<DaemonLspQueryResponse | ActionExecuteFailure>;
+  languageIntelligenceRestart?: (args: Readonly<{ machineId: string; request: DaemonLspRestartRequest }>, context: ActionExecutorContext) => Promise<DaemonLspRestartResponse | ActionExecuteFailure>;
   workspaceFilesReplacePreview?: (args: WorkspaceFilesReplacePreviewActionInput, context: ActionExecutorContext) => Promise<DaemonWorkspaceFileReplacePreviewResponse | ActionExecuteFailure>;
   workspaceFilesReplace?: (args: WorkspaceFilesReplaceActionInput, context: ActionExecutorContext) => Promise<DaemonWorkspaceFileReplaceApplyResponse | ActionExecuteFailure>;
   machineAgentInstallStart?: (args: DaemonAgentInstallStartRequest & { machineId: string; serverId?: string; signal?: AbortSignal }) => Promise<DaemonAgentInstallStartResponse | ActionExecuteFailure>;

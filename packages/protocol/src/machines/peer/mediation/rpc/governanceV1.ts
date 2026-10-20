@@ -173,6 +173,7 @@ const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
   [RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS]: 'daemon.filesystem.listRoots',
   [RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY]: 'daemon.filesystem.browseDirectory',
   [RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH]: 'workspace.files.search',
+  [RPC_METHODS.DAEMON_LSP_RESTART]: 'code.restart',
   [RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW]: 'workspace.files.replace.preview',
   [RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY]: 'workspace.files.replace',
   [RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS]: 'bugreport.collectDiagnostics',
@@ -414,6 +415,11 @@ export function resolveMachineRpcGovernance(method: string): MachineRpcGovernanc
   }
   if (
     method === RPC_METHODS.STOP_DAEMON
+    // The query kind selects its public code.* Action. Sync/watch are the
+    // internal editor transport, so no single Action can own these envelopes.
+    || method === RPC_METHODS.DAEMON_LSP_SYNC
+    || method === RPC_METHODS.DAEMON_LSP_QUERY
+    || method === RPC_METHODS.DAEMON_LSP_WATCH
     || SESSION_SPAWN_PRIVATE_INTERNAL_METHODS.has(method)
     || PMS5_DIRECT_INTERNAL_METHODS.has(method)
     || A16X_PLUGIN_UI_INTERNAL_METHODS.has(method)
