@@ -10,12 +10,12 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
     GlobalWorkerOptions: { workerSrc: '' },
     getDocument: () => ({
         promise: boundary.protected ? Promise.reject(Object.assign(new Error('password'), { name: 'PasswordException' })) : Promise.resolve({
-            numPages: 3, destroy: async () => { boundary.destroyed++; },
+            numPages: 3,
             getPage: async () => ({ getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale }),
                 getTextContent: async () => ({ items: [{ str: 'retry retry retry' }] }),
                 render: () => ({ promise: Promise.resolve(), cancel: () => {} }),
             }),
-        }), destroy: async () => {},
+        }), destroy: async () => { boundary.destroyed++; },
     }),
     TextLayer: class {
         textDivs: HTMLElement[] = [];
@@ -37,7 +37,7 @@ describe('native PDF composed bridge', () => {
         globalThis.IntersectionObserver = class {
             constructor(callback: IntersectionObserverCallback) { intersections = callback; }
             observe() {} unobserve() {} takeRecords() { return []; } disconnect() { disconnected = true; }
-            root = null; rootMargin = '150%'; thresholds = [0];
+            root = null; rootMargin = '150%'; scrollMargin = '0px'; thresholds = [0];
         };
         const messages: PdfWebViewMessage[] = [];
         window.ReactNativeWebView = { postMessage: raw => { const parsed = parsePdfWebViewMessage(raw); if (!parsed) throw new Error('Invalid PDF metadata'); messages.push(parsed); } };
@@ -62,7 +62,7 @@ describe('native PDF composed bridge', () => {
             window.__pdfBegin(bytes.length); window.__pdfAppend(btoa(String.fromCharCode(...bytes))); await window.__pdfOpen();
             expect(messages.at(-1)).toEqual({ type: 'state', state: 'protected' });
             expect(container.querySelectorAll('canvas')).toHaveLength(0);
-            expect(boundary.destroyed).toBe(1);
+            expect(boundary.destroyed).toBe(2);
             await window.__pdfDispose();
             expect(disconnected).toBe(true);
             expect(revoked).toEqual(['blob:pdf-test-worker']);

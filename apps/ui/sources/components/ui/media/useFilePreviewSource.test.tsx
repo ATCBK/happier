@@ -66,6 +66,25 @@ describe('useFilePreviewSource', () => {
         await hook.unmount();
     });
 
+    it('reports the shared transfer progress while a workspace preview downloads', async () => {
+        transfer.setPayload(new Uint8Array([1, 2, 3, 4, 5]), 'clip.mp4');
+        const held = transfer.deferNextComplete();
+        const input = {
+            enabled: true, source: { kind: 'workspace' as const, scope: fixture.scope, filePath: 'clip.mp4' },
+            mimeType: 'video/mp4', sizeBytes: 5, cacheKey: 'clip-revision',
+        };
+        const first = await renderHook(() => useFilePreviewSource(input));
+        await vi.waitFor(() => expect(first.getCurrent()).toMatchObject({ status: 'loading', progress: { receivedBytes: 5, totalBytes: 5 } }));
+        // A second consumer of the same fill (the stage over the body) reads the one transfer's bytes.
+        const joined = await renderHook(() => useFilePreviewSource(input));
+        expect(joined.getCurrent()).toMatchObject({ status: 'loading', progress: { receivedBytes: 5, totalBytes: 5 } });
+        held.resolve();
+        await vi.waitFor(() => expect(first.getCurrent().status).toBe('loaded'));
+        expect(transfer.prepares).toHaveLength(1);
+        await joined.unmount();
+        await first.unmount();
+    });
+
     it('does not take ownership of pre-materialized URIs', async () => {
         const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
         const hook = await renderHook(() => useFilePreviewSource({ enabled: true, source: { kind: 'uri', uri: 'blob:plugin-owned' } }));

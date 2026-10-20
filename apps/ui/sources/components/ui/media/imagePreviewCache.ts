@@ -8,6 +8,10 @@ export type ImagePreviewCacheValue =
     | Readonly<{ status: 'loaded'; uri: string; cleanup?: (() => void | Promise<void>) | null; byteLength?: number | null; mimeType?: string }>
     | Readonly<{ status: 'error'; error: string }>;
 
+/** A shared fill's bytes so far; every consumer of the key sees the one transfer's progress. */
+export type ImagePreviewCacheProgress = Readonly<{ receivedBytes: number; totalBytes: number }>;
+type ProgressListener = (progress: ImagePreviewCacheProgress) => void;
+
 export type ImagePreviewCacheEntry = Readonly<{
     value: ImagePreviewCacheValue;
     byteSize: number;
@@ -26,7 +30,8 @@ export type ImagePreviewCacheOptions = Readonly<{
 export class ImagePreviewCache {
     private readonly entries = new Map<string, ImagePreviewCacheEntry>();
     private readonly retained = new Map<string, number>();
-    private readonly pending = new Map<string, { controller: AbortController; promise: Promise<ImagePreviewCacheValue> }>();
+    private readonly pending = new Map<string, { controller: AbortController; promise: Promise<ImagePreviewCacheValue>; progress: ImagePreviewCacheProgress | null }>();
+    private readonly progressListeners = new Map<string, Set<ProgressListener>>();
     private totalBytes = 0;
     private maxEntries: number;
     private maxTotalBytes: number;
@@ -64,14 +69,23 @@ export class ImagePreviewCache {
     }
 
     /** The cache owns a shared fill; one disappearing consumer cannot cancel another's read. */
-    load(key: ImagePreviewCacheKey, loader: (signal: AbortSignal) => Promise<ImagePreviewCacheValue>): Promise<ImagePreviewCacheValue> {
+    load(
+        key: ImagePreviewCacheKey,
+        loader: (signal: AbortSignal, onProgress: ProgressListener) => Promise<ImagePreviewCacheValue>,
+    ): Promise<ImagePreviewCacheValue> {
         const cached = this.get(key);
         if (cached) return Promise.resolve(cached);
         const storageKey = this.toStorageKey(key);
         const pending = this.pending.get(storageKey);
         if (pending && !pending.controller.signal.aborted) return pending.promise;
         const controller = new AbortController();
-        const promise = loader(controller.signal).then(value => {
+        const report: ProgressListener = (progress) => {
+            const current = this.pending.get(storageKey);
+            if (!current || current.controller !== controller) return;
+            current.progress = progress;
+            for (const listener of this.progressListeners.get(storageKey) ?? []) listener(progress);
+        };
+        const promise = loader(controller.signal, report).then(value => {
             // A cancelled fill must not revoke a retry's mounted URI by replacing it.
             if (controller.signal.aborted && (this.entries.has(storageKey) || this.pending.get(storageKey)?.promise !== promise)) {
                 this.cleanupValue(value);
@@ -83,8 +97,22 @@ export class ImagePreviewCache {
         }).finally(() => {
             if (this.pending.get(storageKey)?.promise === promise) this.pending.delete(storageKey);
         });
-        this.pending.set(storageKey, { controller, promise });
+        this.pending.set(storageKey, { controller, promise, progress: null });
         return promise;
+    }
+
+    /** Follows the key's in-flight fill (current progress first); a consumer joining late sees the same bytes. */
+    observeProgress(key: ImagePreviewCacheKey, listener: ProgressListener): () => void {
+        const storageKey = this.toStorageKey(key);
+        const listeners = this.progressListeners.get(storageKey) ?? new Set<ProgressListener>();
+        listeners.add(listener);
+        this.progressListeners.set(storageKey, listeners);
+        const current = this.pending.get(storageKey)?.progress;
+        if (current) listener(current);
+        return () => {
+            listeners.delete(listener);
+            if (listeners.size === 0) this.progressListeners.delete(storageKey);
+        };
     }
 
     setLimits(limits: Readonly<{ maxEntries: number; maxTotalBytes: number }>): void {

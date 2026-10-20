@@ -11,6 +11,7 @@ import {
 import { WEBVIEW_INJECTED_MESSAGE_MAX_BYTES } from '@/components/ui/webview/bridge/useWebViewBridgeMessenger';
 import { t } from '@/text';
 
+import { MediaLoadStoppedState } from '../MediaDownloadProgress';
 import { useFilePreviewSource } from '../useFilePreviewSource';
 import { createPdfBridgeFindModel } from './pdfBridgeFindModel';
 import {
@@ -57,9 +58,10 @@ type BodyState =
 export function PdfViewer(props: PdfViewerProps) {
   const { theme } = useUnistyles();
   const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
+  const [stopped, setStopped] = React.useState(false);
   const preview = useFilePreviewSource({
     ...props.source,
-    enabled: props.source.enabled && props.isActive,
+    enabled: props.source.enabled && props.isActive && !stopped,
   });
   const webView = React.useRef<WebView>(null);
   const inject = React.useCallback(
@@ -191,7 +193,16 @@ export function PdfViewer(props: PdfViewerProps) {
 
   return (
     <PdfViewerFrame testID={props.testID} presentation={props.presentation}>
-      {failed ? (
+      {stopped ? (
+        <MediaLoadStoppedState
+          testID="pdf-viewer-stopped"
+          title={props.title}
+          onLoadAgain={() => setStopped(false)}
+          {...(props.onOpenInDefaultApp
+            ? { handoff: { label: t('files.viewer.openInDefaultApp'), onPress: props.onOpenInDefaultApp } }
+            : {})}
+        />
+      ) : failed ? (
         <PdfViewerFailureState
           failure={failed.failure}
           title={props.title}
@@ -227,20 +238,11 @@ export function PdfViewer(props: PdfViewerProps) {
             onMessage={onMessage}
           />
           {state.status === 'loading' ? (
-            <View
-              style={{
-                position: 'absolute',
-                top: 0,
-                right: 0,
-                bottom: 0,
-                left: 0,
-                justifyContent: 'center',
-                backgroundColor: theme.colors.surface.inset,
-              }}
-              pointerEvents="none"
-            >
-              <PdfViewerLoadingState />
-            </View>
+            <PdfViewerLoadingState
+              covers
+              progress={preview.status === 'loading' ? preview.progress : null}
+              onCancel={() => setStopped(true)}
+            />
           ) : null}
         </View>
       )}

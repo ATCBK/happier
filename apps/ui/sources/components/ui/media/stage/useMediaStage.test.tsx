@@ -43,6 +43,30 @@ describe('canonical media stage opener', () => {
         } finally { await screen.unmount(); }
     });
 
+    it('empties the origin slot while the picture is out and restores it when the stage closes', async () => {
+        const { openMediaStage } = await import('./useMediaStage');
+        const { MediaStage } = await import('./MediaStage');
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const { ModalProvider } = await import('@/modal');
+        // The thumbnail's native view handle is the platform boundary the stage drives (lab MS1d).
+        const styles: Array<Readonly<{ opacity?: number }>> = [];
+        const origin = {
+            measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(12, 40, 120, 72),
+            setNativeProps: (props: { style?: { opacity?: number } }) => { if (props.style) styles.push(props.style); },
+        };
+        const originRef = { current: origin as unknown as View };
+        const source = { enabled: true, source: { kind: 'uri' as const, uri: 'blob:hero' } };
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+        try {
+            await act(async () => { openMediaStage([{ kind: 'image', title: 'hero.png', source, originRef }]); });
+            expect(styles).toEqual([]);
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 1284, height: 902 } }));
+            expect(styles.at(-1)).toEqual({ opacity: 0 });
+            await act(async () => screen.findByType(MediaStage).props.onClose());
+            expect(styles.at(-1)).toEqual({ opacity: 1 });
+        } finally { await screen.unmount(); }
+    });
+
     it('keeps stage keyboard handlers on the caller runtime across the modal host boundary', async () => {
         const { useMediaStage } = await import('./useMediaStage');
         const { KeyboardShortcutProvider, useKeyboardCommand } = await import('@/keyboard/KeyboardShortcutProvider');

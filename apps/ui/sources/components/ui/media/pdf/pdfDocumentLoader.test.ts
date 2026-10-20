@@ -12,7 +12,7 @@ describe('PDF document lifetime', () => {
         const oldDestroy = deferred<void>();
         let count = 0;
         const loader = createPdfDocumentLoader({ getDocument: () => count++ === 0
-            ? { promise: Promise.resolve({ numPages: 1, destroy: () => oldDestroy.promise }), destroy: async () => {} }
+            ? { promise: Promise.resolve({ numPages: 1 }), destroy: () => oldDestroy.promise }
             : { promise: Promise.reject(new Error('InvalidPDFException')), destroy: async () => {} }, setDocument: () => {} });
         await loader.load(new TextEncoder().encode('%PDF-1.7'));
         const pending = loader.load(new TextEncoder().encode('%PDF-broken'));
@@ -23,7 +23,7 @@ describe('PDF document lifetime', () => {
         await loader.dispose();
     });
     it('accepts a PDF header inside the canonical classifier preamble window', async () => {
-        const document = { numPages: 1, destroy: async () => {} };
+        const document = { numPages: 1 };
         const loader = createPdfDocumentLoader({ getDocument: () => ({ promise: Promise.resolve(document), destroy: async () => {} }), setDocument: () => {} });
         expect(await loader.load(new TextEncoder().encode('\uFEFFgenerated preamble\n%PDF-1.7'))).toEqual({ status: 'ready', document });
         await loader.dispose();
@@ -45,21 +45,21 @@ describe('PDF document lifetime', () => {
         const first = loader.load(bytes);
         const second = loader.load(bytes);
         const third = loader.load(bytes);
-        const documents = [0, 1, 2].map((id) => ({ numPages: 1, destroy: async () => { destroyed.push(id + 10); } }));
+        const documents = [0, 1, 2].map(() => ({ numPages: 1 }));
         pending[2]!.resolve(documents[2]!); await third;
-        pending[0]!.resolve(documents[0]!); await first;
-        pending[1]!.resolve(documents[1]!); await second;
+        pending[0]!.resolve(documents[0]!); expect(await first).toEqual({ status: 'cancelled' });
+        pending[1]!.resolve(documents[1]!); expect(await second).toEqual({ status: 'cancelled' });
         expect(shown.filter(Boolean)).toEqual([documents[2]]);
-        expect(destroyed).toEqual(expect.arrayContaining([0, 1, 10, 11]));
+        expect(destroyed).toEqual([0, 1]);
         await loader.dispose();
-        expect(destroyed).toContain(12);
+        expect(destroyed).toEqual([0, 1, 2]);
         expect(shown.at(-1)).toBeNull();
     });
 
-    it('detaches renders, aborts viewer listeners, then destroys a shown document', async () => {
+    it('detaches renders, aborts viewer listeners, then destroys the shown document loading task', async () => {
         const events: string[] = [];
-        const document = { numPages: 2, destroy: async () => { events.push('destroy'); } };
-        const loader = createPdfDocumentLoader({ getDocument: () => ({ promise: Promise.resolve(document), destroy: async () => {} }),
+        const document = { numPages: 2 };
+        const loader = createPdfDocumentLoader({ getDocument: () => ({ promise: Promise.resolve(document), destroy: async () => { events.push('destroy'); } }),
             setDocument: (next, signal) => {
                 if (next) signal!.addEventListener('abort', () => events.push('abort'));
                 else events.push('detach');

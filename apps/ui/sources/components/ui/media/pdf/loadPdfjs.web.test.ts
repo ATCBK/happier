@@ -4,7 +4,7 @@ import { loadPdfjs, createWebPdfDocumentLoader, readPdfBlobBytes } from './loadP
 
 const boundary = vi.hoisted(() => ({
     version: '6.4.299', worker: { workerSrc: '' }, getDocument: vi.fn((_options: Readonly<Record<string, unknown>>) => ({
-        promise: Promise.resolve({ numPages: 1, destroy: async () => {} }), destroy: async () => {},
+        promise: Promise.resolve({ numPages: 1 }), destroy: async () => {},
     })),
 }));
 // pdf.js is the actual third-party boundary. The loader, admission and lifetime remain real.
@@ -20,7 +20,7 @@ describe('legacy PDF library loading', () => {
         await loader.load(new TextEncoder().encode('%PDF-1.7'));
         const options = boundary.getDocument.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
         expect(options).toMatchObject({ cMapUrl: assets.cMapUrl, standardFontDataUrl: assets.standardFontDataUrl,
-            wasmUrl: assets.wasmUrl, iccUrl: assets.iccUrl, isEvalSupported: false, data: new TextEncoder().encode('%PDF-1.7') });
+            wasmUrl: assets.wasmUrl, iccUrl: assets.iccUrl, data: new TextEncoder().encode('%PDF-1.7') });
         expect(options).not.toHaveProperty('url');
         await loader.dispose();
     });

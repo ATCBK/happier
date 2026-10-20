@@ -48,6 +48,7 @@ import { useWheelZoom } from '../zoom/useWheelZoom';
 import { useZoomableViewport } from '../zoom/useZoomableViewport';
 import { dismissPresentation, resolveZoomBounds } from '../zoom/zoomGeometry';
 import type { MediaStageItem, MediaStageProps } from './mediaStageItems';
+import { hideStageOrigin } from './hideStageOrigin';
 import { useMediaStageGallery } from './useMediaStageGallery';
 import { useMediaStageKeyboard } from './useMediaStageKeyboard';
 
@@ -598,6 +599,12 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
       });
     }
   }, [chromeValue, flightStarted, immersive, phase, reducedMotion]);
+
+  // From the first flight frame until the stage unmounts, the current item's thumbnail slot is empty.
+  React.useLayoutEffect(() => {
+    const node = flightStarted ? item.originRef?.current : null;
+    return node ? hideStageOrigin(node) : undefined;
+  }, [flightStarted, item.originRef]);
 
   const finishOpen = React.useCallback(
     () => setPhase((current) => (current === 'opening' ? 'open' : current)),

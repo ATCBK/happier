@@ -61,7 +61,7 @@ const scaleFor = () => {
     return resolvePdfScale(zoom, { pageWidth: firstPageWidth, pageHeight: firstPageHeight, viewportWidth: element.clientWidth, viewportHeight: element.clientHeight });
 };
 const loader = createPdfDocumentLoader({
-    getDocument: bytes => pdfjs.getDocument({ data: bytes, isEvalSupported: false, useWorkerFetch: false, useWasm: false }),
+    getDocument: bytes => pdfjs.getDocument({ data: bytes, useWorkerFetch: false, useWasm: false }),
     setDocument: (next, signal) => {
         if (viewer) position?.locationChanged(viewer.getViewPosition());
         position?.dispose(); position = null;

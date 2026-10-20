@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/find/FindBarPlacement';
 import { t } from '@/text';
 
+import { MediaLoadStoppedState } from '../MediaDownloadProgress';
 import { useFilePreviewSource } from '../useFilePreviewSource';
 import {
   createWebPdfDocumentLoader,
@@ -83,9 +84,11 @@ function usePdfPageStylesheet() {
 export function PdfViewer(props: PdfViewerProps) {
   usePdfPageStylesheet();
   const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
+  // Cancel stops the transfer until the person loads again (lab FV5l: the page keeps its hand-off).
+  const [stopped, setStopped] = React.useState(false);
   const preview = useFilePreviewSource({
     ...props.source,
-    enabled: props.source.enabled && props.isActive,
+    enabled: props.source.enabled && props.isActive && !stopped,
   });
   const containerRef = React.useRef<View>(null);
   const viewerRef = React.useRef<Viewer | null>(null);
@@ -301,9 +304,18 @@ export function PdfViewer(props: PdfViewerProps) {
         {...({ dataSet: { pdfViewer: props.presentation ?? 'page' } } as unknown as Record<string, unknown>)}
         tabIndex={0}
         accessibilityLabel={props.title}
-        style={{ flex: 1, minHeight: 0, display: failed ? 'none' : 'flex' }}
+        style={{ flex: 1, minHeight: 0, display: failed || stopped ? 'none' : 'flex' }}
       />
-      {failed ? (
+      {stopped ? (
+        <MediaLoadStoppedState
+          testID="pdf-viewer-stopped"
+          title={props.title}
+          onLoadAgain={() => setStopped(false)}
+          {...(props.onOpenInDefaultApp
+            ? { handoff: { label: t('files.viewer.openInDefaultApp'), onPress: props.onOpenInDefaultApp } }
+            : {})}
+        />
+      ) : failed ? (
         <PdfViewerFailureState
           failure={failed.failure}
           title={props.title}
@@ -312,19 +324,10 @@ export function PdfViewer(props: PdfViewerProps) {
           onOpenInDefaultApp={props.onOpenInDefaultApp}
         />
       ) : state.status === 'loading' ? (
-        <View
-          style={{
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            bottom: 0,
-            left: 0,
-            justifyContent: 'center',
-          }}
-          pointerEvents="none"
-        >
-          <PdfViewerLoadingState />
-        </View>
+        <PdfViewerLoadingState
+          progress={preview.status === 'loading' ? preview.progress : null}
+          onCancel={() => setStopped(true)}
+        />
       ) : null}
       {props.showPagePill !== false && state.status === 'ready' ? (
         <PdfPagePill info={pageInfo} zoomPercent={percent} tick={pillTick} />

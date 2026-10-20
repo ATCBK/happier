@@ -12,7 +12,7 @@ describe('PDF canvas visibility and teardown', () => {
             constructor(callback: IntersectionObserverCallback) { observer = callback; }
             observe() {} unobserve() {} takeRecords() { return []; }
             disconnect() { disconnected = true; }
-            root = null; rootMargin = '150%'; thresholds = [0];
+            root = null; rootMargin = '150%'; scrollMargin = '0px'; thresholds = [0];
         };
         let cancelled = 0;
         // pdf.js is the library boundary. The proxy exposes only methods this engine consumes.

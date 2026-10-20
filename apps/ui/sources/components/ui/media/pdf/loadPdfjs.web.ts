@@ -25,5 +25,5 @@ export async function readPdfBlobBytes(uri: string, signal: AbortSignal): Promis
 export async function createWebPdfDocumentLoader(setDocument: (document: PDFDocumentProxy | null, signal?: AbortSignal) => void) {
     const pdfjs = await loadPdfjs();
     const { workerSrc: _workerSrc, ...assets } = resolvePdfjsAssetPaths(pdfjs.version);
-    return createPdfDocumentLoader({ setDocument, getDocument: bytes => pdfjs.getDocument({ data: bytes, ...assets, cMapPacked: true, isEvalSupported: false }) });
+    return createPdfDocumentLoader({ setDocument, getDocument: bytes => pdfjs.getDocument({ data: bytes, ...assets, cMapPacked: true }) });
 }

@@ -9,7 +9,9 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { GlassPanel } from '@/components/ui/glass/GlassPanel';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
-import type { UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
+import { formatPreviewProgressMegabytes } from '@/components/ui/media/MediaDownloadProgress';
+import type { FilePreviewProgress, UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -99,14 +101,41 @@ export function PdfViewerFailureState(
   );
 }
 
-export function PdfViewerLoadingState() {
+/**
+ * The PDF's first wait. Once bytes flow, the pane's live line names them and offers Cancel
+ * ("Loading PDF · 0.7 of 1.8 MB", lab files FV5l); before that, the calm loading card.
+ */
+export function PdfViewerLoadingState(
+  props: Readonly<{
+    progress?: FilePreviewProgress | null;
+    onCancel: () => void;
+    /** Native: the overlay hides the WebView while it boots. */
+    covers?: boolean;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const background = props.covers ? { backgroundColor: theme.colors.surface.inset } : null;
+  if (props.progress) {
+    return (
+      <View style={[StyleSheet.absoluteFill, background]} pointerEvents="box-none">
+        <SurfaceFreshnessLine
+          testID="pdf-viewer-loading"
+          busy
+          reason={`${t('files.viewer.pdfLoading')} · ${t('files.viewer.megabytesOf', formatPreviewProgressMegabytes(props.progress))}`}
+          action={{ label: t('common.cancel'), onPress: props.onCancel, testID: 'pdf-viewer-loading-cancel' }}
+        />
+      </View>
+    );
+  }
   return (
-    <SurfaceStateCard
-      testID="pdf-viewer-loading"
-      kind="loading"
-      size="pane"
-      title={t('files.viewer.pdfLoading')}
-    />
+    <View style={[StyleSheet.absoluteFill, styles.centred, background]} pointerEvents="none">
+      <SurfaceStateCard
+        testID="pdf-viewer-loading"
+        kind="loading"
+        size="pane"
+        title={t('files.viewer.pdfLoading')}
+      />
+    </View>
   );
 }
 
@@ -176,6 +205,9 @@ export function PdfViewerFrame(
 }
 
 const styles = StyleSheet.create((theme) => ({
+  centred: {
+    justifyContent: 'center',
+  },
   stageFrame: {
     backgroundColor: 'transparent',
     alignSelf: 'center',
