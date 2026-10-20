@@ -91,9 +91,7 @@ import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolve
 import type { SessionListRowViewModel } from './sessionListRowViewModels';
 import type { SessionListGuardState } from '@/sync/domains/session/listing/sessionListRenderable';
 import { GuardCountdown } from '@/components/machines/guard/GuardCountdown';
-import Reanimated, { FadeIn } from 'react-native-reanimated';
-import { motionTokens } from '@/components/ui/motion/motionTokens';
-import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { WordCrossFade } from '@/components/ui/motion/WordCrossFade';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
 import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
@@ -1909,7 +1907,7 @@ const SessionItemContent = React.memo(
                                 />
                             ) : null}
                             {showTrailingActivityTime || showTrailingGuardWord ? (
-                                <SessionRowTrailingWordFade wordKey={showTrailingGuardWord && guardState ? guardState.kind : 'time'}>
+                                <WordCrossFade wordKey={showTrailingGuardWord && guardState ? guardState.kind : 'time'}>
                                     {showTrailingGuardWord && guardState ? (
                                         <SessionRowGuardWord guardState={guardState} />
                                     ) : (
@@ -1920,7 +1918,7 @@ const SessionItemContent = React.memo(
                                             {activityTimeLabel}
                                         </Text>
                                     )}
-                                </SessionRowTrailingWordFade>
+                                </WordCrossFade>
                             ) : null}
                         </View>
                     ) : null}
@@ -2065,24 +2063,6 @@ const SessionItemContent = React.memo(
         );
     },
 );
-
-/**
- * The row's trailing word changes between the idle time, "Stops in 4:52" and "Stopped" with one short
- * cross-fade (plan 50 GM); a row that mounts already showing a word (scrolling) simply shows it, and
- * reduced motion changes the word at once.
- */
-function SessionRowTrailingWordFade(props: Readonly<{ wordKey: string; children: React.ReactNode }>) {
-    const reducedMotion = useReducedMotionPreference();
-    const firstKey = React.useRef(props.wordKey);
-    const changed = React.useRef(false);
-    if (props.wordKey !== firstKey.current) changed.current = true;
-    return (
-        <Reanimated.View key={props.wordKey}
-            entering={changed.current && !reducedMotion ? FadeIn.duration(motionTokens.guardMoment.wordCrossFadeMs) : undefined}>
-            {props.children}
-        </Reanimated.View>
-    );
-}
 
 /** The row's guard word (lab `rg` G3-2): amber "Stops in 4:52" while Keep running is still possible; a quiet moon after. */
 function SessionRowGuardWord(props: Readonly<{ guardState: SessionListGuardState }>) {
