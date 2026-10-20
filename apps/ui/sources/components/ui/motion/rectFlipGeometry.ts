@@ -8,6 +8,14 @@ export function rectFlipFrame(origin: RectFlipOrigin): RectFlipFrame {
     return 'imageRect' in origin ? origin : { imageRect: origin, clipRect: origin };
 }
 
+/** The image's uncropped bounds inside a centre-cover thumbnail, in the same window coordinates. */
+export function coverRectFlipOrigin(clipRect: WindowFlightRect, image: Pick<WindowFlightRect, 'width' | 'height'>): RectFlipFrame {
+    const scale = Math.max(clipRect.width / image.width, clipRect.height / image.height);
+    const width = image.width * scale;
+    const height = image.height * scale;
+    return { imageRect: { x: clipRect.x + (clipRect.width - width) / 2, y: clipRect.y + (clipRect.height - height) / 2, width, height }, clipRect };
+}
+
 function interpolateRect(from: WindowFlightRect, to: WindowFlightRect, progress: number): WindowFlightRect {
     'worklet';
     return {

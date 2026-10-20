@@ -2232,6 +2232,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       )}
       <TriageListRowEnvironmentContext.Provider value={rowEnvironment}>
         <Collection<TriageListItemV1>
+          resizeKey="triage"
           model={collection}
           anatomy={anatomy}
           accessibilityLabel={pageTitle}

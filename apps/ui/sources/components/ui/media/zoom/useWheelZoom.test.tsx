@@ -38,6 +38,8 @@ describe('web wheel zoom boundary', () => {
         zoomed = true;
         expect(wheel(target, { deltaX: 10, deltaY: 20 }).defaultPrevented).toBe(true);
         expect(onPan).toHaveBeenCalledWith({ x: -10, y: -20 });
+        wheel(target, { deltaX: 1, deltaY: 1, deltaMode: 2 });
+        expect(onPan).toHaveBeenLastCalledWith({ x: -400, y: -200 });
         await act(async () => screen.unmount());
         expect(wheel(target, { deltaY: 30, metaKey: true }).defaultPrevented).toBe(false);
         expect(onZoom).toHaveBeenCalledTimes(1);
