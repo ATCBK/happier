@@ -14,6 +14,10 @@ describe('Qwen plugin manifest', () => {
     expect(PLUGIN_MANIFEST).toMatchObject({
       hostAccess: {
         required: [{
+          id: 'qwen-native-history',
+          capability: 'filesystem',
+          scope: { locations: [{ root: 'workspace' }], access: ['read'] },
+        }, {
           id: 'qwen-process',
           capability: 'process',
           scope: { executables: [{ kind: 'systemTool', id: 'qwen-cli' }] },
@@ -65,10 +69,11 @@ describe('Qwen plugin manifest', () => {
           surfaces: {
             externalSession: {
               sources: [{
-                sourceKind: 'qwenAcpSessionList',
-                resumeOnly: true,
-                schema: { fields: [{ kind: 'literal', name: 'kind', value: 'qwenAcpSessionList' }] },
-                key: { segments: [{ kind: 'literal', value: 'qwenAcpSessionList' }] },
+                sourceKind: 'qwenRuntimeDir',
+                contentSearch: false,
+                schema: { fields: [{ kind: 'literal', name: 'kind', value: 'qwenRuntimeDir' },
+                  { kind: 'string', name: 'runtimeDir', min: 1, max: 10_000, nullish: true }] },
+                key: { segments: [{ kind: 'literal', value: 'qwenRuntimeDir' }, { kind: 'field', field: 'runtimeDir' }] },
                 instances: [{ kind: 'default', constants: {} }],
               }],
             },
@@ -79,9 +84,9 @@ describe('Qwen plugin manifest', () => {
     });
   });
 
-  it('owes no custom daemon runtime beside the host-owned ACP session-list producer', () => {
+  it('declares only the native reader registration beside the shared ACP runtime', () => {
     expect(derivePluginDaemonContributionRegistrationRights(
       PLUGIN_MANIFEST.contributes as unknown as Readonly<Record<string, unknown>>,
-    )).toEqual([]);
+    )).toMatchObject([{ family: 'agents', localId: 'qwen', target: { realm: 'daemon' }, requiredFields: ['externalSessions'] }]);
   });
 });

@@ -5,11 +5,11 @@ import { activate } from './manifest.js';
 import { PLUGIN_MANIFEST } from './manifest.js';
 
 describe('Qwen activation', () => {
-  it('leaves Qwen ACP and resume-only listing to their shared host owners', async () => {
+  it('registers the native history reader beside the host-owned ACP runtime', async () => {
     const activation = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
     try {
-      expect(activation.registrations()).not.toContainEqual({ family: 'agents', localId: 'qwen' });
-      expect(activation.registration('agents', 'qwen')).toBeUndefined();
+      expect(activation.registration('agents', 'qwen')?.externalSessions).toBeDefined();
+      expect(activation.registration('agents', 'qwen')?.factory).toBeUndefined();
     } finally {
       await activation.dispose();
     }

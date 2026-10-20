@@ -4,6 +4,7 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 import { QWEN_ACP_RUNTIME_DEFINITION } from './agent/acp/definition.js';
 import { AGENT_DEFINITION } from './agent/definition.js';
 import { QWEN_ACP_COMMAND } from './agent/acp/preflight.js';
+import { qwenExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 
 export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
   id: 'happier.agent.qwen',
@@ -13,6 +14,11 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: {
     required: [{
+      id: 'qwen-native-history',
+      capability: 'filesystem',
+      reason: 'Read native Qwen conversation history.',
+      scope: { locations: [{ root: 'workspace' }], access: ['read'] },
+    }, {
       id: 'qwen-process',
       capability: 'process',
       reason: 'Run the declared Qwen CLI executable.',
@@ -60,22 +66,20 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
           acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
-        // Resume-only: supported Qwen ACP releases answer `session/list`, so
-        // the host's generic ACP source owns discovery and resume in Happier.
-        // This does not claim linked transcript observation or takeover.
         surfaces: {
           externalSession: {
             sources: [{
-              sourceKind: 'qwenAcpSessionList',
-              resumeOnly: true,
-              schema: { fields: [{ kind: 'literal', name: 'kind', value: 'qwenAcpSessionList' }] },
-              key: { segments: [{ kind: 'literal', value: 'qwenAcpSessionList' }] },
+              sourceKind: 'qwenRuntimeDir',
+              contentSearch: false,
+              schema: { fields: [{ kind: 'literal', name: 'kind', value: 'qwenRuntimeDir' },
+                { kind: 'string', name: 'runtimeDir', min: 1, max: 10_000, nullish: true }] },
+              key: { segments: [{ kind: 'literal', value: 'qwenRuntimeDir' }, { kind: 'field', field: 'runtimeDir' }] },
               instances: [{ kind: 'default', constants: {} }],
             }],
           },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          skills: { delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'unsupported',
             nativeRoots: { user: [['.qwen', 'skills'], ['.agents', 'skills']], project: [['.qwen', 'skills'], ['.agents', 'skills']] } },
           surfaces: ['externalSessions'],
           sessions: {
@@ -87,6 +91,7 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
           },
         }),
       },
+      externalSessions: qwenExternalSessionsContribution,
     },
   },
   systemTools: {
