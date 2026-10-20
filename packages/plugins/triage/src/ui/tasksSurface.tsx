@@ -16,14 +16,20 @@ export const renderSurface: RenderSurface = defineUiSurface((context) => {
   }, [context.launchInput]);
   const parsedDraft = TriageTaskDraftLaunchV1Schema.safeParse(context.launchInput);
   const draftId = parsedDraft.success ? parsedDraft.data.draftId : null;
-  // Host context updates can reconstruct equal JSON after the handoff was consumed.
+  const [dismissedDraftId, setDismissedDraftId] = React.useState<string | null>(null);
+  const activeDraftId = draftId === dismissedDraftId ? null : draftId;
+  // A committed host binding may change its facade without retiring the
+  // Account/plugin occurrence. Keep the handoff until the person closes it.
   const createDraft = React.useMemo(() => readTriageTaskDraftLaunch(scope,
-    draftId === null ? undefined : { v: 1, kind: 'createTask', draftId }), [scope, draftId]);
-  React.useEffect(() => {
-    if (createDraft.status === 'ready') createDraft.discard();
-  }, [createDraft]);
+    activeDraftId === null ? undefined : { v: 1, kind: 'createTask', draftId: activeDraftId }), [scope, activeDraftId]);
+  const closeDraft = React.useCallback(() => {
+    if (createDraft.status !== 'ready') return;
+    createDraft.discard();
+    setDismissedDraftId(draftId);
+  }, [createDraft, draftId]);
   if (createDraft.status === 'unavailable') return <Banner tone="warning"
     title={text('plugins.triage.tasks.draftUnavailable', 'This task draft is no longer available. Open it again from the message or action.')} />;
   return <TriageListShell tasksPage {...(context.subPath === undefined ? {} : { subPath: context.subPath })}
-    {...(launch === undefined ? {} : { launch })} {...(createDraft.status === 'ready' ? { createDraft: createDraft.fields } : {})} />;
+    {...(launch === undefined ? {} : { launch })}
+    {...(createDraft.status === 'ready' ? { createDraft: createDraft.fields, onCreateDraftClose: closeDraft } : {})} />;
 });
