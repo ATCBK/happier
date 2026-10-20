@@ -8,6 +8,8 @@ import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus'
 import { MemorySearchResultV1Schema } from '@happier-dev/protocol/memory/memorySearch';
 import { ComposerSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui/composer';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { DaemonLspQueryRequestSchema, DaemonLspQueryResponseSchema, DaemonLspSyncRequestSchema,
+    DaemonLspWatchRequestSchema, DaemonLspRestartRequestSchema } from '@happier-dev/protocol/machines/languageIntelligence';
 import { ExternalSessionCandidateMatchV1Schema, ExternalSessionsCandidatesListRequestSchema,
     ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import { createDeferred, PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, standardCleanup } from '@/dev/testkit';
@@ -199,6 +201,7 @@ describe('FSP search production composition', () => {
             files: [{ path: 'src/a.ts', matches: [{ line: 7, column16: 1, length16: 6,
                 text: 'needle()', before: [], after: [] }] }] });
         answerRpc = request => {
+            if (request.method === `fsp-machine:${RPC_METHODS.DAEMON_LSP_QUERY}`) return { status: 'unavailable', reason: 'no_capable_server' };
             expect(request.method).toBe(`fsp-machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH}`);
             const input = DaemonWorkspaceFileSearchRequestSchema.parse(request.params);
             expect(input).toMatchObject({ rootPath: '/repo', regex: true, matchCase: true });
@@ -219,6 +222,57 @@ describe('FSP search production composition', () => {
         answerRpc = () => { throw Object.assign(new Error('missing'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }); };
         expect(await machineCodeIntelligenceFallback('fsp-machine', query, { serverId, accountId: 'fsp-account' }))
             .toEqual({ status: 'unavailable', reason: 'update_required' });
+    });
+
+    it('uses disk authority for semantic Actions and preserves typed cold, unsaved and older-host results', async () => {
+        const diskHash = 'a'.repeat(64);
+        const answer = DaemonLspQueryResponseSchema.parse({ status: 'ok', kind: 'hover', fileHash: diskHash,
+            sections: [{ serverId: 'typescript', label: 'TypeScript', markdown: 'function needle(): void' }] });
+        let response: unknown = answer;
+        answerRpc = request => {
+            expect(request.method).toBe(`fsp-machine:${RPC_METHODS.DAEMON_LSP_QUERY}`);
+            expect(DaemonLspQueryRequestSchema.parse(request.params)).toEqual({ rootPath: '/repo', path: 'src/a.ts',
+                kind: 'hover', text: 'disk', position: { line: 2, symbol: 'needle', occurrence: 2 } });
+            return response;
+        };
+        const execute = () => createDefaultActionExecutor().execute('code.hover.get', { machineId: 'fsp-machine',
+            rootPath: '/repo', path: 'src/a.ts', line: 3, symbol: 'needle', occurrence: 2 },
+        { surface: 'ui', serverId, expectedAccountId: 'fsp-account' });
+        expect(await execute()).toEqual({ ok: true, result: answer });
+        response = { status: 'loading' };
+        expect(await execute()).toEqual({ ok: true, result: response });
+        response = { status: 'error', errorCode: 'unsaved_editor_changes', diskHash };
+        expect(await execute()).toEqual({ ok: true, result: response });
+        response = { ...answer, fileHash: undefined };
+        expect(await execute()).toMatchObject({ ok: false, errorCode: 'invalid_response' });
+        answerRpc = () => { throw Object.assign(new Error('missing'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }); };
+        expect(await execute()).toEqual({ ok: true, result: { status: 'unavailable', reason: 'update_required' } });
+    });
+
+    it('keeps document operations scoped and routes present-user restart through its Action', async () => {
+        const ops = await import('../machineLanguageIntelligence');
+        const options = { serverId, accountId: 'fsp-account' };
+        answerRpc = request => {
+            if (request.method === `fsp-machine:${RPC_METHODS.DAEMON_LSP_SYNC}`) {
+                expect(DaemonLspSyncRequestSchema.parse(request.params)).toMatchObject({ rootPath: '/repo',
+                    op: { op: 'open', path: 'src/a.ts', text: 'needle()', unsaved: false, version: 1 } });
+                return { status: 'ok', generation: 'g1', version: 1, servers: [] };
+            }
+            if (request.method === `fsp-machine:${RPC_METHODS.DAEMON_LSP_WATCH}`) {
+                expect(DaemonLspWatchRequestSchema.parse(request.params)).toEqual({ rootPath: '/repo', sinceRevision: 0 });
+                return { status: 'ok', revision: 1, servers: [], diagnostics: {} };
+            }
+            expect(request.method).toBe(`fsp-machine:${RPC_METHODS.DAEMON_LSP_RESTART}`);
+            expect(DaemonLspRestartRequestSchema.parse(request.params)).toEqual({ rootPath: '/repo', serverId: 'typescript' });
+            return { status: 'ok' };
+        };
+        expect(await ops.machineLanguageIntelligenceSync('fsp-machine', { rootPath: '/repo', op: { op: 'open',
+            path: 'src/a.ts', languageId: 'typescript', version: 1, text: 'needle()', unsaved: false } }, options))
+            .toMatchObject({ status: 'ok', generation: 'g1', version: 1 });
+        expect(await ops.machineLanguageIntelligenceWatch('fsp-machine', { rootPath: '/repo', sinceRevision: 0 }, options))
+            .toEqual({ status: 'ok', revision: 1, servers: [], diagnostics: {} });
+        expect(await ops.machineLanguageIntelligenceRestartAction('fsp-machine', { rootPath: '/repo', serverId: 'typescript' }, options))
+            .toEqual({ status: 'ok' });
     });
 
     it('finds body-only native text through real sources and keeps a published page stable while another source waits', async () => {
