@@ -25,6 +25,7 @@ import { withYarnInstallGuard } from '../worktrees/yarn_install_guard.mjs';
 
 import {
   REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS,
+  adoptInstalledDependencies,
   bootstrapRemoteDependencies as bootstrapDependencies,
 } from './remote_dependency_bootstrap.mjs';
 
@@ -801,6 +802,27 @@ test('source-test bootstrap admits installed tools without requiring a compiled 
   await bootstrapRemoteDependencies({ ...options, validationKind: 'runtime', componentRelativeDir: 'apps/stack' });
   assert.equal((await stat(join(repoDir, 'packages/emitted/dist/index.js'))).isFile(), true,
     'Stack-native validation keeps its emitted-package contract');
+});
+
+test('a provisioner-installed tree is adopted once and then admitted for local validation without reinstalling', async (t) => {
+  const repoDir = await mkdtemp(join(tmpdir(), 'happier-adopt-installed-'));
+  t.after(async () => rm(repoDir, { recursive: true, force: true }));
+  const native = await installWorkspaceAdmissionProcessFixture(t, repoDir);
+  await mkdir(join(repoDir, 'apps/stack'), { recursive: true });
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await writeFile(join(repoDir, 'apps/stack/package.json'), '{"name":"@fixture/stack","version":"1.0.0"}');
+  await writeFile(join(repoDir, 'yarn.lock'), '# installed by CI\n');
+  // CI ran a plain frozen install: node_modules exists, no admission record.
+  await mkdir(join(repoDir, 'node_modules'), { recursive: true });
+  await writeFile(join(repoDir, 'node_modules/.yarn-integrity'), '{}');
+  const local = { repoDir, validationKind: 'runtime', executionPlacement: 'local', componentRelativeDir: 'apps/ui', env: native.env };
+  await assert.rejects(bootstrapDependencies(local), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' });
+  await adoptInstalledDependencies({ repoDir, env: native.env });
+  await bootstrapDependencies(local);
+  await bootstrapDependencies({ ...local, validationKind: 'source-test', toolsOnly: true });
+  await writeFile(join(repoDir, 'yarn.lock'), '# changed after adoption\n');
+  await assert.rejects(bootstrapDependencies(local), { code: 'HAPPIER_DEPENDENCIES_NEED_REFRESH' },
+    'adoption records the installed inputs; later input changes still require an authorized refresh');
 });
 
 test('remote stage-zero dependency install materializes dependencies without workspace lifecycle scripts', () => {

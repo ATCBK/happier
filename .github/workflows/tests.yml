@@ -291,6 +291,10 @@ jobs:
         run: yarn workspace @happier-dev/cli build:shared --source-dev
       - name: Load the prepared Iroh native runtime
         run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
+      - name: Record the installed dependency tree's admission with the canonical refresh owner
+        # Consumers validate locally and refuse unadmitted trees. The frozen
+        # install above is the authorized refresh; the marker travels in node_modules.
+        run: node apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs --adopt-installed --repo-dir="$GITHUB_WORKSPACE"
       - name: Archive the current run's coherent preparation
         run: |
           set -euo pipefail

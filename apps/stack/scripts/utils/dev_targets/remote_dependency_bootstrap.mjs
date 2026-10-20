@@ -61,6 +61,29 @@ async function prepareInitialUiOutputs({ repoDir, env, force }) {
   });
 }
 
+// A provisioner that already ran the canonical frozen install with lifecycle
+// scripts (CI's prepare job) records that installed tree's admission here,
+// through the same refresh owner and mutation lock, without reinstalling.
+// Later local validation then proves freshness against the recorded inputs.
+export async function adoptInstalledDependencies({
+  repoDir = resolve(process.cwd()),
+  env = process.env,
+  withDependencyRefresh: withDependencyRefreshImpl = withDependencyRefresh,
+} = {}) {
+  if (!existsSync(join(repoDir, 'node_modules'))) {
+    throw new Error(`[local] cannot adopt dependencies at ${repoDir}: node_modules is missing`);
+  }
+  return await withDependencyRefreshImpl(
+    {
+      installDir: repoDir,
+      componentDir: join(repoDir, 'apps', 'stack'),
+      env,
+      onDependenciesReady: async () => await prepareInitialUiOutputs({ repoDir, env, force: false }),
+    },
+    async () => {},
+  );
+}
+
 export async function bootstrapRemoteDependencies({
   repoDir = resolve(process.cwd()),
   validationKind = 'runtime',
@@ -167,6 +190,11 @@ export async function bootstrapRemoteDependencies({
 
 const entryPath = String(process.argv[1] ?? '').trim();
 if (entryPath && pathToFileURL(resolve(entryPath)).href === import.meta.url) {
+  if (process.argv.includes('--adopt-installed')) {
+    const adoptRepo = process.argv.slice(2).find(value => value.startsWith('--repo-dir='));
+    await adoptInstalledDependencies(adoptRepo ? { repoDir: resolve(adoptRepo.slice('--repo-dir='.length)) } : {});
+    process.exit(0);
+  }
   const kind = process.argv.slice(2).find(value => value.startsWith('--validation-kind='));
   const component = process.argv.slice(2).find(value => value.startsWith('--component-relative-dir='));
   const repo = process.argv.slice(2).find(value => value.startsWith('--repo-dir='));
