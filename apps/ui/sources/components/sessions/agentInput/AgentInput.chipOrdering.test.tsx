@@ -36,7 +36,7 @@ function flattenJson(
 }
 
 describe('AgentInput (chip ordering)', () => {
-    it('keeps the engine controls grouped ahead of permission in wrap layout', async () => {
+    it('reads setup on the first rail as engine, then permission, then mode', async () => {
         const { AgentInput } = await import('./AgentInput');
 
         const tree = (await renderScreen(React.createElement(AgentInput, {
@@ -63,8 +63,9 @@ describe('AgentInput (chip ordering)', () => {
         expect(permissionIndex).toBeGreaterThanOrEqual(0);
         expect(agentIndex).toBeGreaterThanOrEqual(0);
         expect(modeIndex).toBeGreaterThanOrEqual(0);
-        expect(agentIndex).toBeLessThan(modeIndex);
-        expect(modeIndex).toBeLessThan(permissionIndex);
+        // Rail order (owner, 2026-10-12): engine/model, permission, mode (`agentInputControlRegistry`).
+        expect(agentIndex).toBeLessThan(permissionIndex);
+        expect(permissionIndex).toBeLessThan(modeIndex);
     }, 90_000);
 
     it('keeps machine on the secondary wrap row before path/resume, with the trailing cluster read last', async () => {

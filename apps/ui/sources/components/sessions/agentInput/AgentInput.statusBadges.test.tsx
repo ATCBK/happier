@@ -174,7 +174,8 @@ describe('AgentInput status badges', () => {
         if (!weekly) throw new Error('The own-sign-in weekly quota must be visible');
         // A quota bar shows what is left (18%), like every other quota row, never what was used.
         expect(weekly.props.remainingPct).toBe(18);
-        expect(screen.findAllByType(FloatingOverlay).at(-1)?.props.scrollEnabled).toBe(false);
+        // The usage rows vary in number, so the popover scrolls rather than clipping what is past its height cap.
+        expect(screen.findAllByType(FloatingOverlay).at(-1)?.props.scrollEnabled).toBe(true);
         const recoveryCreditAction = screen.findByTestId('usage-popover-own-sign-in-resets:use');
         expect(recoveryCreditAction).toBeTruthy();
         act(() => {

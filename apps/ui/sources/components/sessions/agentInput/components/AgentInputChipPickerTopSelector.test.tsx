@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
@@ -93,8 +94,9 @@ describe('AgentInputChipPickerTopSelector', () => {
 
         const codexStyle = flattenStyle(codexButton?.props.style({ pressed: false }));
         const claudeStyle = flattenStyle(claudeButton?.props.style({ pressed: false }));
-        expect(codexStyle.minWidth).toBe(resolveMinimumInteractiveTargetSize('web'));
-        expect(codexStyle.minHeight).toBe(resolveMinimumInteractiveTargetSize('web'));
+        const tabTarget = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize('web'));
+        expect(codexStyle.minWidth).toBe(tabTarget);
+        expect(codexStyle.minHeight).toBe(tabTarget);
         // Content-sized tabs retain their full name and never shrink past the scroll end.
         expect(codexStyle.width).toBeUndefined();
         expect(codexStyle.flexShrink).toBe(0);

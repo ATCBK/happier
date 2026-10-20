@@ -270,11 +270,13 @@ describe('AgentInput review comment composer badge', () => {
             />,
         );
 
+        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        const touchFloor = resolveMinimumInteractiveTargetSize('web');
         const removeButton = screen.findByTestId('agent-input-review-comments-attachment-badge-remove');
         expect(removeButton?.props.accessibilityRole).toBe('button');
         expect(removeButton?.props.accessibilityLabel).toBe('files.reviewComments.detachOrDiscardTitle');
         expect(removeButton?.props.hitSlop).toBeUndefined();
-        expect(flattenStyle(removeButton?.props.style)).toMatchObject({ minHeight: 44, minWidth: 44 });
+        expect(flattenStyle(removeButton?.props.style)).toMatchObject({ minHeight: touchFloor, minWidth: touchFloor });
 
         await screen.pressByTestIdAsync('agent-input-review-comments-attachment-badge-remove');
 
