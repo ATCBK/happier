@@ -510,7 +510,10 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(navigate).toHaveBeenCalledWith({ dataId: null, draftId: expect.any(String) });
         const draftId = navigate.mock.calls[0]![0].draftId;
         const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
-        expect(readNewSessionDraftFromRepository({ scope: { serverId, accountId: 'account_1' }, draftId })).toMatchObject({
+        expect(readNewSessionDraftFromRepository({ scope: { serverId, accountId: 'account_1' }, draftId }), JSON.stringify({
+            draftId, profileScope: getStorage().getState().profileScope,
+            snapshot: getSessionDraftSnapshot({ serverId, accountId: 'account_1' }, { kind: 'newSession', draftId }),
+        })).toMatchObject({
             input: quote, selectedMachineId: 'machine_1', selectedPath: '/repo',
         });
         expect(emittedStarts).toEqual([]);
@@ -528,7 +531,10 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(openDetailsTab).not.toHaveBeenCalled();
         expect(navigate).toHaveBeenCalledWith({ dataId: null, draftId: expect.any(String) });
         const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
-        expect(readNewSessionDraftFromRepository({ scope, draftId: navigate.mock.calls[0]![0].draftId })).toMatchObject({
+        const draftId = navigate.mock.calls[0]![0].draftId;
+        expect(readNewSessionDraftFromRepository({ scope, draftId }), JSON.stringify({ draftId,
+            profileScope: getStorage().getState().profileScope, snapshot: getSessionDraftSnapshot(scope, { kind: 'newSession', draftId }),
+        })).toMatchObject({
             input: quote, selectedMachineId: 'machine_1', selectedPath: '/repo',
         });
         expect(emittedStarts).toEqual([]);

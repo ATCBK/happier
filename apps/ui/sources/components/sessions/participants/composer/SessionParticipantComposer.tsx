@@ -699,7 +699,8 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
 
                     const mergeBrowserContextMeta = (metaOverrides?: Record<string, unknown>): Record<string, unknown> | undefined | null => {
                         const result = mergeBrowserContextMessageMetaOverrides({
-                            state: props.browserContextState ?? null,
+                            // Detached text-only Runs do not inherit a parent Session's browser attachments.
+                            state: props.sessionId === null ? null : props.browserContextState ?? null,
                             metaOverrides,
                         });
                         if (result.ok) {
@@ -734,7 +735,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                             outboundText = text.length > 0 ? `${text}\n\n${attachmentBlock}` : attachmentBlock;
                             transferMetaOverrides = buildAttachmentMessageMeta(uploaded);
                         }
-                        // Every participant destination — including a Session-owned Execution
+                        // Every Session-bound participant destination — including an Execution
                         // Run — is an ordinary target of canonical Session input admission. The
                         // Run carries the same text, structured references, composer attachments
                         // and browser/source context as the main Session; only the recipient

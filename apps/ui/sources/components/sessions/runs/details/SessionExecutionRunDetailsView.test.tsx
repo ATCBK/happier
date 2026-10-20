@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     ExecutionRunCancelTurnRequestSchema, ExecutionRunEnsureRequestSchema, ExecutionRunGetRequestSchema,
     ExecutionRunGetResponseSchema, ExecutionRunPublicStateSchema,
+    ExecutionRunSendRequestSchema,
     ExecutionRunStopRequestSchema, FeaturesResponseSchema,
     normalizeActionsSettingsV1,
     SessionAgentActivityHeadlineV1Schema, SessionMessagesPageV1Schema, SessionStoredMessageContentSchema, V2SessionByIdResponseSchema,
@@ -50,6 +51,8 @@ import { DestinationInstanceHost } from '@/components/appShell/workspace/Destina
 import { Stack } from '@/components/appShell/workspace/destinationRoute';
 import { resolveCompactAppDestinations, useDestinationInstanceTitles } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+import { BrowserContextItemV1Schema } from '@happier-dev/protocol/browser/context/v1';
+import { attachBrowserContextToComposer, createBrowserContextState, markBrowserContextViewNavigation } from '@/sync/domains/browser/context';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -354,12 +357,55 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         await loaded();
         expect(info().run.runId).toBe('run_1');
         expect(boundary.requests.some(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && request.targetId === 'm1')).toBe(true);
-        const input = screen.findAllByTestId('session-composer-input').find(node => typeof node.props.onChangeText === 'function')!;
+        const input = screen.findAllByTestId('new-session-composer-input').find(node => typeof node.props.onChangeText === 'function')!;
         await act(async () => { input.props.onChangeText('Explain the next line'); });
-        await screen.pressByTestIdAsync('session-composer-send');
+        await screen.pressByTestIdAsync('new-session-composer-send');
         await vi.waitFor(() => expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND)).toHaveLength(1));
         expect(JSON.stringify(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND))).toContain('Explain the next line');
+        await vi.waitFor(() => expect(input.props.value).toBe(''));
+        await act(async () => { input.props.onChangeText('And the following line?'); });
+        await screen.pressByTestIdAsync('new-session-composer-send');
+        await vi.waitFor(() => expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND)).toHaveLength(2));
+        const inputIds = calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND).map(([, payload]) => ExecutionRunSendRequestSchema.parse(payload).localInputId);
+        expect(inputIds.every(id => typeof id === 'string' && id.length > 0)).toBe(true);
+        expect(new Set(inputIds).size).toBe(2);
+        expect(boundary.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND)
+            .every(request => request.targetId === 'm1')).toBe(true);
         expect(httpReads.filter(request => request.path.includes('/sessions/'))).toEqual([]);
+    });
+    it.each([false, true])('reads and replies to a detached Run without inheriting unavailable Session browser authority (detached=%s)', async detached => {
+        runState = liveRun();
+        await mount(detached ? { sessionId: null, workspace: { machineId: 'm1', cwd: '/repo' } } : {}, true);
+        await loaded();
+        const runtime = browserRuntime;
+        if (!runtime) throw new Error('Expected the parent Session browser owner');
+        const item = BrowserContextItemV1Schema.parse({ v: 1, contextId: 'parent-browser-context', kind: 'browserScreenshot',
+            sourceViewId: 'parent-browser-view', sourceAdapterKind: 'chromiumSidecar', fidelity: 'cdp', capturedAtMs: 1,
+            navigationGeneration: 1, lifecycleState: 'available', redactionLevel: 'metadataOnly',
+            media: { mediaId: 'parent-browser-media', mediaKind: 'image', width: 10, height: 10, sizeBytes: 100 } });
+        const attached = attachBrowserContextToComposer({ ...createBrowserContextState(),
+            itemsById: { [item.contextId]: item }, itemOrder: [item.contextId] }, {
+            attachmentId: 'parent-browser-attachment', contextId: item.contextId,
+        });
+        if (attached.status !== 'attached') throw new Error('Expected the parent browser attachment');
+        await act(async () => runtime.browserShellContext.onStateChange(markBrowserContextViewNavigation(attached.state,
+            { viewId: item.sourceViewId, navigationGeneration: 2 })));
+        await vi.waitFor(() => expect(composer().some(node => node.props.canSendMessages === true)).toBe(true));
+        const inputId = detached ? 'new-session-composer-input' : 'session-composer-input';
+        await vi.waitFor(() => expect(screen.findAllByTestId(inputId).some(node => typeof node.props.onChangeText === 'function')).toBe(true));
+        const input = screen.findAllByTestId(inputId).find(node => typeof node.props.onChangeText === 'function')!;
+        await act(async () => input.props.onChangeText('Explain only the selected file text'));
+        await screen.pressByTestIdAsync(detached ? 'new-session-composer-send' : 'session-composer-send');
+        if (detached) {
+            await vi.waitFor(() => expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND)).toHaveLength(1));
+            expect(JSON.stringify(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND))).not.toContain('parent-browser-context');
+            await vi.waitFor(() => expect(input.props.value).toBe(''));
+        } else {
+            await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith('common.error', 'browserContext.composer.contextUnavailable'));
+            expect(input.props.value).toBe('Explain only the selected file text');
+            expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_SEND)).toEqual([]);
+        }
+        expect(home.requests.some(request => request.method === 'POST' && request.path.includes('/pending'))).toBe(false);
     });
     it('publishes the loaded Run identity and its rename to the workspace, not the parent Agents chrome', async () => {
         routeBoundary.pathname = '/session/s1/runs/run_1';
