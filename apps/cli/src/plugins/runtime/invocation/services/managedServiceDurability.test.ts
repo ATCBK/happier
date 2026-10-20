@@ -11,6 +11,7 @@ import { storageLogRoots } from '@/utils/logs/logRetention';
 import type {
     ManagedServiceEndpointProjectionInputV1,
 } from './managedServiceEndpointProjection';
+import { readManagedServiceEndpointProjectionCandidates } from './managedServiceEndpointProjection';
 import {
     createManagedServiceDurabilityOwner as createDurabilityOwner,
     observeManagedServiceProcessStartIdentity,
@@ -846,11 +847,37 @@ describe('managed server durability owner', () => {
         });
     });
 
-    it('reaps confirmed stale runner projections before enforcing projection capacity', async () => {
+    it('retains every live endpoint projection beyond the former fixed census limit', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-managed-projection-census-'));
+        const owner = createManagedServiceDurabilityOwner({
+            rootDir: root,
+            observeProcessStartIdentity: async (pid) => processIdentity(pid),
+        });
+        try {
+            for (let index = 0; index < 257; index += 1) {
+                await owner.publishEndpointProjection({
+                    ...endpointProjection(record(`live-runner-${index}`, index + 41)),
+                    sessionId: `session-${index}`,
+                });
+            }
+            const projections = readManagedServiceEndpointProjectionCandidates(root);
+            expect(projections).toHaveLength(257);
+            for (const projection of [projections[0]!, projections[256]!]) {
+                await expect(owner.resolveEndpointProjection({
+                    pluginId: projection.pluginId,
+                    sessionId: projection.sessionId,
+                    selector: { kind: 'projectionToken', projectionToken: projection.projectionToken },
+                })).resolves.toMatchObject({ instanceId: projection.instanceId });
+            }
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
+    it('reaps confirmed stale runner projections when resolving a current contribution', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-managed-runner-projection-capacity-'));
         const owner = createManagedServiceDurabilityOwner({
             rootDir: root,
-            maxEndpointProjections: 1,
             observeProcessStartIdentity: async (pid) => pid === 41 ? null : processIdentity(pid),
         });
         await owner.publishEndpointProjection({
@@ -862,6 +889,12 @@ describe('managed server durability owner', () => {
             ...endpointProjection(record('replacement-runner', 42)),
             custodyOwner: 'sessionRunner',
         })).resolves.toMatch(/^[a-f0-9]{64}$/u);
+        await expect(owner.resolveEndpointProjection({
+            pluginId: 'opencode',
+            sessionId: 'session-one',
+            contributionId: 'opencode/agent',
+            selector: { kind: 'currentContribution' },
+        })).resolves.toMatchObject({ instanceId: 'replacement-runner' });
         expect(await readdir(join(root, 'endpoint-projections'))).toHaveLength(1);
     });
 

@@ -119,6 +119,61 @@ const invalidBindings: readonly (readonly [string, BindingOverride])[] = [
 ];
 
 describe('daemon managed-service endpoint read owner', () => {
+    it('lets concurrent endpoint reads wait under caller custody and cancels outstanding headers', async () => {
+        vi.useFakeTimers();
+        let owner: ReturnType<typeof createDaemonManagedServiceEndpointReadOwner>;
+        const cancelled: string[] = [];
+        owner = createDaemonManagedServiceEndpointReadOwner({
+            credentials: { token: 'test-token', encryption: null },
+            resolveProjection: async () => projection,
+            resolveRunnerEndpointReadRpc: async () => ({
+                sessionId: projection.sessionId,
+                async call(rpcInput) {
+                    const request = rpcInput.request as { requestId: string };
+                    if (rpcInput.method === MANAGED_SERVICE_ENDPOINT_READ_RPC_METHODS.CANCEL) {
+                        cancelled.push(request.requestId);
+                        return { v: 1, requestId: request.requestId, status: 'cancelled', cancelled: true };
+                    }
+                    expect(owner.claim({ requestId: request.requestId,
+                        projectionToken: projection.projectionToken, sessionId: projection.sessionId, pluginId })).toBe(true);
+                    return await new Promise<unknown>((resolve, reject) => {
+                        const timeout = setTimeout(() => reject(new Error('RPC call timeout')), rpcInput.timeoutMs);
+                        const response = setTimeout(() => {
+                            clearTimeout(timeout);
+                            resolve({ v: 1, requestId: request.requestId, status: 'opened',
+                                response: { status: 204, statusText: 'No Content', headers: [], hasBody: false } });
+                        }, 35_000);
+                        const signal = (rpcInput as { signal?: AbortSignal }).signal;
+                        const abort = () => {
+                            clearTimeout(timeout);
+                            clearTimeout(response);
+                            reject(signal?.reason);
+                        };
+                        signal?.addEventListener('abort', abort, { once: true });
+                        if (signal?.aborted) abort();
+                    });
+                },
+            }),
+        });
+        const caller = new AbortController();
+        try {
+            const read = await owner.bindHost({ identity,
+                source: { kind: 'opencodeServer', managedEndpoint: true }, signal: caller.signal });
+            const pending = Promise.all(Array.from({ length: 129 }, () => read({ pathAndQuery: '/session' })
+                .then(value => ({ status: value.status }), error => ({ error }))));
+            await vi.advanceTimersByTimeAsync(35_000);
+            expect(await pending).toEqual(Array.from({ length: 129 }, () => ({ status: 204 })));
+            const interrupted = read({ pathAndQuery: '/session' }).then(() => null, error => error);
+            await vi.advanceTimersByTimeAsync(1);
+            caller.abort('caller cancelled');
+            expect(await interrupted).toBe('caller cancelled');
+            expect(cancelled).toHaveLength(130);
+        } finally {
+            await owner.dispose();
+            vi.useRealTimers();
+        }
+    });
+
     it('materializes only the exact requested client credential environment key', async () => {
         let returnedEnvironment: Record<string, string> = {
             OPENCODE_SERVER_PASSWORD: 'exact-password',

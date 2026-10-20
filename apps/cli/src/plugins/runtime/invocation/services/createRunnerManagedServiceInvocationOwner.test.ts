@@ -29,7 +29,6 @@ import {
 import {
     createRunnerManagedServiceEndpointProjectionBinding,
     createRunnerManagedServiceInvocationOwner,
-    RUNNER_MANAGED_SERVICE_MAX_ACTIVE_ENDPOINT_READS,
 } from './createRunnerManagedServiceInvocationOwner';
 import {
     createAgentSessionRunnerFactoryBinding,
@@ -621,22 +620,24 @@ describe('runner managed-service invocation owner endpoint binding', () => {
         }
     });
 
-    // Admission capacity is a real runner resource bound: every live entry retains an abort
-    // controller plus a Fetch body reader and its socket. It is a bound, not a lifetime — a
-    // cancelled read must return its slot immediately.
-    it('bounds concurrent reads at the documented capacity and re-admits after a cancel', async () => {
+    it('keeps caller-owned concurrent reads admitted and independently cancellable', async () => {
         const { binding, route, open } = exactHandleReadHarness([new Uint8Array([1])]);
         const requestIdFor = (index: number) =>
             `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
 
-        for (let index = 0; index < RUNNER_MANAGED_SERVICE_MAX_ACTIVE_ENDPOINT_READS; index += 1) {
+        for (let index = 0; index < 129; index += 1) {
             await expect(open(requestIdFor(index))).resolves.toMatchObject({ status: 'opened' });
         }
-        await expect(open(requestIdFor(9_999))).resolves.toMatchObject({ status: 'unavailable' });
 
         await expect(binding.endpointReadPort.cancel({ v: 1, requestId: requestIdFor(0), route }))
             .resolves.toMatchObject({ status: 'cancelled', cancelled: true });
+        await expect(binding.endpointReadPort.next({ v: 1, requestId: requestIdFor(128), route }))
+            .resolves.toMatchObject({ status: 'chunk' });
         await expect(open(requestIdFor(9_999))).resolves.toMatchObject({ status: 'opened' });
+        for (let index = 1; index < 129; index += 1) {
+            await binding.endpointReadPort.cancel({ v: 1, requestId: requestIdFor(index), route });
+        }
+        await binding.endpointReadPort.cancel({ v: 1, requestId: requestIdFor(9_999), route });
     });
 
     it('preserves exact-handle currentness and cancellation without endpoint projection authority', async () => {
