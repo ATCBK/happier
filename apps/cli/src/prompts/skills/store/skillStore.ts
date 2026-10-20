@@ -7,6 +7,7 @@ import { z as zMini } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PromptBundleEntryV1Schema, validatePromptBundleBodyV1AgainstSchemaId, validateStoredPromptBundleBodyV1AgainstSchemaId, type PromptBundleEntryV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
+import { SkillSourceFolderNameV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { linkDirectoryChildren } from '@happier-dev/plugin-sdk/fs';
 
 const segment = z.string().check(z.minLength(1), z.refine(value => value !== '.' && value !== '..' && !/[\\/\0]/u.test(value)));
@@ -17,19 +18,22 @@ export const SkillOwnerKeySchema = z.string().check(z.refine(value => {
 }));
 export const EnsureSkillSessionDirInputSchema = z.strictObject({
     ownerKey: SkillOwnerKeySchema,
-    items: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), name: segment, digest: digestSchema,
+    items: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), name: segment, sourceFolderName: z.optional(SkillSourceFolderNameV1Schema), digest: digestSchema,
         files: z.array((<T extends z.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(PromptBundleEntryV1Schema)) })),
     nativeDisables: z.array(z.strictObject({ name: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)) })),
-}).check(z.refine(input => new Set(input.items.map(item => item.name)).size === input.items.length, { message: 'Delivered skill names must be unique' }));
-export type SkillSessionDirItem = Readonly<{ skillId: string; name: string; digest: string; files: PromptBundleEntryV1[] }>;
-export type SkillSessionItem = Readonly<{ skillId: string; name: string; digest: string }>;
+}).check(z.refine(input => new Set(input.items.map(item => item.name)).size === input.items.length
+    && new Set(input.items.map(item => (item.sourceFolderName ?? item.name).toLowerCase())).size === input.items.length,
+    { message: 'Delivered skill names and folders must be unique' }));
+export type SkillSessionDirItem = Readonly<{ skillId: string; name: string; sourceFolderName?: string; digest: string; files: PromptBundleEntryV1[] }>;
+export type SkillSessionItem = Readonly<{ skillId: string; name: string; sourceFolderName?: string; digest: string }>;
 export type EnsureSkillSessionDirInput = Readonly<{ ownerKey: string; items: readonly SkillSessionDirItem[];
     nativeDisables: readonly Readonly<{ name: string; path: string }>[] }>;
 export const EnsureSkillSessionDirResultSchema = z.strictObject({ pluginRoot: z.string().check(z.minLength(1)), skillsRoot: z.string().check(z.minLength(1)),
     failed: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), reason: z.literal('materialize_failed'), detail: z.optional(z.string()) })) });
 export type EnsureSkillSessionDirResult = z.infer<typeof EnsureSkillSessionDirResultSchema>;
 export type SkillCachePaths = Readonly<{ reliable: boolean; paths: ReadonlySet<string> }>;
-const sessionManifestSchema = createStoredReadSchema(z.strictObject({ items: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), name: segment, digest: digestSchema })) }));
+const sessionManifestSchema = createStoredReadSchema(z.strictObject({ items: z.array(z.strictObject({ skillId: z.string().check(z.minLength(1)), name: segment,
+    digest: digestSchema, sourceFolderName: z.optional(SkillSourceFolderNameV1Schema) })) }));
 type CollectionInput = Readonly<{ libraryDigests?: readonly string[] | null }>;
 
 function errorCode(error: unknown): string {
@@ -149,25 +153,26 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 const materialized = new Map<string, string>();
                 for (const item of admitted.items) {
                     try {
-                        materialized.set(item.name, await materialize(item));
-                        items.push({ skillId: item.skillId, name: item.name, digest: item.digest });
+                        materialized.set(item.skillId, await materialize(item));
+                        items.push({ skillId: item.skillId, name: item.name, digest: item.digest,
+                            ...(item.sourceFolderName ? { sourceFolderName: item.sourceFolderName } : {}) });
                     } catch (error) { failed.push({ skillId: item.skillId, reason: 'materialize_failed', detail: errorCode(error) }); }
                 }
                 const manifestPath = join(pluginRoot, 'session.json');
                 const previous = await readManifest(manifestPath);
                 const unchanged = previous && JSON.stringify(previous) === JSON.stringify(items);
                 const entriesPresent = await exists(skillsRoot) && (await readdir(skillsRoot)).length === items.length
-                    && (await Promise.all(items.map(item => exists(join(skillsRoot, item.name))))).every(Boolean);
+                    && (await Promise.all(items.map(item => exists(join(skillsRoot, item.sourceFolderName ?? item.name))))).every(Boolean);
                 if (unchanged && entriesPresent) return { pluginRoot, skillsRoot, failed };
                 await mkdir(pluginRoot, { recursive: true, mode: 0o700 });
                 await mkdir(skillsRoot, { recursive: true, mode: 0o700 });
                 await chmod(skillsRoot, 0o700);
                 for (const item of [...items]) {
-                    const destination = join(skillsRoot, item.name);
+                    const destination = join(skillsRoot, item.sourceFolderName ?? item.name);
                     const temporary = join(skillsRoot, `.staging-${randomUUID()}`);
                     try {
-                        const source = materialized.get(item.name)!;
-                        // A real folder under the skill's own name, so `../<sibling>/SKILL.md` resolves from it even where the
+                        const source = materialized.get(item.skillId)!;
+                        // A real folder under the source name (or declared name without a source tree), so sibling paths resolve even where the
                         // platform follows links before `..`; on POSIX its children link to the immutable cache entry.
                         if (platform === 'win32') await cp(source, temporary, { recursive: true });
                         else await linkDirectoryChildren({ source, destination: temporary });
@@ -180,7 +185,7 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                         failed.push({ skillId: item.skillId, reason: 'materialize_failed', detail: errorCode(error) });
                     }
                 }
-                const kept = new Set(items.map(item => item.name));
+                const kept = new Set(items.map(item => item.sourceFolderName ?? item.name));
                 for (const name of await readdir(skillsRoot)) if (!kept.has(name)) await removeOwnedTree(join(skillsRoot, name));
                 await chmod(skillsRoot, 0o555);
                 const pluginManifest = join(pluginRoot, '.claude-plugin', 'plugin.json');

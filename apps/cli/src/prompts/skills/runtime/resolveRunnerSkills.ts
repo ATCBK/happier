@@ -54,7 +54,7 @@ export type RunnerSkillsResult = Readonly<{
 export type RunnerSkillsTransports = Readonly<{
   artifacts?: SkillArtifactStore;
   ensureSessionDir?: (input: Readonly<{
-    ownerKey: string; items: readonly Readonly<{ skillId: string; name: string; digest: string; files: import('@happier-dev/protocol/prompts/library/promptBundleSchemas').PromptBundleEntryV1[] }>[];
+    ownerKey: string; items: readonly Readonly<{ skillId: string; name: string; sourceFolderName?: string; digest: string; files: import('@happier-dev/protocol/prompts/library/promptBundleSchemas').PromptBundleEntryV1[] }>[];
     nativeDisables: readonly Readonly<{ name: string; path: string }>[];
   }>) => Promise<Readonly<{ pluginRoot: string; skillsRoot: string; failed: readonly Readonly<{ skillId: string; reason: 'materialize_failed'; detail?: string }>[] }>>;
 }>;
@@ -179,6 +179,7 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
         return ensureSkillSessionDirHttp(content, {}, identity.data);
       }))({ ownerKey: input.ownerKey,
         items: delivered().map(item => ({ skillId: item.skillId, name: item.name, digest: item.digest,
+          ...(contents.get(item.skillId)!.item.sourceFolderName ? { sourceFolderName: contents.get(item.skillId)!.item.sourceFolderName } : {}),
           files: projectPromptBundleActionEntriesV1(contents.get(item.skillId)!.body.entries) })), nativeDisables }));
       await current();
       const failures = new Set(result.failed.map(item => item.skillId));

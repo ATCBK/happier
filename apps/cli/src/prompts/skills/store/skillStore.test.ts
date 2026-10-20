@@ -75,9 +75,14 @@ describe('daemon skill store', () => {
     });
     it('uses read-only real copies on Windows', async () => {
         const f = await fixture('win32');
-        const result = await f.ensure('session-one');
+        const sibling = { ...skill('declared-b'), sourceFolderName: 'source-b' };
+        const result = await f.ensure('session-one', [skill(), sibling]);
         expect((await lstat(join(result.skillsRoot, 'guide'))).isSymbolicLink()).toBe(false);
         expect(await readFile(join(result.skillsRoot, 'guide', 'SKILL.md'), 'utf8')).toBe('Use the guide');
+        expect(await readFile(join(result.skillsRoot, 'source-b', 'SKILL.md'), 'utf8')).toBe('Use declared-b');
+        const before = await stat(join(result.pluginRoot, 'session.json'));
+        await f.ensure('session-one', [skill(), sibling]);
+        expect((await stat(join(result.pluginRoot, 'session.json'))).mtimeMs).toBe(before.mtimeMs);
         await f.store.releaseSkillSessionDirs('session-one');
         await expect(lstat(result.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });
     });
@@ -91,6 +96,13 @@ describe('daemon skill store', () => {
         expect(result.failed).toMatchObject([{ skillId: invalid.skillId, reason: 'materialize_failed', detail: 'digest_mismatch' }, { skillId: broken.skillId, reason: 'materialize_failed' }]);
         expect(await readdir(result.skillsRoot)).toEqual(['valid']);
         expect(await readdir(join(f.happyHomeDir, 'skills', 'cache'))).toEqual([skill('valid').digest.slice(7)]);
+    });
+    it('refuses a source folder that could escape the Session skills root before writing', async () => {
+        const f = await fixture();
+        for (const sourceFolderName of ['..', '../outside', '..\\outside', '/outside', '.']) {
+            await expect(f.ensure('session-one', [{ ...skill(), sourceFolderName }])).rejects.toThrow();
+        }
+        await expect(lstat(join(f.happyHomeDir, 'skills'))).rejects.toMatchObject({ code: 'ENOENT' });
     });
     it('roots GC in session and Run manifests plus a successful library inventory', async () => {
         const f = await fixture();
