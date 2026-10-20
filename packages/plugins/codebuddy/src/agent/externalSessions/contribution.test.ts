@@ -75,10 +75,48 @@ describe('CodeBuddy native conversation reader', () => {
     const first = await t.list('harbor', undefined, 105);
     expect(first).toMatchObject({ ok: true, value: { contentCoverage: 'partial', nextCursor: expect.any(String) } });
     if (!first.ok || !first.value.nextCursor) throw new Error('Missing continuation');
-    expect(JSON.parse(Buffer.from(first.value.nextCursor, 'base64url').toString()).progress.cursor).toEqual(expect.any(String));
     const next = await t.list('harbor', first.value.nextCursor);
     expect(next).toMatchObject({ ok: true, value: { candidates: [{ match: { sourceItemId: 'u1' } }] } });
     expect(next.ok && next.value.nextCursor).not.toBe(first.value.nextCursor);
+  });
+
+  it('resumes a large replay prepass across soft deadlines before publishing the selected branch', async () => {
+    const t = await setup();
+    t.invocation.maxSerializedBytes = 64 * 1024;
+    await appendFile(t.file, Array.from({ length: 20_000 }, (_, index) => JSON.stringify({
+      id: `abandoned-${index}`, parentId: index ? `abandoned-${index - 1}` : 'result1',
+      type: 'message', role: 'assistant', content: `abandoned needle ${'x'.repeat(200)}`,
+    }) + '\n').join('') + JSON.stringify({ type: 'resend-fork-notice', parentId: 'u1' }) + '\n');
+    let clock = 100;
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    vi.spyOn(nativeFileSystem, 'open').mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      if (args[0] === t.file) clock += 1;
+      return handle;
+    });
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const started = clock;
+      const result = await t.list('harbor question', cursor, started + 8);
+      expect(clock - started).toBeLessThanOrEqual(8);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('Replay failed');
+      if (result.value.nextCursor) {
+        expect(result.value.contentCoverage).toBe('partial');
+        expect(result.value.nextCursor).not.toBe(cursor);
+        expect(result.value.candidates).toEqual([]);
+      } else {
+        expect(result.value.candidates).toMatchObject([{ match: { sourceItemId: 'u1' } }]);
+      }
+      cursor = result.value.nextCursor ?? undefined;
+      pages += 1;
+      if (pages === 1) await appendFile(t.file, JSON.stringify({ type: 'custom-title', title: 'updated during preparation' }) + '\n');
+      if (pages > 200) throw new Error('Replay did not advance to completion');
+    } while (cursor);
+    expect(pages).toBeGreaterThan(1);
+    expect(await t.list('abandoned needle')).toMatchObject({ ok: true, value: { candidates: [] } });
   });
 
   it('pages older items and reads appends, rejecting rewrites and branch rewinds', async () => {
@@ -125,6 +163,17 @@ describe('CodeBuddy native conversation reader', () => {
     if (!first.ok || first.value.outcome !== 'advanced') throw new Error('Missing first append');
     const second = await t.contribution.readAfterTranscript({ ...t.invocation, source: t.source, remoteSessionId: 'fixture-session', cursor: first.value.nextCursor, maxItems: 1 });
     expect(second).toMatchObject({ ok: true, value: { outcome: 'advanced', items: [{ id: 'append2' }], hasMore: false } });
+  });
+
+  it('reads the first append after observing an empty native transcript', async () => {
+    const t = await setup();
+    await writeFile(t.file, '');
+    const initial = await t.page(undefined, 10);
+    if (!initial.ok || !initial.value.tailCursor) throw new Error('Missing empty tail');
+    await appendFile(t.file, JSON.stringify({ id: 'first', type: 'message', role: 'user', content: 'first native prompt' }) + '\n');
+    expect(await t.contribution.readAfterTranscript({ ...t.invocation, source: t.source, remoteSessionId: 'fixture-session',
+      cursor: initial.value.tailCursor, maxItems: 10 })).toMatchObject({ ok: true,
+        value: { outcome: 'advanced', items: [{ id: 'first' }], hasMore: false } });
   });
 
   it('keeps ordinary disconnected history unless native replay declares a rewind', async () => {

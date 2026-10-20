@@ -5,14 +5,16 @@ import type { ExternalSessionContentSearchPageProgress } from '@happier-dev/plug
 import type { AgentExternalSessionCandidate, AgentExternalSessionsListCandidatesRequest, AgentExternalSessionsListCandidatesResult } from '@happier-dev/plugin-sdk/sessions/external';
 import { CodeBuddySourceError, discoverCodeBuddyFiles, isRecord, resolveCodeBuddySource } from './source.js';
 import { pageCodeBuddyTranscript } from './transcript.js';
+import type { CodeBuddyTranscriptPreparation } from './transcript.js';
 
-type SearchCursor = { v: 1; root: string; query: string; target: string; after: string; partial?: boolean; file?: string; progress?: ExternalSessionContentSearchPageProgress };
+type SearchCursor = { v: 1; root: string; query: string; target: string; after: string; partial?: boolean; file?: string; progress?: ExternalSessionContentSearchPageProgress; preparation?: string };
 const encode = (value: SearchCursor) => Buffer.from(JSON.stringify(value)).toString('base64url');
 function decode(raw: string): SearchCursor {
   let value: unknown;
   try { value = JSON.parse(Buffer.from(raw, 'base64url').toString()); } catch { throw new CodeBuddySourceError('invalid_request', 'Invalid CodeBuddy search cursor.'); }
   if (!isRecord(value) || value.v !== 1 || typeof value.root !== 'string' || typeof value.query !== 'string' || typeof value.target !== 'string' || typeof value.after !== 'string'
-    || (value.file !== undefined && typeof value.file !== 'string') || (value.partial !== undefined && typeof value.partial !== 'boolean')) throw new CodeBuddySourceError('invalid_request', 'Invalid CodeBuddy search cursor.');
+    || (value.file !== undefined && typeof value.file !== 'string') || (value.partial !== undefined && typeof value.partial !== 'boolean')
+    || (value.preparation !== undefined && typeof value.preparation !== 'string')) throw new CodeBuddySourceError('invalid_request', 'Invalid CodeBuddy search cursor.');
   let progress: ExternalSessionContentSearchPageProgress | undefined;
   if (value.progress !== undefined) {
     const p = value.progress;
@@ -27,7 +29,7 @@ function decode(raw: string): SearchCursor {
     }
     progress = { complete: p.complete, itemCount: p.itemCount, match, ...(typeof p.cursor === 'string' ? { cursor: p.cursor } : {}) };
   }
-  return { v: 1, root: value.root, query: value.query, target: value.target, after: value.after, ...(value.partial === true ? { partial: true } : {}), ...(typeof value.file === 'string' ? { file: value.file } : {}), ...(progress ? { progress } : {}) };
+  return { v: 1, root: value.root, query: value.query, target: value.target, after: value.after, ...(value.partial === true ? { partial: true } : {}), ...(typeof value.file === 'string' ? { file: value.file } : {}), ...(progress ? { progress } : {}), ...(typeof value.preparation === 'string' ? { preparation: value.preparation } : {}) };
 }
 function visibleText(item: Awaited<ReturnType<typeof pageCodeBuddyTranscript>>['items'][number]): string | null {
   const content: unknown = item.raw.content;
@@ -55,7 +57,8 @@ export async function listCodeBuddyCandidates(request: AgentExternalSessionsList
   for (const file of files) {
     if (file <= after) continue;
     const progress: ExternalSessionContentSearchPageProgress = prior?.file === file && prior.progress ? { ...prior.progress } : { complete: false, itemCount: 0, match: null };
-    const continuation = () => encode({ v: 1, root: resolved.root, query, target, after, partial, file, progress });
+    const preparation: CodeBuddyTranscriptPreparation = { cursor: prior?.file === file ? prior.preparation : undefined };
+    const continuation = () => encode({ v: 1, root: resolved.root, query, target, after, partial, file, progress, ...(preparation.cursor ? { preparation: preparation.cursor } : {}) });
     const info = await stat(file);
     let candidate: AgentExternalSessionCandidate = { remoteSessionId: basename(file, '.jsonl'), updatedAtMs: Math.max(0, Math.trunc(info.mtimeMs)), linkData: { sessionFile: file } };
     try {
@@ -67,7 +70,9 @@ export async function listCodeBuddyCandidates(request: AgentExternalSessionsList
             // The outer maxItems counts Sessions, not native messages. Native
             // batches use the containing byte allowance, so a one-hit query
             // does not reread/hash a whole source for every individual row.
-            const page = await pageCodeBuddyTranscript({ file, cursor, maxItems: Number.MAX_SAFE_INTEGER, maxSerializedBytes: request.maxSerializedBytes, signal: request.signal });
+            const page = await pageCodeBuddyTranscript({ file, cursor, maxItems: Number.MAX_SAFE_INTEGER, maxSerializedBytes: request.maxSerializedBytes,
+              signal: request.signal, preparation, control });
+            delete preparation.cursor;
             partial ||= page.partial;
             candidate = { ...candidate, ...(page.title ? { title: page.title } : {}), ...(page.cwd ? { cwd: page.cwd } : {}) };
             return { records: page.items.map(item => { const text = visibleText(item); const snippet = text === null ? null : matchText(text); return { id: item.id, ...(snippet === null ? {} : { snippet }) }; }), partial: false, nextCursor: page.nextCursor };
@@ -76,7 +81,9 @@ export async function listCodeBuddyCandidates(request: AgentExternalSessionsList
         if (!result.match) { after = file; continue; }
         candidate = { ...candidate, match: result.match };
       } else {
-        const page = await pageCodeBuddyTranscript({ file, maxItems: request.maxItems, maxSerializedBytes: request.maxSerializedBytes, signal: request.signal });
+        const page = await pageCodeBuddyTranscript({ file, maxItems: request.maxItems, maxSerializedBytes: request.maxSerializedBytes,
+          signal: request.signal, preparation, control });
+        delete preparation.cursor;
         candidate = { ...candidate, ...(page.title ? { title: page.title } : {}), ...(page.cwd ? { cwd: page.cwd } : {}) };
         if (query && !`${candidate.title ?? ''} ${candidate.remoteSessionId}`.toLowerCase().includes(query.toLowerCase())) { after = file; continue; }
       }
