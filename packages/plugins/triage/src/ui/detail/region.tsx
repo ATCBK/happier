@@ -273,6 +273,8 @@ function TriageEntryScopedActionRegion(props: Readonly<{
   sourceActions?: React.ReactNode;
   /** The entry's attention reason, at the far end of the action row. */
   attention?: React.ReactNode;
+  /** Place the controls without moving the selected entry's pending action owner. */
+  children(controls: React.ReactElement): React.ReactElement;
 }>): React.ReactElement {
   const host = usePluginHostApi();
   const text = usePluginTranslation();
@@ -407,7 +409,7 @@ function TriageEntryScopedActionRegion(props: Readonly<{
   }, [controller]);
   const notice = describeTriageEntrySessionPhaseV1(controller.phase);
 
-  return (
+  return props.children(
     <Stack gap="small">
       {props.workflowSubject === null ? null : orchestrationPrompt === null ? <TriageEntryActionControls
         target={props.target}
@@ -793,64 +795,8 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   const attention = header.attention === null || pinned ? undefined : (
     <TriageAttentionBadge attention={header.attention} />
   );
-  // The entry's actions: in the header beside the list, and pinned at the foot of the page when the detail is the
-  // page. One keyed region either way, so its action state is the same one; only where it is placed differs.
-  const actionRegion = display === null || actionPresentation === null
-    || selected === null ? null : (
-      <TriageEntryScopedActionRegion
-        key={deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}
-        target={props.target}
-        actions={props.actions}
-        workflowSubject={workflowSubject}
-        {...(snapshot === undefined ? {} : { snapshot })}
-        display={display}
-        presentation={actionPresentation}
-        linkedSessionIds={linkedSessionIds}
-        {...(comparisonRead === undefined ? {} : { comparisonRead })}
-        {...(locator === undefined ? {} : { lastKnownLocator: locator })}
-        {...(repository === undefined ? {} : { repository })}
-        {...(reviewWorkspace === undefined ? {} : { reviewWorkspace })}
-        reviewPreparation={reviewPreparation}
-        viewerIsAuthor={viewerIsAuthor}
-        {...(sourceActions === undefined ? {} : { sourceActions })}
-        {...(attention === undefined ? {} : { attention })}
-      />
-    );
-  const pinActions = props.pushed === true && actionRegion !== null;
-  return (
-    <Stack style={DETAIL_FILL_STYLE_V1}>
-    {/* The Collection's detail body owns the edge (given `detailHeader`); the footer below spans the detail. */}
-    <Stack gap="medium" style={DETAIL_FILL_STYLE_V1}>
-      <ScrollArea style={DETAIL_HEADER_SCROLL_STYLE_V1}>
-      <Stack gap="small">
-      <TriageDetailHeaderView
-        headerHosted={props.headerHosted}
-        header={header}
-        {...(selected === null ? {} : {
-          instanceKey: deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId),
-        })}
-        pin={props.pin}
-        onClose={props.onClose}
-        showLinkedSessions={composition.kind === 'whole'}
-        attentionInActions={actionRegionShown && !pinned}
-        onSelectLinkedSession={selectInlineSession}
-        {...(detail?.kind === 'ready' ? {
-          linkedSessionsPageState: detail.linkedSessionsPageState,
-          onLoadMoreLinkedSessions: sessionSelection.onLoadMore,
-        } : {})}
-      />
-
-      {pinActions ? null : actionRegion}
-      {/* Keyed per entry instance like the action region beside it, under its own name: one key for two siblings
-          made React drop or duplicate one of them on update. */}
-      <TriageEditTaskFields key={`task-fields:${selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}`}
-        row={row} {...(detail?.kind === 'ready' ? { instance: detail.input.instance } : {})}
-        disabled={props.sourceWritesDisabled === true || detail?.kind !== 'ready'} onApplied={completePostMutation} />
-      {actionRegionShown ? null : sourceActions}
-      </Stack>
-      </ScrollArea>
-
-      <Stack style={DETAIL_FILL_STYLE_V1}>
+  // Action-local state (including prompt typing) must not rerender the source's detail body.
+  const detailBody = <Stack style={DETAIL_FILL_STYLE_V1}>
       {observation === null ? (
         <EmptyState
           titleKey="plugins.triage.surface.detail.noConnection.title"
@@ -998,10 +944,66 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
         </TriagePostMutationCompletionProvider>
         </TriageDetailWholeBody>
       )}
+      </Stack>;
+  const renderDetail = (actionRegion: React.ReactElement | null) => (
+    <Stack style={DETAIL_FILL_STYLE_V1}>
+    {/* The Collection's detail body owns the edge (given `detailHeader`); the footer below spans the detail. */}
+    <Stack gap="medium" style={DETAIL_FILL_STYLE_V1}>
+      <ScrollArea style={DETAIL_HEADER_SCROLL_STYLE_V1}>
+      <Stack gap="small">
+      <TriageDetailHeaderView
+        headerHosted={props.headerHosted}
+        header={header}
+        {...(selected === null ? {} : {
+          instanceKey: deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId),
+        })}
+        pin={props.pin}
+        onClose={props.onClose}
+        showLinkedSessions={composition.kind === 'whole'}
+        attentionInActions={actionRegionShown && !pinned}
+        onSelectLinkedSession={selectInlineSession}
+        {...(detail?.kind === 'ready' ? {
+          linkedSessionsPageState: detail.linkedSessionsPageState,
+          onLoadMoreLinkedSessions: sessionSelection.onLoadMore,
+        } : {})}
+      />
+
+      {pinned ? null : actionRegion}
+      {/* Keyed per entry instance like the action region beside it, under its own name: one key for two siblings
+          made React drop or duplicate one of them on update. */}
+      <TriageEditTaskFields key={`task-fields:${selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}`}
+        row={row} {...(detail?.kind === 'ready' ? { instance: detail.input.instance } : {})}
+        disabled={props.sourceWritesDisabled === true || detail?.kind !== 'ready'} onApplied={completePostMutation} />
+      {actionRegionShown ? null : sourceActions}
       </Stack>
+      </ScrollArea>
+      {detailBody}
     </Stack>
-    {pinActions ? <DetailsPaneFooter testID={TRIAGE_DETAIL_FOOTER_TEST_ID_V1}>{actionRegion}</DetailsPaneFooter> : null}
+    {pinned ? <DetailsPaneFooter testID={TRIAGE_DETAIL_FOOTER_TEST_ID_V1}>{actionRegion}</DetailsPaneFooter> : null}
     </Stack>
+  );
+  if (display === null || actionPresentation === null || selected === null) return renderDetail(null);
+  // Custody belongs to the selected entry, not the header/footer where its controls happen to be placed.
+  // A key cannot retain a component moved between those parents during a resize.
+  return (
+    <TriageEntryScopedActionRegion
+      key={deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}
+      target={props.target}
+      actions={props.actions}
+      workflowSubject={workflowSubject}
+      {...(snapshot === undefined ? {} : { snapshot })}
+      display={display}
+      presentation={actionPresentation}
+      linkedSessionIds={linkedSessionIds}
+      {...(comparisonRead === undefined ? {} : { comparisonRead })}
+      {...(locator === undefined ? {} : { lastKnownLocator: locator })}
+      {...(repository === undefined ? {} : { repository })}
+      {...(reviewWorkspace === undefined ? {} : { reviewWorkspace })}
+      reviewPreparation={reviewPreparation}
+      viewerIsAuthor={viewerIsAuthor}
+      {...(sourceActions === undefined ? {} : { sourceActions })}
+      {...(attention === undefined ? {} : { attention })}
+    >{renderDetail}</TriageEntryScopedActionRegion>
   );
 }
 

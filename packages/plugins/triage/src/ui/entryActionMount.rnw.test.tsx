@@ -251,6 +251,7 @@ function createHarness(options: Readonly<{
     /** The durable detail read answers `unavailable`, so the detail never becomes ready. */
     detailUnavailable?: boolean;
     comparisonRead?: () => Promise<unknown>;
+    comparisonOpen?: () => Promise<unknown>;
 }> = {}): Harness {
     const descriptor = options.issue === true
         ? { ...DESCRIPTOR, kinds: DESCRIPTOR.kinds.map((kind) => ({ ...kind, workflowSubject: 'issue' })) }
@@ -366,7 +367,7 @@ function createHarness(options: Readonly<{
             });
         }
         if (action === 'projects.list') return registry;
-        if (action === 'session.open') { comparisonOpens.push(request.input); return null; }
+        if (action === 'session.open') { comparisonOpens.push(request.input); return options.comparisonOpen?.() ?? null; }
         if (action === 'sessions.spawn.profiles.list') return { items: profiles };
         if (action === 'agents.backends.list') return { items: backends };
         if (action === 'prompts.invocation.resolve') {
@@ -451,7 +452,7 @@ let draftSeeds: unknown[] = [];
 /** Seeds handed to the host-owned New Session authoring surface. */
 let newSessionSeeds: unknown[] = [];
 
-async function mountShell(harness: Harness, hostedDetail = false): Promise<PluginUiTestkit> {
+async function mountShell(harness: Harness, hostedDetail = false, chooseDraft?: () => Promise<PluginUiSessionServerStartDraftV1 | null>): Promise<PluginUiTestkit> {
     const ephemeralSharedScope = createTriageEphemeralSharedScopeFixture();
     let fixture!: PluginUiTestkit;
     await act(async () => {
@@ -530,6 +531,10 @@ async function mountShell(harness: Harness, hostedDetail = false): Promise<Plugi
                     }
                     draftsOpened += 1;
                     draftSeeds.push(request.draft);
+                    if (chooseDraft) {
+                        const draft = await chooseDraft();
+                        return draft === null ? { kind: 'cancelled' } : { kind: 'serverStartDraft', draft };
+                    }
                     return harness.draftSettles()
                         ? { kind: 'serverStartDraft', draft: SETTLED_DRAFT } as never
                         : { kind: 'cancelled' } as never;
@@ -581,6 +586,59 @@ afterEach(async () => {
 const PREPARATION_UNSUPPORTED_COPY = 'This source cannot prepare a review workspace, so actions that need one cannot start here.';
 
 describe('the entry action controls on the mounted detail header', () => {
+    it.each(['opened', 'open failed', 'cancelled', 'entry retired'] as const)(
+        'settles the Walk through recipe after a wide-phone-wide resize while the chooser is pending: %s', async (outcome) => {
+        let finishRecipe!: (draft: PluginUiSessionServerStartDraftV1 | null) => void;
+        const harness = createHarness({ includeSecondEntry: outcome === 'entry retired', comparisonRead: async () => ({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }), ...(outcome === 'open failed' ? { comparisonOpen: async () => { throw new Error('Navigation unavailable'); } } : {}) });
+        harness.setStartResults([{ v: 1, type: 'linked', sessionId: 'session-a',
+            disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1]);
+        const shell = await mountShell(harness, false, () => new Promise((resolve) => { finishRecipe = resolve; }));
+        const resize = async (width: number) => {
+            const stage = document.querySelector(`[data-testid="${TRIAGE_SHELL_FILL_TEST_ID_V1}:stage"]`)!;
+            const onLayout = (stage as unknown as { __reactLayoutHandler: (event: unknown) => void }).__reactLayoutHandler;
+            await act(async () => { onLayout({ nativeEvent: { layout: { x: 0, y: 0, width, height: 940 } } }); });
+            await settle();
+        };
+        await resize(1440);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        expect(draftsOpened).toBe(1);
+        expect(harness.startRequests).toHaveLength(0);
+        await resize(390);
+        expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`)).not.toBeNull();
+        await resize(1440);
+        expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`)).toBeNull();
+        if (outcome === 'entry retired') {
+            await act(async () => { await shell.updatePageLocation(buildTriageRouteSubPathV1({
+                ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: SECOND_ENTRY_REF,
+            })); });
+            await settle();
+        }
+        await act(async () => { finishRecipe(outcome === 'cancelled' ? null : SETTLED_DRAFT); });
+        await settle();
+        if (outcome === 'cancelled' || outcome === 'entry retired') {
+            expect(harness.startRequests).toEqual([]);
+            expect(harness.comparisonOpens).toEqual([]);
+            if (outcome === 'entry retired') {
+                expect([...document.querySelectorAll('[role="heading"]')].some(node => node.textContent === SECOND_ENTRY_TITLE)).toBe(true);
+            }
+            return;
+        }
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.comparisonOpens).toEqual([{ sessionId: 'session-a', serverId: 'server-a',
+            destination: { kind: 'scmReview', comparison: PR_COMPARISON, view: 'walkthrough' } }]);
+        expect(draftsOpened).toBe(1);
+        if (outcome === 'open failed') {
+            await expect(shell.getByText('The session was created and linked, but Happier could not open it.')).resolves.toBeDefined();
+        }
+    }, 60_000);
+
     it.each([false, true])('hands off Walk through after the detail refreshes during its comparison read (hosted=%s)', async (hosted) => {
         let finishRead!: (result: unknown) => void;
         let reads = 0;

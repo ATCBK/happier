@@ -7,13 +7,26 @@ import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contribut
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { SessionServerStartSpawnDraftV1Schema, type SessionServerStartSpawnDraftV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import type { CustomModalChromeConfig } from '@/modal';
-import { PluginUiJsonObjectV1Schema, type PluginUiSurfaceContextV1 } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiExecuteActionRequestV1Schema, PluginUiJsonObjectV1Schema, type PluginUiJsonValueV1, type PluginUiSurfaceContextV1 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
+import { PluginHostApiProvider } from '@happier-dev/plugin-ui/advanced';
+import {
+    useTriageEntrySessionStart,
+    type TriageEntrySessionStartPhaseV1,
+    type TriageEntrySessionStartRequestV1,
+} from '../../../../../../packages/plugins/triage/src/ui/header/useEntrySessionStart';
+import { buildTriageEntryAttachmentPresentation } from '../../../../../../packages/plugins/triage/src/composer/mutationPlan';
+import {
+    TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1,
+    TriageStartEntrySessionInputV1Schema,
+    type TriageStartEntrySessionInputV1,
+    type TriageStartEntrySessionResultV1,
+} from '../../../../../../packages/plugins/triage/src/actions/entrySessionProtocol';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -59,6 +72,15 @@ const { createCanonicalPluginReactNativeHostApiAdapter } = await import('@/compo
 
 function RecipeRequestingPlugin({ api, request }: Readonly<{ api: PluginUiHostApi; request(): void }>) {
     return <RoundButton title="Choose recipe" onPress={request} disabled={!api.version().methods.includes('selectActionInput')} />;
+}
+
+function TriageRecipeRequestingPlugin(props: Readonly<{
+    request: TriageEntrySessionStartRequestV1;
+    observe(phase: TriageEntrySessionStartPhaseV1): void;
+}>) {
+    const controller = useTriageEntrySessionStart();
+    React.useLayoutEffect(() => { props.observe(controller.phase); }, [controller.phase, props.observe]);
+    return <RoundButton title="Walk through" onPress={() => controller.start(props.request)} />;
 }
 
 afterAll(async () => {
@@ -296,6 +318,93 @@ describe('mounted Session server-start recipe composer', () => {
                 } else {
                     await expect(selection).resolves.toEqual({ kind: 'serverStartDraft', draft });
                 }
+            } finally { await dialog.unmount(); }
+        } finally { adapter.dispose(); await plugin.unmount(); }
+    });
+
+    it('delivers the real chooser settlement through the mounted Triage controller to session.open after the chooser remounts', async () => {
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Missing Home lifetime');
+        const requestSurface: PluginUiSurfaceContextV1 = {
+            pluginId: 'happier.triage', contributionId: 'list', surfaceId: 'triage-list',
+            placement: 'appSurface', platform: 'ios', channel: 'internal', resourceScope: [], diagnostics: [],
+        };
+        const comparison = { kind: 'pullRequest', locator: { providerId: 'forge', repository: 'example/repository',
+            number: 17, baseOid: 'a'.repeat(40), headOid: 'b'.repeat(40) } } as const;
+        const entryRef = { source: { pluginId: 'example.forge', localId: 'pull-requests' },
+            kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' };
+        const request = {
+            action: { actionId: 'walk-comparison', label: 'Walk through', enabled: true, appliesTo: ['pullRequest'],
+                profileId: null, workspaceMode: 'reference_only',
+                target: { kind: 'agent', promptInvocationId: null, delivery: 'compose' } },
+            entryRef, sourceInstance: { source: entryRef.source, sourceInstanceId: '11111111-1111-4111-8111-111111111111' },
+            display: { locator: { v: 1, webUrl: 'https://example.test/pull/17' }, scopeLabel: 'example/repository' },
+            presentation: buildTriageEntryAttachmentPresentation({ title: 'Repair the parser', scopeLabel: 'example/repository' }),
+            comparisonDestination: { kind: 'scmReview', comparison, view: 'walkthrough' },
+        } satisfies TriageEntrySessionStartRequestV1;
+        const starts: TriageStartEntrySessionInputV1[] = [];
+        const opens: unknown[] = [];
+        const selector = createPluginActionInputSelectionHostApiHandler({
+            host: { machineId: 'machine-1', serverId, targetPluginId: requestSurface.pluginId, accountLifetime: lifetime },
+            isCurrent: lifetime.isCurrent,
+        });
+        const host = createPluginSurfaceHostApi({ surfaceContext: requestSurface, handlers: {
+            selectActionInput: selector,
+            executeAction: async (envelope): Promise<PluginUiJsonValueV1> => {
+                const action = PluginUiExecuteActionRequestV1Schema.parse(envelope.payload);
+                if (action.action === 'projects.list') return { items: [], truncated: false };
+                if (action.action === TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1) {
+                    starts.push(TriageStartEntrySessionInputV1Schema.parse(action.input));
+                    return { v: 1, type: 'linked', sessionId: 'recipe-session', disposition: 'created',
+                        delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1;
+                }
+                if (action.action === 'session.open') { opens.push(action.input); return null; }
+                throw new Error(`Unexpected Action: ${String(action.action)}`);
+            },
+        } });
+        const surface = createPluginSurfaceContextFixture({ platform: 'ios', target: { kind: 'app' },
+            accountEncryptionMode: 'plain', targetedContributions: undefined, mount: { kind: 'destination',
+                destination: { pluginId: requestSurface.pluginId, localId: 'list' }, container: 'appPage' } });
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({ surface, requestSurface,
+            requestIdPrefix: 'triage-recipe', handleRequest: host.handleRequest, installedMethods: host.installedMethods });
+        let phase: TriageEntrySessionStartPhaseV1 = { kind: 'idle' };
+        const observe = (next: TriageEntrySessionStartPhaseV1) => { phase = next; };
+        const plugin = await renderScreen(<PluginHostApiProvider hostApi={adapter.api}>
+            <TriageRecipeRequestingPlugin request={request} observe={observe} />
+        </PluginHostApiProvider>);
+        try {
+            vi.mocked(Modal.show).mockClear();
+            await act(async () => { plugin.findByType(RoundButton).props.onPress(); });
+            await waitForHomeGovernance(() => expect(Modal.show).toHaveBeenCalledTimes(1));
+            expect(phase).toEqual({ kind: 'choosing' });
+            const config = vi.mocked(Modal.show).mock.calls[0]![0];
+            const chrome: { current: CustomModalChromeConfig | null } = { current: null };
+            const chooser = (key: string) => React.createElement(config.component, { ...config.props, key,
+                onClose: () => config.onRequestClose?.(), setChrome: (value: CustomModalChromeConfig) => { chrome.current = value; } });
+            const dialog = await renderScreen(chooser('before-remount'));
+            try {
+                await dialog.update(chooser('after-remount'));
+                expect(phase).toEqual({ kind: 'choosing' });
+                await act(async () => { dialog.findByType(PathSelectionList).props.onChangeDraftPath('/repo'); });
+                await waitForHomeGovernance(() => {
+                    expect(dialog.findAllByType(SessionAuthoringControls)).toHaveLength(2);
+                    if (chrome.current?.kind !== 'card') throw new Error('Missing recipe footer');
+                });
+                const footer = await renderScreen(<>{chrome.current?.footer}</>);
+                try {
+                    const submit = footer.findAllByType(RoundButton).find(node => node.props.title === 'newSession.recipeComposerSubmit')!;
+                    expect(submit.props.disabled).toBe(false);
+                    await act(async () => { submit.props.onPress(); });
+                } finally { await footer.unmount(); }
+                await flushHookEffects();
+                expect(starts, JSON.stringify(phase)).toHaveLength(1);
+                expect(opens, JSON.stringify(phase)).toHaveLength(1);
+                expect(starts[0]?.destination).toMatchObject({ kind: 'new', spawn: {
+                    executionTarget: { serverId, machineId: 'machine-1' },
+                }, materialization: { kind: 'referenceOnly', directory: '/repo' } });
+                expect(opens).toEqual([{ sessionId: 'recipe-session', serverId,
+                    destination: { kind: 'scmReview', comparison, view: 'walkthrough' } }]);
+                expect(phase).toMatchObject({ kind: 'settled', result: { type: 'opened', sessionId: 'recipe-session' } });
             } finally { await dialog.unmount(); }
         } finally { adapter.dispose(); await plugin.unmount(); }
     });
