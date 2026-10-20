@@ -2,6 +2,25 @@
 
 Development / unreleased.
 
+## Inbound files
+
+Gateway messages retain native attachment descriptors alongside their content,
+including messages containing only files. Signed CDN URLs and bytes are never
+stored in observations. The declared `attachmentFetch` Action refreshes the
+owning message through authenticated REST, then downloads the exact native file
+from `https://cdn.discordapp.com` without bot credentials or redirects. The
+existing Channels `channel-file` owner handles Session materialization; Discord
+creates no temporary files or Session writes. Embeds remain non-input.
+
+The [Attachment object](https://docs.discord.com/developers/resources/message#attachment-object)
+and [signed CDN URL contract](https://docs.discord.com/developers/reference#signed-attachment-cdn-urls)
+were checked on 2026-10-20 against REST v10. Discord documents upload limits,
+which do not establish an inbound download cap, so this provider adds none.
+Deleted messages/files, expired downloads and provider failures return explicit
+unavailable results. Fetch batches use the existing all-or-nothing core contract;
+one unavailable file makes the requested batch unavailable. Outbound files
+remain out of scope. Loaded-provider validation requires a refreshed runtime.
+
 ## Ingress ordering
 
 `discordIngressScheduler.ts` runs one task at a time for each connection and
