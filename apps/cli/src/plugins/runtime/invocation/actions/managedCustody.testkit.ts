@@ -87,6 +87,7 @@ export function fixture(options: Readonly<{
     repairAction?: boolean;
     nativeRoleResults?: Partial<Record<typeof roles[number] | 'check' | 'inspect' | 'reconcile', JsonValue>>;
     supportedIntents?: MachineProvisionerContributionV1['retention']['supportedIntents'];
+    platforms?: MachineProvisionerContributionV1['platforms'];
     onInspect?: (input: JsonValue | undefined, context: Parameters<TargetActionInvocationRegistration['handler']>[1]) => void | Promise<void>;
     onNativeRole?: (role: typeof roles[number] | 'reconcile', input: JsonValue | undefined,
         context: Parameters<TargetActionInvocationRegistration['handler']>[1]) => void | Promise<void>;
@@ -183,7 +184,7 @@ export function fixture(options: Readonly<{
                 ...(definition.hostAccessRequests?.length ? { hostAccess: definition.hostAccessRequests.map(({ request }) => request.id) } : {}),
             })),
             machineProvisioners: [{ id: 'vm', title: 'Virtual machine', icon: 'server', resourceKind: 'virtual-machine',
-                schemaVersion: 1, platforms: ['darwin', 'linux', 'win32'], prerequisites: [],
+                schemaVersion: 1, platforms: options.platforms ?? ['darwin', 'linux', 'win32'], prerequisites: [],
                 launchSchema: native.jsonSchema, resourceSchema: native.jsonSchema,
                 billing: { location: 'cloud', stoppedBilling: 'unknown' }, retention: { supportedIntents: options.supportedIntents ?? ['delete'] },
                 actions: { check: 'check', options: 'options', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', power: 'power', destroy: 'destroy', rebuild: 'rebuild' },

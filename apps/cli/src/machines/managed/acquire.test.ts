@@ -1440,6 +1440,16 @@ describe('managed acquisition durable custody', () => {
             .resolves.toEqual({ controller, provisioners: [] });
         expect(post).not.toHaveBeenCalled();
     });
+    it('lists only provisioners declared for the platform the controller runs on', async () => {
+        const other = process.platform === 'darwin' ? 'linux' : 'darwin';
+        const mine = nativeFixture({ credentialPurposes: [] });
+        const foreign = nativeFixture({ credentialPurposes: [], platforms: [other] });
+        const list = (native: typeof mine) => createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home',
+            controller, runtimeRegistry: native.runtimeRegistry, ...accountInputs }).execute('machines.provisioners.list', { homeId: 'home', controller }, { requestId: 'platform' });
+        expect(MachineProvisionersListResultV1Schema.parse(await list(mine)).provisioners).toHaveLength(1);
+        expect(MachineProvisionersListResultV1Schema.parse(await list(foreign))).toEqual({ controller, provisioners: [] });
+        expect(foreign.activations()).toBe(0);
+    });
     it('returns no catalog entry for a different qualified provisioner without activating native code', async () => {
         const native = nativeFixture({ credentialPurposes: [] });
         const reader = createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home',

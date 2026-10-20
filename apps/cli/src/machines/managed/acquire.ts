@@ -486,8 +486,11 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
                 const signal = options.signal ?? new AbortController().signal;
                 // An existing machine needs its own current descriptor, not
                 // acquisition credentials for unrelated provisioners.
-                const providers = (input.runtimeRegistry.contributes.machineProvisioners ?? []).filter(provider => !request.contribution
-                    || provider.identity.pluginId === request.contribution.pluginId && provider.identity.localId === request.contribution.localId);
+                // The controller is the machine the guest is created on, so a provisioner declared
+                // for other operating systems cannot run here and is not offered.
+                const providers = (input.runtimeRegistry.contributes.machineProvisioners ?? []).filter(provider => (!request.contribution
+                    || provider.identity.pluginId === request.contribution.pluginId && provider.identity.localId === request.contribution.localId)
+                    && (provider.definition.platforms as readonly string[]).includes(process.platform));
                 const entries = await Promise.all(providers.map(async provider => {
                     signal.throwIfAborted();
                     const occurrenceId = input.runtimeRegistry.readPluginOccurrenceId?.(provider.pluginId);
