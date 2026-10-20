@@ -6,10 +6,12 @@ import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/
 import type { StoredCredentials } from '@/persistence';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
-import type { DiscussionReplyReturnPublisher } from '@/session/services/sessionMessageReply';
+import { readSessionMessageReply, type DiscussionReplyReturnPublisher } from '@/session/services/sessionMessageReply';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { logger } from '@/ui/logger';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 
 /** Account composition supplies policy and resource crypto, never a second writer. */
 export function createDiscussionReplyReturnPublisher(params: Readonly<{
@@ -21,6 +23,8 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
   isCurrent(): Promise<boolean>;
   actionsSettingsProvider?: RuntimeActionSettingsProvider;
 }>): DiscussionReplyReturnPublisher {
+  const resolveCurrentOrigin = createCurrentMachineExecutionOriginContextResolver({ serverUrl: params.serverHttpBaseUrl,
+    resolveCurrentMachineId: () => params.machineId });
   return async (original, options) => {
     const denied = (): DiscussionAgentPostResponseV1 => ({ v: 1, ok: false, error: 'discussion_post_denied' });
     const signal = options?.signal && options.signal !== params.signal
@@ -28,13 +32,32 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
     const current = async () => !signal.aborted && await params.isCurrent() && !signal.aborted;
     if (original.serverId !== params.serverId
       || original.discussion.participantSessionId !== original.requestSessionId || !await current()) return denied();
+    const origin = await resolveCurrentOrigin(signal);
+    if (!origin || !await current()) return denied();
     const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: original.requestSessionId,
       localId: original.requestLocalId, acceptedTurnId: original.acceptedTurnId });
+    if (!original.workflow) {
+      // Recovery's result projection can await while an explicit answer commits.
+      // Reconcile the same original before even preparing another Action approval;
+      // the append owner's later dedupe alone cannot prevent a duplicate prompt.
+      const latest = await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => readSessionMessageReply({
+        credentials: params.credentials, sessionId: original.requestSessionId, localId: original.requestLocalId, signal,
+      }));
+      const progress = latest.status === 'available' ? latest.progress : undefined;
+      if (!await current() || progress?.mode !== 'return' || progress.disposition !== 'return_pending'
+        || progress.acceptedTurnId !== original.acceptedTurnId || !progress.outcome
+        || progress.outcome.kind === 'answer' && 'publicationRef' in progress.outcome
+        || progress.discussion?.participantSessionId !== original.requestSessionId
+        || progress.discussion.discussionId !== original.discussion.discussionId
+        || progress.discussion.messageId !== original.discussion.messageId
+        || progress.discussion.throughSeq !== original.discussion.throughSeq) return denied();
+    }
     const receipt: { value?: DiscussionAgentPostResponseV1 } = {};
     const transportFailure: { value?: Readonly<{ error: unknown }> } = {};
     let phase = 'action_admission';
     const executor = createCliActionExecutor({ token: params.credentials.token, credentials: params.credentials,
       sessionId: '', mode: 'plain', ctx: null, serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl,
+      serverIdentityId: origin.serverIdentityId,
       isCredentialCurrent: current,
       ...(params.actionsSettingsProvider ? { actionsSettingsProvider: params.actionsSettingsProvider } : {}),
       postAgentDiscussionMessage: async request => {

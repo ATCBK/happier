@@ -802,9 +802,12 @@ that edge. Observation carries this persisted policy and the committed original
 event into the shared C1 resolver. An addressed question is needs-you/decision
 (wait); an ambient watch original is person-wrote for a human publication or
 message for ordinary Agent chat. Unaddressed non-watch chat creates no input.
-Quiet queues selected originals for the next turn without waking; Custom/off
-creates no input; Important wakes for addressed questions, not ambient chat.
-The existing receiver admission, Pending custody and source mute still apply.
+An explicitly addressed original carrying a C2 answer obligation is a direct
+ask regardless of that Follow level: wake an idle receiver, use the next boundary
+when busy, and retain the existing hold when person-stopped. Quiet queues only
+selected unaddressed/informational events without waking; Custom/off suppresses
+those events. The existing receiver admission, Pending custody and source mute
+still apply; changing the Follow level does not opt out of a direct ask.
 
 Answer policy belongs to the existing executable participant row. The
 `discussion.participant.policy.set` Action changes that row; invitation defaults
@@ -824,14 +827,23 @@ The native explicit post/reply policy check reads participants as a companion of
 the original signed Account Action, not a newly signed `discussion.participants.list`
 effect. Home accepts only its canonical GET roster route with absent body/query and
 matching route operands; original root, current installation, signature and resource
-access remain independently required. The daemon can normalize deliberate draft
-identity before signing. A downstream signed recheck cannot rewrite that identity:
+access remain independently required. The daemon normalizes the exact addressed
+C2 return identity before signing, including deliberate drafts. A downstream
+signed recheck cannot rewrite that identity:
 if policy has changed to draft review, it refuses and requires preparation there.
-Already-bound draft context skips that recheck through its existing return binding.
+Already-bound return context skips rebinding through its existing return marker;
+signed informational input remains informational after a level/policy change.
 
-Explicit addressed drafts and final-result fallback retain the original
-question/participant/turn identity. Rejoining that approval must preserve its
-first captured body and terminal decision rather than opening another review.
+Explicit addressed replies, deliberate drafts and final-result fallback retain
+the original question/participant/turn identity. The fallback reconciles the
+original C2 obligation before preparing an Action: a committed explicit reply
+needs neither another publication nor another approval. If the explicit reply
+is still awaiting approval, both paths rejoin that existing approval, preserving
+its first captured body and terminal decision rather than opening another review.
+The final-return producer captures the fresh canonical Home identity through the
+existing Machine execution-origin resolver, retaining the CLI profile identifier
+separately. Approval currentness compares that Home identity, not a browser's or
+daemon's local profile alias; unavailable Home identity holds preparation closed.
 The private publisher verifies the executing approval before stamping a draft
 review assertion on its trusted socket publication. Neither a public post nor
 an authored private publisher request accepts that assertion.

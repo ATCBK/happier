@@ -3,6 +3,8 @@ import { DiscussionPostInputV1Schema, DiscussionReplyInputV1Schema } from '@happ
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { SessionInputSourceSessionV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { readSessionMessageReply } from '@/session/services/sessionMessageReply';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 /** Bind explicit and terminal drafts before the existing approval owner captures their operands. */
 export async function bindDiscussionDraftReply(params: Readonly<{
@@ -11,6 +13,8 @@ export async function bindDiscussionDraftReply(params: Readonly<{
   context: ActionExecutorContext;
   serverId: string;
   discussionAction: ActionExecutorDeps['discussionAction'];
+  credentials?: Readonly<{ token: string }>;
+  serverHttpBaseUrl?: string;
 }>) {
   const unchanged = { actionId: params.actionId, input: params.input, context: params.context };
   const unavailable = () => ({ ...unchanged, failure: { ok: false as const,
@@ -24,6 +28,7 @@ export async function bindDiscussionDraftReply(params: Readonly<{
   const parsed = (params.actionId === 'discussion.reply' ? DiscussionReplyInputV1Schema : DiscussionPostInputV1Schema).safeParse(params.input);
   if (!source.success || !parsed.success || !source.data.discussionAddressing || !source.data.sourceInputId) return unchanged;
   const addressing = source.data.discussionAddressing;
+  const sourceInputId = source.data.sourceInputId;
   const publisherSessionId = context.actionCaller?.kind === 'session' ? context.actionCaller.sessionId : context.defaultSessionId;
   if (publisherSessionId !== addressing.participantSessionId
     || context.defaultSessionId !== undefined && context.defaultSessionId !== publisherSessionId
@@ -42,10 +47,36 @@ export async function bindDiscussionDraftReply(params: Readonly<{
   if (!roster.success || roster.data.discussionId !== addressing.discussionId || context.signal?.aborted) return unavailable();
   const participant = roster.data.participants.find(entry => entry.participant.kind === 'session'
     ? entry.participant.sessionId === publisherSessionId : 'sessionId' in entry && entry.sessionId === publisherSessionId);
-  if (participant?.answerPolicy !== 'drafts_for_approval') return unchanged;
-  // The verified daemon must bind a draft before signing. Other policies keep
-  // their signed explicit post; an unbound signed draft must be retried there.
-  if (context.externalActionExecutionAuthorization) return unavailable();
+  const addressedReply = participant?.answerPolicy === 'when_addressed'
+    && parsed.data.replyTarget?.kind === 'message' && parsed.data.replyTarget.messageId === addressing.messageId;
+  if (participant?.answerPolicy !== 'drafts_for_approval' && !addressedReply) return unchanged;
+  // The verified daemon binds a real return obligation before signing. An
+  // unchanged signed when-addressed reply may instead be an informational input
+  // whose policy changed; preserve it without rewriting operands or borrowing
+  // ambient credentials. An unbound deliberate draft still fails closed.
+  if (context.externalActionExecutionAuthorization) return participant?.answerPolicy === 'drafts_for_approval'
+    ? unavailable() : unchanged;
+  if (addressedReply) {
+    const credentials = params.credentials;
+    if (!credentials) return unavailable();
+    try {
+      const read = () => readSessionMessageReply({ credentials, sessionId: publisherSessionId,
+        localId: sourceInputId, ...(context.signal ? { signal: context.signal } : {}) });
+      const original = params.serverHttpBaseUrl ? await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, read) : await read();
+      if (original.status === 'none') return unchanged;
+      if (original.status !== 'available' || context.signal?.aborted) return unavailable();
+      const progress = original.progress;
+      // A policy change cannot turn an informational/watch input into an ask.
+      // Only the retained original return obligation owns this stable intent.
+      if (progress.mode !== 'return' || !progress.discussion || progress.workflow) return unchanged;
+      if (progress.acceptedTurnId !== source.data.sourceTurnId
+        || !['observing', 'return_pending'].includes(progress.disposition)
+        || progress.discussion.participantSessionId !== publisherSessionId
+        || progress.discussion.discussionId !== addressing.discussionId
+        || progress.discussion.messageId !== addressing.messageId
+        || progress.discussion.throughSeq !== addressing.throughSeq) return unavailable();
+    } catch { return unavailable(); }
+  }
   const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: publisherSessionId,
     localId: source.data.sourceInputId, acceptedTurnId: source.data.sourceTurnId });
   return { actionId: 'discussion.reply', input: { ...parsed.data, localId,

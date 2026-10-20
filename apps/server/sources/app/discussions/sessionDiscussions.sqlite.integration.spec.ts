@@ -230,13 +230,17 @@ describe('First-class Discussions service (SQLite)', () => {
         const observation = observed.observations[0];
         if (!observation || !('source' in observation) || observation.source.kind !== 'discussion') throw new Error('Missing Discussion observation');
         expect(SessionFollowPendingObservationV1Schema.parse(observation)).toEqual(observation);
-        expect(resolveFollowDeliveryV1({ policies: [observation.policy], event: observation.event }).session)
-            .toEqual(preset === 'quiet' ? { nextTurn: true, wake: false } : { nextTurn: false, wake: true });
+        const reply = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id,
+            reply: { mode: 'return', discussion: observation.addressing } }));
+        expect(reply).toMatchObject({ disposition: 'return_pending', discussion: observation.addressing });
+        expect(resolveFollowDeliveryV1({ policies: [observation.policy], event: observation.event,
+            discussionInput: { addressing: observation.addressing, original: question.value.message, reply } }).session)
+            .toEqual({ nextTurn: false, wake: true });
     });
-    it.each(['human', 'agent'] as const)('skips a policy-off addressed original without starving the later selected %s watch event', async author => {
+    it.each(['human', 'agent'] as const)('admits a direct ask despite Follow off and skips an off watch without starving the later selected %s event', async author => {
         const { owner, discussionId } = await fixture();
         const policy: FollowPolicyV1 = { preset: 'custom', events: { needs_you: { decision: { delivery: 'off' } },
-            person_wrote: { delivery: 'interrupt' }, message: { delivery: 'quiet' } } };
+            person_wrote: { delivery: author === 'human' ? 'interrupt' : 'off' }, message: { delivery: author === 'agent' ? 'quiet' : 'off' } } };
         await inTx(tx => updateAccountFollowCreationPreferencesInTx(tx, { accountId: owner.id, patch: { discussionReceivePolicy: policy } }));
         const receiver = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
         const sender = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
@@ -251,11 +255,30 @@ describe('First-class Discussions service (SQLite)', () => {
         const observe = () => inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
             principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId: receiver.id,
         }));
-        expect((await observe()).observations).toEqual([]);
-        expect(await inTx(tx => admitDiscussionFollowAddressingInTx(tx, { accountId: owner.id, discussion: addressing }))).toBe(false);
+        expect((await observe()).observations).toEqual([{ source: { kind: 'discussion', discussionId }, destinationSessionId: receiver.id,
+            policy, event: { kind: 'needs_you', type: 'decision', mode: 'wait' }, addressing }]);
+        expect(await inTx(tx => admitDiscussionFollowAddressingInTx(tx, { accountId: owner.id, discussion: addressing }))).toBe(true);
         expect(await db.sessionPendingMessage.count({ where: { sessionId: receiver.id } })).toBe(0);
+        const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
+        await inTx(async tx => {
+            const progress = await createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion: addressing } });
+            if (!progress) throw new Error('Direct ask obligation is unavailable');
+            await tx.sessionPendingMessage.create({ data: { sessionId: receiver.id, localId, position: 1,
+                content: { t: 'plain', v: {} }, requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1,
+                replyProgress: progress, replyDisposition: progress.disposition,
+                inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing: addressing,
+                    admittedTarget: { homeId: 'home', accountId: owner.id, sessionId: receiver.id, machineId: 'machine', installationId: 'installation' } } } });
+            await acknowledgeDiscussionFollowInputInTx(tx, { addressing, localInputId: localId });
+        });
         expect(await setDiscussionParticipantPolicy({ authentication, actorAccountId: owner.id, discussionId,
             request: { participant: { kind: 'session', sessionId: receiver.id }, answerPolicy: 'watches_and_speaks_up' } })).toMatchObject({ ok: true });
+        const offWatch = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
+            request: postRequest('Unselected ambient original'), ...(author === 'human' ? { producer: { v: 1 as const, kind: 'agent' as const, sessionId: sender.id } } : {}) });
+        if (!offWatch.ok) throw new Error(offWatch.error);
+        expect((await observe()).observations).toEqual([]);
+        expect(await inTx(tx => admitDiscussionFollowAddressingInTx(tx, { accountId: owner.id, discussion: {
+            discussionId, messageId: offWatch.value.message.id, throughSeq: offWatch.value.message.seq, participantSessionId: receiver.id,
+        } }))).toBe(false);
         const watch = await postDiscussionMessage({ authentication, actorAccountId: owner.id, discussionId,
             request: postRequest('Selected ambient original'), ...(author === 'agent' ? { producer: { v: 1 as const, kind: 'agent' as const, sessionId: sender.id } } : {}) });
         if (!watch.ok) throw new Error(watch.error);

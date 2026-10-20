@@ -5,7 +5,7 @@ import { DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/co
 import { deriveDiscussionFollowInputLocalIdV1, type SessionFollowDiscussionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { isDiscussionReplyDestinationCurrentInTx } from '@/app/session/messages/sessionMessageReply';
+import { createSessionInputReplyProgressInTx } from '@/app/session/messages/sessionMessageReply';
 import { invalidateSessionRelationProjectionsInTx } from '@/app/session/relations/sessionRelationChanges';
 import type { Tx } from '@/storage/inTx';
 import { isDeliveryMutedInTx } from './sessionDeliveryMuteService';
@@ -141,6 +141,8 @@ export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly
                     : { kind: 'needs_you', type: 'decision', mode: 'wait' };
                 const addressing = { discussionId, messageId: row.id, throughSeq: row.seq, participantSessionId: input.destinationSessionId };
                 return [{ addressing, localId: deriveDiscussionFollowInputLocalIdV1(addressing), event,
+                    original: { id: row.id, discussionId: row.discussionId, seq: row.seq, addressingV1: snapshot.data },
+                    sourceSession: producer?.success ? producer.data.sourceSession : undefined,
                     senderSessionId: producer?.success ? producer.data.sessionId : undefined }];
             });
             const localIds = candidates.map(candidate => candidate.localId);
@@ -150,7 +152,10 @@ export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly
             ]) : [];
             for (const candidate of candidates) {
                 if (accepted.flat().some(original => original.localId === candidate.localId && receiptHasAddressing(original.inputAdmissionReceipt, candidate.addressing))) continue;
-                if (!await isDiscussionReplyDestinationCurrentInTx(tx, { accountId: input.destinationRuntimeAccountId, discussion: candidate.addressing })) continue;
+                const reply = await createSessionInputReplyProgressInTx(tx, { accountId: input.destinationRuntimeAccountId,
+                    reply: { mode: 'return', discussion: candidate.addressing,
+                        ...(candidate.sourceSession ? { sourceSession: candidate.sourceSession } : {}) } });
+                if (!reply) continue;
                 // Shared receiver policy suppresses a muted original. A later
                 // accepted eligible original may cross it; there is no second
                 // deferred queue or suppression receipt for that earlier ask.
@@ -158,7 +163,8 @@ export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly
                     receiver: { kind: 'session', sessionId: input.destinationSessionId }, candidate: {
                         source: { kind: 'discussion', discussionId }, ...(candidate.senderSessionId ? { senderSessionId: candidate.senderSessionId } : {}),
                     } }) !== false) continue;
-                if (!resolveFollowDeliveryV1({ policies: [policy], event: candidate.event }).selected) continue;
+                if (!resolveFollowDeliveryV1({ policies: [policy], event: candidate.event,
+                    discussionInput: { addressing: candidate.addressing, original: candidate.original, reply } }).selected) continue;
                 observations.push({ source: { kind: 'discussion', discussionId }, destinationSessionId: input.destinationSessionId,
                     addressing: candidate.addressing, policy, event: candidate.event });
                 break;

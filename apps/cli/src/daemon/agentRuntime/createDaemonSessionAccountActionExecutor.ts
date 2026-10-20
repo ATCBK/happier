@@ -220,7 +220,8 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
     if (params.credentials && (operation.actionId === 'discussion.post' || operation.actionId === 'discussion.reply')) {
       const bound = await bindDiscussionDraftReply({ actionId: operation.actionId, input: operation.input, context,
         serverId: params.serverId, discussionAction: createDiscussionActionDeps({ credentials: params.credentials,
-          serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl }).discussionAction });
+          serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl }).discussionAction,
+        credentials: params.credentials, serverHttpBaseUrl: params.serverHttpBaseUrl });
       if ('failure' in bound) return bound.failure;
       if (bound.context.discussionReplyReturn && bound.context.actionRequestId) {
         // Sign the normalized Action and stable request identity. Altering an

@@ -4,6 +4,9 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import type { SessionQuestionContextV1, SessionQuestionHandlerV1 } from '../permissions/questionV1.js';
 import { classifyWorkerUpdateEventV1, type WorkerUpdateV1 } from '../relations/workerUpdateV1.js';
+import type { DiscussionAddressingV1 } from '../../discussions/references.js';
+import type { DiscussionMessageV1 } from '../../discussions/models.js';
+import type { SessionMessageReplyAdmissionV1 } from '../messages/sessionMessageReplyV1.js';
 
 export const FOLLOW_EVENT_KINDS_V1 = [
   'needs_you', 'finished', 'failed_or_stopped', 'stalled', 'update_posted', 'person_wrote', 'goal_changed', 'message',
@@ -92,7 +95,26 @@ export type ResolveFollowDeliveryV1Params = Readonly<{
   event: FollowEventV1;
   muted?: boolean;
   causalEcho?: boolean;
+  /** Exact committed addressing plus C2's answer destination, never an event-only wake hint. */
+  discussionInput?: Readonly<{
+    addressing: DiscussionAddressingV1;
+    original: Pick<DiscussionMessageV1, 'id' | 'discussionId' | 'seq' | 'addressingV1'>;
+    reply: Pick<SessionMessageReplyAdmissionV1, 'mode' | 'discussion'> | null;
+  }>;
 }>;
+
+function hasDirectDiscussionAnswerObligation(input: ResolveFollowDeliveryV1Params['discussionInput']): boolean {
+  if (!input || input.reply?.mode !== 'return') return false;
+  const { addressing, original, reply } = input;
+  const snapshot = original.addressingV1;
+  const destination = reply.discussion;
+  return original.id === addressing.messageId && original.discussionId === addressing.discussionId
+    && original.seq === addressing.throughSeq && snapshot?.throughSeq === addressing.throughSeq
+    && snapshot.participantSessionIds.includes(addressing.participantSessionId)
+    && !snapshot.watcherSessionIds?.includes(addressing.participantSessionId)
+    && destination?.discussionId === addressing.discussionId && destination.messageId === addressing.messageId
+    && destination.throughSeq === addressing.throughSeq && destination.participantSessionId === addressing.participantSessionId;
+}
 
 export type FollowDeliveryDecisionV1 = Readonly<{
   selected: boolean;
@@ -129,6 +151,12 @@ export function resolveFollowDeliveryV1(params: ResolveFollowDeliveryV1Params): 
       selected = true;
       interrupt ||= route.delivery === 'interrupt';
       voice ||= route.voice === true;
+    }
+    // C3's concrete addressed C2 obligation is a direct ask, not an ambient
+    // Follow event. Stored levels still govern informational/watch delivery.
+    if (hasDirectDiscussionAnswerObligation(params.discussionInput)) {
+      selected = true;
+      interrupt = true;
     }
   }
   const managerHandling = params.event.kind === 'needs_you' && params.event.handling === 'manager';

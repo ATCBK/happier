@@ -20,7 +20,7 @@ vi.mock('axios', () => ({ default: http }));
 
 const sessionId = 'c123456789012345678901234';
 const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: sessionId };
-const route = { policy: { preset: 'important' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' } } as const;
+const route = { policy: { preset: 'quiet' }, event: { kind: 'needs_you', type: 'decision', mode: 'wait' } } as const;
 const actor = { v: 1, accountId: 'owner', profile: null };
 const message = { id: 'question', discussionId: 'discussion', localId: 'question', seq: 2,
   authorAccountId: 'owner', accountActor: actor, producerV1: null,
@@ -72,9 +72,10 @@ beforeEach(() => {
 });
 
 it.each([
-  { policy: { preset: 'quiet' }, event: route.event, accepted: true, wakes: false },
-  { policy: { preset: 'custom', events: { needs_you: { decision: { delivery: 'off' } } } }, event: route.event, accepted: false, wakes: false },
+  { policy: { preset: 'quiet' }, event: route.event, accepted: true, wakes: true },
+  { policy: { preset: 'custom', events: { needs_you: { decision: { delivery: 'off' } } } }, event: route.event, accepted: true, wakes: true },
   { policy: { preset: 'important' }, event: route.event, accepted: true, wakes: true },
+  { policy: { preset: 'quiet' }, event: { kind: 'person_wrote' }, accepted: true, wakes: false },
   { policy: { preset: 'custom', events: { person_wrote: { delivery: 'quiet' } } }, event: { kind: 'person_wrote' }, accepted: true, wakes: false },
   { policy: { preset: 'custom', events: { needs_you: { decision: { delivery: 'interrupt' } }, message: { delivery: 'off' } } },
     event: { kind: 'message' }, accepted: false, wakes: false },
@@ -86,6 +87,15 @@ it.each([
       return new URL(url).pathname === `/v2/sessions/${sessionId}`
         ? { ...response, data: { session: { ...response.data.session, active: false, latestTurnStatus: 'completed' } } } : response;
     });
+    if (event.kind !== 'needs_you') {
+      const resourceTransport = http.request.getMockImplementation()!;
+      http.request.mockImplementation(async (request: { url: string }) => {
+        const response = await resourceTransport(request);
+        return new URL(request.url).pathname.endsWith('/messages') ? { ...response, data: { ...response.data, messages: [
+          { ...message, addressingV1: { ...message.addressingV1, watcherSessionIds: [sessionId] } },
+        ] } } : response;
+      });
+    }
     const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
     const admission = vi.fn<CliActionMachineAdmissionTransport>(async () => ({ status: 'accepted', localId }));
     // Only the daemon process launch boundary is replaced; receiver admission
@@ -100,7 +110,40 @@ it.each([
       destinationSessionId: sessionId, addressing, policy, event }, signal: new AbortController().signal })).toBe(accepted);
     expect(admission.mock.calls.length).toBe(accepted ? 1 : 0);
     expect(spawnSession.mock.calls.length).toBe(wakes ? 1 : 0);
+    if (accepted) expect(admission.mock.calls[0]?.[0].reply).toMatchObject({ mode: 'return', discussion: addressing });
   });
+
+it.each(['busy', 'person_stopped', 'muted'] as const)('keeps default-Quiet direct asks under the existing %s receiver admission', async state => {
+  const sessionTransport = http.get.getMockImplementation()!;
+  http.get.mockImplementation(async (url: string, ...options: unknown[]) => {
+    const response = await sessionTransport(url, ...options);
+    if (url.endsWith('/delivery-mutes') && state === 'muted') return { status: 200, data: {
+      scopes: [{ kind: 'source', source: { kind: 'discussion', discussionId: addressing.discussionId } }],
+    } };
+    if (new URL(url).pathname !== `/v2/sessions/${sessionId}`) return response;
+    const current = response.data.session;
+    return { ...response, data: { session: { ...current, active: state === 'busy',
+      latestTurnStatus: state === 'busy' ? 'in_progress' : 'completed',
+      metadata: JSON.stringify({ ...JSON.parse(current.metadata), ...(state === 'person_stopped' ? {
+        sessionExplicitStopV1: { v: 1, cause: 'explicit_stop', requestId: 'person-stop', requestedAtMs: 1 },
+      } : {}) }),
+    } } };
+  });
+  const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
+  const admission = vi.fn<CliActionMachineAdmissionTransport>(async () => ({ status: 'accepted', localId }));
+  const spawnSession = vi.fn(async () => ({ type: 'success' as const, sessionId }));
+  const session = createMutableApiSessionClientFixture({ sessionId, overrides: {
+    getServerFeaturesSnapshot: () => features, getMachineAdmissionTransport: () => admission,
+    runSessionFollowSourceRequest: ({ request }) => request(),
+  } });
+  const intake = createDiscussionFollowInputIntake({ session, credentials: { token: 'token', encryption: null }, spawnSession });
+  expect(await intake({ observation: { source: { kind: 'discussion', discussionId: addressing.discussionId },
+    destinationSessionId: sessionId, addressing, ...route }, signal: new AbortController().signal })).toBe(state !== 'muted');
+  expect(spawnSession).not.toHaveBeenCalled();
+  if (state === 'muted') expect(admission).not.toHaveBeenCalled();
+  else expect(admission).toHaveBeenCalledWith(expect.objectContaining({ requestedAction: { v: 1, kind: 'enqueue' },
+    reply: expect.objectContaining({ mode: 'return', discussion: addressing }) }), expect.anything());
+});
 
 it('admits a human-addressed original into existing Machine Pending without inventing a causal Session or steering a busy turn', async () => {
   const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
