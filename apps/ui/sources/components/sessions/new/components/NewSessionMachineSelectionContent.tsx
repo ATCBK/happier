@@ -74,6 +74,12 @@ export type NewSessionMachineSelectionContentProps<TMachine extends MachineDispl
     showCliGlyphs?: boolean;
     autoDetectCliGlyphs?: boolean;
     maxHeight?: number;
+    /**
+     * `inline`: laid out in a page (the New Session wizard's Machine section) rather than a popover or
+     * the picker route: page rows at their natural height, and the search field waits for the user,
+     * so opening the page does not scroll it down to this list.
+     */
+    presentation?: 'inline';
     /** Content after the last machine that scrolls with the list, so a long list cannot clip it (see `SelectionList` `bodyFooter`). */
     bodyFooter?: React.ReactNode;
 }>;
@@ -133,6 +139,8 @@ export function NewSessionMachineSelectionContent<TMachine extends MachineDispla
         testIdPrefix: props.testIdPrefix,
     });
 
+    const inline = props.presentation === 'inline';
+    const maxHeight = inline ? undefined : props.maxHeight;
     return (
         <>
         {props.managedMachines === undefined && props.selectedServerId && props.onSelectManagedMachine ?
@@ -145,14 +153,14 @@ export function NewSessionMachineSelectionContent<TMachine extends MachineDispla
             selectedOptionId={listModel.selectedOptionId}
             onSelect={() => {}}
             onRequestClose={() => {}}
-            autoFocusInputOnWeb
+            autoFocusInputOnWeb={!inline}
             // In a popover the picker is a transient menu: the shared menu rows (inset, rounded,
             // menu height), as the composer's other pickers draw theirs. The picker page keeps list rows.
-            optionPresentation={props.maxHeight === undefined ? undefined : 'menu'}
-            maxHeight={props.maxHeight}
+            optionPresentation={maxHeight === undefined ? undefined : 'menu'}
+            maxHeight={maxHeight}
             bodyFooter={props.bodyFooter}
             heightBehavior={
-                props.maxHeight === undefined
+                maxHeight === undefined
                     ? undefined
                     : resolvePopoverSelectionListHeightBehavior()
             }

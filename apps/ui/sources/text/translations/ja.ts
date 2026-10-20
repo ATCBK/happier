@@ -9668,7 +9668,7 @@ localTailscale: {
       safeYolo: "オート",
       yolo: "YOLO",
       plan: "プランモード",
-      bypassPermissions: "Yoloモード",
+      bypassPermissions: "YOLOモード",
       badgeAccept: "許可",
       badgePlan: "プラン",
       badgeReadOnly: "読み取り専用",

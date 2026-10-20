@@ -9018,7 +9018,7 @@ const zhHansValues = {
       safeYolo: "自动",
       yolo: "YOLO",
       plan: "计划模式",
-      bypassPermissions: "Yolo 模式",
+      bypassPermissions: "YOLO 模式",
       badgeAccept: "接受",
       badgePlan: "计划",
       badgeReadOnly: "只读",

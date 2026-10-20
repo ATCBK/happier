@@ -19,6 +19,11 @@ const MOBILE_WEB_AGENT_INPUT_POPOVER_VIEWPORT_MARGIN = 12;
 export type AgentInputContentPopoverRenderArgs = Readonly<{
     requestClose: () => void;
     maxHeight: number;
+    /**
+     * The content is laid out in a page section (the New Session wizard's expanded sections) instead
+     * of this popover: it draws page rows and leaves focus alone.
+     */
+    inline?: boolean;
 }>;
 
 export type AgentInputPopoverContent =

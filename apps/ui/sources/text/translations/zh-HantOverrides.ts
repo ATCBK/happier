@@ -7583,7 +7583,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             acceptEdits: '接受編輯',
             safeYolo: '自動',
             plan: '計畫模式',
-            bypassPermissions: 'Yolo 模式',
+            bypassPermissions: 'YOLO 模式',
             badgeSafeYolo: '自動',
             badgeAcceptAllEdits: '接受所有編輯',
             badgeBypassAllPermissions: '繞過所有權限',

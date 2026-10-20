@@ -121,7 +121,8 @@ function NewSessionScreenInner(props: Readonly<{
         );
     }
 
-    const { layout, profiles, agent, machine, footer } = model.wizardProps;
+    // The wizard's layout settings (Settings → Sessions → Wizard layout) ride with its sections.
+    const { layout, sectionPresentation, useColumnLayout, profiles, agent, machine, footer } = model.wizardProps;
     // The web route card has no header, so the wizard brings its own way out (a Home embed never shows the wizard).
     const wizardWithDismissal = (wizard: React.ReactElement) => (
         Platform.OS === 'web' && props.presentation === 'screen'
@@ -143,6 +144,8 @@ function NewSessionScreenInner(props: Readonly<{
                 <NewSessionWizard
                     popoverBoundaryRef={model.popoverBoundaryRef}
                     layout={layout}
+                    sectionPresentation={sectionPresentation}
+                    useColumnLayout={useColumnLayout}
                     profiles={profiles}
                     agent={agent}
                     machine={machine}

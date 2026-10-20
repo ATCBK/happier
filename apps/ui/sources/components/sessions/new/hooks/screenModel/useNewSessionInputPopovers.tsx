@@ -270,7 +270,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
     ]);
 
     const machinePopover = React.useMemo<AgentInputContentPopoverConfig>(() => ({
-        renderContent: ({ maxHeight, requestClose }) => {
+        renderContent: ({ maxHeight, requestClose, inline }) => {
             const renderParams = machinePopoverRenderParamsRef.current;
             // One shared row owner with the full-screen picker: the composer
             // popover and the picker route must never disagree about whether
@@ -350,6 +350,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
                     searchPlacement="header"
                     testIdPrefix="new-session-machine"
                     maxHeight={maxHeight}
+                    presentation={inline ? 'inline' : undefined}
                 />
             );
         },

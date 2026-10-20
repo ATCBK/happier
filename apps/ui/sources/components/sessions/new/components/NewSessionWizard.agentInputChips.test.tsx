@@ -79,7 +79,7 @@ describe('NewSessionWizard real AgentInput composition', () => {
             ], agentPickerSelectedOptionId: 'agent:happier.agent.gemini/gemini', onAgentPickerSelect };
         const { screen } = await renderWizard(props);
         const dropdown = screen.findAllByType(DropdownMenu).find((node) => (
-            node.props.itemTrigger?.itemProps?.testID === 'new-session-agent-dropdown-trigger'
+            node.props.items?.some((item: { id: string }) => item.id === 'agent:happier.agent.gemini/gemini')
         ));
         expect(dropdown).toBeDefined();
         expect(dropdown?.props.items.map((item: { id: string; title: string }) => ({ id: item.id, title: item.title }))).toEqual([

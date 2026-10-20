@@ -98,7 +98,8 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
 }));
 
 vi.mock('@/components/ui/lists/Item', () => ({
-    Item: () => null,
+    Item: (props: { title?: React.ReactNode; subtitle?: React.ReactNode }) =>
+        React.createElement('Item', null, React.createElement('Text', null, props.title), React.createElement('Text', null, props.subtitle)),
 }));
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
@@ -109,9 +110,6 @@ vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
 }));
 vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
     PathSelectionList: () => null,
-}));
-vi.mock('@/components/sessions/new/components/WizardSectionHeaderRow', () => ({
-    WizardSectionHeaderRow: () => null,
 }));
 vi.mock('@/components/profiles/ProfilesList', () => ({
     ProfilesList: () => null,

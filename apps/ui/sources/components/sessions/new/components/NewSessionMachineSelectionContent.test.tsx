@@ -216,6 +216,29 @@ describe('NewSessionMachineSelectionContent', () => {
         expect(props.rootStep.sections).toEqual([]);
     });
 
+    it('leaves focus alone and draws page rows when the wizard lays the list out in its page', async () => {
+        const { NewSessionMachineSelectionContent } = await import('./NewSessionMachineSelectionContent');
+        const base = {
+            groups: [],
+            selectedMachine: null,
+            selectedServerId: null,
+            recentMachines: [],
+            favoriteMachines: [],
+            onSelectMachine: () => {},
+            onSelectScopedMachine: () => {},
+        } as const;
+
+        await renderScreen(<NewSessionMachineSelectionContent {...base} maxHeight={317} />);
+        expect(getLastSelectionList().autoFocusInputOnWeb).toBe(true);
+
+        await renderScreen(<NewSessionMachineSelectionContent {...base} presentation="inline" />);
+        const inline = getLastSelectionList();
+        // Focusing the search field on open would scroll the wizard page down to the Machine section.
+        expect(inline.autoFocusInputOnWeb).toBe(false);
+        expect(inline.optionPresentation).toBeUndefined();
+        expect(inline.maxHeight).toBeUndefined();
+    });
+
     it('builds a single-server SelectionList with recent, favorites, and all machines deduped in launch order', async () => {
         const { NewSessionMachineSelectionContent } = await import('./NewSessionMachineSelectionContent');
         const favorite = createMachine({ id: 'm-fav', metadata: { displayName: 'Favorite', host: 'fav-host', homeDir: '/Users/tester' } });

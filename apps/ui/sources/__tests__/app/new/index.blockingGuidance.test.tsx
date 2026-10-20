@@ -180,6 +180,8 @@ vi.mock('@/components/sessions/new/hooks/useNewSessionScreenModel', () => ({
         popoverBoundaryRef: { current: null },
         wizardProps: {
             layout: null,
+            sectionPresentation: { machines: 'list' },
+            useColumnLayout: true,
             profiles: null,
             agent: null,
             machine: null,
@@ -382,6 +384,18 @@ describe('/new (blocking guidance)', () => {
         expect(mockState.portalScopeRenders).toBe(initialRenders.portal);
         expect(mockState.newSessionBlockHookCalls).toBe(initialRenders.blockingHook);
         expect(mockState.guidanceHookCalls).toBe(0);
+    });
+
+    it('hands the wizard its layout settings (list or dropdown per step, two columns)', async () => {
+        setMockServerId('s1');
+        mockState.tempData = null;
+        mockState.shouldBlockNewSession = false;
+
+        const screen = await renderScreen(React.createElement(Screen));
+
+        const wizard = screen.findByType('NewSessionWizard');
+        expect(wizard.props.sectionPresentation).toEqual({ machines: 'list' });
+        expect(wizard.props.useColumnLayout).toBe(true);
     });
 
     it('keeps the wizard path when temp data seeds a worktree draft intent', async () => {

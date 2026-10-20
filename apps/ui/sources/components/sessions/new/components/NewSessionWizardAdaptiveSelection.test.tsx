@@ -29,7 +29,7 @@ describe('NewSessionWizardAdaptiveSelection', () => {
         expect(resolveWizardAdaptivePresentation(undefined, 'expanded')).toBe('expanded');
     });
 
-    it('renders compact dropdown triggers with selected value as subtitle only', async () => {
+    it('draws the compact select as the wizard value row and opens its menu from it', async () => {
         const { NewSessionWizardDropdownSelectionItem } = await import('./NewSessionWizardAdaptiveSelection');
         const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
         const screen = await renderScreen(<NewSessionWizardDropdownSelectionItem
@@ -43,14 +43,10 @@ describe('NewSessionWizardAdaptiveSelection', () => {
             onSelect={() => {}}
         />);
 
-        const dropdown = screen.findByType(DropdownMenu);
-        expect(dropdown.props.itemTrigger).toMatchObject({
-            title: 'Select Thing',
-            subtitle: 'Current Thing',
-            showSelectedDetail: false,
-            showSelectedSubtitle: false,
-            itemProps: { testID: 'trigger' },
-        });
+        expect(screen.getTextContent()).toContain('Select Thing');
+        expect(screen.findByType(DropdownMenu).props.open).toBe(false);
+        await screen.pressByTestIdAsync('trigger');
+        expect(screen.findByType(DropdownMenu).props.open).toBe(true);
     });
 
     it('retires pending work when the mounted wizard popover closes', async () => {
