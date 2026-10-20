@@ -15,7 +15,7 @@ import { PaneHeader } from '@/components/appShell/panes/PaneHeader';
 import type { PaneBuiltinAdapter } from '@/components/appShell/panes/types';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Icon } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SelectionListFilterChip } from '@/components/ui/selectionList/SelectionListFilterChips';
 import { KeyboardAwareScrollView } from '@/components/ui/keyboardAvoidance/KeyboardAwareScrollView';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
@@ -1509,6 +1509,14 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         <View testID={testIDPrefix} style={styles.root}>
             <AppPaneScopeHost
                 scopeId={WORKFLOW_EDITOR_PANE_SCOPE_ID}
+                mainColumn={{
+                    hideLabel: t('panes.mainColumn.hideWorkflow'),
+                    showLabel: t('panes.mainColumn.showWorkflow'),
+                    identity: <>
+                        <Icon name="tree-structure" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
+                        <Text numberOfLines={1}>{draft.name.trim().length > 0 ? draft.name : t('workflows.page.untitled')}</Text>
+                    </>,
+                }}
                 main={page}
                 rightPaneBuiltinAdapter={flowAdapter}
                 destinationDetails={settingsDetails}

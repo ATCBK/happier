@@ -14,6 +14,7 @@ import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/det
 import { t } from '@/text';
 import { View } from 'react-native';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Text } from '@/components/ui/text/Text';
 
 /**
  * `/workflows`. Beside the Workflows column, main shows the library home, which carries only what the
@@ -36,6 +37,8 @@ export const WorkflowsDestinationIndex = React.memo(function WorkflowsDestinatio
     const main = <>{params.automationUnavailable === '1' ? <SurfaceStateCard testID="retired-automation-unavailable"
         size="line" kind="unavailable" title={t('workflows.triggers.legacy.notAvailable')} /> : null}{content}</>;
     if (wide && sessionId && access.kind === 'workflows') return <AppPaneScopeHost scopeId="workflows" main={main}
+        mainColumn={{ hideLabel: t('panes.mainColumn.hideWorkflow'), showLabel: t('panes.mainColumn.showWorkflow'),
+            identity: <Text numberOfLines={1}>{t('workflows.title')}</Text> }}
         destinationDetails={{ onClose: close, pane: <View style={{ flex: 1, minHeight: 0 }}>
             <PaneHeader title={t('workflows.authoring.agent')} onClose={close} />
             <WorkflowAuthoringSessionPane sessionId={sessionId} serverId={params.authoringServerId} active composer />

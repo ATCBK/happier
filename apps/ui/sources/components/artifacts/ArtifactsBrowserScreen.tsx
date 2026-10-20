@@ -272,6 +272,11 @@ export function ArtifactsBrowser(props: Readonly<{
     return (
         <DetailsPaneHost
             testID="artifacts:detailPane"
+            mainColumn={{
+                hideLabel: t('panes.mainColumn.hidePage', { title: t('artifacts.title') }),
+                showLabel: t('panes.mainColumn.showPage', { title: t('artifacts.title') }),
+                identity: <Text numberOfLines={1}>{t('artifacts.title')}</Text>,
+            }}
             main={main}
             mainMinWidthPx={PAGE_MIN_WIDTH_PX}
             onCloseDetails={() => setOpenId(null)}

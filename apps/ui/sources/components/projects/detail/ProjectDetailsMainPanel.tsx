@@ -93,7 +93,6 @@ export const ProjectDetailsMainPanel = React.memo((props: ProjectDetailsMainPane
             displayPathOverride={props.workspaceRef.rootPath}
             forceOverviewMode={props.forceOverviewMode}
             showTerminalHeaderAction={false}
-            showFocusModeToggle={false}
             onRequestClose={props.onRequestClose}
             pluginUiProjection={props.pluginUiProjection}
             platform={props.platform}

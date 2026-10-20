@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { PopoverScope } from '@/components/ui/popover';
 
@@ -35,6 +36,9 @@ import type { WorkspaceRefResolutionV1 } from '@happier-dev/protocol/workspaces/
 import type { WorkspaceRefUnconfirmed } from './detail/useWorkspaceRefById';
 import { ProjectAtmosphereFrame, ProjectAtmosphereLookChip } from '@/components/atmosphere/ProjectAtmosphereFrame';
 import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBandBoundary';
+import { resolveWorkspaceRefDisplayName } from './resolveWorkspaceRefDisplayName';
+import { Text } from '@/components/ui/text/Text';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 
 export const ProjectDetailScreen = React.memo((props: Readonly<{
     workspaceRefId: string;
@@ -54,6 +58,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
     onSetShowWorktrees?: (nextValue: boolean) => void;
     onPluginSurfaceOpenChange?: (handler: PluginSurfaceOpenHandler | undefined) => void;
 }>) => {
+    const { theme } = useUnistyles();
     const deviceType = useDeviceType();
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     const lastActiveRootPathByWorkspaceRefId = useLocalSetting('projectLastActiveRootPathByWorkspaceRefId');
@@ -283,6 +288,15 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
         <View style={{ flex: 1 }} {...pane.overlayFocusReturnCaptureProps}>
             <AppPaneScopeHost
                 scopeId={scopeId}
+                arrangement="honour"
+                mainColumn={{
+                    hideLabel: t('panes.mainColumn.hideProject'),
+                    showLabel: t('panes.mainColumn.showProject'),
+                    identity: <>
+                        <Icon name="folder" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
+                        <Text numberOfLines={1}>{resolveWorkspaceRefDisplayName(workspaceRef)}</Text>
+                    </>,
+                }}
                 initialRight={multiPaneEnabled && deviceType === 'tablet'
                     ? { isOpen: true, activeTabId: resolveProjectRightTabId(null) }
                     : undefined}

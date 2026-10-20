@@ -295,6 +295,11 @@ export const PluginSettingsHomeScreen = React.memo(function PluginSettingsHomeSc
         <ListPresentationProvider value="page" pageNoticeActive={showSnapshotNotice}>
         <DetailsPaneHost
             testID="settings.plugins.detailPane"
+            mainColumn={{
+                hideLabel: t('panes.mainColumn.hidePage', { title: t(PLUGINS_HOME_TITLE_KEY) }),
+                showLabel: t('panes.mainColumn.showPage', { title: t(PLUGINS_HOME_TITLE_KEY) }),
+                identity: <Text numberOfLines={1}>{t(PLUGINS_HOME_TITLE_KEY)}</Text>,
+            }}
             mainMinWidthPx={PLUGINS_PAGE_MIN_WIDTH_PX}
             onCloseDetails={closePane}
             details={openItem && paneOpen ? {

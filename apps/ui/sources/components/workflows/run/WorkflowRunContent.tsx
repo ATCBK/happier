@@ -1596,6 +1596,13 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
     }
     if (!detailsPaneAvailable) return main;
     return <DetailsPaneHost main={main}
+        mainColumn={{
+            hideLabel: t('panes.mainColumn.hideWorkflow'),
+            showLabel: t('panes.mainColumn.showWorkflow'),
+            identity: <><Icon name="tree-structure" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
+                <Text numberOfLines={1}>{props.title ?? t('workflows.contentUnavailable')}</Text>
+                <Text numberOfLines={1}>{outcomeWord}</Text></>,
+        }}
         details={inspector === null ? null : { content: inspector, header: { title: selectedDetailTitle, subtitle: selectedDetailSubtitle }, accessibilityLabel: selectedDetailTitle }}
         onCloseDetails={() => props.onDeselectInvocation?.()} />;
 }
