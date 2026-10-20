@@ -71,6 +71,7 @@ export const WORKSPACE_ACTION_INPUT_SCHEMAS = {
   'workspace.tabs.list': z.strictObject({}),
   'workspace.tabs.open': z.strictObject({ href: z.optional(id), tabId: z.optional(id), groupId: z.optional(id),
     file: z.optional(WorkspaceFileOpenInputSchema),
+    present: z.optional(z.boolean()),
     find: z.optional(WorkspaceFindSeedSchema),
     beforeTabId: z.optional(z.nullable(id)), reuseExisting: z.optional(z.boolean()),
     mode: z.optional(z.enum(['preview', 'newTab', 'splitLeft', 'splitRight', 'splitUp', 'splitDown'])),
@@ -80,6 +81,9 @@ export const WORKSPACE_ACTION_INPUT_SCHEMAS = {
     message: 'A destination split requires href or file and cannot replace an existing tab',
   }), z.refine(data => !data.find || data.href !== undefined || data.file !== undefined, {
     message: 'Find launch input requires an addressed destination',
+  }), z.refine(data => data.present !== false || (data.file?.target.kind === 'session'
+    && (data.mode === undefined || data.mode === 'preview') && data.groupId === undefined && data.beforeTabId === undefined), {
+    message: 'An unpresented open positions a preview in the foreground Session',
   })),
   'workspace.tabs.activate': z.strictObject({ tabId: id }),
   'workspace.tabs.close': z.strictObject({ tabId: id }),
@@ -158,6 +162,7 @@ const inputFields = {
   'workspace.tabs.open': [
     { path: 'href', title: 'Destination', widget: 'text' }, { ...tabIdHint, required: false },
     { path: 'file', title: 'Workspace file', widget: 'json', description: 'Session or Project target, workspace-relative path, optional anchor, view, blame and Changes scope. Exclusive with href.' },
+    { path: 'present', title: 'Present file', widget: 'boolean', description: 'False positions a preview in the foreground Session without navigating or presenting its pane.' },
     { path: 'find', title: 'Find target', widget: 'json', description: 'Query/options and an exact Session message, Session file or Project file target. Private launch input; not persisted in the URL or tab.' },
     { ...groupIdHint, required: false }, beforeTabHint,
     { path: 'reuseExisting', title: 'Go to an existing tab', widget: 'boolean' },

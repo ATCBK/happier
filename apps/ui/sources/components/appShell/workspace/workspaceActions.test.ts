@@ -29,6 +29,11 @@ describe('workspace Action intent adapter', () => {
             createId: () => `new:${++id}`, onChange: () => {} });
         const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => null, createId: () => `new:${++id}` });
         const anchor = { kind: 'range', filePath: 'src/a.ts', startLine: 3, endLine: 8 };
+        const beforeSilentOpen = state;
+        expect(execute('workspace.tabs.open', { file: { target: { kind: 'session', sessionId: 'session-a', serverId: 'home-a' },
+            path: 'src/a.ts', anchor }, mode: 'preview', present: false }))
+            .toMatchObject({ ok: false, errorCode: 'workspace_file_pane_unavailable' });
+        expect(state).toBe(beforeSilentOpen);
         expect(execute('workspace.tabs.open', { file: { target: { kind: 'session', sessionId: 'session-a', serverId: 'home-a' }, path: 'src/a.ts', anchor, view: 'changes', blame: true }, mode: 'preview' })).toEqual({ ok: true });
         const current = state.tabs[state.groups[state.focusedGroupId].activeTabId];
         expect(current.target.kind).toBe('session');

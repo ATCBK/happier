@@ -1,4 +1,4 @@
-import { WORKSPACE_ACTION_INPUT_SCHEMAS, type WorkspaceActionId, type WorkspaceTabsListOutput, type WorkspaceClosedTabsListOutput } from '@happier-dev/protocol/actions/workspaceActionFamily';
+import { WORKSPACE_ACTION_INPUT_SCHEMAS, type WorkspaceActionId, type WorkspaceTabsListOutput, type WorkspaceClosedTabsListOutput, type WorkspaceFileOpenInput } from '@happier-dev/protocol/actions/workspaceActionFamily';
 import type { z } from 'zod/mini';
 import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCanvasHost';
 import { createWorkspaceEmptyTab, selectWorkspaceClosableTabIds, type ClosedWorkspaceTab, type WorkspaceState } from './workspaceState';
@@ -74,6 +74,8 @@ export function createWorkspaceActionAdapter(input: Readonly<{
     /** Mounted clients project history labels through the same live destination-title owner. */
     readClosedTitle?: (entry: ClosedWorkspaceTab) => string | null;
     phone?: boolean;
+    /** The registered foreground Session driver owns silent file-pane positioning. */
+    openFileInPlace?: (file: WorkspaceFileOpenInput, tabId?: string) => boolean;
     chatFind?: Readonly<{ handoff: FileFindSeedHandoff; resolveAuthority(serverId: string): ServerAccountScopeLifetime | null }>;
 }>) {
     return (actionId: WorkspaceActionId, parameters: unknown): WorkspaceActionOutcome => {
@@ -158,6 +160,13 @@ export function createWorkspaceActionAdapter(input: Readonly<{
                         if (!authority.isCurrent()) { cancelFind(); return workspaceActionFailure('workspace_find_unavailable'); }
                     }
                     try {
+                        if (data.present === false) {
+                            if (!data.file || !input.openFileInPlace?.(data.file, tabId)) {
+                                cancelFind?.();
+                                return workspaceActionFailure('workspace_file_pane_unavailable');
+                            }
+                            return { ok: true };
+                        }
                         if (!input.navigation.openHref(data.href, {
                             ...(tabId ? { tabId } : {}),
                             ...('groupId' in data && data.groupId ? { groupId: data.groupId } : {}),

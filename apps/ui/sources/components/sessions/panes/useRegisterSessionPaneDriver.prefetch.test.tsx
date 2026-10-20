@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PaneDriver } from '@/components/appShell/panes/types';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -37,6 +37,8 @@ vi.mock('@/components/plugins/projection/useScopedPluginUiProjection', () => ({
 }));
 
 afterEach(() => {
+    standardCleanup();
+    driverModule.sessionPaneModulePrefetchLoaders.splice(0, driverModule.sessionPaneModulePrefetchLoaders.length, ...initialLoaders);
     registerDriverSpy.mockClear();
 });
 
@@ -60,6 +62,10 @@ vi.mock('./bottom/SessionBottomPanel', () => {
         SessionBottomPanel: () => React.createElement('SessionBottomPanel'),
     };
 });
+
+// Resolve the real hook graph during collection, outside the mount/timer deadline.
+const driverModule = await import('./useRegisterSessionPaneDriver');
+const initialLoaders = [...driverModule.sessionPaneModulePrefetchLoaders];
 
 describe('useRegisterSessionPaneDriver (module prefetch)', () => {
     it('uses the discovered runtime Home for the mounted pane scope before the route has a server id', async () => {

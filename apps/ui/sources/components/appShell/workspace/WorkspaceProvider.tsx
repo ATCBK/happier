@@ -24,8 +24,9 @@ import { selectWorkspaceClosableTabIds, type WorkspaceState } from './workspaceS
 import { resolvePhoneWorkspaceTabHref } from './workspacePhoneProjection';
 import { useWorkspaceKeyboardShortcuts } from './useWorkspaceKeyboardShortcuts';
 import { WorkspaceRouteHostingContext } from './WorkspaceRouteHostingContext';
-import { useOptionalAppPaneFindSeedContext } from '../panes/AppPaneProvider';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { useOptionalAppPaneFindSeedContext, useOptionalPaneDriverReader } from '../panes/AppPaneProvider';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { BROWSER_HISTORY_NAVIGATION_CHANGED } from '@/utils/navigation/browserHistoryNavigation';
 import { WorkspaceWindowTitle } from './WorkspaceWindowTitle';
 import { clearRouteAnchorSessionId, getSessionSurfaceVisibilityResetVersion, setRouteAnchorSessionId, subscribeSessionSurfaceVisibilityReset } from '@/sync/domains/session/sessionSurfaceVisibility';
@@ -78,6 +79,7 @@ export function WorkspaceProvider(props: Readonly<{
     const browserHref = React.useSyncExternalStore(subscribeBrowserHref, readBrowserHref, readServerHref);
     const scope = useActiveServerAccountScope();
     const findSeedContext = useOptionalAppPaneFindSeedContext();
+    const readPaneDriver = useOptionalPaneDriverReader();
     const findHandoff = findSeedContext?.fileFindSeedHandoff;
     const scopeKey = scope ? JSON.stringify([scope.serverId, scope.accountId]) : null;
     // Browser history is authoritative even when readiness changes before Expo updates its mirror.
@@ -135,8 +137,8 @@ export function WorkspaceProvider(props: Readonly<{
         scopeKey: string | null; titles: Readonly<Record<string, WorkspaceDestinationTitle>>;
     }>>({ scopeKey, titles: {} });
     const destinationTitles = publishedTitles.scopeKey === scopeKey ? publishedTitles.titles : NO_DESTINATION_TITLES;
-    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles });
-    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles };
+    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles, readPaneDriver });
+    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles, readPaneDriver };
     const publishDestinationTitle = React.useCallback((tabId: string, ref: DestinationRef, title: string | null) => {
         // The body may finish an effect after navigation. Its old identity must
         // never name the new destination retained under the same tab key.
@@ -236,6 +238,20 @@ export function WorkspaceProvider(props: Readonly<{
                 publishedTitle: latest.current.destinationTitles[entry.tab.id], fallbackTitle: entry.fallbackTitle,
             }),
             phone,
+            openFileInPlace: (file, tabId) => {
+                if (file.target.kind !== 'session' || !file.target.serverId) return false;
+                const state = latest.current.owner.getState();
+                const activeTabId = state.groups[state.focusedGroupId].activeTabId;
+                const retained = state.tabs[activeTabId]?.target;
+                if ((tabId && tabId !== activeTabId) || retained?.kind !== 'session'
+                    || retained.params.id !== file.target.sessionId
+                    || !areServerProfileIdentifiersEquivalent(retained.params.serverId, file.target.serverId)) return false;
+                const driver = latest.current.readPaneDriver?.(createSessionPaneScopeId(file.target.sessionId, file.target.serverId, tabId));
+                if (driver?.surfaceScope?.targetKind !== 'session' || driver.surfaceScope.sessionId !== file.target.sessionId
+                    || !areServerProfileIdentifiersEquivalent(driver.surfaceScope.serverId, file.target.serverId)) return false;
+                const { target: _target, ...resource } = file;
+                return driver.openResource?.({ kind: 'file', ...resource }, { intent: 'preview', present: false }) === true;
+            },
             ...(findHandoff ? { chatFind: { handoff: findHandoff, resolveAuthority: (serverId: string) =>
                 latest.current.findSeedContext?.fileFindSeedAccountBindings.get(resolveServerProfileScopeIdForIdentifier(serverId)) ?? null } } : {}),
         });

@@ -20,6 +20,9 @@ describe('workspace client actions', () => {
       anchor: { kind: 'range', filePath: 'src/a.ts', startLine: 3, endLine: 8 }, view: 'changes', blame: true,
       changesScope: { kind: 'turn', turnId: 'turn-a' } };
     expect(open.safeParse({ file, mode: 'preview' }).success).toBe(true);
+    expect(open.safeParse({ file, mode: 'preview', present: false }).success).toBe(true);
+    expect(open.safeParse({ file, mode: 'splitRight', present: false }).success).toBe(false);
+    expect(open.safeParse({ href: '/session/session-a', present: false }).success).toBe(false);
     expect(open.safeParse({ file, mode: 'splitRight' }).success).toBe(true);
     expect(open.safeParse({ file, href: '/session/other' }).success).toBe(false);
     expect(open.safeParse({ file, mode: 'splitRight', tabId: 'replace' }).success).toBe(false);

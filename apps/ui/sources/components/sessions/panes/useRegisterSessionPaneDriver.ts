@@ -18,6 +18,9 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { resolveSessionTerminalDockLocation } from '@/components/sessions/terminal/useSessionTerminalAvailability';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { usePanePresentation } from '@/components/appShell/panes/panePresentation';
+import { useOptionalDetailsTabOpener } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { createSessionPaneDetailsTab } from './url/sessionPaneUrlState';
+import { fileChangesComparisonOfScope } from '@/components/workspaces/files/file/changes/fileChangesScope';
 
 type SessionPaneScopedProps = Readonly<{ sessionId: string; scopeId: string }>;
 
@@ -84,6 +87,18 @@ export function useRegisterSessionPaneDriver(
         () => createSessionPaneScopeId(sessionId, serverId, instanceKey),
         [instanceKey, serverId, sessionId],
     );
+    const openDetailsTab = useOptionalDetailsTabOpener(scopeId);
+    const openResource = React.useCallback<NonNullable<PaneDriver['openResource']>>((resource, openOptions) => {
+        if (resource.kind !== 'file' || !openDetailsTab) return false;
+        const { kind, changesScope, ...file } = resource;
+        const constructed = createSessionPaneDetailsTab({ kind, ...file,
+            ...(changesScope ? { changes: fileChangesComparisonOfScope(changesScope) } : {}),
+        });
+        if (!constructed) return false;
+        const { isPinned: _pinned, isPreview: _preview, ...tab } = constructed;
+        openDetailsTab(tab, { intent: openOptions?.intent ?? 'preview', present: openOptions?.present });
+        return true;
+    }, [openDetailsTab]);
     const pluginProjection = useScopedPluginUiProjection({
         machineId: suppliedPluginRuntime ? null : sessionMachineTarget?.machineId ?? null,
         serverId: suppliedPluginRuntime ? null : serverId,
@@ -114,6 +129,7 @@ export function useRegisterSessionPaneDriver(
         const driver: PaneDriver = {
             scopeId,
             surfaceScope,
+            openResource,
             onTerminalWorkspaceReveal: () => {
                 const matchingHome = serverId
                     ? areServerProfileIdentifiersEquivalent(cockpitChrome?.serverId, serverId)
@@ -173,6 +189,7 @@ export function useRegisterSessionPaneDriver(
         pluginRuntime.machineId,
         pluginRuntime.serverId,
         registerDriver,
+        openResource,
         resolveBoardPrimaryHost,
         scopeId,
         sessionId,
