@@ -272,7 +272,6 @@ import {
     preparePendingMessageComposerAdmission,
 } from '@/sync/ops/pendingMessageComposerAdmission';
 import type { SessionTranscriptLoadIssue } from '@/sync/store/domains/transcriptLoading';
-import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
 import { filterReviewCommentDraftsIncludedInPrompt } from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
 import { buildReviewCommentsOutboundMessage } from '@/sync/domains/input/reviewComments/buildReviewCommentsOutboundMessage';
 import { buildReviewCommentsV1MetaPayload } from '@happier-dev/protocol/messages/structured/reviewCommentsInput';
@@ -409,7 +408,6 @@ import { layout } from '@/components/ui/layout/layout';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
-import { sessionSwitch } from '@/sync/ops';
 import { shouldRenderChatTimelineForSession, shouldOfferLocalControlRelease, shouldRequestRemoteControlAfterPendingEnqueue } from '@/sync/domains/session/control/localControlSwitch';
 import { readControlSwitchUiTimeoutMsFromEnv } from '@/sync/domains/session/control/controlSwitchUiTimeout';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -3052,7 +3050,6 @@ function SessionViewLoadedContent({
     const externalTranscriptPresentationNowMs = useSessionListRuntimeNowMs(
         externalTranscriptAuthority.kind === 'server_snapshot',
     );
-    const applyLocalSettings = useApplyLocalSettings();
     const router = useDestinationRouter();
     const pathname = useDestinationPathname();
     const safeArea = useChromeSafeAreaInsets();
@@ -6374,14 +6371,14 @@ function SessionViewLoadedContent({
     // Handle dismissing CLI version warning
     const handleDismissCliWarning = React.useCallback(() => {
         if (machineId && cliVersion) {
-            applyLocalSettings({
+            storage.getState().applyLocalSettings({
                 acknowledgedCliVersions: {
                     ...acknowledgedCliVersions,
                     [machineId]: cliVersion
                 }
-            });
+            }, { source: 'ui' });
         }
-    }, [acknowledgedCliVersions, applyLocalSettings, cliVersion, machineId]);
+    }, [acknowledgedCliVersions, cliVersion, machineId]);
 
     // Function to update permission mode
     const updatePermissionMode = React.useCallback((mode: PermissionMode) => {
@@ -7334,20 +7331,25 @@ function SessionViewLoadedContent({
         controlSwitchCallerRef.current = caller;
         const requestedControlMode = 'remote' as const;
         controlSwitchAttemptIdRef.current = attemptId;
-        setControlSwitchTo(requestedControlMode);
         fireAndForget((async () => {
             const cancellation = mergeAbortSignals([sessionViewCaller.signal, caller.signal]);
             try {
-                const ok = await sessionSwitch(sessionId, requestedControlMode, {
-                    serverId: sessionRouteServerId,
-                    accountLifetime,
+                const result = await executeRecoveryAction('session.control.switch', {
+                    sessionId, to: requestedControlMode,
+                }, {
+                    defaultSessionId: sessionId,
                     signal: cancellation.signal,
+                    onTransportIssued: () => {
+                        if (controlSwitchAttemptIdRef.current === attemptId && accountLifetime.isCurrent()) {
+                            setControlSwitchTo(requestedControlMode);
+                        }
+                    },
                 });
                 if (!accountLifetime.isCurrent()) {
                     finishControlSwitchAttempt(attemptId);
                     return;
                 }
-                if (ok !== true) {
+                if (!result.ok) {
                     if (!finishControlSwitchAttempt(attemptId)) return;
                     Modal.alert(t('common.error'), t('errors.failedToSwitchControl'));
                     return;
@@ -7362,7 +7364,7 @@ function SessionViewLoadedContent({
                 if (controlSwitchCallerRef.current === caller) controlSwitchCallerRef.current = null;
             }
         })(), { tag: 'SessionView.requestSwitchToRemote' });
-    }, [finishControlSwitchAttempt, hasWriteAccess, sessionAccountLifetime, sessionId, sessionRouteServerId, sessionViewCaller]);
+    }, [executeRecoveryAction, finishControlSwitchAttempt, hasWriteAccess, sessionAccountLifetime, sessionId, sessionViewCaller]);
     const targetMachineHomeDir = typeof ownerMetadata?.homeDir === 'string'
         ? ownerMetadata.homeDir
         : null;

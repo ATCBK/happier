@@ -387,6 +387,25 @@ describe('session resume and fork routing through the Home and Account boundary'
         } finally { account.dispose(); }
     });
 
+    it('executes admitted control switching through the captured Home and existing switch RPC', async () => {
+        const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
+        const { ActionIdSchema } = await import('@happier-dev/protocol/actions/actionIds');
+        const id = ActionIdSchema.parse('session.control.switch');
+        const executor = createDefaultActionExecutor();
+        boundary.respond('switch', true);
+        const result = await executor.execute(id, { sessionId: 'session-1', to: 'remote' }, {
+            surface: 'ui', authority: 'present_user', serverId: home.id,
+        });
+        expect(result).toEqual({ ok: true, result: { switched: true } });
+        expect(boundary.requests.filter(request => request.method === 'switch')).toEqual([
+            expect.objectContaining({ serverUrl: home.serverUrl, targetId: 'session-1', payload: { to: 'remote' } }),
+        ]);
+        boundary.respond('switch', false);
+        expect(await executor.execute(id, { sessionId: 'session-1', to: 'local' }, {
+            surface: 'ui', authority: 'present_user', serverId: home.id,
+        })).toMatchObject({ ok: false, errorCode: 'session_control_unavailable' });
+    });
+
     it('preserves resume authoring options at the actual daemon request boundary', async () => {
         const connectedServices = { v: 1, bindingsByServiceId: { anthropic: { source: 'connected', profileId: 'profile-1' } } } as const;
         await expect(ops.resumeSession(resumeOptions({ transcriptStorage: 'direct', attachMetadataIdentityPolicy: 'replace_with_runtime_identity',
