@@ -4,7 +4,7 @@ import type { WorkspaceAddressV1, WorkspaceRefV1 } from '@happier-dev/protocol/w
 import { isWorkspacePathWithinRootV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
 import type { ActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationStore';
-import { canRequestActionOperationStop } from './actionOperationPresentation';
+import { canRequestActionOperationStop, readProjectCommandStepExitCode } from './actionOperationPresentation';
 import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
 import { presentApprovalFailure } from '@/components/tools/shell/approvals/useApprovalDecisionHandler';
 import type { TechnicalDetailsLine } from '@/components/ui/lists/TechnicalDetailsDisclosure';
@@ -126,7 +126,10 @@ function summarizeResult(value: unknown): readonly ActionOperationDetailSummaryR
 function presentFailure(snapshot: ActionOperationSnapshot): ActionOperationDetailFailure | null {
     if (!snapshot.error) return null;
     const { errorCode, error } = snapshot.error;
-    const sentence = resolveSystemTaskFailureMessage({ code: errorCode, message: error }) ?? error;
+    const observedStepExit = readProjectCommandStepExitCode(snapshot);
+    const sentence = observedStepExit !== null
+        ? t('localServices.actions.failure.exitCode', { code: String(observedStepExit) })
+        : resolveSystemTaskFailureMessage({ code: errorCode, message: error }) ?? error;
     const presented = presentApprovalFailure({ errorCode, error }, sentence, t('inbox.actionOperations.failureGeneric'));
     return {
         reason: presented.reason,

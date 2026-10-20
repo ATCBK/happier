@@ -12,6 +12,7 @@ import {
   resolveActionOperationObservation,
 } from '@/sync/domains/actionOperations/actionOperationStore';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
+import { readProjectCommandStepExitCode } from '@/components/inbox/actionOperations/actionOperationPresentation';
 import { t } from '@/text';
 
 type NativeTool = Extract<ProjectCommandSourceV1, { kind: 'native' }>['tool'];
@@ -273,9 +274,7 @@ export function presentProjectRun(
       `${t('projects.scripts.run.stopped', { time: at })}${duration}`,
     );
   // Plan 21 copy: an observed nonzero step exit reads "Exited with code N at 10:12".
-  const observedStepExit = attachment?.exitCode !== undefined
-    && (snapshot.error?.errorCode === 'project_command_step_failed' || snapshot.error?.errorCode === 'project_setup_step_failed')
-    ? attachment.exitCode : null;
+  const observedStepExit = readProjectCommandStepExitCode(snapshot);
   return done(
     'failed',
     'danger',

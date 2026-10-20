@@ -43,6 +43,14 @@ export function canRequestActionOperationStop(
             || snapshot.observation?.kind === 'stop_unconfirmed');
 }
 
+/** A process exit is an outcome only when the command owner reports a failed step. */
+export function readProjectCommandStepExitCode(snapshot: ActionOperationSnapshot): number | null {
+    return snapshot.domainRef?.kind === 'projectCommand'
+        && snapshot.domainRef.exitCode !== undefined
+        && (snapshot.error?.errorCode === 'project_command_step_failed' || snapshot.error?.errorCode === 'project_setup_step_failed')
+        ? snapshot.domainRef.exitCode : null;
+}
+
 export function classifyActionOperationSection(
     snapshot: ActionOperationSnapshot,
     observation: ActionOperationObservation = 'available',

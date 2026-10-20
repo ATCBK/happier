@@ -34,7 +34,7 @@ describe('action operation detail presentation', () => {
             error: { errorCode, error: errorCode },
         }), 'available');
         expect(detail.failure).toEqual({
-            reason: t('localServices.process.exitCode', { code: '17' }),
+            reason: t('localServices.actions.failure.exitCode', { code: '17' }),
             technicalLines: [{ key: 'failure-code', label: t('common.error'), value: errorCode }],
         });
     });
