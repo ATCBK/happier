@@ -54,6 +54,7 @@ export const TAURI_DESKTOP_COMMANDS = [
     'iroh_start_machine_tunnel',
     'iroh_start_machine_http_tunnel',
     'iroh_stop_machine_tunnel',
+    'iroh_wait_machine_tunnel_closed',
     'desktop_browser_get_availability',
     'desktop_browser_open_view',
     'desktop_browser_navigate',

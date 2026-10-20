@@ -101,6 +101,7 @@ export function createHarness(options: Readonly<{
             stopMachineTunnel: async (leaseId) => {
                 irohStops.push(leaseId);
             },
+            waitMachineTunnelClosed: async () => undefined,
         },
         systemTasks: {
             start: async (specJson) => {

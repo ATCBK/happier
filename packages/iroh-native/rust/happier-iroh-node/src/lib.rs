@@ -34,6 +34,7 @@ use happier_iroh_native::{
     happier_iroh_native_start_machine_http_tunnel_json,
     happier_iroh_native_start_machine_tunnel_json, happier_iroh_native_stop_home_acceptor_json,
     happier_iroh_native_stop_machine_acceptor_json, happier_iroh_native_stop_machine_tunnel_json,
+    happier_iroh_native_wait_machine_tunnel_closed_json,
     start_machine_http_tunnel_with_handshake_provider_json, IrohError,
 };
 #[cfg(feature = "test-relay-fixture")]
@@ -189,6 +190,7 @@ pub fn get_availability() -> IrohNodeAvailability {
             "startMachineHttpTunnel",
             "stopMachineTunnel",
             "getMachineTunnelStatus",
+            "waitMachineTunnelClosed",
         ]
         .iter()
         .map(|name| (*name).to_owned())
@@ -338,6 +340,10 @@ pub fn start_machine_http_tunnel(
 #[napi]
 pub fn stop_machine_tunnel(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
     json_op(env, happier_iroh_native_stop_machine_tunnel_json, request)
+}
+#[napi]
+pub fn wait_machine_tunnel_closed(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {
+    json_op(env, happier_iroh_native_wait_machine_tunnel_closed_json, request)
 }
 #[napi]
 pub fn get_machine_tunnel_status(env: &Env, request: String) -> Result<PromiseRaw<'_, String>> {

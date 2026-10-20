@@ -162,6 +162,9 @@ function readAddonExports(candidate: unknown): IrohNodeNativeAddon | null {
   if (typeof candidate !== 'object' || candidate === null) return null;
   const record = candidate as Record<string, unknown>;
   for (const name of IROH_NODE_NATIVE_EXPORTS) {
+    // Older native hosts keep every existing operation usable; guest previews
+    // retire to server admission if this additional observer is unavailable.
+    if (name === 'waitMachineTunnelClosed' && record[name] === undefined) continue;
     if (typeof record[name] !== 'function') return null;
   }
   return candidate as IrohNodeNativeAddon;
@@ -820,6 +823,14 @@ export function createIrohNodeNativeModule(
         'stopMachineTunnel',
       );
     },
+    ...(addon.waitMachineTunnelClosed ? {
+      waitMachineTunnelClosed: async (machineTunnelId: string) => {
+        await requireNullResult(
+          callOperation(addon.waitMachineTunnelClosed!(serializeRequest({ machineTunnelId }))),
+          'waitMachineTunnelClosed',
+        );
+      },
+    } : {}),
     getMachineTunnelStatus: async (machineTunnelId: string) =>
       validateMachineTunnelStatus(
         await callOperation(

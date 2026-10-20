@@ -11,6 +11,7 @@ import Security
 @_silgen_name("happier_iroh_native_start_machine_tunnel_json") private func irohStartMachineTunnel(_ request: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("happier_iroh_native_start_machine_http_tunnel_json") private func irohStartMachineHttpTunnel(_ request: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("happier_iroh_native_stop_machine_tunnel_json") private func irohStopMachineTunnel(_ request: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("happier_iroh_native_wait_machine_tunnel_closed_json") private func irohWaitMachineTunnelClosed(_ request: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 @_silgen_name("happier_iroh_native_free_string") private func irohFree(_ value: UnsafeMutablePointer<CChar>?)
 
 /// Lifecycle/status only; tunnel bytes never cross this boundary.
@@ -49,6 +50,16 @@ public final class HappierIrohNativeModule: Module {
     }
     AsyncFunction("stopMachineTunnel") { (_ machineTunnelId: String) async throws -> Void in
       try callVoidJson(["machineTunnelId": machineTunnelId], irohStopMachineTunnel)
+    }
+    AsyncFunction("waitMachineTunnelClosed") { (_ machineTunnelId: String) async throws -> Void in
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        DispatchQueue.global(qos: .utility).async {
+          do {
+            try callVoidJson(["machineTunnelId": machineTunnelId], irohWaitMachineTunnelClosed)
+            continuation.resume(returning: ())
+          } catch { continuation.resume(throwing: error) }
+        }
+      }
     }
   }
 }

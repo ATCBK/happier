@@ -102,6 +102,10 @@ test('finite machine tunnel command routes to the opaque raw listener contract',
         value: null,
     });
     assert.deepEqual(irohStops, ['machine-raw-lease-1']);
+    assert.deepEqual(await runCommand(registry, 'iroh_wait_machine_tunnel_closed', { leaseId: 'machine-raw-lease-1' }, context), {
+        kind: 'implemented',
+        value: null,
+    });
 });
 
 test('Personal Home desktop commands are implemented through the shared Electron host registry', async () => {

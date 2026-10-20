@@ -38,6 +38,7 @@ export const IROH_NODE_NATIVE_EXPORTS = [
   'startMachineHttpTunnel',
   'stopMachineTunnel',
   'getMachineTunnelStatus',
+  'waitMachineTunnelClosed',
 ] as const;
 
 export type IrohNodeNativeExportName = (typeof IROH_NODE_NATIVE_EXPORTS)[number];
@@ -55,13 +56,15 @@ export type IrohNodeAvailability = Readonly<{
 export type IrohNodeNativeAddon = Readonly<{
   /** Optional host allocator maintenance, outside the Iroh lifecycle ABI. */
   trimProcessAllocator?: () => Promise<boolean>;
+  /** Optional on older addons; absence only disables guest-preview observation. */
+  waitMachineTunnelClosed?: (request: string) => Promise<string>;
   getAvailability: () => IrohNodeAvailability;
   startMachineHttpTunnel: (
     request: string,
     handshakeProvider?: () => Promise<string>,
   ) => Promise<string>;
 }> & {
-  [Name in Exclude<IrohNodeNativeExportName, 'getAvailability' | 'startMachineHttpTunnel'>]: (
+  [Name in Exclude<IrohNodeNativeExportName, 'getAvailability' | 'startMachineHttpTunnel' | 'waitMachineTunnelClosed'>]: (
     request: string,
   ) => Promise<string>;
 };
@@ -255,6 +258,7 @@ export type NodeIrohNativeModule = Readonly<{
   startMachineHttpTunnel: (request: IrohNodeStartMachineHttpTunnelRequest) => Promise<IrohNodeMachineHttpTunnelStarted>;
   stopMachineTunnel: (machineTunnelId: string) => Promise<void>;
   getMachineTunnelStatus: (machineTunnelId: string) => Promise<IrohNodeMachineTunnelStatus | null>;
+  waitMachineTunnelClosed?: (machineTunnelId: string) => Promise<void>;
 }>;
 
 /**

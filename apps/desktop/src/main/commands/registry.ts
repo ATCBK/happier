@@ -70,6 +70,7 @@ export type RegistryDependencies = Readonly<{
         startMachineTunnel: (request: unknown) => Promise<unknown>;
         startMachineHttpTunnel: (request: unknown) => Promise<unknown>;
         stopMachineTunnel: (leaseId: string) => Promise<void>;
+        waitMachineTunnelClosed: (leaseId: string) => Promise<void>;
     }>;
     systemTasks: Readonly<{
         start: (specJson: string) => Promise<{ taskId: string }>;
@@ -251,6 +252,12 @@ export function createCommandRegistry(dependencies: RegistryDependencies): Comma
         const leaseId = readString(args, 'leaseId');
         if (leaseId === null) throw new Error('iroh_stop_machine_tunnel requires a leaseId');
         await dependencies.irohTunnel.stopMachineTunnel(leaseId);
+        return null;
+    });
+    registry.set('iroh_wait_machine_tunnel_closed', async (args) => {
+        const leaseId = readString(args, 'leaseId');
+        if (leaseId === null) throw new Error('iroh_wait_machine_tunnel_closed requires a leaseId');
+        await dependencies.irohTunnel.waitMachineTunnelClosed(leaseId);
         return null;
     });
 

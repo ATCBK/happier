@@ -22,6 +22,7 @@ const boundaries = vi.hoisted(() => ({
     platformOS: 'web' as 'web' | 'ios',
     appState: 'active',
     appStateListeners: new Set<() => void>(),
+    terminalWaiters: new Map<string, { promise: Promise<unknown>; resolve: (value: unknown) => void }>(),
 }));
 
 // Only OS, secure-storage, and HTTP/native transport boundaries are replaced.
@@ -99,12 +100,18 @@ beforeEach(async () => {
     boundaries.platformOS = 'web';
     boundaries.appState = 'active';
     boundaries.appStateListeners.clear();
+    boundaries.terminalWaiters.clear();
     vi.stubGlobal('__TAURI_INTERNALS__', { invoke: boundaries.invoke });
-    boundaries.invoke.mockImplementation(async (command) => {
+    boundaries.invoke.mockImplementation(async (command, args) => {
         if (command === 'iroh_get_availability') return { available: true };
         if (command === 'iroh_get_application_endpoint') return { endpointId: 'b'.repeat(64) };
         if (command === 'iroh_start_machine_tunnel') return { leaseId: 'lease-1', localPort: 42123 };
         if (command === 'iroh_stop_machine_tunnel') return null;
+        if (command === 'iroh_wait_machine_tunnel_closed') {
+            const terminal = createDeferred<unknown>();
+            boundaries.terminalWaiters.set(String(args?.leaseId), terminal);
+            return terminal.promise;
+        }
         if (command === 'desktop_browser_get_availability') return desktopAvailability;
         if (command === 'desktop_browser_drain_diagnostics') return { ok: true, availability: desktopAvailability, messages: [] };
         if (command.startsWith('desktop_browser_')) return { ok: true, availability: desktopAvailability };
@@ -133,6 +140,58 @@ afterEach(async () => {
 });
 
 describe('native preview viewer access', () => {
+    it('retires an acquired native listener on terminal mux failure and resumes fresh server admission at the current path', async () => {
+        const hook = await renderHook(useNativeDirectPreview, { initialProps: { ...baseInput, serverId } });
+        await flushHookEffects({ cycles: 40 });
+        expect(hook.getCurrent().localOrigin).toBe('http://127.0.0.1:42123');
+        await hook.rerender({ ...baseInput, serverId, requestedUrl: 'http://127.0.0.1:42123/docs?app=1#heading' });
+        await act(async () => { boundaries.terminalWaiters.get('lease-1')?.resolve(null); });
+        await flushHookEffects({ cycles: 40 });
+        expect(hook.getCurrent()).toMatchObject({
+            localOrigin: null, acquiring: false,
+            url: 'https://preview.example.test/docs?app=1&previewToken=fresh-server-admission#heading',
+        });
+        expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_stop_machine_tunnel')).toHaveLength(1);
+        expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_start_machine_tunnel')).toHaveLength(1);
+        await hook.unmount();
+        expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_stop_machine_tunnel')).toHaveLength(1);
+    });
+
+    it('ignores terminal completion from a released view after a replacement listener is acquired', async () => {
+        const hook = await renderHook(useNativeDirectPreview, { initialProps: { ...baseInput, serverId } });
+        await flushHookEffects({ cycles: 40 });
+        const oldTerminal = boundaries.terminalWaiters.get('lease-1');
+        expect(oldTerminal).toBeDefined();
+        await hook.rerender({ ...baseInput, serverId, enabled: false });
+        const nativeDefault = boundaries.invoke.getMockImplementation()!;
+        boundaries.invoke.mockImplementation((command, args) => command === 'iroh_start_machine_tunnel'
+            ? Promise.resolve({ leaseId: 'replacement', localPort: 42124 }) : nativeDefault(command, args));
+        await hook.rerender({ ...baseInput, serverId });
+        await flushHookEffects({ cycles: 40 });
+        expect(hook.getCurrent().localOrigin).toBe('http://127.0.0.1:42124');
+        await act(async () => { oldTerminal?.resolve(null); });
+        await flushHookEffects({ cycles: 40 });
+        expect(hook.getCurrent().localOrigin).toBe('http://127.0.0.1:42124');
+        expect(boundaries.fetch.mock.calls.some(([, init]) => isServerAccessCall(init))).toBe(false);
+        await hook.unmount();
+        expect(boundaries.terminalWaiters.has('replacement')).toBe(true);
+        await act(async () => { boundaries.terminalWaiters.get('replacement')?.resolve(null); });
+        await flushHookEffects();
+        expect(boundaries.fetch.mock.calls.some(([, init]) => isServerAccessCall(init))).toBe(false);
+    });
+
+    it('retires the listener and falls back when its loaded host cannot observe native completion', async () => {
+        const nativeDefault = boundaries.invoke.getMockImplementation()!;
+        boundaries.invoke.mockImplementation((command, args) => command === 'iroh_wait_machine_tunnel_closed'
+            ? Promise.reject(new Error('native observer unavailable')) : nativeDefault(command, args));
+        const hook = await renderHook(useNativeDirectPreview, { initialProps: { ...baseInput, serverId } });
+        await flushHookEffects({ cycles: 40 });
+        expect(hook.getCurrent().localOrigin).toBeNull();
+        expect(hook.getCurrent().acquiring).toBe(false);
+        expect(boundaries.fetch.mock.calls.some(([, init]) => isServerAccessCall(init))).toBe(true);
+        expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_stop_machine_tunnel')).toHaveLength(1);
+        await hook.unmount();
+    });
     it('opens an already registered web preview through viewer admission without a custodian URL or native renderer', async () => {
         vi.stubGlobal('__TAURI_INTERNALS__', undefined);
         const hook = await renderHook(useNativeDirectPreview, { initialProps: { ...baseInput, serverId, fallbackUrl: null } });

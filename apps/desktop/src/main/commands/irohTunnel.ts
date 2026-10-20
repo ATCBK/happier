@@ -53,6 +53,7 @@ export type IrohNodeLifecycleBoundary = Readonly<{
         relayUrls?: readonly string[];
         handshakeJson: string;
         capProfile: 'machineBulk';
+        nativeHttpLease?: Readonly<{ openJson: string }>;
     }) => Promise<{ machineTunnelId: string; localPort: number; localCapability?: string }>;
     startMachineHttpTunnel: (request: {
         endpointHandle: string;
@@ -63,6 +64,7 @@ export type IrohNodeLifecycleBoundary = Readonly<{
         capProfile: 'machineBulk';
     }) => Promise<{ machineTunnelId: string; localPort: number; localCapability: string }>;
     stopMachineTunnel: (machineTunnelId: string) => Promise<void>;
+    waitMachineTunnelClosed?: (machineTunnelId: string) => Promise<void>;
 }>;
 
 export type DesktopIrohTunnelLease = Readonly<{
@@ -309,6 +311,17 @@ export class ElectronIrohTunnelService {
 
     async startMachineTunnel(request: unknown): Promise<DesktopIrohMachineTunnelLease> {
         const { native, endpoint, record } = await this.#prepareMachineTunnel(request);
+        let nativeHttpLease: { openJson: string } | undefined;
+        if (record.nativeHttpLease !== undefined) {
+            const value = record.nativeHttpLease;
+            if (typeof value !== 'object' || value === null || !('openJson' in value) || typeof value.openJson !== 'string') {
+                throw nativeError('invalid-request', 'nativeHttpLease requires signed open JSON');
+            }
+            if (!native.waitMachineTunnelClosed) {
+                throw nativeError('transport-unavailable', 'native preview lifecycle observation is unavailable');
+            }
+            nativeHttpLease = { openJson: value.openJson };
+        }
         return projectMachineTunnelLease(await native.startMachineTunnel({
             endpointHandle: endpoint.endpointHandle,
             endpointId: record.endpointId as string,
@@ -316,6 +329,7 @@ export class ElectronIrohTunnelService {
             ...(Array.isArray(record.relayUrls) ? { relayUrls: record.relayUrls as string[] } : {}),
             handshakeJson: record.handshakeJson as string,
             capProfile: 'machineBulk',
+            ...(nativeHttpLease ? { nativeHttpLease } : {}),
         }));
     }
 
@@ -343,6 +357,14 @@ export class ElectronIrohTunnelService {
     async stopMachineTunnel(leaseId: string): Promise<void> {
         const native = await this.#requireNative();
         await native.stopMachineTunnel(leaseId);
+    }
+
+    async waitMachineTunnelClosed(leaseId: string): Promise<void> {
+        const native = await this.#requireNative();
+        if (!native.waitMachineTunnelClosed) {
+            throw nativeError('transport-unavailable', 'native preview lifecycle observation is unavailable');
+        }
+        await native.waitMachineTunnelClosed(leaseId);
     }
 
     async releaseHomeTunnel(leaseId: string): Promise<void> {

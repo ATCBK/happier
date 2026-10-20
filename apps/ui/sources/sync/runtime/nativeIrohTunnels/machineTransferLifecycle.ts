@@ -20,6 +20,8 @@ export type IrohMachineTransferNativeLease = Readonly<{
     leaseId: string;
     localOrigin: string;
     release: () => Promise<void>;
+    /** Native guest mux completion; raw finite-transfer leases do not use it. */
+    closed?: Promise<void>;
 }>;
 export type IrohMachineHttpNativeLease = IrohMachineTransferNativeLease & Readonly<{
     /** Private native-client authentication, never a guest navigation URL. */
@@ -286,12 +288,21 @@ async function startMachineTunnel(input: IrohMachineTunnelStartInput, http: bool
         const stop = async (leaseId: string): Promise<void> => {
             await invokeDesktopHost('iroh_stop_machine_tunnel', { leaseId });
         };
-        return http ? await readLease(response, stop, true) : await readLease(response, stop);
+        const lease = http ? await readLease(response, stop, true) : await readLease(response, stop);
+        return input.nativeHttpLease ? {
+            ...lease,
+            // Losing observation also retires this listener rather than leaving
+            // an unobservable native origin suppressing server admission.
+            closed: invokeDesktopHost<void>('iroh_wait_machine_tunnel_closed', { leaseId: lease.leaseId }).catch(() => undefined),
+        } : lease;
     }
     if (!isRuntimeActive()) {
         throw new IrohError('unavailable', IROH_HOME_TUNNEL_SUSPENDED_ERROR);
     }
     const native = await requireMobileModule();
+    if (input.nativeHttpLease && !native.waitMachineTunnelClosed) {
+        throw new Error('Iroh native preview lifecycle observation is unavailable');
+    }
     const endpoint = await ensureIrohApplicationEndpoint(native, {
         ...(input.policy ? { policy: input.policy } : {}),
         ...(input.relayUrls ? { relayUrls: input.relayUrls } : {}),
@@ -318,5 +329,8 @@ async function startMachineTunnel(input: IrohMachineTunnelStartInput, http: bool
         await lease.release().catch(() => undefined);
         throw new IrohError('unavailable', IROH_HOME_TUNNEL_SUSPENDED_ERROR);
     }
-    return lease;
+    return input.nativeHttpLease ? {
+        ...lease,
+        closed: Promise.resolve().then(() => native.waitMachineTunnelClosed!(lease.leaseId)).catch(() => undefined),
+    } : lease;
 }

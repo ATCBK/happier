@@ -1481,6 +1481,31 @@ pub fn stop_machine_tunnel_json(request: &str) -> Value {
     invoke_json_request(request, stop_machine_tunnel)
 }
 
+fn wait_machine_tunnel_closed(value: *const c_char) -> Value {
+    let input = match parse_json::<MachineTunnelHandleRequest>(value) {
+        Ok(value) => value,
+        Err((code, message)) => return error_response(code, message),
+    };
+    // Clone the existing guest task's completion signal under custody, then
+    // relinquish the map lock so stop and endpoint teardown can complete it.
+    let closed = {
+        let tunnels = state().machine_tunnels.lock().expect("machine tunnel lock poisoned");
+        match tunnels.get(&input.machine_tunnel_id).map(|lease| &lease.tunnel) {
+            Some(MachineTunnelKind::GuestHttp(lease)) => Some(lease.closed_signal()),
+            None => None,
+            _ => return error_response("invalid-request", "terminal wait requires a guest HTTP lease"),
+        }
+    };
+    if let Some(mut closed) = closed {
+        runtime().block_on(async { let _ = closed.changed().await; });
+    }
+    json!({"ok": true, "result": Value::Null})
+}
+
+pub fn wait_machine_tunnel_closed_json(request: &str) -> Value {
+    invoke_json_request(request, wait_machine_tunnel_closed)
+}
+
 fn get_machine_tunnel_status(value: *const c_char) -> Value {
     let input = match parse_json::<MachineTunnelHandleRequest>(value) {
         Ok(value) => value,
@@ -1856,6 +1881,12 @@ pub extern "C" fn happier_iroh_native_stop_machine_tunnel_json(
     response(stop_machine_tunnel(value))
 }
 #[no_mangle]
+pub extern "C" fn happier_iroh_native_wait_machine_tunnel_closed_json(
+    value: *const c_char,
+) -> *mut c_char {
+    response(wait_machine_tunnel_closed(value))
+}
+#[no_mangle]
 pub extern "C" fn happier_iroh_native_get_machine_tunnel_status_json(
     value: *const c_char,
 ) -> *mut c_char {
@@ -2037,6 +2068,14 @@ mod android {
             input,
             happier_iroh_native_stop_machine_tunnel_json,
         )
+    }
+    #[no_mangle]
+    pub extern "system" fn Java_dev_happier_iroh_HappierIrohNativeRust_waitMachineTunnelClosedJson(
+        mut env: JNIEnv<'_>,
+        _: JClass<'_>,
+        input: JString<'_>,
+    ) -> jstring {
+        call(&mut env, input, happier_iroh_native_wait_machine_tunnel_closed_json)
     }
 }
 

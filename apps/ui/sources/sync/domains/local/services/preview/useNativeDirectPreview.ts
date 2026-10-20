@@ -108,6 +108,17 @@ export function useNativeDirectPreview(input: NativeDirectPreviewInput): Readonl
             }
             owned = lease;
             setState({ key, lease, settled: true });
+            if (lease) {
+                const retire = () => {
+                    if (cancelled || owned !== lease) return;
+                    previous.current = { key, origin: lease.localOrigin, initialPath: lease.initialPath };
+                    owned = null;
+                    setState((current) => current?.key === key && current.lease === lease
+                        ? { key, lease: null, settled: true } : current);
+                    void lease.release().catch(() => undefined);
+                };
+                void lease.closed.then(retire, retire);
+            }
         });
         return () => {
             cancelled = true;

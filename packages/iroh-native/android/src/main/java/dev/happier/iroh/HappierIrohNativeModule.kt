@@ -62,6 +62,11 @@ class HappierIrohNativeModule : Module() {
         HappierIrohNativeBridge.stopMachineTunnel(machineTunnelId)
       }
     }
+    AsyncFunction("waitMachineTunnelClosed").SuspendBody { machineTunnelId: String ->
+      withContext(Dispatchers.IO) {
+        HappierIrohNativeBridge.waitMachineTunnelClosed(machineTunnelId)
+      }
+    }
   }
 }
 
@@ -116,6 +121,11 @@ private object HappierIrohNativeBridge {
   fun stopMachineTunnel(machineTunnelId: String) {
     if (!loaded) return
     unwrap(HappierIrohNativeRust.stopMachineTunnelJson(JSONObject(mapOf("machineTunnelId" to machineTunnelId)).toString()))
+  }
+
+  fun waitMachineTunnelClosed(machineTunnelId: String) {
+    ensureLoaded()
+    unwrap(HappierIrohNativeRust.waitMachineTunnelClosedJson(JSONObject(mapOf("machineTunnelId" to machineTunnelId)).toString()))
   }
 
   fun tunnelStatus(tunnelId: String): Map<String, Any?>? {
@@ -285,4 +295,5 @@ private object HappierIrohNativeRust {
   external fun startMachineTunnelJson(requestJson: String): String
   external fun startMachineHttpTunnelJson(requestJson: String): String
   external fun stopMachineTunnelJson(requestJson: String): String
+  external fun waitMachineTunnelClosedJson(requestJson: String): String
 }

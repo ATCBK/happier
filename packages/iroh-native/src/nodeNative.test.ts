@@ -71,6 +71,25 @@ function createFakeAddon(
 
 const okNull = JSON.stringify({ ok: true, result: null });
 
+it('waits for the native guest lease terminal result and leaves observation absent on older addons', async () => {
+  const addon = createFakeAddon(() => okNull);
+  let finish: (value: string) => void = () => undefined;
+  const terminal = new Promise<string>((resolve) => { finish = resolve; });
+  const native = createIrohNodeNativeModule({ ...addon, waitMachineTunnelClosed: async (request) => {
+    expect(JSON.parse(request)).toEqual({ machineTunnelId: 'guest-lease' });
+    return await terminal;
+  } });
+  let closed = false;
+  const waiting = native.waitMachineTunnelClosed!('guest-lease').then(() => { closed = true; });
+  await Promise.resolve();
+  expect(closed).toBe(false);
+  finish(okNull);
+  await waiting;
+  expect(closed).toBe(true);
+  expect(createIrohNodeNativeModule(addon).waitMachineTunnelClosed).toBeUndefined();
+  await expect(createIrohNodeNativeModule(addon).stopMachineTunnel('guest-lease')).resolves.toBeUndefined();
+});
+
 describe('Iroh Node/Bun addon resolution', () => {
   it('names the addon deterministically for every supported platform/arch target', () => {
     expect(resolveIrohNodeAddonArtifactName('darwin', 'arm64')).toBe(

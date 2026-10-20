@@ -93,6 +93,7 @@ const APP_TAURI_COMMANDS: &[&str] = &[
     "iroh_start_machine_tunnel",
     "iroh_start_machine_http_tunnel",
     "iroh_stop_machine_tunnel",
+    "iroh_wait_machine_tunnel_closed",
 ];
 
 fn is_truthy_env(name: &str) -> bool {

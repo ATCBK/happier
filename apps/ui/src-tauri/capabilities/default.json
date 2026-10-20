@@ -101,6 +101,7 @@
     "allow-iroh-start-machine-tunnel",
     "allow-iroh-start-machine-http-tunnel",
     "allow-iroh-stop-machine-tunnel",
+    "allow-iroh-wait-machine-tunnel-closed",
     {
       "identifier": "http:default",
       "allow": [

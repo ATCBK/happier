@@ -19,6 +19,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 export type NativeDirectPreviewLease = Readonly<{
     localOrigin: string;
     initialPath: string;
+    closed: Promise<void>;
     release: () => Promise<void>;
 }>;
 
@@ -127,11 +128,11 @@ export async function acquireNativeDirectPreviewAccess(input: Readonly<{
             directAddresses: access.target.directAddresses, relayUrls: access.target.relayUrls,
             handshakeJson: JSON.stringify(handshake), nativeHttpLease: { openJson: JSON.stringify(open) },
         });
-        if (!eligible()) {
+        if (!eligible() || !lease.closed) {
             await lease.release().catch(() => undefined);
             return null;
         }
-        return { localOrigin: lease.localOrigin, initialPath: access.initialPath.pathname + access.initialPath.search, release: lease.release };
+        return { localOrigin: lease.localOrigin, initialPath: access.initialPath.pathname + access.initialPath.search, release: lease.release, closed: lease.closed };
     } catch {
         // The native lifecycle retains failed stops for its existing retry owner.
         await lease?.release().catch(() => undefined);

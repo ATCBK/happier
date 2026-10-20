@@ -166,6 +166,7 @@ pub fn run() {
                 iroh::iroh_start_machine_tunnel,
                 iroh::iroh_start_machine_http_tunnel,
                 iroh::iroh_stop_machine_tunnel,
+                iroh::iroh_wait_machine_tunnel_closed,
                 secure_storage::desktop_secure_storage_read,
                 secure_storage::desktop_secure_storage_write,
                 secure_storage::desktop_secure_storage_remove,

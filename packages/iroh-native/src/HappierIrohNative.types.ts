@@ -94,4 +94,6 @@ export type NativeIrohModule = Readonly<{
     lastErrorCode: string | null;
   }>;
   stopMachineTunnel?: (machineTunnelId: string) => Promise<void>;
+  /** Settles when the guest mux/listener finishes, including explicit stop. */
+  waitMachineTunnelClosed?: (machineTunnelId: string) => Promise<void>;
 }>;

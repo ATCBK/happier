@@ -195,6 +195,19 @@ pub async fn iroh_start_machine_tunnel(
 }
 
 #[tauri::command]
+pub async fn iroh_wait_machine_tunnel_closed(lease_id: String) -> Result<Value, String> {
+    let envelope = tauri::async_runtime::spawn_blocking(move || {
+        happier_iroh_native::wait_machine_tunnel_closed_json(
+            &json!({ "machineTunnelId": lease_id }).to_string(),
+        )
+    })
+    .await
+    .map_err(|error| native_error("transport-unavailable", error))?;
+    envelope_result(&envelope)?;
+    Ok(Value::Null)
+}
+
+#[tauri::command]
 pub async fn iroh_stop_machine_tunnel(lease_id: String) -> Result<Value, String> {
     let envelope = tauri::async_runtime::spawn_blocking(move || {
         happier_iroh_native::stop_machine_tunnel_json(
@@ -501,6 +514,7 @@ mod tests {
         "iroh_start_machine_tunnel",
         "iroh_start_machine_http_tunnel",
         "iroh_stop_machine_tunnel",
+        "iroh_wait_machine_tunnel_closed",
     ];
 
     #[test]

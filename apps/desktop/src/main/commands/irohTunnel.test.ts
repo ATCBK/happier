@@ -383,6 +383,11 @@ test('native preview forwards its signed mux descriptor and observes terminal na
     finish();
     await waiting;
     assert.equal(closed, true);
+    const older = createNativeFake();
+    await assert.rejects(createService(older.native).startMachineTunnel({
+        endpointId: ENDPOINT_ID, handshakeJson: JSON.stringify({ flow: 'tcp_tunnel' }), nativeHttpLease,
+    }), /lifecycle observation is unavailable/);
+    assert.deepEqual(older.calls.machineRawStart, []);
 });
 
 test('the desktop iroh seam stays lifecycle-only: no byte or payload APIs at invoke seams', () => {
