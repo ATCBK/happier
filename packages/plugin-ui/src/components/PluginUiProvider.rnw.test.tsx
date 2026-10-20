@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import type { Disposable } from '@happier-dev/plugin-sdk';
 import type { SurfaceContext } from '@happier-dev/plugin-sdk/ui';
 import { describe, expect, it } from 'vitest';
@@ -139,7 +139,7 @@ describe('PluginUiProvider', () => {
    * fails against the obvious wrong implementation (a single `useMemo` over the
    * whole environment object).
    */
-  it('keeps localization and its resolver stable across unrelated inset and accessibility pushes', async () => {
+  it('keeps unchanged theme and localization consumers stable across serialized context pushes', async () => {
     const initial = createSurfaceContext({ translations: { 'acme.ready': 'Ready' } });
     let publish: ((context: SurfaceContext) => void) | undefined;
     const hostApi = createHostApiStub(initial, {
@@ -154,6 +154,11 @@ describe('PluginUiProvider', () => {
     const translationResolvers: ReturnType<typeof usePluginTranslation>[] = [];
     const accessibilityIdentities: unknown[] = [];
     const insetsIdentities: unknown[] = [];
+    let themeRenders = 0;
+    const ThemeOnly = memo(function ThemeOnly() {
+      themeRenders++;
+      return <output data-testid="theme-text">{useHappierUiTheme().colors.text}</output>;
+    });
 
     function Probe() {
       themeIdentities.push(useHappierUiTheme());
@@ -168,16 +173,18 @@ describe('PluginUiProvider', () => {
     const mount = await mountThroughReactNativeWebAsync(
       <PluginUiProvider hostApi={hostApi}>
         <Probe />
+        <ThemeOnly />
       </PluginUiProvider>,
     );
 
     expect(publish).toBeTypeOf('function');
+    const initialThemeRenders = themeRenders;
     const { act } = await import('react');
     await act(async () => {
       // Context transports deserialize a fresh message map, even when only
       // another capability changed. Translation-dependent effects must keep
       // their pending work rather than restarting on that transport identity.
-      publish?.({ ...initial, translations: { ...initial.translations },
+      publish?.({ ...initial, theme: structuredClone(initial.theme), translations: { ...initial.translations },
         safeAreaInsets: { top: 44, right: 0, bottom: 34, left: 0 } });
     });
 
@@ -186,20 +193,35 @@ describe('PluginUiProvider', () => {
     expect(localizationIdentities.at(-1)).toBe(localizationIdentities[0]);
     expect(translationResolvers.at(-1)).toBe(translationResolvers[0]);
     expect(themeIdentities.at(-1)).toBe(themeIdentities[0]);
+    expect(themeRenders).toBe(initialThemeRenders);
 
     await act(async () => {
-      publish?.({ ...initial, translations: { ...initial.translations }, contrast: 'high' });
+      publish?.({ ...initial, theme: structuredClone(initial.theme), translations: { ...initial.translations }, contrast: 'high' });
     });
 
     expect(accessibilityIdentities.at(-1)).not.toBe(accessibilityIdentities[0]);
     expect(localizationIdentities.at(-1)).toBe(localizationIdentities[0]);
     expect(translationResolvers.at(-1)).toBe(translationResolvers[0]);
+    const highContrastTheme = themeIdentities.at(-1);
+    const highContrastRenders = themeRenders;
+    await act(async () => {
+      publish?.({ ...initial, theme: structuredClone(initial.theme), contrast: 'high',
+        safeAreaInsets: { top: 48, right: 0, bottom: 34, left: 0 } });
+    });
+    expect(themeIdentities.at(-1)).toBe(highContrastTheme);
+    expect(themeRenders).toBe(highContrastRenders);
     await act(async () => {
       publish?.({ ...initial, translations: { 'acme.ready': 'Bereit' }, locale: 'de' });
     });
     expect(translationResolvers.at(-1)).not.toBe(translationResolvers[0]);
     expect(localizationIdentities.at(-1)).toMatchObject({ locale: 'de' });
     expect(translationResolvers.at(-1)?.('acme.ready')).toBe('Bereit');
+    await act(async () => {
+      publish?.({ ...initial, theme: { ...structuredClone(initial.theme),
+        colors: { ...initial.theme.colors, text: '#123456' } } });
+    });
+    expect(mount.container.querySelector('[data-testid="theme-text"]')?.textContent).toBe('#123456');
+    expect(themeRenders).toBeGreaterThan(highContrastRenders);
     mount.unmount();
   });
 
