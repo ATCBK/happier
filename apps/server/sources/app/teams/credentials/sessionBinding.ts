@@ -137,6 +137,24 @@ export async function readSessionTeamCredentialBindingInTx(
     return row ? { ...row, deliveryMode: input.deliveryMode } : null;
 }
 
+/** Read the selection witness for an attaching Session; broker use still rechecks current authority. */
+export async function readAcceptedSessionTeamCredentialProviderModelBindingInTx(
+    tx: Tx,
+    sessionId: string,
+): Promise<SessionTeamCredentialBindingIntentListV1[number] | null> {
+    const rows = await tx.sessionTeamCredentialBinding.findMany({
+        where: { sessionId, slotKey: Buffer.from(key({ kind: 'provider_model' })) },
+        select: { slotKind: true, resourceId: true, resourceRevision: true, resource: { select: { teamId: true } } },
+    });
+    if (rows.length === 0) return null;
+    if (rows.length !== 1) throw new Error('Conflicting accepted Session Provider-model bindings');
+    const row = rows[0]!;
+    const deliveryMode = (['direct', 'brokered'] as const).find(mode => row.slotKind === persistedSlotKind({ kind: 'provider_model' }, mode));
+    if (!deliveryMode) throw new Error('Invalid accepted Session Provider-model binding');
+    return { v: 1, slot: { kind: 'provider_model' }, resourceId: row.resourceId,
+        expectedResourceRevision: row.resourceRevision, deliveryMode, teamId: row.resource.teamId };
+}
+
 export async function isSessionTeamCredentialBindingIntentCurrentInTx(
     tx: Tx,
     input: Readonly<{

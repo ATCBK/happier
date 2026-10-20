@@ -8,11 +8,22 @@ import {
   SessionLookupByTagsRequestV2Schema,
   SessionLookupByTagsResponseV2Schema,
   V2SessionByIdNotFoundSchema,
+  V2SessionByIdResponseSchema,
   V2SessionRecordSchema,
   V2SessionResourceAccessResponseSchema,
 } from './contract.js';
 
 describe('sessionControl contract exports', () => {
+  it('validates the Home-accepted Team model witness instead of preserving an unchecked authority bag', () => {
+    const session = { id: 'session', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+      metadata: '{}', metadataVersion: 0, agentState: null, agentStateVersion: 0, dataEncryptionKey: null,
+      acceptedTeamCredentialBinding: { v: 1, slot: { kind: 'provider_model' }, resourceId: 'resource',
+        expectedResourceRevision: 3, deliveryMode: 'brokered', teamId: 'team' } };
+    expect(V2SessionByIdResponseSchema.parse({ session }).session.acceptedTeamCredentialBinding).toEqual(session.acceptedTeamCredentialBinding);
+    expect(V2SessionByIdResponseSchema.safeParse({ session: { ...session,
+      acceptedTeamCredentialBinding: { ...session.acceptedTeamCredentialBinding, forgedAuthority: true },
+    } }).success).toBe(false);
+  });
   it('normalizes stored Bot owner extensions in Session responses and rejects malformed known identity', () => {
     const row = {
       id: 'bot', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,

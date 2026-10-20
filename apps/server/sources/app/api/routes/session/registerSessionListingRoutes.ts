@@ -45,6 +45,7 @@ import { loadPendingActivationPublicationInTx } from '@/app/session/pending/publ
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 import { projectSessionManagerForRowsInTx, readmitCapturedSessionManagerReferencesInTx, type SessionManagerContribution } from "@/app/session/awareness/sessionManagerProjection";
 import { projectSessionTurnWaitingHttpResponse } from '@/app/clientCompatibility/sessionTurnWaitingCompatibility';
+import { readAcceptedSessionTeamCredentialProviderModelBindingInTx } from '@/app/teams/credentials/sessionBinding';
 
 const SESSION_METADATA_PRIVACY_UPGRADE_REQUIRED_RESPONSE_SCHEMA = z.strictObject({
     error: z.literal("Session metadata privacy upgrade required"),
@@ -208,6 +209,7 @@ export async function readSessionDetail(input: Readonly<{ userId: string; sessio
                 payload: V2SessionByIdResponseSchema.parse({
                     session: {
                         ...mappedSession,
+                        acceptedTeamCredentialBinding: await readAcceptedSessionTeamCredentialProviderModelBindingInTx(tx, session.id),
                         pendingActivationAuthorization: await loadPendingActivationPublicationInTx(tx, session.id) ?? undefined,
                         pendingExecutionRunIds: targets.map((target) => target.runId),
                     },

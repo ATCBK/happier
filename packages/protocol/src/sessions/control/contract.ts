@@ -1,5 +1,6 @@
 import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { SessionTeamCredentialBindingIntentV1Schema } from '../../teams/credentials/sessionBindingIntentV1.js';
 import { z } from 'zod/mini';
 import { SessionManagerV1Schema, SessionManagedSessionsV1Schema } from '../follow/sessionManagerV1.js';
 import { SessionEffectiveAccessV1Schema, type SessionEffectiveAccessV1 } from '../access/sessionEffectiveAccessV1.js';
@@ -411,6 +412,8 @@ function refineV2SessionMetadataRecipientFields(
 }
 
 export const V2SessionRecordSchema = lazyZodSchema(() => z.looseObject({
+    /** Owner detail only: Home-written inference selection witness, never caller metadata or current broker authority. */
+    acceptedTeamCredentialBinding: z.optional(z.nullable(SessionTeamCredentialBindingIntentV1Schema)),
     id: z.string().check(z.minLength(1)),
     /** Canonical immutable Session owner, absent on Homes predating this projection. */
     ownerAccountId: z.optional(z.string().check(z.minLength(1))),
