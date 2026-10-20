@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { AxiosError, AxiosHeaders } from 'axios';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { RpcHandler } from '@/api/rpc/types';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerDiscussionAgentPublisher } from './discussionAgentPublisher';
 import { createWorkflowAccountRunActionOwner, materializeWorkflowAcceptedSnapshotV1,
   sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
@@ -13,10 +15,51 @@ import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessi
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { WorkflowInvocationGetRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 
-vi.mock('axios', () => ({ default: { get: vi.fn() } }));
+vi.mock('axios', async original => {
+  const actual = await original<typeof import('axios')>();
+  return { ...actual, default: { ...actual.default, get: vi.fn() } };
+});
 
 describe('trusted Discussion reply publisher', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    { status: 503, error: 'discussions_unavailable' },
+    { status: undefined, error: 'discussions_unavailable' },
+    { status: 403, error: 'discussion_post_denied' },
+  ] as const)('distinguishes unavailable original custody from a refused terminal return (HTTP $status)', async ({ status, error }) => {
+    const config = { headers: new AxiosHeaders() };
+    vi.mocked(axios.get).mockRejectedValue(new AxiosError('Private transport details',
+      status === undefined ? 'ETIMEDOUT' : 'ERR_BAD_RESPONSE', config, undefined,
+      status === undefined ? undefined : { status, statusText: 'Unavailable', headers: {}, config, data: {} }));
+    const logger = vi.fn();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'receiver', encryptionMode: 'plain', logger });
+    const posts: unknown[] = [];
+    registerDiscussionAgentPublisher({ rpcHandlerManager: rpc,
+      serverId: 'home', serverUrl: 'https://home.test',
+      readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
+      isApprovalExecutionOriginCurrent: async () => false,
+      session: { sessionId: 'receiver', postAgentDiscussionMessage: async request => {
+        posts.push(request);
+        return { v: 1, ok: false, error: 'discussion_post_denied' };
+      } },
+    });
+    const response = await rpc.invokeLocal(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, { request: {
+      v: 1, sessionId: 'receiver', discussionId: 'discussion',
+      replyReturn: { serverId: 'home', requestLocalId: 'input', acceptedTurnId: 'completed-turn' },
+      request: { localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'receiver', localId: 'input', acceptedTurnId: 'completed-turn' }),
+        content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Final answer' }] } },
+        mentionedAccountIds: [], mentionedSessionIds: [], replyTarget: { kind: 'message', messageId: 'question' } },
+    } });
+    expect(response).toEqual({ v: 1, ok: false, error });
+    expect(posts).toEqual([]);
+    expect(JSON.stringify(response)).not.toContain('Private transport details');
+    expect(logger).toHaveBeenCalledWith('[RPC] Request completed', expect.objectContaining({
+      outcomeCode: error, admissionPredicate: 'discussion_reply_custody',
+    }));
+    expect(JSON.stringify(logger.mock.calls)).not.toContain('Private transport details');
+    expect(JSON.stringify(logger.mock.calls)).not.toContain('Final answer');
+  });
 
   it.each([false, true])('keeps active explicit replies behind accepted Workflow output (workflow=%s)', async workflow => {
     const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' };
@@ -26,9 +69,10 @@ describe('trusted Discussion reply publisher', () => {
     } } });
     const witness = { turnId: 'turn', inputId: 'input', discussionAddressing: addressing,
       userMessageSeq: 1, userMessageSeqs: [1] };
-    const handlers = new Map<string, RpcHandler>();
+    const logger = vi.fn();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'receiver', encryptionMode: 'plain', logger });
     const posts: unknown[] = [];
-    registerDiscussionAgentPublisher({ rpcHandlerManager: { registerHandler: (id, handler) => { handlers.set(id, handler); } },
+    registerDiscussionAgentPublisher({ rpcHandlerManager: rpc,
       serverId: 'home', serverUrl: 'https://home.test',
       readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
       isApprovalExecutionOriginCurrent: async () => false,
@@ -38,12 +82,15 @@ describe('trusted Discussion reply publisher', () => {
           return { v: 1, ok: false, error: 'discussion_post_denied' };
         } },
     });
-    const handler = handlers.get(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1)!;
-    expect(await handler({ witness, request: { v: 1, sessionId: 'receiver', discussionId: 'discussion',
+    expect(await rpc.invokeLocal(SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, { witness, request: { v: 1, sessionId: 'receiver', discussionId: 'discussion',
       request: { localId: 'authored-id', content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'answer' }] } },
         mentionedAccountIds: [], mentionedSessionIds: [], replyTarget: { kind: 'message', messageId: 'question' } },
     } })).toMatchObject({ ok: false, error: 'discussion_post_denied' });
     expect(posts).toHaveLength(workflow ? 0 : 1);
+    expect(logger).toHaveBeenCalledWith('[RPC] Request completed', expect.objectContaining({
+      outcomeCode: 'discussion_post_denied',
+      admissionPredicate: workflow ? 'discussion_reply_custody' : 'discussion_publication',
+    }));
   });
 
   it.each(['absent', 'origin_only', 'other_delivery', 'delivery'] as const)('opens the actual completed Workflow invocation and its frozen Discussion delivery (%s)', async binding => {
