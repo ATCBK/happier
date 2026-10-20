@@ -441,6 +441,26 @@ export type ProvidersActionInputById = {
         agentTargetKey: string;
         modelId: string | null;
         compatibilityFingerprint: string;
+        connectedAccountTarget?: {
+            kind: 'account';
+            account: {
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+                accountId: string;
+            };
+        } | {
+            kind: 'group';
+            service: {
+                pluginId: string;
+                localId: string;
+            } | {
+                pluginId: 'happier';
+                localId: 'mcp-sign-in';
+            };
+            groupId: string;
+        } | undefined;
     }, true>;
     readonly "providers.models.load": {
         connectionId: string;
@@ -3325,6 +3345,26 @@ export type ProvidersActionResultById = {
                     };
                 } | undefined;
             }[];
+            connectedAccountTarget?: {
+                kind: 'account';
+                account: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                kind: 'group';
+                service: {
+                    pluginId: string;
+                    localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
+                };
+                groupId: string;
+            } | undefined;
             sourceAuthority?: {
                 provider: {
                     identity: {
@@ -3636,6 +3676,26 @@ export type ProvidersActionResultById = {
                     };
                 } | undefined;
             }[];
+            connectedAccountTarget?: {
+                kind: 'account';
+                account: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                kind: 'group';
+                service: {
+                    pluginId: string;
+                    localId: string;
+                } | {
+                    pluginId: 'happier';
+                    localId: 'mcp-sign-in';
+                };
+                groupId: string;
+            } | undefined;
             sourceAuthority?: {
                 provider: {
                     identity: {

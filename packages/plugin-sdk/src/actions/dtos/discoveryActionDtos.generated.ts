@@ -736,6 +736,26 @@ export type DiscoveryActionResultById = {
                             };
                         } | undefined;
                     }[];
+                    connectedAccountTarget?: {
+                        kind: 'account';
+                        account: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        kind: 'group';
+                        service: {
+                            pluginId: string;
+                            localId: string;
+                        } | {
+                            pluginId: 'happier';
+                            localId: 'mcp-sign-in';
+                        };
+                        groupId: string;
+                    } | undefined;
                     sourceAuthority?: {
                         provider: {
                             identity: {

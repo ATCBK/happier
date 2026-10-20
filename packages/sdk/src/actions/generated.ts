@@ -716,6 +716,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "ui.command_palette.invoke",
   "ui.current_context.command.invoke",
   "ui.find",
+  "ui.pet.choose",
   "ui.prompts.picker.open",
   "ui.voice_agent.teleport",
   "ui.voice_global.brief.close",

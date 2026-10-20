@@ -332,6 +332,8 @@
 | `./actions` | `FollowEventDeliveryV1` | type | any |
 | `./actions` | `FollowEventMapV1` | type | any |
 | `./actions` | `FollowPolicyV1` | type | any |
+| `./actions` | `FriendsActionInputById` | type | any |
+| `./actions` | `FriendsActionResultById` | type | any |
 | `./actions` | `HomeGovernanceActionInputById` | type | any |
 | `./actions` | `HomeGovernanceActionResultById` | type | any |
 | `./actions` | `HomeHubLayoutActionInputById` | type | any |

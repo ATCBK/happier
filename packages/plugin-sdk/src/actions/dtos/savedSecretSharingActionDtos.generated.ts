@@ -879,6 +879,26 @@ export type SavedSecretSharingActionInputById = {
                             modelId: string | null;
                             compatibilityFingerprint: string;
                             confirmedAt: number;
+                            connectedAccountTarget?: {
+                                kind: 'account';
+                                account: {
+                                    service: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    accountId: string;
+                                };
+                            } | {
+                                kind: 'group';
+                                service: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | {
+                                    pluginId: 'happier';
+                                    localId: 'mcp-sign-in';
+                                };
+                                groupId: string;
+                            } | undefined;
                         }[];
                         machineGrants: {
                             v: 1;

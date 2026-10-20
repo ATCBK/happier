@@ -64,6 +64,7 @@ export type { DiscoveryActionInputById, DiscoveryActionResultById } from './dtos
 export type { ExecutionRunControlActionInputById, ExecutionRunControlActionResultById } from './dtos/executionRunControlActionDtos.generated.js';
 export type { ExternalSessionsActionInputById, ExternalSessionsActionResultById } from './dtos/externalSessionsActionDtos.generated.js';
 export type { FindActionInputById, FindActionResultById } from './dtos/findActionDtos.generated.js';
+export type { FriendsActionInputById, FriendsActionResultById } from './dtos/friendsActionDtos.generated.js';
 export type { FilesystemActionInputById, FilesystemActionResultById } from './dtos/filesystemActionDtos.generated.js';
 export type { WorkspaceFileSearchActionInputById, WorkspaceFileSearchActionResultById } from './dtos/workspaceFileSearchActionDtos.generated.js';
 export type { HomeGovernanceActionInputById, HomeGovernanceActionResultById } from './dtos/homeGovernanceActionDtos.generated.js';
