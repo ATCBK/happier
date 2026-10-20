@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1, type ConnectedAccountPurposeDeclarationV1 } from '@happier-dev/protocol';
 import { writeCommittedLocalPathPluginFixture } from '@/plugins/store/state.testkit';
 import { createLocalPathPluginDistributionIdentity, createPluginTrustRecord } from '@/plugins/store/install/trustIdentity';
 import { loadInstalledPlugins } from '@/plugins/discovery/load/installed';
@@ -23,6 +23,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   holdResponseForInput?: string;
   upstreamUrl?: string;
   experimental?: boolean;
+  connectedAccounts?: readonly ConnectedAccountPurposeDeclarationV1[];
   resolveAccountTarget?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['resolveAccountTarget'] }> = {}) {
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-managed-run-'));
   const pluginId = 'acme.managed-run';
@@ -57,6 +58,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
     engines: { happier: '^0.2.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.mjs' },
     contributes: {
       agents: [{ id: 'agent', title: 'Run Agent', runtime: { kind: 'custom' }, primary: 'sessions',
+        ...(input.connectedAccounts ? { connectedAccounts: input.connectedAccounts } : {}),
         ...(input.signedOutAgentCli ? { cli: {
           executable: { binaryName: 'managed-run-agent', sourcePreference: 'system-first', knownUserBinDirSuffixes: null },
           install: { manual: { kind: 'none' } },

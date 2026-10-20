@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { createServer, request as httpRequest, type ServerResponse } from 'node:http';
+import { Agent, createServer, request as httpRequest, type ServerResponse } from 'node:http';
 import { connect } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ import { createTeamCredentialBrokerSourceOwner } from '@/providers/broker/teamCr
 import { startManagedProviderConsumerApplication } from '@/providers/broker/managedProviderConsumerApplication';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { readProviderSettingsForCli } from '@/providers/settings/read';
+import { createAccountConnectionModelProjectionRequest } from '@/providers/broker/applicationProjection';
 import type { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import type { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -44,6 +45,9 @@ export async function startGatewayJourneyUpstream() {
   let beforeLookup: () => Promise<void> = async () => {};
   const unexpected = async (): Promise<never> => { throw new Error('Unexpected auth recovery'); };
   const auth = createConnectedAccountRequestAuthService({
+    // Explicit budget of this controlled request (matching the Go lookup
+    // conformance vector); the valid 35-second phase must fit inside it.
+    operationDeadlineMs: 60_000,
     resolveCurrentBinding: async input => {
       await beforeLookup();
       if (!input.subject.bindingAuthority) throw new Error('Missing real purpose lease');
@@ -113,6 +117,7 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
   const stored = new Map<string, Body>();
   const events: AgentSessionRuntimeEventV1[] = [];
   const sends: string[] = [];
+  const failures: string[] = [];
   const jobs: Promise<void>[] = [];
   const requests = new Map<string, AbortController>();
   const session = { sessionId, enqueueAgentMessageCommitted: async (_provider: string, body: Body, options: { localId: string }) => {
@@ -152,7 +157,7 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
           const response = await fetch(`${endpoint.endpointUrl}/responses`, { method: 'POST',
             headers: { authorization: endpoint.renderedCredential, 'content-type': 'application/json' },
             body: JSON.stringify({ model: 'gateway-model', input: text, stream: true }), signal: controller.signal });
-          if (!response.ok || !response.body) throw new Error(`Native HTTP ${response.status}`);
+          if (!response.ok || !response.body) throw new Error(`Native HTTP ${response.status}: ${await response.text()}`);
           let buffered = '';
           for await (const chunk of response.body) {
             buffered += new TextDecoder().decode(chunk);
@@ -174,7 +179,8 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
           }
           await notify('item/completed', { ...scope, item: { type: 'agentMessage', id: turnId, text: message } });
           await notify('turn/completed', { ...scope, turn: { id: turnId, status: 'completed' } });
-        } catch {
+        } catch (error) {
+          if (!controller.signal.aborted) failures.push(error instanceof Error ? error.message : 'Native boundary failed');
           if (controller.signal.aborted) {
             await notify('turn/completed', { ...scope, turn: { id: turnId, status: 'interrupted' } });
           } else if (text === 'hold:outage') {
@@ -202,7 +208,7 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
   native.watch(event => { events.push(event); projection = projection.then(async () => {
     await project({ session, provider: 'codex', runtimeMessageDeltaBridge: bridge, event });
   }); });
-  return { native, events, stored, sends,
+  return { native, events, stored, sends, failures,
     async send(text: string) {
       const terminals = events.filter(event => ['turn-complete', 'turn-cancelled', 'turn-failed'].includes(event.kind)).length;
       await native.send({ inputIds: [`${sessionId}-${sends.length}`], input: { text }, delivery: { kind: 'newTurn', turnId: `host-${sends.length}` } });
@@ -252,7 +258,12 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
   const sources: NonNullable<Awaited<ReturnType<typeof open>>>[] = [];
   const attach = async (sessionId: string) => {
     const access = await open({ source, application, consumer: { kind: 'session', sessionId }, consumerMachineId: fixture.machineId, signal });
-    if (!access) throw new Error('Local source refused');
+    if (!access) {
+      const projection = await common.projectModels(createAccountConnectionModelProjectionRequest({ machineId: fixture.machineId,
+        connectionId: source.connectionId, expectedConnectionSecurityFingerprint: source.expectedConnectionSecurityFingerprint,
+        agentTargetKey: fixture.agentTargetKey, application, refreshPolicy: 'current_only' }));
+      throw new Error(`Local source refused: ${JSON.stringify({ current: current(fixture.machineId), source, projection })}`);
+    }
     sources.push(access);
     const endpoint = await startManagedProviderConsumerApplication({ signal, endpointUrl: access.access.endpointUrl('api')!,
       credentialTransport: declaration.credential!.transports[0]!, request: async request => await access.revalidate(request.signal)
@@ -264,13 +275,13 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
   const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
   const roots = [{ keyId: 'home', publicKey: Buffer.from(key.publicKey).toString('base64url') }];
   const payload: SignedProviderBrokerRouteGrantV2['payload'] = { v: 2, grantId: 'journey-peer', aud: 'happier-provider-broker-route-v2',
-    issuedAt: Date.now(), expiresAt: Date.now() + 60_000, homeId: 'home', accountId: 'account', initiatorTokenEpoch: 0,
+    issuedAt: 100, expiresAt: 200, homeId: 'home', accountId: 'account', initiatorTokenEpoch: 0,
     source, application, consumer: { kind: 'session', sessionId: 'peer-session' },
     initiator: { accountId: 'account', machineId: peerId, endpointId: 'a'.repeat(64) },
     target: { custodianAccountId: 'account', machineId: fixture.machineId, endpointId: 'b'.repeat(64) } };
   const authority: SignedProviderBrokerRouteGrantV2 = { payload, signature: { alg: 'Ed25519', keyId: 'home',
     valueBase64Url: Buffer.from(tweetnacl.sign.detached(Buffer.from(createProviderBrokerRouteGrantSigningInputV2(payload)), key.secretKey)).toString('base64url') } };
-  const broker = await startDaemonProviderBrokerRuntime({ machineId: fixture.machineId, resolveTrustRoots: () => roots, nowMs: Date.now,
+  const broker = await startDaemonProviderBrokerRuntime({ machineId: fixture.machineId, resolveTrustRoots: () => roots, nowMs: () => 150,
     createRequestId: () => 'journey-request', resolveRequestPolicy: async () => null,
     admitRequest: async () => ({ ok: false, reasonCode: 'resource_forbidden' }), authorizeModelCatalog: async () => ({ ok: false, reasonCode: 'resource_forbidden' }),
     sourceOwner: createTeamCredentialBrokerSourceOwner({ machineId: fixture.machineId, custody,
@@ -279,7 +290,7 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
       open: createAccountConnectionBrokerSourceOpen({ ...common, admitConsumer: async value => current(value.payload.initiator.machineId) }),
       retire: request => retireAccountConnectionBrokerSource({ ...common, authority: request.authority }) },
   });
-  const admission = createPeerMediationLoopbackApp({ nowMs: Date.now, trustRoots: roots,
+  const admission = createPeerMediationLoopbackApp({ nowMs: () => 150, trustRoots: roots,
     expected: { accountId: 'account', machineId: fixture.machineId, flowKind: 'bounded_transfer', routeKind: 'loopback_direct', endpointFingerprint: 'unused' },
     irohMachineAdmission: { localEndpointId: payload.target.endpointId, role: 'acceptor', allowedFlows: [], resolveApplicationTarget: () => null,
       resolveProviderBrokerApplicationTarget: broker.resolveProviderBrokerApplicationTarget } });
@@ -310,13 +321,18 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
         if (admitted.statusCode !== 204) return { ok: false, reasonCode: 'resource_forbidden' };
         const port = Number(admitted.headers[IROH_MACHINE_APPLICATION_PORT_HEADER.toLowerCase()]);
         const capability = String(admitted.headers[IROH_MACHINE_APPLICATION_CAPABILITY_HEADER.toLowerCase()]);
+        const socket = connect({ host: '127.0.0.1', port });
+        await once(socket, 'connect');
+        socket.write(capability, 'ascii');
+        const agent = new Agent({ keepAlive: false });
+        agent.createConnection = () => socket;
         const response = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
           const forwarded = httpRequest({ host: '127.0.0.1', port, path: request.pathAndQuery, method: request.method,
-            headers: request.headers, signal: request.signal, agent: false,
-            createConnection: () => { const socket = connect({ host: '127.0.0.1', port }); socket.once('connect', () => socket.write(capability, 'ascii')); return socket; },
+            headers: { ...request.headers, connection: 'close' }, signal: request.signal, agent,
           }, resolve);
-          forwarded.once('error', reject); forwarded.end(request.body);
+          forwarded.once('error', error => { agent.destroy(); reject(error); }); forwarded.end(request.body);
         });
+        response.once('close', () => agent.destroy());
         return { ok: true, response: { ok: response.statusCode! < 400, status: response.statusCode!, statusText: response.statusMessage ?? '', headers: Object.fromEntries(Object.entries(response.headers)
           .flatMap(([name, value]) => value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]])),
           body: Readable.toWeb(response) as ReadableStream<Uint8Array> } };
@@ -324,6 +340,7 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
     consumers.push(peerEndpoint);
     const peer = createJourneyCodex('peer-session', peerEndpoint); natives.push(peer);
     await (await peer.send('tool:peer'))();
+    expect(peer.failures).toEqual([]);
     expect(peer.events.filter(event => event.kind === 'tool-call')).toHaveLength(1);
     expect(peer.events.filter(event => event.kind === 'tool-result')).toHaveLength(1);
     expect([...peer.stored.values()].filter(body => body.type === 'tool-call')).toHaveLength(1);
@@ -344,11 +361,13 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
 
     const interrupted = await survivor.native.send('hold:outage');
     await vi.waitFor(() => expect(upstream.held.has('hold:outage')).toBe(true));
+    await vi.waitFor(() => expect([...survivor.native.stored.values()])
+      .toContainEqual({ type: 'message', message: 'unfinished prefix' }));
     process.kill(originalPid, 'SIGTERM');
     expect(await waitForProcessExit(originalPid)).toBe(true);
     await interrupted();
     expect([...survivor.native.stored.values()].filter(body => body.type === 'message' && body.message === 'unfinished prefix')).toEqual([]);
-    expect([...survivor.native.stored.values()]).toContainEqual({ type: 'message', message: 'Interrupted answer settled' });
+    expect([...survivor.native.stored.values()].filter(body => body.type === 'message' && body.message === 'Interrupted answer settled')).toHaveLength(1);
     await input.deliverPending(async text => { await (await survivor.native.send(text))(); });
     const replacementPid = Number(await readFile(processFile, 'utf8'));
     expect(replacementPid).not.toBe(originalPid);

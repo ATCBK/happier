@@ -1,8 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { reloadConfiguration } from '@/configuration';
 import { createPluginStateStore } from '@/plugins/store/state.testkit';
@@ -17,6 +19,10 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import type { Credentials } from '@/persistence';
 
 import { SessionHostBridge } from './SessionHostBridge';
+import { createSessionAttachFile } from '@/daemon/sessionAttachFile';
+import { createNativeSessionClientTestPort } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
+import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 
 const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
 
@@ -134,14 +140,30 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
     }
   });
 
-  it('uses the host-owned Team credential preparation callback for a direct pinned plugin runtime', async () => {
+  it.each([false, true])('uses the host-owned Team credential preparation callback for a pinned plugin runtime (committed attach=%s)', async attached => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-session-bridge-team-credential-home-'));
     const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-session-bridge-team-credential-plugin-'));
+    const upstreamRequests: unknown[] = [];
+    const upstream = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      upstreamRequests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ output_text: 'TEAM_BINDING_SENTINEL' }));
+    });
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('Missing controlled upstream address');
+    const upstreamUrl = `http://127.0.0.1:${address.port}/v1`;
     try {
-      await installSample({ happyHomeDir, pluginRoot, trustPolicy: 'local_trusted' });
-      const lease = createEphemeralPluginRuntimeRegistryLease(
-        await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, generation: 1 }),
-      );
+      envScope.patch({ HAPPIER_HOME_DIR: happyHomeDir });
+      reloadConfiguration();
+      const fixture = await createManagedRunLaunchFixture({ directory: pluginRoot, happyHomeDir });
+      const lease = fixture.lease;
+      const agentId = fixture.agentId;
+      const identity = fixture.contributes.agentDefinitionsById.get(agentId)?.identity;
+      if (!identity) throw new Error('Missing admitted external Agent identity');
       const prepareTeamCredentialProviderBinding = vi.fn(async () => ({
         providerBinding: {
           source: {
@@ -149,48 +171,47 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
             resourceId: 'resource-1',
             resourceRevision: 3,
           },
-          model: { id: 'team-model', name: 'Team model' },
+          model: { id: 'gpt-5.5', name: 'Team model' },
           upstream: {
-            protocol: 'openai',
-            normalizedUrl: 'http://127.0.0.1:43123/v1',
+            protocol: 'openai-responses',
+            normalizedUrl: upstreamUrl,
             credential: 'apiKey' as const,
           },
           materialization: { v: 1 as const, kind: 'spawnEnv' as const },
         },
         environmentOverlay: [{
-          name: 'OPENAI_BASE_URL',
-          value: 'http://127.0.0.1:43123/v1',
+          name: 'RUN_PROVIDER_TOKEN',
+          value: 'synthetic-consumer-token',
           source: 'provider' as const,
         }],
-        additionalRedactionValues: ['http://127.0.0.1:43123/v1'],
+        additionalRedactionValues: ['synthetic-consumer-token'],
       }));
+      const binding = { v: 1 as const, slot: { kind: 'provider_model' as const }, resourceId: 'resource-1',
+        expectedResourceRevision: 3, deliveryMode: 'brokered' as const, teamId: 'team-1' };
+      const attachFile = attached ? await createSessionAttachFile({ happySessionId: 'runner-session-1',
+        payload: { v: 2, encryptionMode: 'plain', snapshot: { metadata: {}, metadataVersion: 0,
+          agentState: null, agentStateVersion: 0, acceptedTeamCredentialBinding: binding } },
+      }) : null;
       try {
         const plan = await new SessionHostBridge().createSessionRuntime(
-          SAMPLE_PLUGIN_BACKEND_ID,
+          agentId,
           {
             credentials: createTestCredentials(),
             directory: pluginRoot,
             happyHomeDir,
             backendTarget: {
               kind: 'agent',
-              identity: {
-                pluginId: SAMPLE_PLUGIN_ID,
-                localId: SAMPLE_PLUGIN_BACKEND_ID,
-              },
+              identity,
             },
-            teamCredentialBindings: [{
-              v: 1,
-              slot: { kind: 'provider_model' },
-              resourceId: 'resource-1',
-              expectedResourceRevision: 3,
-            }],
+            ...(attachFile ? { existingSessionId: 'runner-session-1', sessionAttachFilePath: attachFile.filePath }
+              : { teamCredentialBindings: [binding] }),
             modelSelection: {
               v: 1,
               updatedAt: 1,
               ref: {
-                agentTargetKey: `agent:${SAMPLE_PLUGIN_ID}/${SAMPLE_PLUGIN_BACKEND_ID}`,
+                agentTargetKey: fixture.agentTargetKey,
                 providerConnectionId: null,
-                modelId: 'team-model',
+                modelId: 'gpt-5.5',
               },
             },
           },
@@ -200,11 +221,16 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
           },
         );
 
+        const session = createNativeSessionClientTestPort('runner-session-1');
+        const presentationLifetime = new AbortController();
+        onTestFinished(() => presentationLifetime.abort());
+        const presentation = createCurrentSessionPresentationHost({ session, signal: presentationLifetime.signal });
         const runtime = await plan.config.createSessionRuntime?.({
           directory: pluginRoot,
           metadata: {},
           machineId: 'runner-machine-1',
-          session: { sessionId: 'runner-session-1' },
+          session,
+          currentSessionPresentation: presentation.bindCurrentSession,
           transcriptSession: {},
           messageBuffer: {},
           mcpServers: {},
@@ -246,11 +272,12 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
           kind: 'input-accepted',
           turnId: 'runner-external-turn-1',
         }));
+        expect(upstreamRequests).toEqual([{ model: 'gpt-5.5', input: 'brokered turn through external plugin' }]);
         await expect(operations.prepareRunTeamCredentialProviderBinding?.({
           runId: 'run-1',
-          agentId: SAMPLE_PLUGIN_BACKEND_ID,
+          agentId,
           resourceId: 'resource-1',
-          modelId: 'team-model',
+          modelId: 'gpt-5.5',
         })).resolves.toMatchObject({
           providerBinding: {
             source: { kind: 'team_resource', resourceId: 'resource-1', resourceRevision: 3 },
@@ -260,10 +287,10 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
           sessionId: 'runner-session-1',
           resourceId: 'resource-1',
           expectedResourceRevision: 3,
-          agentTargetKey: `agent:${SAMPLE_PLUGIN_ID}/${SAMPLE_PLUGIN_BACKEND_ID}`,
-          modelId: 'team-model',
+          agentTargetKey: fixture.agentTargetKey,
+          modelId: 'gpt-5.5',
           consumer: { kind: 'execution_run', executionRunId: 'run-1' },
-          executionRunAgentId: SAMPLE_PLUGIN_BACKEND_ID,
+          executionRunAgentId: agentId,
           signal: expect.any(AbortSignal),
         });
         // An attached Run that independently selected a direct resource for
@@ -296,18 +323,22 @@ describe('SessionHostBridge current custom Agent (integration)', () => {
         });
         unsubscribe?.();
         await operations.resetOrDisposeRuntime();
+        presentationLifetime.abort();
         expect(prepareTeamCredentialProviderBinding).toHaveBeenCalledWith({
           sessionId: 'runner-session-1',
           resourceId: 'resource-1',
           expectedResourceRevision: 3,
-          agentTargetKey: `agent:${SAMPLE_PLUGIN_ID}/${SAMPLE_PLUGIN_BACKEND_ID}`,
-          modelId: 'team-model',
+          agentTargetKey: fixture.agentTargetKey,
+          modelId: 'gpt-5.5',
           signal: expect.any(AbortSignal),
         });
+        if (attachFile) await expect(import('node:fs/promises').then(fs => fs.stat(attachFile.filePath))).rejects.toMatchObject({ code: 'ENOENT' });
       } finally {
-        await lease.release();
+        await attachFile?.cleanup();
+        await fixture.cleanup();
       }
     } finally {
+      await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(pluginRoot, { recursive: true, force: true });
     }

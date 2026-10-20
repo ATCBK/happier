@@ -438,6 +438,13 @@ Endpoint validation rejects credentials in URLs, unsafe metadata destinations, a
 
 A catalog probe is bounded end to end, not per hop: one wall budget covers pre-dispatch resolution, request establishment and the complete response body across every redirect, and one idle budget bounds the gap between body chunks. Both apply identically to a public endpoint and to a Provider the daemon supervises — a managed probe reaches its service through that service's own supervised request handle, so a response that returns headers and never finishes its body cannot hold a Provider probe slot.
 
+In 0.3 development, native broker inference does not use the catalog-response
+byte ceiling. Its ingress retains the request bytes for policy parsing. The
+managed-service carrier owns its complete-message size boundary and reports
+`plugin_managed_service_request_too_large` with the resource, limit and actual
+size. The broker preserves that refusal as HTTP 413 with `request_too_large`.
+Relay frame limits govern individual chunks, not the complete inference body.
+
 In 0.3 development, connection descriptions and mutations, Profile migration
 admission, and binding-status reads follow their containing operation's lifetime.
 The endpoint-probe budget does not expire a slow Home or registry read in those
@@ -445,6 +452,20 @@ operations. A local command catalog fallback consumes the remaining catalog
 deadline and cancellation, with the same canonical catalog-response byte bound
 as HTTP catalogs. Transport settlement during cancellation cannot publish a
 successful withdrawal as a completed operation.
+
+The development local-installation advisory consumes the containing description's
+cancellation signal, without a separate waiter timeout. A description reports
+`localInstallationsStatus: incomplete` if that interest ends before the checks
+settle or the advisory is unavailable; unfinished work never persists absence.
+On cancellation, completed rows remain available, and an uncancellable system-tool
+lookup retains its single-flight custody until its real result settles. An omitted status from
+an older description supplies no completeness observation.
+
+Provider-source descriptors use the existing managed-service request-header
+carrier. That carrier retains its header-value and aggregate envelope limits
+and refuses overflow with `plugin_managed_service_request_too_large`, naming the
+resource, actual size and limit. A valid source declaration may exceed the carrier;
+neither its schema nor the final-hop wrapper adds another descriptor-size limit.
 
 Connected Account currentness conflicts and group-generation convergence also
 follow the owning operation's cancellation. Settled credential leases expire or
@@ -666,26 +687,37 @@ purpose. The plugin generates those rows from its pinned SDK source. This read
 requires a current selection from the Connected Account purpose-binding owner;
 it neither starts a Gateway nor schedules a probe. A saved Gateway does not replace
 this source catalog. Ordinary saved Gateway model reads retain their probe path.
-These rows describe static compatibility, with account entitlement unverified.
-Unknown model capabilities retain experimental compatibility and require explicit
-per-Agent confirmation by the person selecting the model in their own Account.
+In development, Team source reads describe the gateway's declared protocols,
+capabilities and pinned family models without activating the worker Agent on
+the broker. Source-any readiness uses the same unbound catalog observation;
+it does not enumerate broker-local Agents. Saved Provider sources retain their
+own connection/security/grant and observed-catalog admission.
+These rows retain account-unverified, experimental/unconfirmed presentation.
+The actual worker's admitted adapter computes compatibility at selection and
+launch. A source-reported compatibility or confirmation is not worker authority.
 The existing `providers.models.experimental.confirm` Action and private catalog
 also accept the projection's exact `connectedAccountTarget` and source-qualified
 catalog ref. This creates no saved Provider connection or grant. Source projections
 use revision zero; saved Gateways retain their captured connection revision.
-The same confirmation matcher checks the source, Agent, model scope and current
-compatibility fingerprint. Confirmed rows stay experimental and account-unverified;
-only then can the existing Team eligibility, Test, request-policy and source-catalog
-consumers admit them. Ordinary Pool member changes and access-token refresh do not
+Team rows also carry an opaque confirmation source key, without the private
+Account or Pool target. The worker model-projection RPC accepts a
+`teamCredentialModel` and returns its locally computed compatibility and
+fingerprint. The recipient uses that result with the existing Account
+confirmation Action (`catalogSourceKey`, revision zero). The same confirmation
+matcher checks the source, Agent, model scope and actual adapter fingerprint;
+launch recomputes them before materialization. Confirmed rows stay experimental
+and account-unverified. Ordinary Pool member changes and access-token refresh do not
 change this static compatibility confirmation. A changed target or compatibility
 fingerprint requires its own confirmation.
 
-**Development completion gap:** a recipient's confirmation is not yet carried
-through the source custodian's model projection. That projection currently
-reads the custodian's Provider settings. A successful confirmation in the
-recipient's Account therefore does not by itself establish a selectable
-cross-Account Team model. Do not infer a working launch from confirmation or
-an unqualified entitlement read alone.
+The custodian's confirmation never filters recipients' source catalogs,
+eligibility, request-policy facts or resource Test candidates. Team policy and
+current source membership decide what is offered; the recipient's own consent
+decides experimental selection/launch admission. This source/worker contract
+does not by itself prove a working native turn. The consuming UI must request
+worker compatibility before offering confirmation, and launch must read an
+application-qualified catalog through the accepted Session/Run binding.
+Loaded-runtime replay remains a separate integration check.
 
 The development daemon launch composition normalizes a fresh Session's
 service-purpose Team selection together with its effective model before
@@ -693,9 +725,17 @@ Session binding admission. It uses the declared Agent/Provider application
 and an exact currently offered Team model row, not a personal Provider
 connection or a model-name inference. Explicit model-source choices retain
 precedence; an unavailable or ambiguous model source is refused rather than
-falling back to native authentication. This prepares the Session model slot;
-it does **not** establish the missing admitted broker transport or exempt the
-launch from native sign-in. That end-to-end launch handoff remains incomplete.
+falling back to native authentication. A Team model launch commits its Session
+before native-auth preflight. Owner detail projects the Home-written model-slot
+witness into the protected attach snapshot; rejoin reads that Session's accepted
+selection rather than treating a new caller intent as accepted. The attaching
+host consumes the snapshot before capturing native runtime inputs. Only an
+accepted brokered inference binding satisfies native-auth preflight; native
+Sessions retain their sign-in check. Broker open and each request still enforce
+current resource, source and consumer authority, including Execution Run custody.
+The runtime's entitled-catalog read still needs the worker's application
+qualifier. That integration and the composed recipient Pool → Action/CLI
+spawn → native-turn journey remain incomplete in development source.
 
 Resource access has two intentionally different privacy contracts:
 

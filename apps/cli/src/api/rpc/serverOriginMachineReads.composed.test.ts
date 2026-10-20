@@ -19,6 +19,7 @@ import { registerMachineProviderRpcHandlers } from '@/api/machine/rpcHandlers.pr
 import { resolveTeamCredentialSourceModelCatalog } from '@/providers/broker/resourceTestCandidate';
 import { projectManagedProviderBrokerApplication, resolveManagedProviderBrokerPurpose } from '@/providers/broker/applicationProjection';
 import { resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
+import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
@@ -33,8 +34,10 @@ import { readLeasedAgentProviderBindingAdapter } from '@/plugins/runtime/provide
 // The CLI harness resolves each host's source aliases from its importing file.
 const forwarderPath = '../../../../server/sources/app/api/socket/serverRpcForwarder';
 const eligibilityPath = '../../../../server/sources/app/teams/credentials/poolSourceEligibility';
+const projectionPath = '../../../../server/sources/app/teams/credentials/providerModelProjection';
 const { createServerRpcForwarder }: typeof import('../../../../server/sources/app/api/socket/serverRpcForwarder') = await import(forwarderPath);
 const { createTeamCredentialPoolSourceEligibilityReader }: typeof import('../../../../server/sources/app/teams/credentials/poolSourceEligibility') = await import(eligibilityPath);
+const { projectTeamCredentialProviderModels }: typeof import('../../../../server/sources/app/teams/credentials/providerModelProjection') = await import(projectionPath);
 
 const accountId = 'account-1';
 const machineId = 'machine-1';
@@ -79,8 +82,7 @@ function createTransport(manager: RpcHandlerManager, replies: unknown[] = []) {
 }
 
 describe('server-origin Machine reads across the E2EE RPC seam', () => {
-    // Review-blocked: the source/worker compatibility transport needs an approved trust boundary.
-    it.skip('preserves source catalog and compatibility facts for an external Agent installed only on the worker', async () => {
+    const verifyWorkerOnlySource = async (scenario: 'connected_source' | 'saved_provider') => {
         const worker = await createManagedRunLaunchFixture();
         const home = await mkdtemp(join(tmpdir(), 'worker-only-source-catalog-'));
         try {
@@ -124,14 +126,13 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                 modelSettingsMutation: unused,
             });
             const request = { machineId, agentTargetKey: worker.agentTargetKey,
-                connectedAccountTarget: target, refreshPolicy: 'current_only' as const };
+                connectedAccountTarget: target, sourceCatalog: true as const, refreshPolicy: 'current_only' as const };
             const local = await runtime.projectModels(request);
             expect(local).toMatchObject({ status: 'success' });
             if (local.status !== 'success' || !local.groups[0]?.rows[0]?.application) throw new Error('Expected real source catalog');
             installedAtBroker = false;
-            const application = { ...local.groups[0].rows[0].application, agentCompatibility: {
-                support: captured.support, adapterVersion: captured.adapter.adapterVersion,
-            } };
+            const application = local.groups.flatMap(group => group.rows)
+                .find(row => row.application?.protocol === captured.support.acceptsProtocols[0])!.application!;
             const remote = await runtime.projectModels({ ...request, application });
             expect(remote).toMatchObject({ status: 'success' });
             if (remote.status !== 'success') throw new Error('Expected worker-only source projection');
@@ -142,11 +143,93 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                         rows: group.rows.map(row => ({ descriptor: row.descriptor, compatibility: row.compatibility })) })));
             expect(remote.groups.every(group => group.rows.every(row =>
                 JSON.stringify(row.application) === JSON.stringify(application)))).toBe(true);
+            await expect(runtime.resolveTeamCredentialBrokerEligibility({ machineId, teamId: 'team-1', resourceId: 'resource-1',
+                expectedResourceRevision: 1, scope: 'source_any', source: { v: 1, kind: 'connected_pool', target,
+                    poolIncarnation: 'pool-incarnation' },
+            })).resolves.toEqual({ status: 'eligible' });
+            if (scenario === 'connected_source') {
+            const offered = projectTeamCredentialProviderModels({ response: remote, resourceId: 'resource-1', teamId: 'team-1',
+                resourceRevision: 1, agentTargetKey: worker.agentTargetKey, application, allowedModelIds: null,
+                source: { v: 1, kind: 'connected_pool', target, poolIncarnation: 'pool-incarnation' }, deliveryMode: 'brokered' });
+            expect(offered.status).toBe('success');
+            const teamModel = offered.models[0]!;
+            expect(teamModel.sourceFacts?.endpoint.protocol).toBe(application.protocol);
+            const recipientSnapshot = { ...worker.snapshot };
+            const recipientRuntime = createRuntimeProviderModelManagementServices({ machineId: worker.machineId,
+                happyHomeDir: home, featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => recipientSnapshot,
+                acquireRuntimeLease: async () => ({ registry: worker.lease.registry, source: 'active', durableRevision: -1, release: async () => {} }),
+                modelSettingsMutation: unused,
+            });
+            const workerRequest = { machineId: worker.machineId, agentTargetKey: worker.agentTargetKey,
+                teamCredentialModel: teamModel, refreshPolicy: 'current_only' as const };
+            const before = await recipientRuntime.projectModels(workerRequest);
+            expect(before).toMatchObject({ status: 'success', groups: [{ rows: [{
+                ref: { modelId: teamModel.descriptor.id }, compatibility: { result: { status: 'experimental' }, confirmed: false },
+            }] }] });
+            if (before.status !== 'success') throw new Error('Expected worker admission projection');
+            const compatibility = before.groups[0]!.rows[0]!.compatibility;
+            if (compatibility.result.status !== 'experimental') throw new Error('Expected actual worker compatibility');
+            const confirm = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 2,
+                readCatalog: async () => recipientSnapshot.providerConnectionsCatalog!, readDefinitions: async () => [],
+                writeCatalog: async value => { recipientSnapshot.providerConnectionsCatalog = {
+                    status: 'ready', revision: value.expectedRevision + 1, catalog: value.catalog }; return { status: 'updated' }; },
+            });
+            expect(await confirm(parseProviderActionRequestV1('providers.models.experimental.confirm', {
+                action: 'confirmExperimental', ...teamModel.confirmationSource, expectedConnectionRevision: 0,
+                agentTargetKey: worker.agentTargetKey, modelId: compatibility.result.confirmationScope.kind === 'model' ? teamModel.descriptor.id : null,
+                compatibilityFingerprint: compatibility.compatibilityFingerprint,
+            }), {})).toMatchObject({ ok: true });
+            expect(await recipientRuntime.projectModels(workerRequest)).toMatchObject({ status: 'success', groups: [{ rows: [{
+                ref: { modelId: teamModel.descriptor.id }, compatibility: { confirmed: true },
+            }] }] });
+            return;
+            }
+            // A saved Provider source must also describe its catalog without
+            // the worker's executable contribution on the broker.
+            const sourceContribution = worker.lease.registry.contributes.providersByContributionKey.values().next().value;
+            if (!sourceContribution) throw new Error('Expected external source declaration');
+            const nativeDefinition = { ...sourceContribution.definition };
+            delete nativeDefinition.managedRuntime;
+            const sourceProviders = new Map([...sourceOnlyRegistry.contributes.providersByContributionKey,
+                [`${sourceContribution.identity.pluginId}/${sourceContribution.identity.localId}`, { ...sourceContribution, definition: nativeDefinition }] as const]);
+            const sourceSettings = ProviderSettingsV1Schema.parse({ ...worker.providerSettings, machineGrants: [],
+                connections: worker.providerSettings.connections.map(connection => ({ ...connection, deployment: { kind: 'external' } })) });
+            const resolved = resolveProviderConnectionForMachine({ connectionId: worker.record.connectionId, machineId,
+                providerSettings: sourceSettings, registry: { providersByContributionKey: sourceProviders },
+                dnsEvidenceByEndpointUrl: new Map(nativeDefinition.endpointTemplates.flatMap(endpoint => endpoint.baseUrl
+                    ? [[endpoint.baseUrl, ['1.1.1.1']] as const] : [])),
+            });
+            if (resolved.status !== 'resolved') throw new Error('Expected native Provider source');
+            const providerSettings = ProviderSettingsV1Schema.parse({ ...sourceSettings, machineGrants: [{ v: 1,
+                connectionId: worker.record.connectionId, machineId, connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint,
+                endpointSetFingerprint: resolved.record.endpointSetFingerprint, confirmedAt: 1 }] });
+            const providerSourceSnapshot = { ...worker.snapshot, providerConnectionsCatalog: { status: 'ready' as const,
+                revision: 1, catalog: splitProviderSettingsV1(providerSettings).catalog } };
+            const providerSourceRuntime = createRuntimeProviderModelManagementServices({ machineId, happyHomeDir: home,
+                featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => providerSourceSnapshot,
+                resolveAddresses: async () => ['1.1.1.1'], acquireRuntimeLease: async () => ({
+                    registry: { ...sourceOnlyRegistry, contributes: { ...sourceOnlyRegistry.contributes,
+                        providersByContributionKey: sourceProviders } },
+                    source: 'active', durableRevision: -1, release: async () => {},
+                }), modelSettingsMutation: unused });
+            const sourceProjection = await providerSourceRuntime.projectModels({ machineId, agentTargetKey: worker.agentTargetKey,
+                sourceCatalog: true, providerConnection: { connectionId: worker.record.connectionId,
+                    expectedConnectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint },
+                application, refreshPolicy: 'current_only',
+            });
+            expect(sourceProjection, JSON.stringify(sourceProjection)).toMatchObject({ status: 'success', groups: [{ rows: [{ descriptor: { id: 'model-a' } }] }] });
+            await expect(providerSourceRuntime.resolveTeamCredentialBrokerEligibility({ machineId,
+                teamId: 'team-1', resourceId: 'resource-provider', expectedResourceRevision: 1, scope: 'source_any',
+                source: { v: 1, kind: 'provider_connection', connectionId: worker.record.connectionId,
+                    connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint, credentialSlotId: 'apiKey' },
+            })).resolves.toEqual({ status: 'eligible' });
         } finally {
             await worker.cleanup();
             await rm(home, { recursive: true, force: true });
         }
-    });
+    };
+    it('preserves source catalog and compatibility facts for an external Agent installed only on the worker', () => verifyWorkerOnlySource('connected_source'));
+    it('preserves saved Provider source facts for an external Agent installed only on the worker', () => verifyWorkerOnlySource('saved_provider'));
 
     const verifyConnectedSource = async (scenario: 'admit' | 'admit_pool' | 'recipient_confirmation' | 'account' | 'pool' | 'installed' | 'saved_gateway' | 'revoked' | 'removed' | 'different_service' | 'no_selection') => {
         const home = await mkdtemp(join(tmpdir(), 'connected-codex-eligibility-'));
@@ -232,7 +315,7 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                 await expect(runtime.resolveTeamCredentialResourceTestCandidate({ machineId,
                     teamId: input.teamId, resourceId: input.resourceId, expectedResourceRevision: 1,
                     source, refreshPolicy: 'current_only',
-                })).resolves.toMatchObject({ status: 'unavailable' });
+                })).resolves.toMatchObject({ status: 'success' });
                 // The Account-row transport is in-memory; the actual Action parser,
                 // confirmation semantics, strict catalog and CAS writer stay real.
                 const confirmationSnapshot = scenario === 'recipient_confirmation'
@@ -294,8 +377,8 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
                     expect(projection.groups.map(group => group.connectionId)).not.toContain('saved-gateway');
                     expect(new Set(projection.groups.map(group => JSON.stringify(group.rows[0]?.application))).size).toBe(projection.groups.length);
                 }
-                expect(replies).toEqual([{ status: 'unavailable', reason: 'model_unavailable' }]);
-                expect([...result.eligibleMachineIds]).toEqual([]);
+                expect(replies).toEqual([eligible]);
+                expect([...result.eligibleMachineIds]).toEqual([machineId]);
                 return;
             }
             const application = projectManagedProviderBrokerApplication({
@@ -337,8 +420,7 @@ describe('server-origin Machine reads across the E2EE RPC seam', () => {
 
     it('admits a connected Codex source through the real model projector without a saved Provider connection', () => verifyConnectedSource('admit'));
     it('admits a confirmed connected Codex Pool through the same real projector', () => verifyConnectedSource('admit_pool'));
-    // AMENDMENT_REQUIRED: the source currently reads its custodian's private confirmations.
-    it.skip('admits a Team source after the recipient confirms in their own private Account', () => verifyConnectedSource('recipient_confirmation'));
+    it('admits a Team source after the recipient confirms in their own private Account', () => verifyConnectedSource('recipient_confirmation'));
     it.each(['account', 'pool', 'installed', 'saved_gateway', 'revoked', 'removed', 'different_service', 'no_selection'] as const)(
         'projects only the current source-qualified SDK catalog, preserving experimental confirmation: %s', verifyConnectedSource,
     );
