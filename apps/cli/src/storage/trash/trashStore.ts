@@ -10,6 +10,7 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { RequesterWorkAttributionV1Schema } from '@happier-dev/protocol/machines/requesterWorkAttributionV1';
 import type { MachineGuardActivityEntryV1 } from '@happier-dev/protocol/machines/guard/activityV1';
 import type { ActivityLog } from '@/daemon/guard/activityLog';
+import { logger } from '@/ui/logger';
 import { physicalStoragePathWithoutFollowingLeaf, storageAbsolutePath, storagePathContains, storagePathDirname,
     storagePathJoin, storagePathLeaf, storagePathsEqual, storagePathToFs } from '../storagePath';
 import { ensureProtectedLocalStateDirectory, readProtectedLocalStateFile, verifyProtectedLocalStatePath, writeProtectedLocalStateFileAtomic } from '@/utils/fs/protectedLocalState';
@@ -123,8 +124,15 @@ export function createTrashStore(deps: TrashStoreDeps) {
             for (const entryId of await readdir(root.path)) {
                 if (activePreparations.has(entryId)) continue;
                 if (!component.safeParse(entryId).success || selection.entryIds && !selection.entryIds.includes(entryId)) continue;
-                const record = await load(root, entryId);
-                if (!selection.batchId || selection.batchId === record.manifest.entry.batchId) result.push(record);
+                try {
+                    const record = await load(root, entryId);
+                    if (!selection.batchId || selection.batchId === record.manifest.entry.batchId) result.push(record);
+                } catch (error) {
+                    // An interrupted prepare can leave a directory without a manifest.
+                    // Keep unknown bytes untouched: without the manifest neither owner
+                    // authority nor safe recovery can be established for this entry.
+                    logger.warnLocalFile('[storage/trash] Retaining unreadable entry', { volumeId: root.volumeId, entryId, error });
+                }
             }
         }
         return result;

@@ -91,6 +91,36 @@ describe('Trash with the real filesystem and native measurement', () => {
         expect(await readFile(join(f.source, 'bytes'))).toEqual(Buffer.alloc(8192, 9));
         expect(await restarted.list()).toEqual([]);
     });
+    it.each(['missing', 'malformed', 'mismatched'] as const)('retains a %s manifest without blocking healthy Trash reads or recovery', async kind => {
+        const f = await fixture(`unreadable-${kind}`);
+        const prepared = await f.prepare();
+        const entry = await prepared.commit();
+        const incompleteId = 'unfinished-entry';
+        const incomplete = join(f.home, 'trash', incompleteId);
+        await mkdir(incomplete, { mode: 0o700 });
+        await writeFile(join(incomplete, 'payload'), 'unknown retained bytes');
+        if (kind !== 'missing') {
+            const manifest = JSON.parse(await readFile(join(prepared.payloadPath, '..', 'entry.json'), 'utf8'));
+            await writeProtectedLocalStateFileAtomic(join(incomplete, 'entry.json'), kind === 'malformed' ? '{' : JSON.stringify(manifest));
+        }
+        const recoveringSource = join(f.base, 'recovering');
+        await mkdir(recoveringSource); await writeFile(join(recoveringSource, 'bytes'), 'recover these bytes');
+        const recovering = await f.store.prepare({ path: recoveringSource, batchId: 'recovery', title: 'Recovering', size: emptySize,
+            movedBy: { accountId: 'alice', kind: 'person' } });
+        await rename(recoveringSource, recovering.payloadPath);
+        const restarted = createTrashStore(f.deps);
+        expect(await restarted.list()).toEqual([entry]);
+        expect(await restarted.list({ entryIds: [entry.entryId] })).toEqual([entry]);
+        await restarted.reconcile();
+        expect((await restarted.list()).map(row => row.entryId)).toEqual(expect.arrayContaining([entry.entryId, recovering.entry.entryId]));
+        expect(await f.activityLog.read(`${recovering.entry.entryId}-trash_moved`)).not.toBeNull();
+        const result = await restarted.empty({}, { actorAccountId: 'alice', custodianAccountId: 'owner' });
+        expect(result.outcomes).toEqual(expect.arrayContaining([
+            { entryId: entry.entryId, status: 'deleted' },
+            { entryId: recovering.entry.entryId, status: 'deleted' },
+        ]));
+        expect(await readFile(join(incomplete, 'payload'), 'utf8')).toBe('unknown retained bytes');
+    });
     it.skipIf(process.platform === 'win32')('roundtrips an invalid UTF-8 POSIX name without touching its replacement-character twin', async context => {
         const f = await fixture('byte-name');
         const path = Buffer.concat([Buffer.from(`${f.base}/invalid-`), Buffer.from([0xff]), Buffer.from('.bin')]);
