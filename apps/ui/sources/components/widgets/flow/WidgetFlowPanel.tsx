@@ -177,7 +177,9 @@ export function WidgetFlowPanel(props: Readonly<{
                         {props.onCancel || primary ? (
                             <View style={styles.footerActions}>
                                 {props.onCancel ? (
-                                    <RoundButton testID={`${props.testID}.cancel`} size="small" display="secondary" title={t('common.cancel')} onPress={props.onCancel} />
+                                    // Closing a submitted flow does not promise withdrawal of its Action.
+                                    <RoundButton testID={`${props.testID}.cancel`} size="small" display="secondary"
+                                        title={t(props.primary?.busy ? 'common.close' : 'common.cancel')} onPress={props.onCancel} />
                                 ) : null}
                                 {primary}
                             </View>
