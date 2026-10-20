@@ -10491,6 +10491,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     },
     fileEmpty: "Arquivo está vazio",
     noChanges: "Nenhuma alteração para exibir",
+    noChangesPurpose: 'As edições feitas nesta pasta aparecem aqui, prontas para revisão.',
     emptyFile: 'Arquivo vazio',
     sourceControlOperations: {
       title: "Controle de versão",

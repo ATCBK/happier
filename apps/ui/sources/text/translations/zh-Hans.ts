@@ -10002,6 +10002,7 @@ const zhHansValues = {
     },
     fileEmpty: "文件为空",
     noChanges: "没有要显示的更改",
+    noChangesPurpose: '在此文件夹中所做的编辑会显示在这里，可供审阅。',
     emptyFile: '空文件',
     sourceControlOperations: {
       title: "版本控制",

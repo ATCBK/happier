@@ -10198,6 +10198,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     },
     fileEmpty: "Plik jest pusty",
     noChanges: "Brak zmian do wyświetlenia",
+    noChangesPurpose: 'Zmiany wprowadzone w tym folderze pojawiają się tutaj, gotowe do przeglądu.',
     emptyFile: 'Pusty plik',
     sourceControlOperations: {
       title: "Kontrola wersji",

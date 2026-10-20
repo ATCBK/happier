@@ -12178,6 +12178,7 @@ const enFiles = {
   },
   fileEmpty: 'File is empty',
   noChanges: 'No changes to display',
+  noChangesPurpose: 'Edits made in this folder show up here, ready to review.',
   emptyFile: 'Empty file',
   sourceControlOperations: {
     title: 'Source control',

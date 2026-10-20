@@ -114,6 +114,7 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
     // A refused switch says so in the section, beside the switch it did not move, until the next attempt.
     const [refused, setRefused] = React.useState(false);
     const setEnabled = React.useCallback((next: boolean) => {
+        if (pendingChoice !== null) return;
         setPendingChoice(next);
         setRefused(false);
         fireAndForget((async () => {
@@ -126,7 +127,7 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
                 setPendingChoice(null);
             }
         })(), { tag: 'SessionMemorySection.setEnabled' });
-    }, [sessionTarget]);
+    }, [pendingChoice, sessionTarget]);
 
     const shownEnabled = pendingChoice ?? enabled;
     const documentAccess = displayedSource.view?.access ?? null;
@@ -187,7 +188,6 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
                     <Switch
                         testID="session-work-memory.enabled.switch"
                         value={shownEnabled}
-                        disabled={pendingChoice !== null}
                         onValueChange={setEnabled}
                         accessibilityLabel={t('memoryContext.session.useMemory')}
                     />

@@ -8397,6 +8397,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
         },
         fileEmpty: '檔案為空',
         noChanges: '沒有要顯示的更改',
+        noChangesPurpose: '在此資料夾中所做的編輯會顯示在這裡，可供審閱。',
         emptyFile: '空檔案',
         sourceControlOperations: {
             title: '版本控制',

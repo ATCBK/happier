@@ -10371,6 +10371,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     },
     fileEmpty: "El archivo está vacío",
     noChanges: "No hay cambios que mostrar",
+    noChangesPurpose: 'Las ediciones hechas en esta carpeta aparecen aquí, listas para revisar.',
     emptyFile: 'Archivo vacío',
     sourceControlOperations: {
       title: "Control de versiones",

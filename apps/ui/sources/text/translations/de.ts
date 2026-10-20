@@ -10214,6 +10214,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             },
         fileEmpty: 'Die Datei ist leer',
         noChanges: 'Keine Änderungen zum Anzeigen',
+        noChangesPurpose: 'Änderungen in diesem Ordner erscheinen hier und lassen sich direkt prüfen.',
         emptyFile: 'Leere Datei',
         sourceControlOperations: {
             title: 'Versionsverwaltung',

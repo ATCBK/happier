@@ -162,6 +162,17 @@ describe('getSessionMachineLabel', () => {
         })).toBe('Studio');
     });
 
+    it('names a machine whose details are still locked or loading by the host its own session published', () => {
+        const locked = { id: SESSION_MACHINE, metadata: null, availability: { kind: 'locked' } };
+        const hydrating = { id: SESSION_MACHINE, metadata: null };
+        const session = { machineId: SESSION_MACHINE, host: 'NLDW3-5-36-33' };
+        expect(getSessionMachineLabel({ machineId: SESSION_MACHINE, machine: locked, session })).toBe('NLDW3-5-36-33');
+        expect(getSessionMachineLabel({ machineId: SESSION_MACHINE, machine: hydrating, session })).toBe('NLDW3-5-36-33');
+        // Without a published host the placeholder stays what it is.
+        expect(getSessionMachineLabel({ machineId: SESSION_MACHINE, machine: locked, session: { machineId: SESSION_MACHINE } }))
+            .toBe(t('machine.lockedMachine'));
+    });
+
     it('reads the session\'s own host when its machine is not in the inventory, never the raw id', () => {
         const label = getSessionMachineLabel({
             machineId: SESSION_MACHINE, machine: null, session: { machineId: SESSION_MACHINE, host: 'NLDW3-5-36-33' },

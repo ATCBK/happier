@@ -9516,6 +9516,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         },
         fileEmpty: 'El fitxer està buit',
         noChanges: 'No hi ha canvis a mostrar',
+        noChangesPurpose: 'Les edicions fetes en aquesta carpeta apareixen aquí, a punt per revisar.',
         emptyFile: 'Fitxer buit',
         sourceControlOperations: {
             title: 'Control de versions',

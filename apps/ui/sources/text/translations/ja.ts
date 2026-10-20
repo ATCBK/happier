@@ -10665,6 +10665,7 @@ localTailscale: {
     },
     fileEmpty: "ファイルは空です",
     noChanges: "表示する変更はありません",
+    noChangesPurpose: 'このフォルダーで行った編集はここに表示され、確認できます。',
     emptyFile: '空のファイル',
     sourceControlOperations: {
       title: "バージョン管理",

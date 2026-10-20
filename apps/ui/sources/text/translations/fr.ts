@@ -10207,6 +10207,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     },
     fileEmpty: "Fichier vide",
     noChanges: "Aucune modification à afficher",
+    noChangesPurpose: 'Les modifications faites dans ce dossier apparaissent ici, prêtes à être relues.',
     emptyFile: 'Fichier vide',
     sourceControlOperations: {
       title: "Gestion de version",

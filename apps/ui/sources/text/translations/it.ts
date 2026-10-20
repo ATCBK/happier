@@ -10592,6 +10592,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     },
     fileEmpty: "File vuoto",
     noChanges: "Nessuna modifica da mostrare",
+    noChangesPurpose: 'Le modifiche fatte in questa cartella compaiono qui, pronte da rivedere.',
     emptyFile: 'File vuoto',
     sourceControlOperations: {
       title: "Controllo di versione",

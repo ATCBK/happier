@@ -180,9 +180,13 @@ describe('Work › Memory', () => {
         await React.act(async () => { screen.findByTestId('session-work-memory.enabled.switch')?.props.onValueChange(true); });
         const pending = screen.findByTestId('session-work-memory.enabled.switch');
         expect(pending?.props.value).toBe(true);
-        expect(pending?.props.disabled).toBe(true);
+        // The row owns its switch, so a disabled switch would dim the title too: a save in flight is not
+        // "disabled", it just takes no second choice until it settles.
+        expect(pending?.props.disabled).toBeFalsy();
+        await React.act(async () => { pending?.props.onValueChange(false); });
+        expect(execute).toHaveBeenCalledTimes(1);
         await React.act(async () => { settle({ ok: true, result: { ok: true } }); });
-        expect(screen.findByTestId('session-work-memory.enabled.switch')?.props.disabled).toBe(false);
+        expect(screen.findByTestId('session-work-memory.enabled.switch')?.props.disabled).toBeFalsy();
     });
 
     it('says a refused switch in the section, beside the switch it did not move, and opens no dialog', async () => {

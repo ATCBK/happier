@@ -1112,7 +1112,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                 {reviewFiles.length === 0 && !(changedFilesViewMode === 'turn_checkpoint' && turnCheckpointMetadata?.contentConfidence === 'unavailable') && (
                     // Nothing to review is one calm state, like the pane's other empty states, not a caption under a header.
                     <SurfaceStateCard testID="changed-files-review-empty" kind="empty" iconName="git-diff"
-                        title={t(resolveChangedFilesEmptyStateTranslationKey(changedFilesViewMode))} />
+                        title={t(resolveChangedFilesEmptyStateTranslationKey(changedFilesViewMode))}
+                        reason={t('files.noChangesPurpose')} />
                 )}
 
                 {(changedFilesViewMode === 'turn' || changedFilesViewMode === 'turn_checkpoint') && turnCheckpointMetadata && (

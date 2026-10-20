@@ -10219,6 +10219,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
     },
     fileEmpty: "Файл пустой",
     noChanges: "Нет изменений для отображения",
+    noChangesPurpose: 'Правки, сделанные в этой папке, появляются здесь и готовы к проверке.',
     emptyFile: 'Пустой файл',
     sourceControlOperations: {
       title: "Контроль версий",
