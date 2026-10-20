@@ -2976,6 +2976,28 @@ const Domain_filesPaneTranslations = (() => {
 type FilesPaneTranslations = Shared_filesPaneTranslations.FilesPaneTranslations;
 
 const filesPaneTranslations = { ru: {
+        menu: {
+            openBeside: "Открыть рядом",
+            openWithBlame: "Открыть с авторами строк",
+            wrap: "Переносить строки",
+            background: "Фон",
+            raw: "Исходный код",
+            copyContents: "Копировать содержимое",
+            revealInFiles: "Показать в Файлах",
+            showBlame: "Показать авторов строк",
+            hideBlame: "Скрыть авторов строк",
+            copyPath: "Копировать путь",
+            copyHappierLink: "Копировать ссылку Happier",
+            attachToMessage: "Прикрепить к сообщению",
+            saveAsArtifact: "Сохранить как Artifact…",
+            openInDefaultApp: "Открыть в приложении по умолчанию",
+            restoreBeforeTurn: ({ turn }) => "Восстановить файл до хода" + " " + turn,
+            restoreBeforeTurnFallback: "Восстановить файл",
+            discardAllChanges: "Отменить все изменения в этом файле",
+            goToDefinition: "Перейти к определению у курсора",
+            showInfo: "Информация у курсора",
+            restartLanguageServices: "Перезапустить языковые службы",
+        },
         changedOnly: 'Только изменённые',
         showAllFiles: 'Показать все файлы',
         viewOptions: 'Параметры вида',

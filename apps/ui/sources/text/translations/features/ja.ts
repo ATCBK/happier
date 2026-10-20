@@ -2954,6 +2954,28 @@ const Domain_filesPaneTranslations = (() => {
 type FilesPaneTranslations = Shared_filesPaneTranslations.FilesPaneTranslations;
 
 const filesPaneTranslations = { ja: {
+        menu: {
+            openBeside: "横に開く",
+            openWithBlame: "行の作成者を表示して開く",
+            wrap: "行を折り返す",
+            background: "背景",
+            raw: "ソース",
+            copyContents: "内容をコピー",
+            revealInFiles: "ファイルで表示",
+            showBlame: "行の作成者を表示",
+            hideBlame: "行の作成者を非表示",
+            copyPath: "パスをコピー",
+            copyHappierLink: "Happierリンクをコピー",
+            attachToMessage: "メッセージに添付",
+            saveAsArtifact: "Artifactとして保存…",
+            openInDefaultApp: "既定のアプリで開く",
+            restoreBeforeTurn: ({ turn }) => "このターンの前にファイルを復元:" + " " + turn,
+            restoreBeforeTurnFallback: "ファイルを復元",
+            discardAllChanges: "このファイルの変更をすべて破棄",
+            goToDefinition: "カーソル位置の定義へ移動",
+            showInfo: "カーソル位置の情報",
+            restartLanguageServices: "言語サービスを再起動",
+        },
         changedOnly: '変更のみ',
         showAllFiles: 'すべてのファイルを表示',
         viewOptions: '表示オプション',

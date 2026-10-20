@@ -2956,6 +2956,28 @@ const Domain_filesPaneTranslations = (() => {
 type FilesPaneTranslations = Shared_filesPaneTranslations.FilesPaneTranslations;
 
 const filesPaneTranslations = { es: {
+        menu: {
+            openBeside: "Abrir al lado",
+            openWithBlame: "Abrir con autoría",
+            wrap: "Ajustar líneas",
+            background: "Fondo",
+            raw: "Fuente",
+            copyContents: "Copiar contenido",
+            revealInFiles: "Mostrar en Archivos",
+            showBlame: "Mostrar autoría",
+            hideBlame: "Ocultar autoría",
+            copyPath: "Copiar ruta",
+            copyHappierLink: "Copiar enlace de Happier",
+            attachToMessage: "Adjuntar al mensaje",
+            saveAsArtifact: "Guardar como Artifact…",
+            openInDefaultApp: "Abrir en la aplicación predeterminada",
+            restoreBeforeTurn: ({ turn }) => "Restaurar este archivo antes del turno" + " " + turn,
+            restoreBeforeTurnFallback: "Restaurar archivo",
+            discardAllChanges: "Descartar todos los cambios de este archivo",
+            goToDefinition: "Ir a la definición en el cursor",
+            showInfo: "Información en el cursor",
+            restartLanguageServices: "Reiniciar servicios de lenguaje",
+        },
         changedOnly: 'Solo con cambios',
         showAllFiles: 'Mostrar todos los archivos',
         viewOptions: 'Opciones de vista',

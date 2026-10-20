@@ -2956,6 +2956,28 @@ const Domain_filesPaneTranslations = (() => {
 type FilesPaneTranslations = Shared_filesPaneTranslations.FilesPaneTranslations;
 
 const filesPaneTranslations = { ca: {
+        menu: {
+            openBeside: "Obre al costat",
+            openWithBlame: "Obre amb autoria",
+            wrap: "Ajusta les línies",
+            background: "Fons",
+            raw: "Font",
+            copyContents: "Copia el contingut",
+            revealInFiles: "Mostra a Fitxers",
+            showBlame: "Mostra l’autoria",
+            hideBlame: "Amaga l’autoria",
+            copyPath: "Copia el camí",
+            copyHappierLink: "Copia l’enllaç de Happier",
+            attachToMessage: "Adjunta al missatge",
+            saveAsArtifact: "Desa com a Artifact…",
+            openInDefaultApp: "Obre amb l’aplicació predeterminada",
+            restoreBeforeTurn: ({ turn }) => "Restaura aquest fitxer abans del torn" + " " + turn,
+            restoreBeforeTurnFallback: "Restaura el fitxer",
+            discardAllChanges: "Descarta tots els canvis d’aquest fitxer",
+            goToDefinition: "Ves a la definició al cursor",
+            showInfo: "Informació al cursor",
+            restartLanguageServices: "Reinicia els serveis de llenguatge",
+        },
         changedOnly: 'Només canviats',
         showAllFiles: 'Mostra tots els fitxers',
         viewOptions: 'Opcions de visualització',

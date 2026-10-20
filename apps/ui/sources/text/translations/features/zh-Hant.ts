@@ -2949,6 +2949,28 @@ const Domain_filesPaneTranslations = (() => {
 type FilesPaneTranslations = Shared_filesPaneTranslations.FilesPaneTranslations;
 
 const filesPaneTranslations = { 'zh-Hant': {
+        menu: {
+            openBeside: "在旁邊開啟",
+            openWithBlame: "開啟並顯示行作者",
+            wrap: "自動換行",
+            background: "背景",
+            raw: "原始碼",
+            copyContents: "複製內容",
+            revealInFiles: "在檔案中顯示",
+            showBlame: "顯示行作者",
+            hideBlame: "隱藏行作者",
+            copyPath: "複製路徑",
+            copyHappierLink: "複製 Happier 連結",
+            attachToMessage: "附加至訊息",
+            saveAsArtifact: "另存為 Artifact…",
+            openInDefaultApp: "在預設應用程式中開啟",
+            restoreBeforeTurn: ({ turn }) => "將此檔案還原至此回合之前：" + " " + turn,
+            restoreBeforeTurnFallback: "還原檔案",
+            discardAllChanges: "捨棄此檔案中的所有變更",
+            goToDefinition: "前往游標處的定義",
+            showInfo: "游標處的資訊",
+            restartLanguageServices: "重新啟動語言服務",
+        },
         changedOnly: '僅顯示變更',
         showAllFiles: '顯示所有檔案',
         viewOptions: '檢視選項',

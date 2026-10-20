@@ -2948,6 +2948,28 @@ const Domain_filesPaneTranslations = (() => {
 type FilesPaneTranslations = Shared_filesPaneTranslations.FilesPaneTranslations;
 
 const filesPaneTranslations = { de: {
+        menu: {
+            openBeside: "Daneben öffnen",
+            openWithBlame: "Mit Zeilenautoren öffnen",
+            wrap: "Zeilen umbrechen",
+            background: "Hintergrund",
+            raw: "Quelltext",
+            copyContents: "Inhalt kopieren",
+            revealInFiles: "In Dateien anzeigen",
+            showBlame: "Zeilenautoren anzeigen",
+            hideBlame: "Zeilenautoren ausblenden",
+            copyPath: "Pfad kopieren",
+            copyHappierLink: "Happier-Link kopieren",
+            attachToMessage: "An Nachricht anhängen",
+            saveAsArtifact: "Als Artifact speichern…",
+            openInDefaultApp: "In Standard-App öffnen",
+            restoreBeforeTurn: ({ turn }) => "Datei vor diesem Zug wiederherstellen:" + " " + turn,
+            restoreBeforeTurnFallback: "Datei wiederherstellen",
+            discardAllChanges: "Alle Änderungen in dieser Datei verwerfen",
+            goToDefinition: "Zur Definition am Cursor",
+            showInfo: "Informationen am Cursor",
+            restartLanguageServices: "Sprachdienste neu starten",
+        },
         changedOnly: 'Nur geänderte',
         showAllFiles: 'Alle Dateien anzeigen',
         viewOptions: 'Ansichtsoptionen',
