@@ -439,7 +439,17 @@ export function createStopSession(params: Readonly<{
               break;
             }
           }
-          if (!retired) return incompleteStopSession('terminal_control_serviceability_retirement_failed');
+          if (!retired) {
+            // A native runner may publish hostPid before its webhook binds it
+            // to the tracked launcher. Reuse recovery's current-Machine and
+            // dead-host proof before retiring that different metadata owner.
+            const recovered = await params.recoverStrandedTerminalControlServiceability?.({
+              sessionId: normalizedSessionId,
+              stoppedAt: Date.now(),
+              ...(options?.metadataContext ? { metadataContext: options.metadataContext } : {}),
+            });
+            return recovered ?? incompleteStopSession('terminal_control_serviceability_retirement_failed');
+          }
         } catch (error) {
           logWarning('[DAEMON RUN] Failed to publish absent terminal control serviceability after runner Stop', error);
           return incompleteStopSession('terminal_control_serviceability_retirement_failed');
