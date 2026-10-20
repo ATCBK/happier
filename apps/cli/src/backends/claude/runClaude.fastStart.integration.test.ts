@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Credentials } from '@/persistence';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { HAPPIER_DAEMON_PENDING_FIRST_INPUT_ENV_KEY } from '@/daemon/spawn/pendingFirstInput';
 import { configuration } from '@/configuration';
 import type { registerRunnerTerminationHandlers as registerRunnerTerminationHandlersFn } from '@/agent/runtime/runnerTerminationHandlers';
 import type { RunnerTerminationEvent, RunnerTerminationOutcome } from '@/agent/runtime/runnerTerminationOutcome';
@@ -377,6 +379,7 @@ vi.mock('@/api/session/sessionWritesBestEffort', () => ({
 }));
 
 describe('runClaude fast-start', () => {
+  const launchEnvScope = createEnvKeyScope([HAPPIER_DAEMON_PENDING_FIRST_INPUT_ENV_KEY]);
   const loopStartWaitMs = 30_000;
   const prevTiming = process.env.HAPPIER_STARTUP_TIMING_ENABLED;
   const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
@@ -385,12 +388,14 @@ describe('runClaude fast-start', () => {
   }) as any);
 
   beforeAll(async () => {
+    launchEnvScope.patch({ [HAPPIER_DAEMON_PENDING_FIRST_INPUT_ENV_KEY]: undefined });
     process.env.HAPPIER_STARTUP_TIMING_ENABLED = '1';
     const { reloadConfiguration } = await import('@/configuration');
     reloadConfiguration();
   });
 
   afterAll(async () => {
+    launchEnvScope.restore();
     if (prevTiming === undefined) delete process.env.HAPPIER_STARTUP_TIMING_ENABLED;
     else process.env.HAPPIER_STARTUP_TIMING_ENABLED = prevTiming;
     const { reloadConfiguration } = await import('@/configuration');

@@ -715,6 +715,7 @@ export async function runStandardAcpProvider(
       messageBuffer,
       shouldExit: () => shouldExit,
       getAbortSignal: () => abortController.signal,
+      waitForPendingAbort: () => explicitAbortPromise,
       keepAlive: sendKeepAlive,
       setThinking: setThinkingState,
       sendReady,

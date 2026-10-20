@@ -199,14 +199,14 @@ const OauthCredentialPayloadSchema = z.object({
     tokenType: z.string().min(1).nullable(),
     providerAccountId: z.string().min(1).nullable(),
     providerEmail: z.string().min(1).nullable(),
-    raw: z.unknown().nullable(),
+    raw: z.unknown().nullable().optional(),
 });
 
 const TokenCredentialPayloadSchema = z.object({
     token: z.string().min(1),
     providerAccountId: z.string().min(1).nullable(),
     providerEmail: z.string().min(1).nullable(),
-    raw: z.unknown().nullable(),
+    raw: z.unknown().nullable().optional(),
 });
 
 const ConnectedServiceCredentialBaseSchema = z.object({
@@ -514,6 +514,7 @@ export const SealedConnectedServiceQuotaSnapshotV1Schema = z.object({
     format: ConnectedServiceCredentialFormatSchema,
     ciphertext: z.string().min(1),
     subscription: SealedProviderAccountSubscriptionV1Schema.optional(),
+    recoveryCreditDetails: z.object({ ciphertext: z.string().min(1) }).strict().optional(),
 });
 
 export type SealedConnectedServiceQuotaSnapshotV1 = z.infer<typeof SealedConnectedServiceQuotaSnapshotV1Schema>;

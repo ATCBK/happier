@@ -2,7 +2,7 @@ import { test, expect, type Page, type BrowserContext } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createRunDirs } from '../../src/testkit/runDir';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
@@ -168,7 +168,6 @@ test.describe('ui e2e: plaintext mode + public share', () => {
       HAPPIER_SERVER_URL: server.baseUrl,
       HAPPIER_WEBAPP_URL: uiBaseUrl,
       HAPPIER_CLAUDE_PATH: fakeClaudeFixturePath(),
-      HAPPIER_DISABLE_CAFFEINATE: '1',
       HAPPIER_VARIANT: 'dev',
       HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
     };
@@ -198,15 +197,8 @@ test.describe('ui e2e: plaintext mode + public share', () => {
       const migrateJson = (await migrateResp.json()) as { success?: unknown; mode?: unknown };
       expect(migrateJson?.success).toBe(true);
       expect(migrateJson?.mode).toBe('plain');
-
-      // Machine conversion retires the old key context; restart before creating another session.
-      await daemon.stop();
-      daemon = null;
-      daemon = await startTestDaemon({
-        testDir: resolve(join(testDir, 'daemon-after-plain')),
-        happyHomeDir: cliHomeDir,
-        env: daemonEnv,
-      });
+      // Converting Machine content retires its previous daemon encryption context.
+      daemon = await daemon.restart();
 
       const tag = `ui-e2e-plain-${run.runId}`;
       const message = `hello from plain ${run.runId}`;

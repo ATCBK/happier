@@ -36,6 +36,7 @@ import type { SessionListDragSnapshot } from '../drag/_types';
 import { applySessionListTreeDropOperation } from '../commit/applySessionListTreeDropOperation';
 import { buildSessionListDragSource } from '../drop-resolution/buildSessionListDragSource';
 import { buildSessionListTreeRows } from '../drop-resolution/buildSessionListTreeRows';
+import { resolveSessionListDragEligibilityBlock } from '../drop-resolution/resolveSessionListInstruction';
 import type {
     SessionListFolderSortMode,
     SessionListTreeDropResult,
@@ -571,10 +572,10 @@ export function useSessionListRowInteractions({
         sourceRowId: string,
         direction: SessionListKeyboardMoveDirection,
     ): SessionListTreeDropResult | null => {
-        if (!folderActionsEnabled) return null;
         try {
             const tree = buildLatestGeometryFreeTree();
             const source = buildSessionListDragSource({ tree, sourceRowId });
+            if (resolveSessionListDragEligibilityBlock({ source, foldersFeatureEnabled: folderActionsEnabled })) return null;
             const result = buildSessionListKeyboardMoveResult({ tree, source, direction, folderSortMode });
             pendingTreeDropRef.current = { tree, source, result };
             runPendingTreeDrop();

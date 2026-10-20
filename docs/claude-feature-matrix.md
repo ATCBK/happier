@@ -21,6 +21,20 @@ This document captures the current low-level Claude implementation across the CL
 | Linked direct transcript source (`.claude/projects/...jsonl`) | `supported` | `apps/cli/src/backends/claude/session.ts`, `apps/cli/src/backends/claude/directSessions/listClaudeSessionCandidates.ts`, `apps/cli/src/backends/claude/directSessions/pageClaudeTranscript.ts`, `apps/cli/src/backends/claude/directSessions/readAfterClaudeTranscript.ts`, `apps/cli/src/backends/claude/directSessions/resolveClaudeDirectSessionFile.ts` | When transcript storage is `direct`, `session.ts` writes `directSessionV1`; browse/tail reads provider-owned JSONL directly and supports backward paging plus forward tail-follow. | Replace `directSessionV1` and Claude-specific file cursors with a shared transcript-source contract used by browse, takeover, and handoff. |
 | Sidechains, subagents, and team inbox | `partial` | `apps/cli/src/backends/claude/remote/sidechains/claudeTaskOutputSidechainImporter.ts`, `apps/cli/src/backends/claude/remote/sidechains/claudeRemoteSubagentFileCollector.ts`, `apps/cli/src/backends/claude/remote/teamInbox/claudeRemoteTeamInboxBridge.ts`, `apps/cli/src/backends/claude/utils/teamInbox/claudeTeamInboxCollector.ts`, `apps/ui/sources/sync/domains/session/participants/providers/claude/deriveClaudeTeamParticipants.ts`, `apps/ui/sources/components/tools/renderers/workflow/SubAgentRunView.tsx` | Remote mode has dedicated collectors for `Task` / `Agent` JSONL sidechains and team-inbox messages; UI then reconstructs team state, shutdown pruning, and run previews from normalized tool calls plus imported sidechain messages. | Centralize Claude sidechain/team normalization so CLI collectors and UI participant derivation stop re-encoding the same lifecycle rules. |
 
+In development source, Direct takeover preserves the current native config
+environment when the linked transcript store is the configured store, including
+an unset `CLAUDE_CONFIG_DIR`. A resolved transcript path alone does not select
+native credentials. Explicit native overrides retain their value, and links to a
+different store retain their pinned root. Existing-state handoff and bundle import
+use the same native environment-overlay owner for their target environment.
+These rules do not recover the original authentication environment of older links.
+
+In development source, the remote launcher records unexpected launch failures
+in the normal session file log, including failures before the SDK subprocess or
+its debug log exists. The entry includes redacted error text and the existing
+error disposition; user cancellation and owned teardown remain debug-only.
+Resume validation and provider identity preservation are unchanged.
+
 Development-source transcript ingestion and UI normalization share
 `providers.claude.isClaudeInternalEventType` from `@happier-dev/agents` for
 non-conversation records, including Claude SDK `command_lifecycle` status events.

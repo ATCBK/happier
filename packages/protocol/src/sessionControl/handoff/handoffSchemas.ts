@@ -15,6 +15,7 @@ import {
   SessionHandoffProgressCheckpointSchema,
   SessionHandoffProgressWarningCodeSchema,
   SessionHandoffStatusSchema,
+  type SessionHandoffStatus,
   SessionHandoffWorkspacePreflightSummarySchema,
 } from './handoffStatus.js';
 import { TransferChunkEnvelopeSchema, TransferEndpointCandidateSchema } from '../../machineTransfer/transferStream.js';
@@ -35,10 +36,33 @@ export const SessionHandoffCapabilityV2Schema = z.object({
   protocolVersion: z.literal(2),
   atomicTargetResume: z.literal(true),
   targetCleanup: z.literal(true),
-  sameMachineHandoff: z.unknown().transform((value) => value === true),
-  existingState: z.unknown().transform((value) => value === true),
+  sameMachineHandoff: z.unknown().optional().transform((value) => value === true),
+  existingState: z.unknown().optional().transform((value) => value === true),
 });
 export type SessionHandoffCapabilityV2 = z.infer<typeof SessionHandoffCapabilityV2Schema>;
+
+/** Reads daemon handoff failures while retaining their recovery identity and progress. */
+export function readSessionHandoffError(raw: unknown): Readonly<{
+  errorCode: string;
+  errorMessage: string;
+  handoffId?: string;
+  status?: SessionHandoffStatus;
+}> | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const parsedStatus = SessionHandoffStatusSchema.safeParse(value.status);
+  const status = parsedStatus.success ? parsedStatus.data : undefined;
+  const handoffId = typeof value.handoffId === 'string' ? value.handoffId : status?.handoffId;
+  if ((value.ok === false && typeof value.errorCode === 'string') || typeof value.error === 'string') {
+    return {
+      errorCode: typeof value.errorCode === 'string' ? value.errorCode : 'UNEXPECTED',
+      errorMessage: typeof value.error === 'string' ? value.error : 'Session handoff failed',
+      ...(handoffId ? { handoffId } : {}),
+      ...(status ? { status } : {}),
+    };
+  }
+  return null;
+}
 
 export const SessionHandoffWorkspaceTransferSchema = z
   .object({

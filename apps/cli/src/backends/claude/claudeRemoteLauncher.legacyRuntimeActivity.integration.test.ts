@@ -15,6 +15,7 @@ import type { EnhancedMode } from './loop';
 import { claudeRemoteLauncher } from './claudeRemoteLauncher';
 import { hashClaudeEnhancedModeForQueue } from './remote/modeHash';
 import { Session } from './session';
+import { logger } from '@/ui/logger';
 import { completedNativeChildTranscript } from './workflows/claudeWorkflowActivitySource.testkit';
 import type { SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
@@ -118,7 +119,8 @@ function createHarness(providerTasks?: SessionRuntimeActivityContributionHandle,
       metadata = updater(metadata);
       hasMetadata = true;
     }),
-    updateAgentState: vi.fn((updater: (current: AgentState) => AgentState) => {
+    updateAgentStateRequestSettlement: vi.fn(async () => {}),
+      updateAgentState: vi.fn((updater: (current: AgentState) => AgentState) => {
       agentState = updater(agentState);
     }),
     getAgentStateSnapshot: vi.fn(() => agentState),
@@ -184,6 +186,37 @@ describe.sequential('claudeRemoteLauncher legacy Runtime Activity subscriber', (
     mockClaudeRemoteAgentSdk.mockReset();
     mockRunClaudeUnifiedTerminalSession.mockReset();
     process.env.HAPPIER_CLAUDE_REMOTE_INTERRUPT_THEN_TEARDOWN_GRACE_MS = '0';
+  });
+
+  it('records a pre-spawn resume failure in the normal file log while preserving the conversation', async () => {
+    const { session } = createHarness();
+    const transcriptDir = await mkdtemp(join(tmpdir(), 'claude-missing-resume-'));
+    session.transcriptPath = join(transcriptDir, 'claude-current.jsonl');
+    // Execute the real SDK runner and its filesystem resume check, stopping before
+    // any external provider launch because the requested transcript is absent.
+    mockClaudeRemoteAgentSdk.mockImplementation(actualClaudeRemoteAgentSdk.claudeRemoteAgentSdk);
+    const infoFile = vi.spyOn(logger, 'infoFile');
+    session.queue.push('continue the conversation', {
+      permissionMode: 'default',
+      claudeRemoteAgentSdkEnabled: true,
+      claudeUnifiedTerminalEnabled: false,
+    }, { userMessageLocalId: 'missing-resume-input' });
+
+    try {
+      await expect(claudeRemoteLauncher(session)).resolves.toBe('exit');
+      expect(session.sessionId).toBe('claude-current');
+      expect(session.client.sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'message',
+        message: expect.stringContaining('transcript is unavailable'),
+      }));
+      expect(infoFile).toHaveBeenCalledWith('[remote]: launch error', expect.objectContaining({
+        error: expect.stringContaining('ClaudeResumeSessionUnavailableError'),
+        disposition: 'preserve-resume-and-exit',
+      }));
+    } finally {
+      infoFile.mockRestore();
+      await rm(transcriptDir, { recursive: true, force: true });
+    }
   });
 
   it('applies SDK permission metadata during startup and while idle without another prompt', async () => {

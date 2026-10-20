@@ -81,6 +81,30 @@ off. An unknown setting leaves the item untouched; failures remain visible in
 the tray and retry on the next setting observation. This reuses the existing
 login-item migration rather than adding another startup preference or writer.
 
+## Linux desktop rendering runtime
+
+In development source, the desktop release pipeline prepares WebKitGTK 2.54.1
+for AppImage bundling. The trusted Linux finalizer opts into
+`.github/actions/install-tauri-linux-dependencies`; its checksum-pinned source
+recipe builds on Ubuntu 22.04 with Clang 18 and GCC 12's standard library.
+An exact Actions cache reuses the staged SDK. Missing helpers, unresolved native
+dependencies, the wrong engine version or a newer libc ABI fail validation rather
+than falling back to the distribution engine. The AppImage artifact audit repeats
+the runtime validation after bundling.
+
+Candidate compilation keeps Ubuntu's native WebKit headers. DEB and RPM packages
+continue to use the installed distribution runtime; the SDK and additional GPU
+helper are bundled only into AppImage. Direct Tauri development commands retain
+their system-runtime behavior; the pinned runtime contract belongs to the release
+pipeline. This source change does not establish availability in a published release.
+
+WebKit can migrate IndexedDB when opening an existing desktop profile. An older
+engine may then be unable to open that database; replacing the executable does
+not reverse the migration. Follow the downgrade warning on the
+[downloads page](../apps/docs/content/docs/getting-started/get-the-apps.mdx),
+preserve pending drafts and messages, and do not delete the profile to diagnose
+rendering performance. No second storage writer or profile migration is added.
+
 ## Desktop-initiated CLI acquisition
 
 The desktop app acquires the Happier CLI itself; the user never runs an installer to connect the
@@ -460,6 +484,28 @@ host dependency vendoring and explicit external-package bundles. Remove it when 
 Transformers distribution declares the dependency or stops importing it. Validate this closure
 outside the repository's hoisted `node_modules`, which otherwise masks the missing dependency.
 
+Current development source keeps each Sharp dependency tree together with Yarn's existing
+`nohoist` policy: the CLI, server and website use Sharp 0.35.5, while older transitive consumers
+retain their own native addon and matching libvips. `sharpRuntimeSidecars.ts` resolves the
+CLI/server closure from the importing workspace and stages the target packages together beside
+the executable. CLI packaging excludes Sharp from its generic dependency copier so this shared
+projection owns both binary layouts. Target validation resolves packages within the payload;
+dependencies in the source checkout cannot satisfy a missing packaged native dependency.
+
+Both binaries use `packages/cli-common/scripts/buildBunBinary.mjs`. It bundles Sharp's public
+CJS entry, preserving Sharp's platform selection, CPU checks and error reporting, and redirects
+only the resolved native addon import to its staged file. The filename comes from the actual
+native import, preserving libvips adjacency without embedding renamed Bun native assets.
+These redirects are virtual modules: compilation does not read optional foreign-platform
+addon files that Sharp never selects on the requested target. A selected missing addon still
+fails visibly through Sharp's runtime loading path. The platform shims' guarded
+`require.resolve('@img/sharp-libvips-*/binary')` hints stay external, so the executable does not
+embed every installed platform's libvips; the selected library ships only as its sidecar.
+This does not enable Bun's package-json autoloader; the CLI also keeps dotenv autoloading
+disabled. The canonical Bun compiler defaults disable bunfig autoloading for standalone CLI, server, hsetup, hstack and Prisma
+migration executables, so a working directory cannot inject a preload before startup.
+Both custom Bun build adapters consume the same defaults.
+
 Binary artifact finalization projects native dependencies from the requested artifact target,
 not the build host: ONNX Runtime Node retains its target OS/architecture directory with all
 support libraries, and PTY packages retain target prebuilds plus source-built Release/Debug
@@ -486,10 +532,15 @@ dependency copies is removed only when the surviving ancestor is reachable from 
 the two trees are recursively byte-identical without symbolic links, and direct peer resolution is
 unchanged; missing, shadowed, divergent, peer-dependent, or linked copies are retained.
 
-The PTY provider uses `node-pty` first. On POSIX Bun it skips the Homebridge native
-fallback because that package writes through a `tty.ReadStream` that is not writable
-in Bun, then uses the existing external relay when available. Node-hosted Homebridge
-and Windows backend selection are unchanged.
+In current development source, the PTY provider uses the existing Python relay on
+POSIX Bun. Both native packages use `tty.ReadStream` for a nonblocking PTY master;
+the bundled Bun 1.4.2 can return a successful spawn without working input/output
+([upstream issue](https://github.com/oven-sh/bun/issues/25822)). Module-load success
+therefore cannot establish backend usability. Re-enable native POSIX selection
+only after the bundled runtime passes interactive input/output and cleanup checks.
+The relay requires Python 3, applies the initial window size, and reports
+`terminal_resize_unavailable` for subsequent resizes. Node-hosted and Windows
+backend selection are unchanged.
 
 ## Internal dependency closure
 

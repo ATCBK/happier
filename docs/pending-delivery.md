@@ -85,6 +85,13 @@ materialization; row retirement still waits for that materialization. Existing
 acceptance and committed-sequence fences continue to protect in-flight sends and
 legitimate durable Pending/transcript coexistence.
 
+In development source, acceptance fences bind to the refresh outstanding when
+HTTP success arrives. Waiting for response-body identity validation cannot attach
+that earlier acceptance to a newer read that already proves row removal. The
+shared requested-action entry point reconciles the exact session on row
+`not-found` and `action-conflict`, then preserves the original action error. This
+covers Send now, steering, and resume actions without UI-owned row removal.
+
 To distinguish settlement from display failures, inspect the canonical Pending
 read for the exact session and `localId`. A retained server row points to
 acceptance or settlement; an absent server row with a stale mounted Pending row

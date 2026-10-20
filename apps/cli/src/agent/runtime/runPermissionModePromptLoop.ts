@@ -122,6 +122,7 @@ export async function runPermissionModePromptLoop(opts: {
   messageBuffer: MessageBuffer;
   shouldExit: () => boolean;
   getAbortSignal: () => AbortSignal;
+  waitForPendingAbort?: () => Promise<void> | null;
   keepAlive: () => void;
   setThinking: (value: boolean) => void;
   sendReady: (context?: ReadyNotificationTurnContext) => void;
@@ -349,6 +350,13 @@ export async function runPermissionModePromptLoop(opts: {
   }
 
   while (!opts.shouldExit()) {
+    // The runner owns replacement of the input signal after provider cancellation.
+    // Join that operation before another input wait instead of retrying an aborted signal.
+    const pendingAbort = opts.waitForPendingAbort?.();
+    if (pendingAbort) {
+      await pendingAbort;
+      if (opts.shouldExit()) break;
+    }
     let message: QueuedPermissionModeMessage | null = pending;
     pending = null;
 

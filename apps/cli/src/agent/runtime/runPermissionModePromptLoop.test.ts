@@ -2077,4 +2077,69 @@ describe('runPermissionModePromptLoop', () => {
     expect(runtime.reset).not.toHaveBeenCalled();
     expect(runtime.sendPrompt).toHaveBeenCalledTimes(1);
   });
+
+  it('does not wait before exiting when shutdown aborted the input wait', async () => {
+    // Only the timers are faked, so a retry delay that is started here can never finish on its own.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const session = createPromptLoopSession();
+      session.waitForPendingEligibilityUpdate = vi.fn(
+        (signal?: AbortSignal) =>
+          new Promise<boolean>((resolve) => {
+            signal?.addEventListener('abort', () => resolve(false), { once: true });
+          }),
+      );
+      const queue = createModeQueue();
+      const runtime = createRuntime();
+      const messageBuffer = new MessageBuffer();
+      const permissionHandler = {
+        setPermissionMode: vi.fn(),
+        reset: vi.fn(),
+      } as any;
+
+      const abortController = new AbortController();
+      let shouldExit = false;
+      let exited = false;
+      const loopPromise = (runPermissionModePromptLoop as unknown as (params: any) => Promise<void>)({
+        providerName: 'Test Provider',
+        agentMessageType: 'cursor',
+        explicitPermissionMode: undefined,
+        session,
+        messageQueue: queue,
+        permissionHandler,
+        runtime,
+        createOverrideSynchronizer: () => ({ syncFromMetadata: () => {}, flushPendingAfterStart: async () => {} }),
+        messageBuffer,
+        shouldExit: () => shouldExit,
+        getAbortSignal: () => abortController.signal,
+        keepAlive: () => {},
+        setThinking: () => {},
+        sendReady: () => {},
+        currentPermissionModeUpdatedAt: 0,
+        setCurrentPermissionMode: () => {},
+        setCurrentPermissionModeUpdatedAt: () => {},
+        formatPromptErrorMessage: (caught: unknown) => `Error: ${String(caught)}`,
+      }).then(() => {
+        exited = true;
+      });
+
+      // The loop parks in its input wait with nothing queued.
+      for (let index = 0; index < 10; index += 1) {
+        await waitForPromptLoopTick();
+      }
+      expect(exited).toBe(false);
+
+      // Shutdown: exit is requested first, then the wait is aborted, so the wait answers `null` while exiting.
+      shouldExit = true;
+      abortController.abort();
+      for (let index = 0; index < 10 && !exited; index += 1) {
+        await waitForPromptLoopTick();
+      }
+
+      expect(exited).toBe(true);
+      await loopPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

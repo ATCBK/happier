@@ -282,8 +282,9 @@ const SessionListRowModelBoundaryContent = React.memo(function SessionListRowMod
         ? props.getRowSetTagsHandler(sessionKey)
         : null;
     const isIos = Platform.OS === 'ios';
-    const nativeContextMenuOpen = isIos && sessionKey != null && props.nativeContextMenuSessionKey === sessionKey;
-    const handleNativeContextMenuOpenChange = isIos && sessionKey
+    const isNativeMobile = isIos || Platform.OS === 'android';
+    const nativeContextMenuOpen = isNativeMobile && sessionKey != null && props.nativeContextMenuSessionKey === sessionKey;
+    const handleNativeContextMenuOpenChange = isNativeMobile && sessionKey
         ? props.getRowNativeContextMenuOpenChangeHandler(sessionKey)
         : null;
     const moveActionHandlers = props.getRowMoveActionHandlers({
@@ -353,7 +354,7 @@ const SessionListRowModelBoundaryContent = React.memo(function SessionListRowMod
                     nativeInlineDragEnabled: true,
                 }
                 : null)}
-            {...(isIos && sessionKey != null
+            {...(isNativeMobile && sessionKey != null
                 ? {
                     nativeContextMenuOpen,
                     onNativeContextMenuOpenChange: handleNativeContextMenuOpenChange ?? undefined,

@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { deriveBoxPublicKeyFromSeed, encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { ApiClient } from './api';
 import { encodeBase64, encrypt } from './encryption';
 
@@ -12,7 +12,7 @@ vi.mock('@/ui/logger', () => ({ logger: { debug: vi.fn(), warn: vi.fn(), infoFil
 describe('plain machine registration', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-  it('registers and reads plain machine content with no encryption material', async () => {
+  it.each(['tokenOnly', 'dataKey'] as const)('registers and reads plain Machine content for %s account credentials', async (credentialMode) => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({
       features: { encryption: { plaintextMachine: { enabled: true } } },
       capabilities: { encryption: { storagePolicy: 'plaintext_only', allowAccountOptOut: false, defaultAccountMode: 'plain' } },
@@ -27,7 +27,10 @@ describe('plain machine registration', () => {
       return { data: { machine: { id: 'machine', metadata: body.metadata, dataEncryptionKey: body.dataEncryptionKey,
         metadataVersion: 1, daemonState: null, daemonStateVersion: 0 } } };
     });
-    const api = await ApiClient.create({ token: 'token', encryption: null });
+    const machineKey = new Uint8Array(32).fill(7);
+    const api = await ApiClient.create({ token: 'token', encryption: credentialMode === 'dataKey'
+      ? { type: 'dataKey', machineKey, publicKey: deriveBoxPublicKeyFromSeed(machineKey) }
+      : null });
     await expect(api.getOrCreateMachine({ machineId: 'machine', metadata }))
       .resolves.toMatchObject({ encryptionVariant: 'plain', encryptionKey: null, metadata });
     expect(post).toHaveBeenCalledOnce();

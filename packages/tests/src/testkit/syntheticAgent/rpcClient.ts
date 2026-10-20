@@ -4,11 +4,13 @@ import type { SocketCollector } from '../socketClient';
 import { decryptDataKeyBase64, encryptDataKeyBase64 } from '../rpcCrypto';
 import { unwrapSerializedJsonValue } from '../unwrapSerializedJsonValue';
 
-export type DataKeyRpcResult =
+export type RpcResult =
   | { ok: true; result: unknown | null }
   | { ok: false; error?: string; errorCode?: string };
 
-export function unwrapDataKeyRpcResult(result: DataKeyRpcResult, context = 'data key rpc'): unknown | null {
+export type DataKeyRpcResult = RpcResult;
+
+export function unwrapRpcResult(result: RpcResult, context = 'rpc'): unknown | null {
   if (result.ok !== true) {
     const reason = result.errorCode ?? result.error ?? 'unknown-error';
     throw new Error(`${context} failed: ${reason}`);
@@ -16,14 +18,13 @@ export function unwrapDataKeyRpcResult(result: DataKeyRpcResult, context = 'data
   return result.result;
 }
 
-type RpcSocket = {
-  rpcCall: <T = unknown>(
-    method: string,
-    params: unknown,
-    timeoutMs?: number,
-    authorization?: SocketRpcAuthorizationContext,
-  ) => Promise<T>;
-};
+export function unwrapDataKeyRpcResult(result: DataKeyRpcResult, context = 'data key rpc'): unknown | null {
+  return unwrapRpcResult(result, context);
+}
+
+type RpcSocket = Pick<SocketCollector, 'rpcCall'>;
+
+type RpcEncryption = Readonly<{ type: 'plain' }> | Readonly<{ type: 'dataKey'; dataKey: Uint8Array }>;
 
 type RpcResponseEnvelope = {
   ok?: unknown;
@@ -32,7 +33,7 @@ type RpcResponseEnvelope = {
   errorCode?: unknown;
 };
 
-function createRpcClient(socket: RpcSocket, dataKey: Uint8Array | null): {
+export function createRpcClient(socket: RpcSocket, encryption: RpcEncryption): {
   /**
    * `authorization` is required by the server for a session-write method
    * (`resolveSocketRpcSessionWriteAuthorizationMethod`); without it the call is
@@ -43,7 +44,7 @@ function createRpcClient(socket: RpcSocket, dataKey: Uint8Array | null): {
     payload: unknown,
     timeoutMs?: number,
     authorization?: SocketRpcAuthorizationContext,
-  ) => Promise<DataKeyRpcResult>;
+  ) => Promise<RpcResult>;
 } {
   return {
     call: async (
@@ -52,18 +53,18 @@ function createRpcClient(socket: RpcSocket, dataKey: Uint8Array | null): {
       timeoutMs?: number,
       authorization?: SocketRpcAuthorizationContext,
     ) => {
-      const params = dataKey === null ? payload : encryptDataKeyBase64(payload, dataKey);
+      const params = encryption.type === 'plain' ? payload : encryptDataKeyBase64(payload, encryption.dataKey);
       const res = await socket.rpcCall<RpcResponseEnvelope>(method, params, timeoutMs, authorization);
       if (!res || typeof res !== 'object') {
         return { ok: false, error: 'invalid-rpc-response' };
       }
       if (res.ok === true) {
-        if (dataKey === null) return { ok: true, result: res.result };
+        if (encryption.type === 'plain') return { ok: true, result: res.result };
         if (typeof res.result !== 'string') {
           return { ok: false, error: 'invalid-rpc-result', errorCode: undefined };
         }
         const encrypted = res.result;
-        const decrypted = decryptDataKeyBase64(encrypted, dataKey);
+        const decrypted = decryptDataKeyBase64(encrypted, encryption.dataKey);
         const result = unwrapSerializedJsonValue(decrypted);
         return { ok: true, result };
       }
@@ -76,10 +77,6 @@ function createRpcClient(socket: RpcSocket, dataKey: Uint8Array | null): {
   };
 }
 
-export function createDataKeyRpcClient(socket: RpcSocket, dataKey: Uint8Array) {
-  return createRpcClient(socket, dataKey);
-}
-
-export function createPlainRpcClient(socket: RpcSocket) {
-  return createRpcClient(socket, null);
+export function createDataKeyRpcClient(socket: RpcSocket, dataKey: Uint8Array): ReturnType<typeof createRpcClient> {
+  return createRpcClient(socket, { type: 'dataKey', dataKey });
 }

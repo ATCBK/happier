@@ -30,6 +30,7 @@ import {
     getQuotaSnapshotEntry,
     refreshQuotaSnapshot,
     retainQuotaSnapshotPolling,
+    subscribeQuotaSnapshotEntry,
 } from './connectedServiceQuotaSnapshotStore';
 
 const ctx = {
@@ -61,6 +62,21 @@ describe('connectedServiceQuotaSnapshotStore polling lifecycle', () => {
         globalWithDocument.document = originalDocument;
     });
 
+
+    it('preserves the public snapshot and suppresses notifications when polling release changes no visible state', async () => {
+        const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
+        const release = retainQuotaSnapshotPolling(key, ctx);
+        await vi.advanceTimersByTimeAsync(0);
+        const snapshot = getQuotaSnapshotEntry(key);
+        const onChange = vi.fn();
+        const unsubscribe = subscribeQuotaSnapshotEntry(key, onChange);
+
+        release();
+
+        expect(getQuotaSnapshotEntry(key)).toBe(snapshot);
+        expect(onChange).not.toHaveBeenCalled();
+        unsubscribe();
+    });
 
     it.each(['snapshot', 'error'] as const)('keeps accepted refresh pending beyond the old cutoff until a newer %s arrives', async (outcome) => {
         const snapshot = {

@@ -221,6 +221,13 @@ export function installSessionShellCommonModuleMocks(
         return createReactNativeWebMock();
     });
 
+    // The global FlashList stub is a host tag; shell tests need rendered rows and auxiliaries.
+    // Reuse each test's RN list boundary while retaining the real engine selector.
+    vi.mock('@shopify/flash-list', async () => {
+        const { FlatList } = await import('react-native');
+        return { FlashList: FlatList };
+    });
+
     vi.mock('react-native-unistyles', async () => {
         const activeOptions = sessionShellModuleState.options;
         if (activeOptions.unistyles) {

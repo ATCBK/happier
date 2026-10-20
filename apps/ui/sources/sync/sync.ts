@@ -1668,8 +1668,9 @@ class Sync {
                   ? createApiSessionDraftsTransport({ credentials })
                   : undefined,
               cipher: createSessionDraftCipher({
-                  accountMode,
-                  accountCryptoMaterial: resolveAccountScopedCryptoMaterialFromCredentials(credentials),
+                  ...(accountMode === 'plain'
+                      ? { accountMode, accountCryptoMaterial: null }
+                      : { accountMode, accountCryptoMaterial: resolveAccountScopedCryptoMaterialFromCredentials(credentials) }),
                   getSessionContext: (sessionId) => {
                       const session = storage.getState().sessions[sessionId] ?? null;
                       if (!session) return null;
@@ -2893,13 +2894,6 @@ class Sync {
                     );
             }
         } catch (e) {
-            if (
-                e
-                && typeof e === 'object'
-                && (e as { code?: unknown }).code === 'action-conflict'
-            ) {
-                await this.fetchPendingMessages(sessionId).catch(() => {});
-            }
             if (isTerminalAuthError(e)) {
                 recordTerminalAuthSyncError(e);
             }
@@ -3176,17 +3170,29 @@ class Sync {
         const wireMode = resolvePendingInputServerWireMode(await getServerFeaturesSnapshot({
             serverId: ownerContext.outboxScope.serverId,
         }));
-        await updatePendingRequestedActionV2({
-            sessionId,
-            localId,
-            requestedAction,
-            ...(options?.resumeWhenAvailable !== undefined
-                ? { resumeWhenAvailable: options.resumeWhenAvailable }
-                : {}),
-            request: ownerContext.request,
-            outboxScope: ownerContext.outboxScope,
-            wireMode,
-        });
+        try {
+            await updatePendingRequestedActionV2({
+                sessionId,
+                localId,
+                requestedAction,
+                ...(options?.resumeWhenAvailable !== undefined
+                    ? { resumeWhenAvailable: options.resumeWhenAvailable }
+                    : {}),
+                request: ownerContext.request,
+                outboxScope: ownerContext.outboxScope,
+                wireMode,
+            });
+        } catch (error) {
+            const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+            if (code === 'action-conflict' || code === 'not-found') {
+                try {
+                    await this.fetchPendingMessages(sessionId);
+                } catch (refreshError) {
+                    log.log('Failed to reconcile pending messages after a stale requested action: ' + String(refreshError));
+                }
+            }
+            throw error;
+        }
         if (options?.resumeWhenAvailable !== undefined) {
             await this.refreshSessionForSubmit(sessionId, {
                 serverId: ownerContext.outboxScope.serverId,

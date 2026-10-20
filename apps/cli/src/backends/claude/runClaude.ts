@@ -46,6 +46,7 @@ import { applyStartupMetadataUpdateToSession, buildModelOverride, buildPermissio
 import { initializeRuntimeOverridesSynchronizer } from '@/agent/runtime/runtimeOverridesSynchronizer';
 import { createBaseSessionForAttach } from '@/agent/runtime/createBaseSessionForAttach';
 import { createSessionMetadata } from '@/agent/runtime/createSessionMetadata';
+import { resolveClaudeConfigDirEnvOverlay } from './utils/resolveClaudeConfigDirEnvOverlay';
 import { readSessionAttachMetadataIdentityPolicyFromEnv } from '@/agent/runtime/readSessionAttachMetadataIdentityPolicyFromEnv';
 import { hashClaudeEnhancedModeForQueue } from '@/backends/claude/remote/modeHash';
 import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
@@ -380,6 +381,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     const { state, metadata } = createSessionMetadata({
         flavor: 'claude',
+        nativeAgentEnvironment: resolveClaudeConfigDirEnvOverlay(process.env),
         machineId,
         directory: workingDirectory,
         startedBy: options.startedBy,
@@ -1738,6 +1740,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
 
                 const { state, metadata } = createSessionMetadata({
                     flavor: 'claude',
+                    nativeAgentEnvironment: resolveClaudeConfigDirEnvOverlay(process.env),
                     machineId,
                     directory: workingDirectory,
                     startedBy: options.startedBy,

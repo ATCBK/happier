@@ -2647,6 +2647,7 @@ export {
 export {
   SessionHandoffAbortRequestSchema,
   SessionHandoffCapabilityV2Schema,
+  readSessionHandoffError,
   type SessionHandoffCapabilityV2,
   SessionHandoffAbortRequestV2Schema,
   SessionHandoffAbortResponseSchema,
@@ -3658,7 +3659,6 @@ export {
   supportsConnectedServiceOperation,
   withConnectedServiceReaderSupport,
 } from './connect/connectedServiceReaderSupport.js';
-
 export {
   MACHINE_PLAIN_DATA_KEY_MARKER,
   encodePlainMachineStoredContent,

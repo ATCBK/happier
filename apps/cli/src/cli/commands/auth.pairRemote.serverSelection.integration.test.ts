@@ -2,16 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fastify from 'fastify';
 import tweetnacl from 'tweetnacl';
 
-import { createAccountProfileFixture, createAccountTokenFixture } from '@/testkit/backends/accountFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
+import { registerTerminalApprovalAccountFixture } from '@/testkit/http/terminalApprovalAccountFixture';
 import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
 import { setStdioTtyForTest } from '@/testkit/process/stdio';
 
-const accountId = 'pair-remote-account';
-const localToken = createAccountTokenFixture(accountId);
-const signingSeed = new Uint8Array(32).fill(9);
 const spawnSyncMock = vi.fn();
 
 vi.mock('cross-spawn', () => {
@@ -56,10 +53,7 @@ describe('auth pair-remote server selection', () => {
   it('pairs in text mode with an explicit remote server URL while approving through the local API URL', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
-    app.get(`/v1/user/${accountId}`, async (request) => {
-      expect(request.headers.authorization).toBe(`Bearer ${localToken}`);
-      return { user: createAccountProfileFixture({ accountId, signingSeed }) };
-    });
+    const { token: localToken } = registerTerminalApprovalAccountFixture(app);
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
@@ -151,10 +145,7 @@ describe('auth pair-remote server selection', () => {
   it('prompts with current-machine reachable address choices when the selected relay is loopback-only', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
-    app.get(`/v1/user/${accountId}`, async (request) => {
-      expect(request.headers.authorization).toBe(`Bearer ${localToken}`);
-      return { user: createAccountProfileFixture({ accountId, signingSeed }) };
-    });
+    const { token: localToken } = registerTerminalApprovalAccountFixture(app);
 
     app.post('/v1/auth/response', async (req, reply) => {
       const authHeader = String((req.headers as any)?.authorization ?? '');
@@ -271,10 +262,7 @@ describe('auth pair-remote server selection', () => {
   it('stops before approval when the remote request reports a different relay', async () => {
     const requests = new Map<string, { response: string | null }>();
     const app = fastify({ logger: false });
-    app.get(`/v1/user/${accountId}`, async (request) => {
-      expect(request.headers.authorization).toBe(`Bearer ${localToken}`);
-      return { user: createAccountProfileFixture({ accountId, signingSeed }) };
-    });
+    const { token: localToken } = registerTerminalApprovalAccountFixture(app);
 
     app.post('/v1/auth/response', async (req, reply) => {
       const body = req.body as { publicKey?: unknown; response?: unknown } | undefined;

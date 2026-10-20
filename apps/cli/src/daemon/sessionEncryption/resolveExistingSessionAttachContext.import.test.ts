@@ -4,12 +4,14 @@ vi.mock('@/configuration', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configuration')>();
   return {
     ...actual,
-    configuration: {
-      ...actual.configuration,
-      get daemonReattachCatchUpConcurrency(): number {
-        throw new Error('Existing-session concurrency must not be read at module import time');
+    configuration: new Proxy(actual.configuration, {
+      get(target, property, receiver) {
+        if (property === 'daemonReattachCatchUpConcurrency') {
+          throw new Error('Existing-session lookup configuration was accessed during module import');
+        }
+        return Reflect.get(target, property, receiver);
       },
-    },
+    }),
   };
 });
 

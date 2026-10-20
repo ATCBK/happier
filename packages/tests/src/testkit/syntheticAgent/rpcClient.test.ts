@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createDataKeyRpcClient, createPlainRpcClient } from './rpcClient';
+import { createDataKeyRpcClient, createRpcClient } from './rpcClient';
 import { encryptDataKeyBase64 } from '../rpcCrypto';
 
 describe('createDataKeyRpcClient', () => {
@@ -26,16 +26,20 @@ describe('createDataKeyRpcClient', () => {
     expect(rpcCalls[0]?.timeoutMs).toBe(60_000);
     expect(rpcCalls[0]?.params).toEqual(expect.any(String));
   });
+});
 
-  it('exchanges raw request and response values with a plaintext machine', async () => {
-    const payload = { machineId: 'plain-machine', providerId: 'claude' };
-    const candidates = { ok: true, candidates: [{ remoteSessionId: 'direct-session' }] };
-    const rpcCall = async <T = unknown>(_method: string, params: unknown): Promise<T> => {
-      expect(params).toEqual(payload);
-      return { ok: true, result: candidates } as T;
+describe('createRpcClient', () => {
+  it('sends plain machine RPC values unchanged and accepts a plain response', async () => {
+    const payload = { machineId: 'plain-machine', limit: 20 };
+    const calls: Array<{ method: string; params: unknown; timeoutMs?: number }> = [];
+    const rpcCall = async <T = unknown>(method: string, params: unknown, timeoutMs?: number): Promise<T> => {
+      calls.push({ method, params, timeoutMs });
+      return { ok: true, result: { candidates: [] } } as T;
     };
+    const client = createRpcClient({ rpcCall }, { type: 'plain' });
 
-    await expect(createPlainRpcClient({ rpcCall }).call('daemon.directSessions.candidates.list', payload))
-      .resolves.toEqual({ ok: true, result: candidates });
+    await expect(client.call('plain-machine:daemon.directSessions.candidatesList', payload, 60_000))
+      .resolves.toEqual({ ok: true, result: { candidates: [] } });
+    expect(calls).toEqual([{ method: 'plain-machine:daemon.directSessions.candidatesList', params: payload, timeoutMs: 60_000 }]);
   });
 });

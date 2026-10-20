@@ -540,6 +540,8 @@ export type Metadata = {
    * Null indicates "no profile".
    */
   profileId?: string | null,
+  /** Non-secret native account directory overrides captured by the creating runner. */
+  nativeAgentEnvironmentV1?: import('@/agent/runtime/sessionNativeEnvironment').SessionNativeEnvironment,
   summary?: {
     text: string,
     updatedAt: number

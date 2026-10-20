@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import * as accountUsageModule from './accountUsage.js';
+import { SealedConnectedServiceQuotaSnapshotV1Schema } from './connectedServiceSchemas.js';
 import * as protocol from '../index.js';
 import { ReleasedProviderAccountUsageSnapshotV1Schema, ReleasedSealedProviderAccountUsageSnapshotV1Schema, ReleasedProviderAccountUsagePlainWriteSchema } from './fixtures/releasedV0216AccountUsage.js';
 
@@ -142,6 +143,8 @@ describe('provider account usage protocol', () => {
     const subscription = { status: 'subscribed', renewal: 'off', observedAtMs: 900, staleAfterMs: 60_000, currentPeriodEndAtMs: 1_800_000_000_000 };
     const recoveryCreditDetails = { grant: { remainingCount: 2, appliesToProviderLimitIds: ['five_hour', 'seven_day'], unavailableReason: 'cooldown' } };
     const sealed = seal({ material, snapshot: { ...base, subscription, recoveryCreditDetails }, randomBytes: (length: number) => new Uint8Array(length).fill(3) });
+    const quotaEnvelope = SealedConnectedServiceQuotaSnapshotV1Schema.parse(sealed);
+    expect(open({ material, sealed: quotaEnvelope })).toEqual({ ...base, subscription, recoveryCreditDetails });
     expect(accountUsageModule.openProviderAccountUsageSnapshotCiphertext({ material, ciphertext: sealed.ciphertext })?.value).toEqual(base);
     expect(open({ material, sealed })).toEqual({ ...base, subscription, recoveryCreditDetails });
     const other = createSnapshot({ recordKey: { ...base.recordKey, accountSubjectId: 'other' } });

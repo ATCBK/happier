@@ -15,6 +15,7 @@ import { waitFor } from '../../src/testkit/timing';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { startForwardedHeaderProxy } from '../../src/testkit/uiE2e/forwardedHeaderProxy';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -189,6 +190,10 @@ async function connectAuthenticatedMachinePublisher(params: Readonly<{
       sid: params.sessionId,
       time: Date.now(),
       thinking: params.thinking,
+    });
+    await waitFor(async () => (await fetchSessionV2(params.baseUrl, params.token, params.sessionId)).active === true, {
+      timeoutMs: 20_000,
+      context: `persist authenticated runtime presence for ${params.sessionId}`,
     });
     return socket;
   } catch (error) {
@@ -385,58 +390,88 @@ function workingSubtitleText(page: Page, sessionId: string) {
   return page.getByTestId(sessionListTestIds.statusSubtitleText(sessionId, 'working'));
 }
 
-async function expectRowInSection(params: Readonly<{
-  page: Page;
-  headerTestId: string;
-  sessionId: string;
-}>): Promise<void> {
-  const rowTestId = sessionListTestIds.row(params.sessionId);
-  await expect
-    .poll(
-      async () => params.page.evaluate(({ headerTestId, rowTestId }) => {
-        const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'));
-        const headerIndex = elements.findIndex((element) => element.dataset.testid === headerTestId);
-        const rowIndex = elements.findIndex((element) => element.dataset.testid === rowTestId);
-        if (headerIndex < 0 || rowIndex < 0 || rowIndex <= headerIndex) return false;
-        const nextHeaderIndex = elements.findIndex((element, index) => {
-          const testId = element.dataset.testid ?? '';
-          return index > headerIndex && testId.startsWith('session-list-header:');
-        });
-        return nextHeaderIndex < 0 || rowIndex < nextHeaderIndex;
-      }, {
-        headerTestId: params.headerTestId,
-        rowTestId,
-      }),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
+function collectPlacementSocketUpdates(page: Page, sessionIds: ReadonlySet<string>) {
+  const updates: Record<string, unknown>[] = [];
+  const recordPackets = (payload: string) => {
+    for (const packet of payload.split('\x1e')) {
+      if (!packet.startsWith('42')) continue;
+      let event: unknown;
+      try {
+        event = JSON.parse(packet.slice(2));
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(event)) continue;
+      const data: unknown = event[1];
+      if (!data || typeof data !== 'object') continue;
+      const body = event[0] === 'update' && 'body' in data ? data.body : data;
+      if (!body || typeof body !== 'object') continue;
+      const fields = body as Record<string, unknown>;
+      if (typeof fields.id !== 'string' || !sessionIds.has(fields.id)) continue;
+      if (fields.t !== 'update-session' && fields.type !== 'activity') continue;
+      updates.push({
+        receivedAt: Date.now(),
+        sessionId: fields.id,
+        event: event[0] === 'update' ? 'update-session' : 'activity',
+        active: typeof fields.active === 'boolean' ? fields.active : undefined,
+        activeAt: typeof fields.activeAt === 'number' ? fields.activeAt : undefined,
+        latestTurnStatus: ['in_progress', 'completed', 'cancelled', 'failed'].includes(String(fields.latestTurnStatus))
+          ? fields.latestTurnStatus : undefined,
+        latestTurnStatusObservedAt: typeof fields.latestTurnStatusObservedAt === 'number'
+          ? fields.latestTurnStatusObservedAt : undefined,
+      });
+    }
+  };
+  page.on('websocket', (socket) => {
+    socket.on('framereceived', ({ payload }) => recordPackets(typeof payload === 'string' ? payload : payload.toString('utf8')));
+  });
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname !== '/v1/updates/' || response.request().method() !== 'GET') return;
+    void response.text().then(recordPackets).catch(() => {
+      updates.push({ event: 'polling-response-unavailable' });
+    });
+  });
+  return () => updates;
 }
 
-async function expectRowNotInSection(params: Readonly<{
+async function readRowInSection(params: Readonly<{
   page: Page;
   headerTestId: string;
   sessionId: string;
-}>): Promise<void> {
+}>): Promise<boolean | null> {
   const rowTestId = sessionListTestIds.row(params.sessionId);
-  await expect
-    .poll(
-      async () => params.page.evaluate(({ headerTestId, rowTestId }) => {
-        const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'));
-        const headerIndex = elements.findIndex((element) => element.dataset.testid === headerTestId);
-        const rowIndex = elements.findIndex((element) => element.dataset.testid === rowTestId);
-        if (headerIndex < 0 || rowIndex < 0 || rowIndex <= headerIndex) return true;
-        const nextHeaderIndex = elements.findIndex((element, index) => {
-          const testId = element.dataset.testid ?? '';
-          return index > headerIndex && testId.startsWith('session-list-header:');
-        });
-        return nextHeaderIndex >= 0 && rowIndex > nextHeaderIndex;
-      }, {
-        headerTestId: params.headerTestId,
-        rowTestId,
-      }),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
+  return params.page.evaluate(({ headerTestId, rowTestId }) => {
+    const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'));
+    const row = elements.find((element) => element.dataset.testid === rowTestId);
+    if (!row) return null;
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.width <= 0 || rowRect.height <= 0) return null;
+
+    // Virtualized cells retain DOM order when recycled. Section membership follows
+    // their rendered positions, read together so a live move cannot split the sample.
+    let precedingHeader: { testId: string; top: number } | null = null;
+    for (const element of elements) {
+      const testId = element.dataset.testid ?? '';
+      if (!testId.startsWith('session-list-header:')) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || rect.top > rowRect.top) continue;
+      if (!precedingHeader || rect.top > precedingHeader.top) {
+        precedingHeader = { testId, top: rect.top };
+      }
+    }
+    return precedingHeader?.testId === headerTestId;
+  }, {
+    headerTestId: params.headerTestId,
+    rowTestId,
+  });
+}
+
+async function expectRowInSection(params: Parameters<typeof readRowInSection>[0]): Promise<void> {
+  await expect.poll(() => readRowInSection(params), { timeout: 60_000 }).toBe(true);
+}
+
+async function expectRowNotInSection(params: Parameters<typeof readRowInSection>[0]): Promise<void> {
+  await expect.poll(() => readRowInSection(params), { timeout: 60_000 }).toBe(false);
 }
 
 test.describe('ui e2e: session list attention', () => {
@@ -642,104 +677,144 @@ test.describe('ui e2e: session list attention', () => {
       title: 'Live placement cancelled e2e',
     });
 
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
-    await waitForInitialAppUi({ page, timeoutMs: 180_000 });
-
-    await chooseSessionListPlacementMode({
-      page,
-      baseUrl: uiBaseUrl,
-      triggerTestId: sessionListTestIds.attentionPromotionModeTrigger,
-      placement: 'global',
-    });
-    await chooseSessionListPlacementMode({
-      page,
-      baseUrl: uiBaseUrl,
-      triggerTestId: sessionListTestIds.workingPlacementModeTrigger,
-      placement: 'global',
-    });
-    await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'narrow' });
-    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
-    await waitForInitialAppUi({ page, timeoutMs: 180_000 });
-
-    await expect(row(page, background.id)).toHaveCount(1, { timeout: 120_000 });
-    await expect(row(page, live.id)).toHaveCount(1, { timeout: 120_000 });
-
-    await markWorkingSessionInProgress({ baseUrl: server.baseUrl, token, sessionId: live.id });
-    await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
-    await expectRowInSection({
-      page,
-      headerTestId: sessionListTestIds.workingHeader,
-      sessionId: live.id,
-    });
-
-    await page.evaluate(() => {
-      const globalTarget = globalThis as typeof globalThis & {
-        __HAPPIER_E2E_ORIGINAL_DATE_NOW__?: typeof Date.now;
-      };
-      globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__ = Date.now.bind(Date);
-      const staleNow = Date.now() + 180_000;
-      Date.now = () => staleNow;
-    });
+    const browserDiagnostics = collectBrowserDiagnostics({ page });
+    const socketUpdates = collectPlacementSocketUpdates(page, new Set([live.id, cancelled.id]));
+    const runtimePublishers: SocketCollector[] = [];
     try {
-      await row(page, background.id).click();
-      await expect(page).toHaveURL(new RegExp(`/session/${background.id}(?:\\?|$)`), { timeout: 90_000 });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
+      await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+
+      await chooseSessionListPlacementMode({
+        page,
+        baseUrl: uiBaseUrl,
+        triggerTestId: sessionListTestIds.attentionPromotionModeTrigger,
+        placement: 'global',
+      });
+      await chooseSessionListPlacementMode({
+        page,
+        baseUrl: uiBaseUrl,
+        triggerTestId: sessionListTestIds.workingPlacementModeTrigger,
+        placement: 'global',
+      });
+      await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'narrow' });
+      await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+      await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+
+      await expect(row(page, background.id)).toHaveCount(1, { timeout: 120_000 });
+      await expect(row(page, live.id)).toHaveCount(1, { timeout: 120_000 });
+
+      runtimePublishers.push(await connectAuthenticatedMachinePublisher({
+        baseUrl: server.baseUrl,
+        token,
+        sessionId: live.id,
+        thinking: false,
+      }));
+      await markWorkingSessionInProgress({ baseUrl: server.baseUrl, token, sessionId: live.id });
       await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
       await expectRowInSection({
         page,
         headerTestId: sessionListTestIds.workingHeader,
         sessionId: live.id,
       });
-    } finally {
+
       await page.evaluate(() => {
         const globalTarget = globalThis as typeof globalThis & {
           __HAPPIER_E2E_ORIGINAL_DATE_NOW__?: typeof Date.now;
         };
-        if (globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__) {
-          Date.now = globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__;
-          delete globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__;
-        }
+        globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__ = Date.now.bind(Date);
+        const staleNow = Date.now() + 180_000;
+        Date.now = () => staleNow;
       });
+      try {
+        await row(page, background.id).click();
+        await expect(page).toHaveURL(new RegExp(`/session/${background.id}(?:\\?|$)`), { timeout: 90_000 });
+        await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
+        await expectRowInSection({
+          page,
+          headerTestId: sessionListTestIds.workingHeader,
+          sessionId: live.id,
+        });
+      } finally {
+        await page.evaluate(() => {
+          const globalTarget = globalThis as typeof globalThis & {
+            __HAPPIER_E2E_ORIGINAL_DATE_NOW__?: typeof Date.now;
+          };
+          if (globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__) {
+            Date.now = globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__;
+            delete globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__;
+          }
+        });
+      }
+
+      await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: live.id });
+      await updateSessionRuntimeStatus({
+        baseUrl: server.baseUrl,
+        token,
+        sessionId: live.id,
+        latestTurnStatus: 'completed',
+      });
+      await expect(attentionHeader(page)).toHaveCount(1, { timeout: 60_000 });
+      await expectRowInSection({
+        page,
+        headerTestId: sessionListTestIds.attentionHeader,
+        sessionId: live.id,
+      });
+      await expectRowNotInSection({
+        page,
+        headerTestId: sessionListTestIds.workingHeader,
+        sessionId: live.id,
+      });
+
+      await expect(row(page, cancelled.id)).toHaveCount(1, { timeout: 120_000 });
+      runtimePublishers.push(await connectAuthenticatedMachinePublisher({
+        baseUrl: server.baseUrl,
+        token,
+        sessionId: cancelled.id,
+        thinking: false,
+      }));
+      await markWorkingSessionInProgress({ baseUrl: server.baseUrl, token, sessionId: cancelled.id });
+      await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
+      await expectRowInSection({
+        page,
+        headerTestId: sessionListTestIds.workingHeader,
+        sessionId: cancelled.id,
+      });
+
+      await updateSessionRuntimeStatus({
+        baseUrl: server.baseUrl,
+        token,
+        sessionId: cancelled.id,
+        latestTurnStatus: 'cancelled',
+      });
+      await expectRowNotInSection({
+        page,
+        headerTestId: sessionListTestIds.workingHeader,
+        sessionId: cancelled.id,
+      });
+    } catch (error) {
+      const serverProjections = await Promise.all([live, cancelled].map(async (session) => {
+        try {
+          const projection = await fetchSessionV2(server!.baseUrl, token!, session.id);
+          return {
+            sessionId: session.id,
+            active: projection.active,
+            activeAt: projection.activeAt,
+            latestTurnStatus: projection.latestTurnStatus,
+          };
+        } catch {
+          return { sessionId: session.id, unavailable: true };
+        }
+      }));
+      const visibleOrder = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'))
+        .map((element) => element.dataset.testid)
+        .filter((id) => id?.startsWith('session-list-header:') || id?.startsWith('session-list-item-')))
+        .catch(() => ['page-unavailable']);
+      const diagnostics = JSON.stringify({ serverProjections, socketUpdates: socketUpdates(), visibleOrder }, null, 2);
+      await test.info().attach('session-list-placement', { body: diagnostics, contentType: 'application/json' });
+      throw appendBrowserDiagnostics(error, `${browserDiagnostics().replaceAll(token, '[redacted]')}\n${diagnostics}`);
+    } finally {
+      for (const publisher of runtimePublishers) publisher.close();
     }
-
-    await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: live.id });
-    await updateSessionRuntimeStatus({
-      baseUrl: server.baseUrl,
-      token,
-      sessionId: live.id,
-      latestTurnStatus: 'completed',
-    });
-    await expect(attentionHeader(page)).toHaveCount(1, { timeout: 60_000 });
-    await expectRowInSection({
-      page,
-      headerTestId: sessionListTestIds.attentionHeader,
-      sessionId: live.id,
-    });
-    await expectRowNotInSection({
-      page,
-      headerTestId: sessionListTestIds.workingHeader,
-      sessionId: live.id,
-    });
-
-    await expect(row(page, cancelled.id)).toHaveCount(1, { timeout: 120_000 });
-    await markWorkingSessionInProgress({ baseUrl: server.baseUrl, token, sessionId: cancelled.id });
-    await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
-    await expectRowInSection({
-      page,
-      headerTestId: sessionListTestIds.workingHeader,
-      sessionId: cancelled.id,
-    });
-
-    await updateSessionRuntimeStatus({
-      baseUrl: server.baseUrl,
-      token,
-      sessionId: cancelled.id,
-      latestTurnStatus: 'cancelled',
-    });
-    await expectRowNotInSection({
-      page,
-      headerTestId: sessionListTestIds.workingHeader,
-      sessionId: cancelled.id,
-    });
   });
 });

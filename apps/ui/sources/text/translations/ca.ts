@@ -4272,6 +4272,13 @@ export const ca: TranslationStructure = {
         showLineNumbersInDiffsDescription: 'Mostra els números de línia a les diferències de codi',
         showLineNumbersInToolViews: 'Mostra els números de línia a les vistes d\'eines',
         showLineNumbersInToolViewsDescription: 'Mostra els números de línia a les diferències de vistes d\'eines',
+        chatCodeBlocks: {
+            title: 'Blocs de codi del xat',
+            showWrapControls: 'Mostra els controls de salt de línia',
+            showWrapControlsDescription: 'Mostra un botó de salt de línia a cada bloc de codi del xat',
+            wrapByDefault: 'Ajusta les línies per defecte',
+            wrapByDefaultDescription: 'Ajusta les línies llargues dels blocs de codi del xat, tret que triïs una altra opció per a un bloc',
+        },
         wrapLinesInDiffs: 'Ajusta les línies a les vistes de codi',
         wrapLinesInDiffsDescription: 'Ajusta les línies llargues a les previsualitzacions de codi i als editors en lloc de desplaçar-te horitzontalment',
         alwaysShowContextSize: 'Mostra sempre la mida del context',
@@ -8772,6 +8779,20 @@ settingsSession: {
                         subtitle: 'Gestiona els fitxers Kokoro descarregats en aquest dispositiu.',
                     },
                 },
+            },
+            modelPackDownload: {
+                progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} de ${total}`,
+                progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'fitxer' : 'fitxers'}`,
+                progressAccessibilityLabel: "Progrés de la descàrrega",
+                failedDetail: "Ha fallat",
+                failedSubtitle: "No s'ha pogut preparar el model. Toca per tornar-ho a provar.",
+                failedResumableSubtitle: ({ size }: { size: string }) => `La descàrrega no s'ha completat. Es conserven ${size}; toca per reprendre-la.`,
+                incompleteDetail: "Incompleta",
+                incompleteSubtitle: ({ size }: { size: string }) => `${size} descarregats fins ara. Toca per continuar.`,
+                discardSubtitle: "Elimina la descàrrega inacabada per alliberar espai.",
+                discardConfirmTitle: "Vols descartar la descàrrega inacabada?",
+                discardConfirmBody: ({ size }: { size: string }) => `S'eliminaran els ${size} descarregats fins ara. Podràs tornar a descarregar el model més endavant.`,
             },
             localNeuralStt: {
                 modelPack: {

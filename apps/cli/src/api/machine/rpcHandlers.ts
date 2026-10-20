@@ -14,6 +14,7 @@ import {
 } from '@/rpc/handlers/registerSessionHandlers';
 import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/codexBackendMode';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import {
   AcpConfigOptionOverridesV1Schema,
   AgentRuntimeDescriptorV1Schema,
@@ -1219,8 +1220,8 @@ export function registerMachineRpcHandlers(params: Readonly<{
       if (scope?.machineId === machineId) {
         return await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, {});
       }
-      const credentials = await readCredentials().catch(() => null);
-      if (!credentials) return null;
+      const credentials = await readCredentials();
+      if (!credentials) throw new RpcError('Authentication is required', 'not_authenticated');
       return await callMachineRpc(buildTrackedSessionHandoffMachineCall({
         credentials, machineId, method: RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, request: {},
       }));

@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { createRunDirs } from '../../src/testkit/runDir';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
@@ -181,8 +181,8 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
   });
 
   test('switches modes and keeps old sessions readable (e2ee → plain → e2ee)', { tag: "@smoke" }, async ({ page }, testInfo) => {
-    // This scenario performs two real account migrations and three daemon-backed session create/send flows.
-    test.setTimeout(180_000);
+    // Auth, daemon, CLI, and browser phases enforce their own deadlines throughout this composed scenario.
+    test.setTimeout(0);
     if (!server || !ui) throw new Error('missing server/ui fixtures');
     if (!uiBaseUrl) throw new Error('missing ui base url');
 
@@ -195,7 +195,6 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
       HAPPIER_SERVER_URL: server.baseUrl,
       HAPPIER_WEBAPP_URL: uiBaseUrl,
       HAPPIER_CLAUDE_PATH: fakeClaudeFixturePath(),
-      HAPPIER_DISABLE_CAFFEINATE: '1',
       HAPPIER_VARIANT: 'dev',
       HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
     };
@@ -265,6 +264,8 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
       expect(sessionADraft.envelope).toBe('encrypted');
 
       const migrateDraftsToPlain = await toggleAccountEncryptionMode({ page, uiBaseUrl, expectedMode: 'plain' });
+      // Converting Machine content retires its previous daemon encryption context.
+      daemon = await daemon.restart();
       expectCompleteDraftMigration({
         request: migrateDraftsToPlain,
         draftIds: [draftAId, draftBId],
@@ -274,15 +275,6 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
       await expectNewSessionDraftReadable({ page, uiBaseUrl, draftId: draftBId, text: draftBText });
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/session/${sessionAId}`, 120_000);
       await expect(page.getByTestId('session-composer-input')).toHaveValue(sessionADraftText, { timeout: 60_000 });
-
-      // Machine conversion retires the old key context; restart before creating another session.
-      await daemon.stop();
-      daemon = null;
-      daemon = await startTestDaemon({
-        testDir: resolve(join(testDir, 'daemon-after-plain')),
-        happyHomeDir: cliHomeDir,
-        env: daemonEnv,
-      });
 
       const tagB = `ui-e2e-plain-b-${run.runId}`;
       const msgB = `hello plain B ${run.runId}`;
@@ -326,6 +318,7 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
       await expect(page.getByText(msgB, { exact: true }).first()).toBeVisible({ timeout: 120_000 });
 
       const migrateDraftsToE2ee = await toggleAccountEncryptionMode({ page, uiBaseUrl, expectedMode: 'e2ee' });
+      daemon = await daemon.restart();
       expectCompleteDraftMigration({
         request: migrateDraftsToE2ee,
         draftIds: [draftAId, draftBId],
@@ -335,15 +328,6 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
       await expectNewSessionDraftReadable({ page, uiBaseUrl, draftId: draftBId, text: draftBText });
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/session/${sessionAId}`, 120_000);
       await expect(page.getByTestId('session-composer-input')).toHaveValue(sessionADraftText, { timeout: 60_000 });
-
-      // Machine conversion retires the old key context; restart before creating another session.
-      await daemon.stop();
-      daemon = null;
-      daemon = await startTestDaemon({
-        testDir: resolve(join(testDir, 'daemon-after-e2ee')),
-        happyHomeDir: cliHomeDir,
-        env: daemonEnv,
-      });
 
       const tagC = `ui-e2e-e2ee-c-${run.runId}`;
       const msgC = `hello e2ee C ${run.runId}`;

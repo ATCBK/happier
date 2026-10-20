@@ -13,7 +13,7 @@ import {
 import { ApiClient, isMachineContentPublicKeyMismatchError } from '@/api/api';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
-import { ensureSessionMachineAccessKeyBinding } from '@/api/session/ensureSessionMachineAccessKeyBinding';
+import { reconcileRecoveredSessionMachineControl } from './sessions/reconcileRecoveredSessionMachineControl';
 import { isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
@@ -110,6 +110,7 @@ import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
 import { forceStopKnownDaemonPid, isDaemonRunningCurrentlyInstalledHappyVersion, resolveDaemonSpawnSessionByNonce, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
 import { resolveTrackedSessionCatalogAgentId } from './sessions/resolveTrackedSessionCatalogAgentId';
+import { extractResumeIdFromCommand } from './sessions/extractResumeIdFromCommand';
 import { activatePendingSessionRuntime } from './sessions/activatePendingInactiveSession';
 import {
   recoverPendingSessionActivations,
@@ -2669,22 +2670,23 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           }
 
           sessionMachineAccessBindingReconcileInFlight = (async () => {
-            const liveSessionIds = new Set(
-              getCurrentChildren()
-                .map((tracked) => tracked.happySessionId?.trim())
-                .filter((sessionId): sessionId is string => Boolean(sessionId)),
-            );
+            const liveSessionsById = new Map<string, TrackedSession>();
+            for (const tracked of getCurrentChildren()) {
+              const sessionId = tracked.happySessionId?.trim();
+              if (sessionId) liveSessionsById.set(sessionId, tracked);
+            }
             for (const sessionId of pendingSessionMachineAccessBindingIds) {
-              if (!liveSessionIds.has(sessionId)) {
+              const tracked = liveSessionsById.get(sessionId);
+              if (!tracked) {
                 pendingSessionMachineAccessBindingIds.delete(sessionId);
                 continue;
               }
               try {
-                await ensureSessionMachineAccessKeyBinding({
-                  serverUrl: configuration.apiServerUrl,
-                  token: credentials.token,
+                await reconcileRecoveredSessionMachineControl({
+                  credentials,
                   sessionId,
                   machineId,
+                  runnerPid: tracked.sessionRunnerPid ?? tracked.pid,
                 });
                 pendingSessionMachineAccessBindingIds.delete(sessionId);
               } catch (error) {
@@ -3378,6 +3380,34 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 modelId = normalizedOptions.modelId;
                 modelUpdatedAt = normalizedOptions.modelUpdatedAt;
                 effectiveResume = typeof resume === 'string' ? resume.trim() : '';
+              }
+
+              // A terminal restart can give one vendor conversation a new Happier
+              // identity. Per-Happier-id admission above cannot see that sibling.
+              if (effectiveResume) {
+                for (const tracked of pidToTrackedSession.values()) {
+                  if (tracked.happySessionId === normalizedExistingSessionId) continue;
+                  const trackedResume = tracked.vendorResumeId ?? tracked.spawnOptions?.resume
+                    // Terminal registration can precede its provider-id report.
+                    ?? extractResumeIdFromCommand(tracked.processCommand ?? '');
+                  if (trackedResume !== effectiveResume) continue;
+                  const trackedTarget = tracked.spawnOptions?.backendTarget;
+                  const sameTarget = backendTarget?.kind === 'configuredAcpBackend'
+                    ? trackedTarget?.kind === 'configuredAcpBackend' && trackedTarget.backendId === backendTarget.backendId
+                    : trackedTarget?.kind !== 'configuredAcpBackend' && resolveTrackedSessionCatalogAgentId(tracked) === catalogAgentId;
+                  if (!sameTarget) continue;
+                  const presence = await classifyTrackedSessionRunnerPresence({ tracked });
+                  if (presence === 'absent') continue;
+                  logger.warn('[DAEMON RUN] Refusing a second entry for an existing provider conversation', {
+                    sessionId: normalizedExistingSessionId || null,
+                    existingSessionId: tracked.happySessionId,
+                    presence,
+                  });
+                  return {
+                    type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+                    errorMessage: 'This conversation already has another session runner. Open its existing session, or stop that runner before resuming.',
+                  };
+                }
               }
 
               const nativeSpawnSelection = resolveAgentNativeSpawnDefinitiveRejection({

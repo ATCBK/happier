@@ -27,6 +27,44 @@ function createDeferred<T>() {
 }
 
 describe('rpcHandlers (session handoff async prepare)', () => {
+  it('reports missing local authentication before an existing-state handoff instead of an unsupported peer', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-handoff-auth-admission-'));
+    let registration: Awaited<ReturnType<typeof import('./rpcHandlers')['registerMachineRpcHandlers']>> | undefined;
+    try {
+      vi.resetModules();
+      vi.doMock('@/configuration', async () => {
+        const actual = await vi.importActual<typeof import('@/configuration')>('@/configuration');
+        return { ...actual, configuration: { ...actual.configuration, activeServerId: 'cloud', activeServerDir,
+          privateKeyFile: join(activeServerDir, 'missing-access.key'), legacyPrivateKeyFile: join(activeServerDir, 'missing-legacy.key') } };
+      });
+      const { RpcHandlerManager } = await import('../rpc/RpcHandlerManager');
+      const { registerMachineRpcHandlers } = await import('./rpcHandlers');
+      const { readRpcErrorCode } = await import('@happier-dev/protocol/rpcErrors');
+      const manager = new RpcHandlerManager({ scopePrefix: 'local', encryptionKey: new Uint8Array(32), encryptionVariant: 'dataKey' });
+      let processMutationCount = 0;
+      registration = registerMachineRpcHandlers({ rpcHandlerManager: manager, handlers: {
+        // Only runner process adapters are replaced; credential reads and admission stay real.
+        spawnSession: async () => { processMutationCount += 1; return { type: 'success', sessionId: 'session-1' }; },
+        spawnSessionForHandoff: async () => { processMutationCount += 1; return { type: 'success', sessionId: 'session-1', runnerAcceptance: 'newly_accepted' }; },
+        stopSession: async () => { processMutationCount += 1; return true; },
+        requestShutdown: () => { processMutationCount += 1; },
+      } });
+      const error = await manager.invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_START, {
+        sessionId: 'session-1', sourceMachineId: 'source', targetMachineId: 'target',
+        sessionStorageMode: 'persisted', stateTransfer: 'existing',
+        preferredTransportStrategies: ['direct_peer'], negotiatedTransportStrategy: 'direct_peer',
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      expect(readRpcErrorCode(error)).toBe('not_authenticated');
+      expect(processMutationCount).toBe(0);
+    } finally {
+      await registration?.dispose();
+      vi.doUnmock('@/configuration');
+      vi.resetModules();
+      await removeTestDirectory(activeServerDir);
+    }
+  });
+
   it('prepares existing-state through the native store without transfer and retains the mode across restart', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-handoff-existing-prepare-'));
     const claudeHome = join(activeServerDir, 'claude-home');

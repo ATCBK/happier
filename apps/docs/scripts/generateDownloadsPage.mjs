@@ -123,6 +123,15 @@ comparison to try, not a guaranteed performance improvement. On other
 distributions, the [browser client](/getting-started/get-the-apps#in-a-browser)
 provides another way to use Happier.
 
+<Callout type="warn">
+Before switching package formats, send any pending messages and close Happier.
+[WebKitGTK 2.52 and newer change the local IndexedDB format](https://github.com/WebKit/WebKit/commit/4905ec5f9240c6826dca52cfea2ae496fbb7b8b3).
+After a newer runtime opens the desktop profile, WebKitGTK 2.50 may fail to open
+its databases. Keep the newer-runtime installation available, and do not delete
+app data to troubleshoot this error. Comparing with the browser client avoids
+changing the desktop profile.
+</Callout>
+
 On NVIDIA with Wayland, a native package can instead exit before opening a
 window with \`Error 71 (Protocol error) dispatching to Wayland display\`.
 For this specific startup failure, try launching the installed app from a

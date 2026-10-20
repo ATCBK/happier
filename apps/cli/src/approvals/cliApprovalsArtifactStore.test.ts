@@ -20,17 +20,6 @@ vi.mock('axios', () => ({
   },
 }));
 
-vi.mock('@/configuration', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/configuration')>();
-  return {
-    ...actual,
-    configuration: {
-      ...actual.configuration,
-      apiServerUrl: 'http://127.0.0.1:24599',
-    },
-  };
-});
-
 describe('createCliApprovalsArtifactStore', () => {
   beforeEach(() => {
     mockGet.mockReset();

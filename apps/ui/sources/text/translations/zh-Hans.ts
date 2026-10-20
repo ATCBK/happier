@@ -4362,6 +4362,13 @@ export const zhHans: TranslationStructure = {
     showLineNumbersInDiffsDescription: "在代码差异中显示行号",
     showLineNumbersInToolViews: "在工具视图中显示行号",
     showLineNumbersInToolViewsDescription: "在工具视图差异中显示行号",
+    chatCodeBlocks: {
+        title: '聊天代码块',
+        showWrapControls: '显示换行开关',
+        showWrapControlsDescription: '在每个聊天代码块上显示自动换行开关',
+        wrapByDefault: '默认自动换行',
+        wrapByDefaultDescription: '自动换行聊天代码块中的长行，除非单独更改该代码块的设置',
+    },
     wrapLinesInDiffs: "在代码视图中自动换行",
     wrapLinesInDiffsDescription: "在代码预览和编辑器中自动换行显示长行，而不是水平滚动",
     alwaysShowContextSize: "始终显示上下文大小",
@@ -9018,6 +9025,20 @@ settingsSession: {
             subtitle: "管理本设备上已下载的 Kokoro 文件。",
           },
         },
+      },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} / ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} / ${total} · ${filesDone} / ${filesTotal} 个文件`,
+        progressAccessibilityLabel: "下载进度",
+        failedDetail: "失败",
+        failedSubtitle: "无法准备模型。轻点以重试。",
+        failedResumableSubtitle: ({ size }: { size: string }) => `下载未完成。已保留 ${size}，轻点即可继续。`,
+        incompleteDetail: "未完成",
+        incompleteSubtitle: ({ size }: { size: string }) => `目前已下载 ${size}。轻点以继续。`,
+        discardSubtitle: "删除未完成的下载以释放空间。",
+        discardConfirmTitle: "放弃未完成的下载？",
+        discardConfirmBody: ({ size }: { size: string }) => `这将删除目前已下载的 ${size}。之后可以重新下载模型。`,
       },
       localNeuralStt: {
         modelPack: {
