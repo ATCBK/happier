@@ -284,6 +284,51 @@ describe('the mounted PRs & Issues source settings page', () => {
       localInstanceKey: 'Other workspace', binding: binding('account-1'),
     } }]);
   });
+  it('says why a selection cannot be saved, and keeps listed units in place while the next page loads', async () => {
+    let releaseNextPage!: (value: JsonValue) => void;
+    const nextPage = new Promise<JsonValue>((resolve) => { releaseNextPage = resolve; });
+    const surface = createTriageSourceSettingsSurface({
+      pluginId: PLUGIN_ID, listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
+      connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID,
+      connectedAccountPurpose: PURPOSE, sourceDisplayName: SOURCE_DISPLAY_NAME,
+      scopeSelection: {
+        unitLabel: 'teams', listScopeUnitsLocalActionId: 'author/list-units',
+        readSelection: () => ({ kind: 'all' }),
+        // The source's token holds at most two units: a third cannot be encoded.
+        writeSelection: (draft, selection) => selection.kind === 'selected' && selection.unitIds.length > 2
+          ? null
+          : { ...draft, configuration: { v: 1, token: JSON.stringify({ v: 1, selection }) } },
+      },
+    });
+    const harness = createHarness({ discovery: { kind: 'complete', candidates: [candidate('Workspace')], failures: [] },
+      scopeUnits: (input) => TriageListScopeUnitsInputV1Schema.parse(input).cursor === undefined
+        ? { kind: 'page', status: 'partial', selection: { kind: 'all' }, nextCursor: { v: 1, token: 'page-2' },
+          units: [{ id: 'unit-1', label: 'First team' }, { id: 'unit-2', label: 'Second team' }, { id: 'unit-3', label: 'Third team' }] }
+        : nextPage,
+    });
+    const page = await mountSettings(harness, {}, surface);
+    await pressControl(page, 'Add Workspace to PRs & Issues');
+    await act(async () => { await page.press(await page.getByRole('radio', { name: 'Selected…' })); });
+
+    // A disabled Save says what it needs; a page with more to load offers that once.
+    await expect(page.getByText('Choose at least one to save.')).resolves.toBeDefined();
+    await expect(page.queryByText('More teams may be available')).resolves.toBeUndefined();
+    await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'First team' })); });
+    await expect(page.getByText('1 selected')).resolves.toBeDefined();
+    await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Second team' })); });
+    await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Third team' })); });
+    await expect(page.getByText('This selection can’t be saved. Choose fewer.')).resolves.toBeDefined();
+    await expect(page.getByRole('button', { name: 'Save selection', state: { disabled: true } })).resolves.toBeDefined();
+
+    // Loading the next page never replaces or pushes down the units already listed.
+    await pressControl(page, 'Load more');
+    await expect(page.getByRole('checkbox', { name: 'First team' })).resolves.toBeDefined();
+    await expect(page.queryByRole('progressbar', { name: 'Reading teams' })).resolves.toBeUndefined();
+    await act(async () => { releaseNextPage({ kind: 'page', status: 'complete', selection: { kind: 'all' },
+      units: [{ id: 'unit-4', label: 'Fourth team' }] }); });
+    await expect(page.getByRole('checkbox', { name: 'Fourth team' })).resolves.toBeDefined();
+    await expect(page.queryByRole('button', { name: 'Load more' })).resolves.toBeUndefined();
+  });
   it('configures the native login with source-owned translated copy and no connected-account editor', async () => {
     const nativeBinding = { purpose: PURPOSE, source: 'native', service: { pluginId: PLUGIN_ID, localId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID } };
     const nativeDraft = { v: 1, binding: nativeBinding, localInstanceKey: 'native-scope', keyStability: 'stable', configuration: { v: 1, token: 'scope:native' }, locator: { v: 1, displayLabel: 'local-user' } };

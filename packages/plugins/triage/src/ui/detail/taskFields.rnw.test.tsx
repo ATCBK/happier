@@ -14,7 +14,8 @@ import { testkitEntryRef, testkitObservation } from '../../corpus/testkit/observ
 import { foldTriageListWindow, TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
 import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema } from '../../actions/tasksProtocol.js';
 import type { TriageMountedConfiguredSourceV1 } from '../configuration/useTriageConfiguredSources.js';
-import { TriageCreateTaskFields, TriageEditTaskScope, useTriageTaskCommit } from './taskFields.js';
+import { readTriageSelectedObservationV1 } from '../window/selectedObservation.js';
+import { TriageCreateTaskFields, TriageEditTaskScope, TriageTaskRowStatusControl, useTriageTaskCommit } from './taskFields.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mounted: PluginUiTestkit[] = [];
@@ -41,10 +42,12 @@ function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, 
   };
 }
 
-it('keeps task creation unavailable until sources are read and distinguishes settled emptiness from failure', async () => {
+it.each([false, true])('keeps task creation behind source readiness and its declared execution placement (Account data: %s)', async (accountData) => {
   let setReadiness!: React.Dispatch<React.SetStateAction<{ loaded: boolean; unavailableReason: string | null }>>;
   let setSources!: React.Dispatch<React.SetStateAction<readonly TriageMountedConfiguredSourceV1[]>>;
-  const source = createTriageSourceV1Fixture();
+  const sourceFixture = createTriageSourceV1Fixture();
+  const source = { ...sourceFixture, configuredInstance: { ...sourceFixture.configuredInstance,
+    binding: accountData ? { purpose: sourceFixture.descriptor.purpose, source: 'accountData' as const } : sourceFixture.configuredInstance.binding } };
   const saved: ReturnType<typeof TriageCreateTaskActionInputV1Schema.parse>[] = [];
   await act(async () => {
     mounted.push(await createPluginUiTestkit({ identity: { instanceId: 'task-create', mountNonce: 'readiness' },
@@ -59,7 +62,8 @@ it('keeps task creation unavailable until sources are read and distinguishes set
           draft={{ title: 'Fix reconnect handling' }}
           onApplied={async () => undefined} onClose={() => undefined} />;
       }),
-      surfaceContext: createSurfaceContextFixture({ targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create') }),
+      surfaceContext: createSurfaceContextFixture({ targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create'),
+        ...(accountData ? { machineConnectionPending: true, machineExecutionReady: false } : {}) }),
       adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
       handlers: { executeAction: ({ action, input }) => {
         expect(action).toBe('tasks/create-v1');
@@ -68,29 +72,47 @@ it('keeps task creation unavailable until sources are read and distinguishes set
       } },
     }));
   });
-  const picker = () => document.querySelector<HTMLElement>('[aria-label="Where?"]');
-  expect(picker()?.getAttribute('aria-disabled')).toBe('true');
+  const fixture = mounted.at(-1)!;
+  const place = () => fixture.getByRole('button', { name: 'Engineering' });
+  // Where comes first (lab `tasks-create`): no place can be chosen while the sources are still being read.
+  await expect(place()).rejects.toBeDefined();
   expect(document.querySelector('[role="progressbar"]')).not.toBeNull();
   expect(document.querySelector('[role="form"]')).toBeNull();
   await act(async () => { setReadiness({ loaded: true, unavailableReason: null }); });
   expect(document.querySelector('[role="progressbar"]')).toBeNull();
-  expect(picker()?.getAttribute('aria-disabled')).toBe('true');
+  await expect(place()).rejects.toBeDefined();
   expect(document.body.textContent).toContain('Add a source that supports creating tasks');
   await act(async () => { setSources([{ sourceInstanceId: source.configuredInstance.instance.sourceInstanceId,
     configured: source.configuredInstance, displayLabel: 'Engineering' }]); });
-  expect(picker()?.getAttribute('aria-disabled')).not.toBe('true');
-  await act(async () => { picker()?.click(); });
-  const choice = document.querySelector<HTMLElement>('[role="menuitemradio"]');
-  expect(choice).not.toBeNull();
-  await act(async () => { choice?.click(); });
+  if (accountData) {
+    expect((await place()).state?.disabled).toBe(true);
+    await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
+      targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create'),
+      machineConnectionPending: false, machineExecutionReady: true,
+    })); });
+  }
+  expect((await place()).state?.disabled).not.toBe(true);
+  await act(async () => { await fixture.press(await place()); });
   expect(document.querySelector('[role="form"]')).not.toBeNull();
+  // The chosen place stays named above its form and leads back to the list without losing the draft.
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Change' })); });
+  expect(document.querySelector('[role="form"]')).toBeNull();
+  await act(async () => { await fixture.press(await place()); });
+  expect(document.querySelector('[role="form"]')).not.toBeNull();
+  if (!accountData) {
+    const targetedContributions = targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create');
+    await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
+      targetedContributions, machineConnectionPending: true, machineExecutionReady: false,
+    })); });
+    expect(document.querySelector('[role="form"]')).not.toBeNull();
+    expect((await fixture.getByRole('button', { name: 'Create task' })).state?.disabled).toBe(true);
+    await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({ targetedContributions })); });
+  }
   await act(async () => { setReadiness({ loaded: true, unavailableReason: 'The Account is unavailable.' }); });
   expect(document.body.textContent).toContain('The Account is unavailable.');
   expect(document.querySelector('[role="form"]')).toBeNull();
-  expect(document.body.textContent).toContain('Close');
   expect(saved).toEqual([]);
   await act(async () => { setReadiness({ loaded: true, unavailableReason: null }); });
-  const fixture = mounted.at(-1)!;
   await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Create task' })); });
   expect(saved).toHaveLength(1);
   expect(saved[0]?.fields).toEqual({ title: 'Fix reconnect handling' });
@@ -99,8 +121,10 @@ it('keeps task creation unavailable until sources are read and distinguishes set
 
 async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: boolean; truncated?: boolean; readFailed?: boolean;
   fields?: readonly TriageTaskFieldV1[]; values?: TriageTaskFieldsV1; transitions?: NonNullable<TriageTaskCapabilitiesV1['transitions']>;
-  nativeLabel?: string }> = {}) {
-  const source = createTriageSourceV1Fixture();
+  nativeLabel?: string; accountData?: boolean }> = {}) {
+  const sourceFixture = createTriageSourceV1Fixture();
+  const source = { ...sourceFixture, configuredInstance: { ...sourceFixture.configuredInstance,
+    binding: options.accountData ? { purpose: sourceFixture.descriptor.purpose, source: 'accountData' as const } : sourceFixture.configuredInstance.binding } };
   const entryRef = testkitEntryRef();
   const base = testkitObservation();
   if (base.outcome.kind !== 'present') throw new Error('Expected a present fixture');
@@ -188,6 +212,32 @@ it.each([true, false])('blocks task edits during a Machine outage even with reta
   expect(document.querySelector('[aria-label="Notes"]')).toBeNull();
   expect((await fixture.getByRole('button', { name: 'Edit task' })).state?.disabled).toBe(true);
   expect(saved).toEqual([]);
+});
+
+it('does not infer Account execution placement from an Account-data source binding', async () => {
+  const { fixture, saved, rereads } = await mountEditor({ accountData: true });
+  const source = createTriageSourceV1Fixture();
+  const entry = testkitEntryRef();
+  await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
+    targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, entry.kindId, 'edit'),
+    machineConnectionPending: true, machineExecutionReady: false,
+  })); });
+  expect((await fixture.getByRole('button', { name: 'Edit task' })).state?.disabled).toBe(true);
+  expect(saved).toEqual([]);
+  await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
+    targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, entry.kindId, 'edit'),
+    machineConnectionPending: false, machineExecutionReady: true,
+  })); });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
+  const input = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]');
+  expect(input?.value).toContain('Original Markdown.');
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, 'Account notes');
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Save changes' })); });
+  expect(saved.map(input => input.fields)).toEqual([{ body: 'Account notes' }]);
+  expect(rereads()).toBe(1);
 });
 
 it('edits the full body independently of truncated display facts and sends only the changed field', async () => {
@@ -304,4 +354,56 @@ it('does not report an unsettled commit when its authoritative reread fails', as
   expect(write!.busy).toBe(false);
   await act(async () => { await write!.commit('tasks/edit-v1', {}); });
   expect(calls).toBe(1);
+});
+
+async function mountRowStatus(task: React.ComponentProps<typeof TriageTaskRowStatusControl>['task'], transitions: NonNullable<TriageTaskCapabilitiesV1['transitions']>) {
+  const entryRef = testkitEntryRef();
+  const observation = testkitObservation();
+  const row = foldTriageListWindow({ observations: [{ ...observation, entryRef }], lanes: [],
+    configuredSourcesStatus: 'complete', activeSourceInstanceIds: [observation.sourceInstanceId],
+    lens: TRIAGE_LIST_DEFAULT_LENS_V1, assembledAtMs: 1_000 }).rows[0]!;
+  const selected = readTriageSelectedObservationV1(row)!;
+  const transitioned: unknown[] = [];
+  let rereads = 0;
+  let fixture!: PluginUiTestkit;
+  await act(async () => {
+    fixture = await createPluginUiTestkit({ identity: { instanceId: 'task-row', mountNonce: `row-${mounted.length}` },
+      authorPlugin: { id: 'happier.triage', version: '0.0.0' },
+      surface: defineUiSurface(() => <TriageTaskRowStatusControl task={task} onApplied={async () => { rereads++; }}
+        address={{ entryRef, sourceInstanceId: selected.sourceInstanceId, lastKnownLocator: selected.observation.locator }} />),
+      surfaceContext: createSurfaceContextFixture({ targetedContributions: targetedTaskSource(entryRef.source, entryRef.kindId, 'edit', false, ['title'], transitions) }),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
+      // Host Action transport is the genuine boundary.
+      handlers: { executeAction: ({ input }) => { transitioned.push(input); return { kind: 'refused', reason: 'unavailable' }; } },
+    });
+  });
+  mounted.push(fixture);
+  return { fixture, transitioned, entryRef, rereads: () => rereads };
+}
+
+const ROW_TRANSITIONS = [
+  { id: 'start', label: 'In Progress', state: { presentation: 'active', stage: 'started', nativeLabel: 'In Progress' } },
+  { id: 'done', label: 'Done', state: { presentation: 'resolved', nativeLabel: 'Done', completionReason: 'completed' } },
+] as const satisfies NonNullable<TriageTaskCapabilitiesV1['transitions']>;
+
+it('completes a task from its row glyph in one write when the source declares the completing transition', async () => {
+  const { fixture, transitioned, entryRef } = await mountRowStatus({ category: 'unstarted', statusLabel: 'Todo', relations: null,
+    completingTransitionId: 'done', transitions: [{ id: 'start', label: 'In Progress', category: 'started' }, { id: 'done', label: 'Done', category: 'completed' }] }, ROW_TRANSITIONS);
+  const glyph = await fixture.getByRole('button', { name: 'Mark as done, Todo' });
+  await act(async () => { await fixture.press(glyph); });
+  // One press, one write of the declared completing transition; no menu in between.
+  expect(document.querySelector('[role="menuitem"]')).toBeNull();
+  expect(transitioned).toHaveLength(1);
+  expect(transitioned[0]).toMatchObject({ entryRef, transitionId: 'done' });
+});
+
+it('opens the source workflow from the row glyph when no single completing transition exists', async () => {
+  const { fixture, transitioned } = await mountRowStatus({ category: 'started', statusLabel: 'In Review', relations: null,
+    transitions: [{ id: 'start', label: 'In Progress', category: 'started' }, { id: 'done', label: 'Done', category: 'completed' }] }, ROW_TRANSITIONS);
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Change status, In Review' })); });
+  expect(transitioned).toEqual([]);
+  const done = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes('Done'));
+  await act(async () => { done!.click(); });
+  expect(transitioned).toHaveLength(1);
+  expect(transitioned[0]).toMatchObject({ transitionId: 'done' });
 });

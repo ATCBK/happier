@@ -72,6 +72,9 @@ import {
     TRIAGE_ROUTE_DEFAULT_LENS_V1,
 } from './navigation/location.js';
 
+/** The New task draft's first line (lab `tasks-create`). */
+const DRAFT_PURPOSE = 'Where does it belong? It\u2019s created there and stays there.';
+
 /**
  * The mounted PRs & Issues vertical, driven end to end through the real host
  * boundary.
@@ -429,7 +432,7 @@ describe('the mounted PRs & Issues surface', () => {
         await act(async () => { await shell.press(await shell.getByRole('button', { name: 'New task' })); });
         // The detail frame names the draft; where it goes comes first.
         await expect(shell.getByRole('heading', { name: 'New task' })).resolves.toBeDefined();
-        await expect(shell.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
+        await expect(shell.getByText(DRAFT_PURPOSE)).resolves.toEqual({ content: DRAFT_PURPOSE });
         expect(harness.actionCalls.filter((id) => id === 'tasks/create-v1')).toEqual([]);
     });
     it('does not mistake an unreadable Session-link index for an empty Agents lens', async () => {

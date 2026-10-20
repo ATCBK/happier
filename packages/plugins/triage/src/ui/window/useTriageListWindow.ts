@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../../accountExecution.js';
 import { usePluginHostApi, usePluginHostReadiness, usePluginUiEphemeralSharedScope, type PluginUiHostReadiness } from '@happier-dev/plugin-ui';
 
 import type { TriageListLensV1 } from '../../projection/listWindow.js';
@@ -56,8 +57,7 @@ export type TriageMountedListWindowV1 = Readonly<{
 export function useTriageListWindow(): TriageMountedListWindowV1 {
   const hostApi = usePluginHostApi();
   const sharedScope = usePluginUiEphemeralSharedScope();
-  // The aggregate is Account-owned; each nested source admits its own placement.
-  const hostReadiness = usePluginHostReadiness(false);
+  const hostReadiness = usePluginHostReadiness(Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon'));
   const committedReadiness = useRef(hostReadiness);
   useLayoutEffect(() => {
     committedReadiness.current = hostReadiness;

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../../accountExecution.js';
 import { usePluginHostReadiness, type PluginUiHostReadiness } from '@happier-dev/plugin-ui';
 
 import type { TriageRefreshTriggerV1 } from '../../refresh/refreshEligibility.js';
@@ -20,7 +21,7 @@ export function useTriageListWindowViewDemand(
   refresh: RefreshTriageListWindowV1,
   readClientReadiness?: PluginUiHostReadiness,
 ): void {
-  const ownReadiness = usePluginHostReadiness(false);
+  const ownReadiness = usePluginHostReadiness(Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon'));
   const readiness = readClientReadiness ?? ownReadiness;
   const previous = useRef<Readonly<{
     active: boolean;
@@ -42,7 +43,7 @@ export function useTriageListWindowViewDemand(
     // A retained inactive surface must stay demand-silent. The host's active
     // fact gates both view demand and the shared owner's re-acquisition.
     // Readiness is supplied by the host, independently from public activity.
-    // Hand the Account read's readiness edge to the same window/coalescing owner.
+    // Hand the declared read's readiness edge to the same window/coalescing owner.
     // Nested sources decide their own execution placement, not this page demand.
     if (!active || readiness.pending || (!mountOrScopeChanged && !regainedActivity && !reacquire)) return;
 

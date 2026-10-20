@@ -70,6 +70,8 @@ export type TriageListTaskFactsV1 = Readonly<{
   completedAtMs?: number;
   /** Names an offered completed transition; activation uses the existing transition role. */
   completingTransitionId?: string;
+  /** The selected connection's offered workflow (the row's status menu), each with the category it moves to. */
+  transitions?: readonly Readonly<{ id: string; label: string; category: TriageListTaskFactsV1['category'] }>[];
 }>;
 
 function readTaskFacts(row: TriageListRowV1 | null, declared?: TriageTaskCapabilitiesV1): TriageListTaskFactsV1 | null {
@@ -88,6 +90,11 @@ function readTaskFacts(row: TriageListRowV1 | null, declared?: TriageTaskCapabil
     ...(snapshot.dueDate === undefined ? {} : { dueDate: snapshot.dueDate }),
     ...(snapshot.completedAtMs === undefined ? {} : { completedAtMs: snapshot.completedAtMs }),
     ...(completing === undefined ? {} : { completingTransitionId: completing.id }),
+    ...(capabilities?.transitions === undefined || capabilities.transitions.length === 0 ? {} : {
+      transitions: capabilities.transitions.map((transition) => Object.freeze({
+        id: transition.id, label: transition.label, category: triageTaskStatusCategoryV1(transition.state),
+      })),
+    }),
   });
 }
 

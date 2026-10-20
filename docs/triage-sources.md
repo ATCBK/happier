@@ -187,8 +187,10 @@ readable and show the edit-read failure rather than seeding an empty field.
 Task create, edit and transition controls follow the selected source's declared
 roles, configured instance and host execution readiness. An age-stale list or an
 unrelated unavailable source does not disable a ready task's controls. Pending
-or unavailable Machine execution still disables writes, and the source Action
-retains authorization and confirming-read authority.
+or unavailable execution follows the selected source's admitted Action. The
+current live aggregate and personal-source Actions remain daemon-placed and
+require an execution Machine. Account-data ownership does not imply Account
+execution. The source Action retains authorization and confirming-read authority.
 
 Task category is derived by the single public `triageTaskStatusCategoryV1`
 mapper from the existing entry state, including its optional active stage and
@@ -284,6 +286,17 @@ fields, completion projection, and Session-link CAS; its
 preserve the existing index ordering. Both authenticated transports enforce the
 Account encryption mode. Earlier records without task refinements, including
 bare Session-key links, remain readable.
+
+The live aggregate list, exact detail, task writes and built-in source roles
+remain daemon-placed through the same authored Action map and root `activate`
+entry. Their Account data owner is unchanged; their execution still requires a
+Machine. The portable Account cutover is not active: the live manifest selects
+no Account Action or Account runtime artifact. No-Machine personal Triage
+execution is therefore not an available development-source claim yet. Detail
+retains authoritative Session links when optional Session summary presentation
+is unavailable. Task reordering continues through the existing
+`tasks.internal.reorder` host Account Action and index CAS owner; the current
+Tasks page has no manual reorder control.
 
 Internal task links live only in `todo.<id>.linkedSessions`. The optional
 `linkSession` and `readSessionLinks` source roles let the existing entry Session

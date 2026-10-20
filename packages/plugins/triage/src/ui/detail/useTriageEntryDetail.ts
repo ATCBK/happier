@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../../accountExecution.js';
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
 import { usePluginHostApi, usePluginHostReadiness, useSurfaceContext } from '@happier-dev/plugin-ui';
 import type {
@@ -246,10 +247,10 @@ export function useTriageEntryDetail(
   sourceReadSelection.current = { identity, sourceOwned: admittedSourceRead
     || (sourceReadSelection.current.identity === identity && sourceReadSelection.current.sourceOwned) };
   const sourceOwned = sourceReadSelection.current.sourceOwned;
-  // Source-owned relations use the Account Action even with mounted Collections;
+  // Source-owned relations use the declared Action even with mounted Collections;
   // each nested source operation admits its own execution placement.
   const useActionTransport = durable.collections === null || sourceOwned;
-  const readiness = usePluginHostReadiness(false);
+  const readiness = usePluginHostReadiness(useActionTransport && Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon'));
   const transport = useMemo<TriageEntryDetailTransportV1>(
     () => durable.collections !== null && !useActionTransport
       ? createDirectTriageEntryDetailTransport(durable.collections)

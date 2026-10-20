@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { readTriageTaskProgressV1 } from './rows.js';
+import { readTriageTaskDueV1, readTriageTaskProgressV1 } from './rows.js';
 
 const text = (_key: string, fallback: string, params?: Readonly<Record<string, string | number>>) =>
   fallback.replace(/\{(\w+)\}/g, (_match, name: string) => String(params?.[name] ?? ''));
@@ -14,5 +14,23 @@ describe('a task row\'s Progress hint', () => {
     expect(readTriageTaskProgressV1({ parent: ref }, text)).toBe('Sub-task');
     expect(readTriageTaskProgressV1({}, text)).toBeNull();
     expect(readTriageTaskProgressV1(null, text)).toBeNull();
+  });
+});
+
+describe('a task row\'s Due cell', () => {
+  const now = new Date(2026, 9, 20, 12, 0).getTime(); // Tuesday noon, local time
+  it('reads a calendar date as a day: overdue before today, today, then the weekday this week and the date beyond', () => {
+    expect(readTriageTaskDueV1('2026-10-19', 'started', 'en', now, text)).toEqual({ label: 'Overdue · Mon', tone: 'danger' });
+    expect(readTriageTaskDueV1('2026-10-20', 'unstarted', 'en', now, text)).toEqual({ label: 'Today', tone: 'warning' });
+    expect(readTriageTaskDueV1('2026-10-22', 'unstarted', 'en', now, text)).toEqual({ label: 'Thu', tone: null });
+    expect(readTriageTaskDueV1('2026-11-03', 'backlog', 'en', now, text)).toEqual({ label: 'Nov 3', tone: null });
+    expect(readTriageTaskDueV1(undefined, 'started', 'en', now, text)).toBeNull();
+  });
+  it('reads a moment as a moment: past today is overdue, and a finished task is never overdue', () => {
+    const earlier = new Date(2026, 9, 20, 9, 0).toISOString();
+    const later = new Date(2026, 9, 20, 17, 0).toISOString();
+    expect(readTriageTaskDueV1(earlier, 'started', 'en', now, text)?.tone).toBe('danger');
+    expect(readTriageTaskDueV1(later, 'started', 'en', now, text)).toEqual({ label: 'Today', tone: 'warning' });
+    expect(readTriageTaskDueV1('2026-10-19', 'completed', 'en', now, text)).toEqual({ label: 'Mon', tone: null });
   });
 });

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {
-  Banner, Button, EmptyState, ErrorState, Form, LoadingState, Row, Select, Stack, Text,
+  Banner, Button, EmptyState, ErrorState, Form, LoadingState, Select, Stack,
   TextField, useExecutePluginAction, usePluginTranslation,
 } from '@happier-dev/plugin-ui';
 import {
@@ -130,6 +130,14 @@ export function TriageSourceScopeSelectionEditor({
     const unit = known.get(id);
     return { value: id, label: unit?.label ?? id, ...(unit?.secondaryText === undefined ? {} : { description: unit.secondaryText }) };
   });
+  // One line under Save says what the selection is, or why it cannot be saved yet.
+  const cannotEncode = nextDraft === null && !(mode === 'selected' && ids.length === 0);
+  const footnote = cannotEncode
+    ? text('plugins.triage.sourceSettings.selection.cannotEncode', 'This selection can’t be saved. Choose fewer.')
+    : mode !== 'selected' ? null
+      : ids.length === 0
+        ? text('plugins.triage.sourceSettings.selection.chooseOne', 'Choose at least one to save.')
+        : text('plugins.triage.sourceSettings.selection.count', '{count} selected', { count: ids.length });
 
   return <Stack gap="medium">
     <Form.Field label={text('plugins.triage.sourceSettings.selection.include', 'Include')}>
@@ -144,14 +152,14 @@ export function TriageSourceScopeSelectionEditor({
       />
     </Form.Field>
     {mode === 'selected' ? <Stack gap="small">
-      <Text variant="meta">{text('plugins.triage.sourceSettings.selection.count', '{count} selected', { count: ids.length })}</Text>
       <TextField label={text('plugins.triage.sourceSettings.selection.search', 'Search {units}', { units: adapter.unitLabel })}
         presentation="field" value={queryDraft} onChange={setQueryDraft} disabled={busy}
         autoCapitalize="none" autoCorrect={false}
         onSubmitEditing={() => { if (!listing.pending) setQuery(queryDraft.trim()); }} />
       <Button title={text('plugins.triage.sourceSettings.selection.searchAction', 'Search')} variant="secondary" size="small"
         disabled={busy || listing.pending} onPress={() => { if (queryDraft.trim() === query) void load(); else setQuery(queryDraft.trim()); }} />
-      {listing.pending ? <LoadingState rows={2} title={text('plugins.triage.sourceSettings.selection.loading', 'Reading {units}', { units: adapter.unitLabel })} /> : null}
+      {/* A next page loads under the units already listed (Load more is busy); only a first read takes their place. */}
+      {listing.pending && options.length === 0 ? <LoadingState rows={2} title={text('plugins.triage.sourceSettings.selection.loading', 'Reading {units}', { units: adapter.unitLabel })} /> : null}
       {options.length > 0 ? <Select label={adapter.unitLabel} multiple value={ids} options={options} disabled={busy}
         onChange={(value) => { if (Array.isArray(value)) setIds(value.filter((id): id is string => typeof id === 'string')); }} /> : null}
       {!listing.pending && listing.error === null && options.length === 0 ? <EmptyState layout="line"
@@ -160,16 +168,16 @@ export function TriageSourceScopeSelectionEditor({
       {listing.error !== null ? <ErrorState layout="line" title={listing.error}
         action={<Button title={text('plugins.triage.sourceSettings.tryAgain', 'Try again')} variant="secondary" size="small"
           disabled={listing.pending || busy} onPress={() => { void load(listing.nextCursor ?? undefined); }} />} /> : null}
-      {listing.partial && listing.error === null ? <Banner tone="warning"
+      {listing.partial && listing.error === null && listing.nextCursor === null ? <Banner tone="warning"
         title={text('plugins.triage.sourceSettings.selection.partial', 'More {units} may be available', { units: adapter.unitLabel })} /> : null}
       {listing.nextCursor !== null ? <Button title={text('plugins.triage.sourceSettings.selection.more', 'Load more')} variant="secondary" size="small"
-        disabled={listing.pending || busy} onPress={() => { void load(listing.nextCursor ?? undefined); }} /> : null}
+        busy={listing.pending} disabled={listing.pending || busy} onPress={() => { void load(listing.nextCursor ?? undefined); }} /> : null}
     </Stack> : null}
     {Fields === undefined ? null : <Fields draft={nextDraft ?? editedDraft} busy={busy} onChange={changeFields} />}
-    <Row gap="small">
+    <Form.Actions footnote={footnote} footnoteTone={cannotEncode ? 'danger' : 'secondary'}>
       <Button title={text('plugins.triage.sourceSettings.selection.save', 'Save selection')} variant="primary" size="small"
         busy={busy} disabled={busy || nextDraft === null} onPress={() => { if (!busy && nextDraft !== null) void onSubmit(nextDraft); }} />
       {cancel}
-    </Row>
+    </Form.Actions>
   </Stack>;
 }

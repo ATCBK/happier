@@ -383,6 +383,9 @@ export type TriageListShellProps = Readonly<{
   launch?: TriageEntryDetailLaunchInputV1;
 }>;
 
+const NO_COLLAPSED_GROUPS: ReadonlySet<string> = new Set();
+const TASKS_DONE_COLLAPSED: ReadonlySet<string> = new Set(['completed']);
+
 export function TriageListShell(props: TriageListShellProps = {}): React.ReactElement {
   const hostApi = usePluginHostApi();
   const surfaceContext = useSurfaceContext();
@@ -470,6 +473,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     },
   );
   const taskAudience = surface.filters.tasks;
+  const [doneOpen, setDoneOpen] = React.useState(false);
   const windowLens = readTriageWindowLensV1(surface);
   const completedSinceMs = windowLens.tasks?.completedSinceMs;
   // Agents membership needs relationship truth even when no live Session has answered.
@@ -605,7 +609,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       { key: 'started', title: text('plugins.triage.tasks.started', 'In progress') },
       { key: 'unstarted', title: text('plugins.triage.tasks.unstarted', 'To do') },
       { key: 'backlog', title: text('plugins.triage.tasks.backlog', 'Backlog') },
-      { key: 'completed', title: text('plugins.triage.tasks.completed', 'Done') },
+      { key: 'completed', title: text('plugins.triage.tasks.completed', 'Done'),
+        description: text('plugins.triage.tasks.thisWeek', 'This week') },
       { key: 'canceled', title: text('plugins.triage.tasks.canceled', 'Canceled') },
       { key: 'everythingElse', title: text('plugins.triage.tasks.unclassified', 'Other states') },
     ] : [
@@ -1666,6 +1671,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     organizing,
     sharedGroupReasons,
     tasks: taskAudience !== undefined,
+    onTaskApplied: refresh,
   });
   // Every row names its own selection below; the current detail must not
   // replace all row destinations when the rest of the lens is unchanged.
@@ -2283,6 +2289,14 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           minDetailWidth={minDetailWidth}
           preferredListRatio={TRIAGE_SPLIT_LIST_RATIO_PREFERENCE_V1}
           useRowActions={useTriageListRowActions}
+          // Done sits collapsed as its band ("Done 6 · This week"): the week's finished tasks, one press away.
+          {...(taskAudience === undefined ? {} : {
+            collapsedGroups: doneOpen ? NO_COLLAPSED_GROUPS : TASKS_DONE_COLLAPSED,
+            groupAction: (groupKey: string) => groupKey !== 'completed' ? null : {
+              label: doneOpen ? text('plugins.triage.tasks.hideDone', 'Hide') : text('plugins.triage.tasks.showDone', 'Show'),
+              onPress: () => setDoneOpen((open) => !open),
+            },
+          })}
           testID={TRIAGE_SHELL_FILL_TEST_ID_V1}
           listTestID={TRIAGE_SHELL_LIST_REGION_TEST_ID_V1}
           detailTestID={TRIAGE_SHELL_DETAIL_REGION_TEST_ID_V1}

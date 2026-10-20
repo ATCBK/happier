@@ -1,26 +1,29 @@
 import * as React from 'react';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../../accountExecution.js';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 import {
-  Banner, Button, EmptyState, ErrorState, Form, Item, ItemGroup, LoadingState, Menu, Row, Select, Stack,
+  Banner, BrandMark, Button, EmptyState, ErrorState, Form, IconButton, Item, ItemGroup, LoadingState, Menu, Row, Stack, TaskStatusGlyph, Text,
   usePluginHostApi, usePluginHostReadiness, usePluginTranslation, useSurfaceContext,
   type ActionFormFieldHint,
 } from '@happier-dev/plugin-ui';
-import { TriageGetResultV1Schema, TriageTaskFieldsV1Schema, TriageTaskWriteResultV1Schema,
-  type TriageConfiguredSourceInstanceV1, type TriageEntryRefV1, type TriageSourceInstanceIdV1, type TriageTaskFieldV1,
+import { TriageGetResultV1Schema, TriageTaskFieldsV1Schema, TriageTaskWriteResultV1Schema, triageTaskStatusCategoryV1,
+  type TriageConfiguredSourceInstanceV1, type TriageEntryLocatorV1, type TriageEntryRefV1, type TriageSourceInstanceIdV1, type TriageTaskFieldV1,
   type TriageTaskWriteResultV1 } from '@happier-dev/triage-protocol/v1';
 import { TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1, TRIAGE_TASKS_EDIT_ACTION_LOCAL_ID_V1,
   TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1 } from '../../actions/tasksProtocol.js';
 import type { TriageListRowV1 } from '../../projection/listWindow.js';
+import type { TriageListTaskFactsV1 } from '../list/sections.js';
 import type { TriageMountedConfiguredSourceV1 } from '../configuration/useTriageConfiguredSources.js';
 import { readTriageSelectedObservationV1 } from '../window/selectedObservation.js';
 import { readTriageSourceGetOperationV1, resolveTriageSourceDescriptorV1, resolveTriageSourceTaskOperationV1 } from './sourceSurface.js';
 
 /** List age and other sources' health do not decide whether this source can execute. */
 function useTriageTaskExecutionUnavailable(): boolean {
-  const readiness = usePluginHostReadiness();
+  const machineBound = Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon');
+  const readiness = usePluginHostReadiness(machineBound);
   const context = useSurfaceContext();
-  return readiness.pending || context.machineExecutionReady === false;
+  return readiness.pending || (machineBound && context.machineExecutionReady === false);
 }
 
 /** A single explicit form commit; provider authorization and settlement stay in tasks/* and the source. */
@@ -61,13 +64,66 @@ export function useTriageTaskCommit(onApplied: () => Promise<void>) {
   return { result, busy, commit };
 }
 
+function taskWriteMessage(text: ReturnType<typeof usePluginTranslation>, result: TriageTaskWriteResultV1): string {
+  return text(`plugins.triage.tasks.write.${result.kind}`, result.kind === 'applied' ? 'Saved at the source'
+    : result.kind === 'uncertain' ? 'The source may have saved this. Check it before creating or saving again.'
+      : result.kind === 'refused' ? 'This change is not available for this task.' : 'The source could not save this change.');
+}
+
 function TaskWriteNotice({ result }: Readonly<{ result: TriageTaskWriteResultV1 | null }>) {
   const text = usePluginTranslation();
   if (result === null) return null;
-  return <Banner tone={result.kind === 'applied' ? 'info' : 'warning'}
-    title={text(`plugins.triage.tasks.write.${result.kind}`, result.kind === 'applied' ? 'Saved at the source'
-      : result.kind === 'uncertain' ? 'The source may have saved this. Check it before creating or saving again.'
-        : result.kind === 'refused' ? 'This change is not available for this task.' : 'The source could not save this change.')} />;
+  return <Banner tone={result.kind === 'applied' ? 'info' : 'warning'} title={taskWriteMessage(text, result)} />;
+}
+
+const TASK_CATEGORY_WORDS = { backlog: 'Backlog', unstarted: 'To do', started: 'In progress', completed: 'Done', canceled: 'Canceled' } as const;
+
+/**
+ * A task row's status glyph as its control (lab `tasks-list`, decision 3): when the selected connection declares the
+ * one transition that completes the task, a press completes it in one write; otherwise the glyph opens the source's
+ * own workflow in place. The write is the detail's (`tasks/transition-v1`, one commit, no replay of an uncertain
+ * answer); while it runs the glyph is the spinner, and an outcome other than applied is said by the host notice.
+ */
+export function TriageTaskRowStatusControl(props: Readonly<{
+  /** The selected connection's address the list row carries (its entry, connection and locator). */
+  address: Readonly<{ entryRef: TriageEntryRefV1; sourceInstanceId: TriageSourceInstanceIdV1; lastKnownLocator: TriageEntryLocatorV1 }>;
+  task: TriageListTaskFactsV1;
+  onApplied(): Promise<void>;
+}>): React.ReactElement | null {
+  const context = useSurfaceContext();
+  const host = usePluginHostApi();
+  const text = usePluginTranslation();
+  const unavailable = useTriageTaskExecutionUnavailable();
+  const write = useTriageTaskCommit(props.onApplied);
+  const [open, setOpen] = React.useState(false);
+  const { task, address } = props;
+  const declared = resolveTriageSourceTaskOperationV1(context.targetedContributions, address.entryRef.source, 'transition') !== undefined;
+  const transitions = task.transitions ?? [];
+  if (task.category === null || !declared || transitions.length === 0) {
+    return task.category === null ? null : <TaskStatusGlyph category={task.category} />;
+  }
+  const category = task.category;
+  const disabled = unavailable || write.busy || write.result?.kind === 'uncertain';
+  const commit = async (transitionId: string) => {
+    if (disabled) return;
+    const result = await write.commit(TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1, { v: 1, entryRef: address.entryRef,
+      sourceInstanceId: address.sourceInstanceId, lastKnownLocator: address.lastKnownLocator, transitionId });
+    if (result !== undefined && result.kind !== 'applied') {
+      void host.notify(taskWriteMessage(text, result), { severity: 'warning' }).catch(() => undefined);
+    }
+  };
+  const statusWord = task.statusLabel ?? text(`plugins.triage.tasks.${category}`, TASK_CATEGORY_WORDS[category]);
+  const completing = category === 'completed' || category === 'canceled' ? undefined : task.completingTransitionId;
+  if (completing !== undefined) {
+    return <IconButton icon={<TaskStatusGlyph category={category} />} busy={write.busy} disabled={disabled}
+      accessibilityLabel={`${text('plugins.triage.tasks.complete', 'Mark as done')}, ${statusWord}`}
+      onPress={() => commit(completing)} />;
+  }
+  const transitionLabel = text('plugins.triage.tasks.transition', 'Change status');
+  return <Menu open={open && !disabled} onOpenChange={(next) => setOpen(next && !disabled)} disabled={disabled}
+    trigger={statusWord} triggerTaskStatus={category} triggerAccessibilityLabel={`${transitionLabel}, ${statusWord}`}
+    items={transitions.map((transition) => ({ id: transition.id, label: transition.label }))}
+    onSelect={(id) => { if (transitions.some((transition) => transition.id === id)) void commit(id); }} />;
 }
 
 export function TriageCreateTaskFields(props: Readonly<{
@@ -82,65 +138,76 @@ export function TriageCreateTaskFields(props: Readonly<{
 }>): React.ReactElement {
   const context = useSurfaceContext();
   const text = usePluginTranslation();
-  const disabled = useTriageTaskExecutionUnavailable();
+  const machineUnavailable = useTriageTaskExecutionUnavailable();
   const [where, setWhere] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState<Record<string, unknown>>({ title: '', ...props.draft });
   const write = useTriageTaskCommit(props.onApplied);
   const choices = props.sources.flatMap((source) => {
     const descriptor = resolveTriageSourceDescriptorV1(context.targetedContributions, source.configured.instance.source);
     const operation = resolveTriageSourceTaskOperationV1(context.targetedContributions, source.configured.instance.source, 'create');
-    return (descriptor?.kinds ?? []).filter((kind) => kind.task === true).map((kind) => ({
-      value: JSON.stringify([source.sourceInstanceId, kind.id]), source, kind,
-      label: `${source.displayLabel} · ${kind.displayName ?? kind.id}`,
-      disabled: operation === undefined || !kind.taskCapabilities?.createFields?.includes('title'),
-      ...(operation === undefined || !kind.taskCapabilities?.createFields?.includes('title')
-        ? { unavailableReason: text('plugins.triage.tasks.write.refused', 'This change is not available for this task.') } : {}),
-    }));
+    return (descriptor?.kinds ?? []).filter((kind) => kind.task === true).map((kind) => {
+      const supportsCreate = operation !== undefined && kind.taskCapabilities?.createFields?.includes('title') === true;
+      return { value: JSON.stringify([source.sourceInstanceId, kind.id]), source, kind, supportsCreate,
+        family: descriptor?.displayName ?? source.displayLabel, disabled: !supportsCreate || machineUnavailable };
+    });
   });
   const chosen = choices.find((choice) => choice.value === where);
   const sourcesReady = props.sourcesLoaded && props.sourcesUnavailableReason === null;
-  const canChoose = sourcesReady && choices.some((choice) => !choice.disabled);
+  const canChoose = sourcesReady && choices.some((choice) => choice.supportsCreate);
   const fields = chosen?.kind.taskCapabilities?.createFields ?? [];
   const unsupportedBody = typeof draft.body === 'string' && draft.body.length > 0 && !fields.includes('body');
-  // The draft stands in the detail's place under the pane's own "New task" title, so it draws no second heading:
-  // where the task goes comes first, then the fields that place accepts, with one Create (lab `tasks-form`).
-  return <ItemGroup>
-    <Item title={text('plugins.triage.tasks.where', 'Where?')} accessoryWraps accessory={
-      <Select label={text('plugins.triage.tasks.where', 'Where?')} presentation="field" value={where}
-        disabled={disabled || !canChoose} options={choices}
-        onChange={(value) => { if (canChoose && !disabled && typeof value === 'string') setWhere(value); }} />
-    } />
-    {props.sourcesUnavailableReason !== null ? <ErrorState kind="unavailable" layout="line"
-      title={text('plugins.triage.tasks.sourcesUnavailable', 'Task sources are unavailable')}
-      description={props.sourcesUnavailableReason} />
-      : !props.sourcesLoaded ? <LoadingState layout="line" title={text('plugins.triage.surface.sources.loading', 'Reading your sources…')} />
-      : !canChoose ? <EmptyState layout="line" title={text('plugins.triage.tasks.noCreateSource', 'Add a source that supports creating tasks in Sources.')} />
-      : chosen === undefined ? <Banner tone="info" title={text('plugins.triage.tasks.chooseSource', 'Choose where this task belongs.')} />
-      : <Form value={draft} onChange={setDraft} disabled={disabled || chosen.disabled || unsupportedBody || write.result?.kind === 'uncertain' || write.result?.kind === 'applied'} busy={write.busy}
-        onCancel={props.onClose}
-        hints={{ submitLabel: text('plugins.triage.tasks.create', 'Create task'), fields: [
-          { path: 'title', title: text('plugins.triage.tasks.taskTitle', 'Title'), widget: 'text', required: true },
-          ...(fields.includes('body') ? [{ path: 'body', title: text('plugins.triage.tasks.body', 'Notes'), widget: 'textarea' as const }] : []),
-          ...(fields.includes('scopeId') ? [{ path: 'scopeId', title: text('plugins.triage.tasks.scope', 'Repository or project'), widget: 'text' as const }] : []),
-        ] }}
-        onSubmit={async (value) => {
-          const title = typeof value.title === 'string' ? value.title.trim() : '';
-          if (title.length === 0 || chosen.disabled || !sourcesReady || disabled || unsupportedBody) return;
-          const result = await write.commit(TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1, { v: 1,
-            source: chosen.source.configured.instance.source, sourceInstanceId: chosen.source.sourceInstanceId,
-            kindId: chosen.kind.id, fields: { title,
-              ...(fields.includes('body') && typeof value.body === 'string' ? { body: value.body } : {}),
-              ...(fields.includes('scopeId') && typeof value.scopeId === 'string' && value.scopeId.length > 0 ? { scopeId: value.scopeId } : {}),
-            } });
-          if (result?.kind === 'applied') props.onCreated?.({
-            entryRef: { source: chosen.source.configured.instance.source, ...result.observation.localRef },
-            sourceInstanceId: chosen.source.configured.instance.sourceInstanceId,
-          });
-        }} />}
+  const placeNote = (choice: (typeof choices)[number]) => choice.supportsCreate ? choice.kind.displayName ?? choice.kind.id
+    : text('plugins.triage.tasks.where.cannotCreate', 'Tasks can\u2019t be created here');
+  const mark = (choice: (typeof choices)[number]) =>
+    <BrandMark pluginId={choice.source.configured.instance.source.pluginId} size="small" externallyLabelled />;
+  // The draft stands in the detail's place under the pane's own "New task" title (lab `tasks-create`, decision 10):
+  // first the places this task can go, one row each under its source's name; a place that cannot take tasks says so.
+  // Choosing one opens its form under a single place row that leads back to the list (lab `tasks-form`), with one Create.
+  if (chosen === undefined || !canChoose) {
+    const families = [...new Set(choices.map((choice) => choice.family))];
+    return <Stack gap="medium">
+      <Text variant="body" tone="secondary" value={text('plugins.triage.tasks.where.purpose', 'Where does it belong? It\u2019s created there and stays there.')} />
+      {props.sourcesUnavailableReason !== null ? <ErrorState kind="unavailable" layout="line"
+        title={text('plugins.triage.tasks.sourcesUnavailable', 'Task sources are unavailable')}
+        description={props.sourcesUnavailableReason} />
+        : !props.sourcesLoaded ? <LoadingState layout="line" title={text('plugins.triage.surface.sources.loading', 'Reading your sources\u2026')} />
+        : !canChoose ? <EmptyState layout="line" title={text('plugins.triage.tasks.noCreateSource', 'Add a source that supports creating tasks in Sources.')} />
+        : families.map((family) => <ItemGroup key={family} title={family} surface="none">
+          {choices.filter((choice) => choice.family === family).map((choice) => <Item key={choice.value}
+            icon={mark(choice)} title={choice.source.displayLabel} accessibilityRole="button" disabled={choice.disabled}
+            accessibilityLabel={choice.source.displayLabel} accessibilityHint={placeNote(choice)} subtitle={placeNote(choice)}
+            onPress={() => { if (!choice.disabled) setWhere(choice.value); }} />)}
+        </ItemGroup>)}
+    </Stack>;
+  }
+  return <Stack gap="medium">
+    <Item icon={mark(chosen)} title={chosen.source.displayLabel} subtitle={placeNote(chosen)} accessibilityLabel={chosen.source.displayLabel}
+      accessoryOutsidePressable accessory={<Button title={text('plugins.triage.tasks.where.change', 'Change')} variant="plain" size="small"
+        disabled={write.busy || write.result?.kind === 'uncertain' || write.result?.kind === 'applied'} onPress={() => setWhere(null)} />} />
+    <Form value={draft} onChange={setDraft} disabled={chosen.disabled || unsupportedBody || write.result?.kind === 'uncertain' || write.result?.kind === 'applied'} busy={write.busy}
+      onCancel={props.onClose}
+      hints={{ submitLabel: text('plugins.triage.tasks.create', 'Create task'), fields: [
+        { path: 'title', title: text('plugins.triage.tasks.taskTitle', 'Title'), widget: 'text', required: true },
+        ...(fields.includes('body') ? [{ path: 'body', title: text('plugins.triage.tasks.body', 'Notes'), widget: 'textarea' as const }] : []),
+        ...(fields.includes('scopeId') ? [{ path: 'scopeId', title: text('plugins.triage.tasks.scope', 'Repository or project'), widget: 'text' as const }] : []),
+      ] }}
+      onSubmit={async (value) => {
+        const title = typeof value.title === 'string' ? value.title.trim() : '';
+        if (title.length === 0 || chosen.disabled || !sourcesReady || unsupportedBody) return;
+        const result = await write.commit(TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1, { v: 1,
+          source: chosen.source.configured.instance.source, sourceInstanceId: chosen.source.sourceInstanceId,
+          kindId: chosen.kind.id, fields: { title,
+            ...(fields.includes('body') && typeof value.body === 'string' ? { body: value.body } : {}),
+            ...(fields.includes('scopeId') && typeof value.scopeId === 'string' && value.scopeId.length > 0 ? { scopeId: value.scopeId } : {}),
+          } });
+        if (result?.kind === 'applied') props.onCreated?.({
+          entryRef: { source: chosen.source.configured.instance.source, ...result.observation.localRef },
+          sourceInstanceId: chosen.source.configured.instance.sourceInstanceId,
+        });
+      }} />
     <TaskWriteNotice result={write.result} />
-    {chosen === undefined || !unsupportedBody ? null : <TaskWriteNotice result={{ kind: 'refused', reason: 'unsupportedField' }} />}
-    {chosen !== undefined && canChoose ? null : <Button title={text('plugins.triage.surface.close', 'Close')} variant="plain" onPress={props.onClose} />}
-  </ItemGroup>;
+    {!unsupportedBody ? null : <TaskWriteNotice result={{ kind: 'refused', reason: 'unsupportedField' }} />}
+  </Stack>;
 }
 
 const TASK_EDIT_HINTS = {
@@ -239,6 +306,7 @@ export function TriageEditTaskScope(props: Readonly<{
   // The status control says the task's current status in the source's own word ("In Review"); its menu is that
   // source's workflow. Its name keeps the operation for assistive technology.
   const currentStatus = snapshot.state.nativeLabel ?? null;
+  const currentCategory = triageTaskStatusCategoryV1(snapshot.state);
   const transitionLabel = text('plugins.triage.tasks.transition', 'Change status');
   const transitionTrigger = currentStatus ?? transitionLabel;
   const transitionAccessibilityLabel = currentStatus === null ? transitionLabel : `${transitionLabel}, ${currentStatus}`;
@@ -252,6 +320,7 @@ export function TriageEditTaskScope(props: Readonly<{
       busy={reading} onPress={openEditor} /> : null}
     {transitions.length === 0 ? null : <Menu open={statusOpen && !disabled} onOpenChange={(open) => setStatusOpen(open && !disabled)}
       trigger={transitionTrigger} triggerAccessibilityLabel={transitionAccessibilityLabel} triggerAppearance="control" disabled={disabled}
+      {...(currentCategory === null ? {} : { triggerTaskStatus: currentCategory })}
       items={transitions.map((transition) => ({ id: transition.id, label: transition.label }))}
       onSelect={(value) => { if (!disabled && transitions.some((transition) => transition.id === value))
         void write.commit(TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1, { ...address, transitionId: value }); }} />}

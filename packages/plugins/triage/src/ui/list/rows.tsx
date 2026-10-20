@@ -35,9 +35,11 @@ import {
   readTriageEntryGlyphV1,
   type TriageEntryDisplayTextV1,
 } from '../window/entryDisplay.js';
-import type { TriageListGroupIdV1, TriageListItemV1, TriageListRowSignalV1 } from './sections.js';
+import type { TriageListGroupIdV1, TriageListItemV1, TriageListRowSignalV1, TriageListTaskFactsV1 } from './sections.js';
+import { TriageTaskRowStatusControl } from '../detail/taskFields.js';
 
 const NO_SHARED_GROUP_REASONS: ReadonlyMap<TriageListGroupIdV1, string> = new Map();
+const NO_TASK_REREAD = async () => undefined;
 import type { TriageAgentStatusV1 } from '../detail/agentState.js';
 import { TRIAGE_ENTRY_DRAG_SOURCE_ID_V1, TRIAGE_ENTRY_SESSION_DROP_TARGET_ID_V1 } from './entryDragDrop.js';
 
@@ -538,6 +540,8 @@ export function useTriageListAnatomyV1(input: Readonly<{
    * the PR signal stay on PRs & Issues; the agent's state stays in Agent.
    */
   tasks?: boolean;
+  /** After a row's status control wrote at the source: the list's authoritative reread. */
+  onTaskApplied?: () => Promise<void>;
 }>): CollectionAnatomy<TriageListItemV1> {
   const text = usePluginTranslation();
   const { locale, targetedContributions } = useSurfaceContext();
@@ -545,7 +549,7 @@ export function useTriageListAnatomyV1(input: Readonly<{
   // host-context pushes must not replace every row's anatomy and callbacks.
   const contributionSnapshotJson = JSON.stringify(targetedContributions);
   // A column no listed entry fills is not drawn: an all-dash Agent column is noise, like an all-dash Signal one.
-  const { withAgent = true, organizing = false, sharedGroupReasons = NO_SHARED_GROUP_REASONS, tasks = false } = input;
+  const { withAgent = true, organizing = false, sharedGroupReasons = NO_SHARED_GROUP_REASONS, tasks = false, onTaskApplied = NO_TASK_REREAD } = input;
   const withSignal = input.withSignal && !tasks;
   const withReason = (input.withReason ?? true) && !tasks;
   return React.useMemo<CollectionAnatomy<TriageListItemV1>>(() => {
@@ -607,6 +611,16 @@ export function useTriageListAnatomyV1(input: Readonly<{
           ? { live: true }
           : { icon: badge.mark, ...(badge.tone === undefined ? {} : { tone: badge.tone }) };
       },
+      // A task's status glyph is its control when its selected connection offers a workflow (lab decision 3).
+      ...(tasks ? { leadingControl: (item: TriageListItemV1) => {
+        const task = item.task ?? null;
+        const { row, locator } = item;
+        // A stale row is last-known content: its glyph stays a mark until the source answers again.
+        if (task === null || task.category === null || (task.transitions?.length ?? 0) === 0
+          || row.stale || row.sourceInstanceId === null || locator == null) return null;
+        return <TriageTaskRowStatusControl task={task} onApplied={onTaskApplied}
+          address={{ entryRef: row.entryRef, sourceInstanceId: row.sourceInstanceId, lastKnownLocator: locator }} />;
+      } } : {}),
       title: (item) => item.row.title,
       // The table says the designation quietly after the title ("Retry … #2481") and Where is the place alone.
       titleSuffix: (item) => item.row.designation,
@@ -641,6 +655,16 @@ export function useTriageListAnatomyV1(input: Readonly<{
         render: (item: TriageListItemV1) => {
           const progress = readTriageTaskProgressV1(item.task?.relations ?? null, text);
           return progress === null ? null : <Text variant="meta" tone="secondary" value={progress} numberOfLines={1} />;
+        },
+      }, {
+        key: 'due',
+        title: text('plugins.triage.tasks.column.due', 'Due'),
+        minWidth: 96,
+        priority: 1,
+        render: (item: TriageListItemV1) => {
+          const due = item.task == null ? null : readTriageTaskDueV1(item.task.dueDate, item.task.category, locale, Date.now(), text);
+          if (due === null) return null;
+          return <Text variant="meta" tone={due.tone ?? 'secondary'} value={due.label} numberOfLines={1} />;
         },
       }] } : {}),
       ...(withReason ? { reason: (item: TriageListItemV1) => {
@@ -705,7 +729,46 @@ export function useTriageListAnatomyV1(input: Readonly<{
         age: text('plugins.triage.surface.column.age', 'Age'),
       },
     };
-  }, [contributionSnapshotJson, locale, organizing, sharedGroupReasons, tasks, text, withAgent, withReason, withSignal]);
+  }, [contributionSnapshotJson, locale, onTaskApplied, organizing, sharedGroupReasons, tasks, text, withAgent, withReason, withSignal]);
+}
+
+const DAY_MS = 86_400_000;
+const CALENDAR_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * A task's Due cell (lab `tasks-list`): Overdue in rose before it is due, Today in amber, then the weekday within the
+ * week and the date beyond. A calendar date ("2026-10-22", as trackers keep it) is a day in the reader's calendar,
+ * never a UTC midnight; a moment is overdue once it has passed. A finished task only says its date.
+ */
+export function readTriageTaskDueV1(
+  dueDate: string | undefined,
+  category: TriageListTaskFactsV1['category'],
+  locale: string,
+  nowMs: number,
+  text: PluginTranslate,
+): Readonly<{ label: string; tone: 'danger' | 'warning' | null }> | null {
+  if (dueDate === undefined) return null;
+  const calendar = CALENDAR_DATE.exec(dueDate);
+  const due = calendar === null
+    ? new Date(Date.parse(dueDate))
+    : new Date(Number(calendar[1]), Number(calendar[2]) - 1, Number(calendar[3]));
+  if (Number.isNaN(due.getTime())) return null;
+  const today = new Date(nowMs);
+  today.setHours(0, 0, 0, 0);
+  const dueDay = new Date(due);
+  dueDay.setHours(0, 0, 0, 0);
+  const days = Math.round((dueDay.getTime() - today.getTime()) / DAY_MS);
+  const date = Math.abs(days) <= 6
+    ? new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(due)
+    : new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(due);
+  if (category === 'completed' || category === 'canceled') return { label: date, tone: null };
+  const passed = calendar === null ? due.getTime() < nowMs : days < 0;
+  if (passed) {
+    const when = days === 0 ? new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' }).format(due) : date;
+    return { label: text('plugins.triage.tasks.due.overdue', 'Overdue · {date}', { date: when }), tone: 'danger' };
+  }
+  if (days === 0) return { label: text('plugins.triage.tasks.due.today', 'Today'), tone: 'warning' };
+  return { label: date, tone: null };
 }
 
 /**

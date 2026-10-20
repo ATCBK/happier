@@ -25,7 +25,7 @@ import { useTriageCurrentUiContextPublication } from '../currentContextPublicati
 import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1, TRIAGE_TASK_DETAIL_DESTINATION_V1 } from '../../composer/openEntryDetails.js';
 import { TRIAGE_LIST_DEFAULT_LENS_V1, triageEntryRowKey } from '../../projection/listWindow.js';
 import { readTriageSourceDescriptorV1 } from '../detail/sourceSurface.js';
-import { readTriageRowBylinePlaceV1, readTriageRowDetailToneV1, readTriageRowMarkV1 } from '../list/rows.js';
+import { readTriageRowBylinePlaceV1, readTriageRowDetailToneV1, readTriageRowMarkV1, readTriageTaskDueV1 } from '../list/rows.js';
 import { openTriageLinkedEntry } from '../navigation/openLinkedEntry.js';
 import { projectTriageEntryDisplay } from '../window/entryDisplay.js';
 import { projectTriageListWindow } from '../window/mountedWindow.js';
@@ -164,11 +164,15 @@ export function TriageLatestWidget({ tasksOnly = false }: Readonly<{ tasksOnly?:
         const mark = readTriageRowMarkV1(display, workflowSubject);
         const detailTone = readTriageRowDetailToneV1(display);
         // My tasks (lab `tasks-widget`): the status category leads, line two is where and the key, and the one
-        // loud fact a task has here is a blocker; why-it's-here reasons stay on PRs & Issues.
+        // loud fact is Overdue, then Due today, then Blocked (the page's precedence); why-it's-here reasons stay on
+        // PRs & Issues.
         const snapshot = row.content?.outcome.snapshot;
         const category = tasksOnly && snapshot !== undefined ? triageTaskStatusCategoryV1(snapshot.state) : null;
         if (tasksOnly) {
           const blocked = (snapshot?.relations?.blockedBy?.length ?? 0) > 0;
+          const due = readTriageTaskDueV1(snapshot?.dueDate, category, surfaceContext.locale, Date.now(), text);
+          const loud = due !== null && due.tone !== null ? { detail: due.label, detailTone: due.tone }
+            : blocked ? { detail: text('plugins.triage.tasks.progress.blocked', 'Blocked') } : null;
           return (
             <Item
               key={display.key}
@@ -178,7 +182,7 @@ export function TriageLatestWidget({ tasksOnly = false }: Readonly<{ tasksOnly?:
               subtitle={readTriageRowBylinePlaceV1(display)}
               subtitleNumberOfLines={1}
               icon={category === null ? <Icon name={mark.name} size="small" tone={mark.tone} /> : <TaskStatusGlyph category={category} />}
-              {...(blocked ? { detail: text('plugins.triage.tasks.progress.blocked', 'Blocked'), detailNumberOfLines: 1 } : {})}
+              {...(loud === null ? {} : { ...loud, detailNumberOfLines: 1 })}
               density="compact"
               onPress={() => { void openTriageLinkedEntry(hostApi, row.entryRef, undefined,
                 { ...TRIAGE_ROUTE_DEFAULT_LENS_V1, filters: { ...TRIAGE_ROUTE_DEFAULT_LENS_V1.filters, tasks: 'mine' } }); }}

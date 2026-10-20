@@ -52,7 +52,7 @@ const SOURCE = Object.freeze({ pluginId: 'happier.example.source', localId: 'exa
 const INSTANCE = '11111111-1111-4111-8111-111111111111';
 const TITLE = 'Replace the duplicated normalizer';
 
-function createListHarness(withTasks = false) {
+function createListHarness(withTasks = false, mineFacts: Readonly<Record<string, unknown>> = {}) {
     const { collections, control } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
     control.sourceInstances.seed(toCorpusStoredValue({
         instanceTag: `a${'0'.repeat(42)}`,
@@ -96,7 +96,7 @@ function createListHarness(withTasks = false) {
         }, ...(withTasks ? [true, false].map((mine, index) => ({
             kind: 'present' as const,
             localRef: { kindId: 'issue', collisionScope: 'example/repository', entryId: `issue-${index}` },
-            locator: testkitLocator(), snapshot: testkitSnapshot({ title: mine ? 'My assigned task' : 'Someone else’s task' }),
+            locator: testkitLocator(), snapshot: { ...testkitSnapshot({ title: mine ? 'My assigned task' : 'Someone else’s task' }), ...(mine ? mineFacts : {}) },
             viewer: testkitViewer({ involvement: mine ? ['assignee'] : [] }), sourceUpdatedAtMs: 3_000,
         })) : [])],
         evidence: { kind: 'walkFinished' },
@@ -166,6 +166,16 @@ describe('the New in PRs & Issues widget', () => {
         await vi.waitFor(() => widget.getByText('My assigned task'));
         await expect(widget.getByText(TITLE)).rejects.toBeDefined();
         await expect(widget.getByText('Someone else’s task')).rejects.toBeDefined();
+    });
+    it('says an overdue task as its one loud fact, ahead of a blocker', async () => {
+        const blocker = { source: SOURCE, kindId: 'issue', collisionScope: 'example/repository', entryId: 'issue-9' };
+        const harness = createListHarness(true, { dueDate: '2000-01-03', relations: { blockedBy: [blocker] } });
+        const widget = await mountWidget(createTriageEphemeralSharedScopeOriginFixture(), (input) => harness.executeAction(input),
+            undefined, { surface: renderTasksWidget, targetedContributions: harness.targetedContributions });
+        await vi.waitFor(() => widget.getByText('My assigned task'));
+        // The date is the reader's locale's ("3 Jan", "Jan 3"); the blocker is not said beside it.
+        expect(document.body.textContent).toMatch(/Overdue · /);
+        expect(document.body.textContent).not.toContain('Blocked');
     });
     it('retries a failed first demand through the addressed mounted refresh owner', async () => {
         const scope = createTriageEphemeralSharedScopeOriginFixture();
