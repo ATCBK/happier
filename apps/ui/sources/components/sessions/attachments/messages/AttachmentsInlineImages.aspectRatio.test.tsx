@@ -1,14 +1,16 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { installReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { installUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { installSessionAttachmentCommonModuleMocks } from '../sessionAttachmentTestHelpers';
+import { createSessionFileNativeTransferBoundary } from '@/components/sessions/files/sessionFileNativeTransferTestkit';
+import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 
 installSessionAttachmentCommonModuleMocks({
-    reactNative: installReactNativeWebMock(),
+    reactNative: installReactNativeWebMock({ Platform: { OS: 'ios', select: (values: { ios?: unknown; default?: unknown }) => values.ios ?? values.default } }),
     unistyles: installUnistylesMock({
         theme: { colors: { textSecondary: '#bbb', divider: '#222', surfaceHighest: '#111' } },
     }),
@@ -18,17 +20,16 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-vi.mock('@/components/sessions/attachments/preview/AttachmentImagePreviewModal', () => ({
-    AttachmentImagePreviewModal: () => null,
-}));
-
-vi.mock('@/components/sessions/files/content/imagePreview/useSessionImagePreview', () => ({
-    useSessionImagePreview: () => ({
-        status: 'loaded',
-        uri: 'blob:preview',
-        error: null,
-    }),
-}));
+vi.mock('expo-file-system', async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);
+let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
+beforeAll(prepareSessionFilesViewTestkit);
+beforeEach(async () => {
+    const transfer = createSessionFileNativeTransferBoundary();
+    fixture = await createSessionFilesViewFixture({ sessionId: 's1', rootPath: '/repo', machineCarrierOrigin: transfer.origin,
+        rpc: transfer.rpc, request: transfer.request });
+    fixture.storage.getState().applySettingsLocal({ filesImagePreviewCacheMaxEntries: 0, filesImagePreviewMaxBytes: 1_000_000 });
+});
+afterEach(async () => { await fixture.dispose(); });
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -62,6 +63,8 @@ describe('AttachmentsInlineImages aspect ratios', () => {
 
         const tileTestID = `message-attachments-inline-image:${attachment.path}`;
         const previewTestID = `message-attachments-inline-image-preview:${attachment.path}`;
+
+        await vi.waitFor(() => expect(screen.findByTestId(previewTestID)).not.toBeNull());
 
         expect(flattenStyle(screen.findByTestId(tileTestID)?.props.style)).toMatchObject({
             width: 84,

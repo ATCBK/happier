@@ -9,14 +9,6 @@ const announceAccessibilityMessage = vi.hoisted(() => vi.fn());
 
 const actEnvironmentGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
-type PreviewState =
-    | { status: 'loaded'; uri: string; error: null }
-    | { status: 'error'; uri: null; error: string };
-
-const previewState = vi.hoisted(() => ({
-    value: { status: 'loaded', uri: 'data:image/png;base64,.happier/uploads/messages/m1/file.png', error: null } as PreviewState,
-}));
-
 installSessionAttachmentCommonModuleMocks({
     reactNative: installReactNativeWebMock({
         useWindowDimensions: () => ({ width: 900, height: 700 }),
@@ -25,18 +17,6 @@ installSessionAttachmentCommonModuleMocks({
 
 vi.mock('expo-image', () => ({
     Image: (props: Record<string, unknown>) => React.createElement('Image', props, null),
-}));
-
-vi.mock('@/components/sessions/files/content/imagePreview/useSessionImagePreview', () => ({
-    useSessionImagePreview: (input: { enabled: boolean; filePath: string }) => {
-        if (!input.enabled) {
-            return { status: 'disabled', uri: null, error: null };
-        }
-        if (previewState.value.status === 'error') {
-            return previewState.value;
-        }
-        return { ...previewState.value, uri: `data:image/png;base64,${input.filePath}` };
-    },
 }));
 
 vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({
@@ -48,7 +28,6 @@ describe('AttachmentImagePreviewModal', () => {
 
     beforeEach(() => {
         actEnvironmentGlobal.IS_REACT_ACT_ENVIRONMENT = true;
-        previewState.value = { status: 'loaded', uri: 'data:image/png;base64,reset', error: null };
         announceAccessibilityMessage.mockClear();
     });
 
@@ -239,64 +218,8 @@ describe('AttachmentImagePreviewModal', () => {
         expect(empty.findAllByTestId('attachment-image-preview-surface')).toHaveLength(0);
     });
 
-    it('renders session-backed images through the shared session preview hook', async () => {
-        const { AttachmentImagePreviewModal } = await import('./AttachmentImagePreviewModal');
-        const setChrome = vi.fn();
-
-        const screen = await renderScreen(<AttachmentImagePreviewModal
-            onClose={() => {}}
-            setChrome={setChrome}
-            images={[
-                {
-                    kind: 'session-image',
-                    title: 'from-transcript.png',
-                    sessionId: 's1',
-                    filePath: '.happier/uploads/messages/m1/file.png',
-                    mimeType: 'image/png',
-                    sizeBytes: 10,
-                    cacheKey: 'hash',
-                },
-            ]}
-            initialIndex={0}
-        />);
-
-        expect(screen.findByType('Image').props.source).toEqual({
-            uri: 'data:image/png;base64,.happier/uploads/messages/m1/file.png',
-        });
-    });
-
-    it('renders an opaque staged composer image through the same preview hook without a source path or URI input', async () => {
-        const { AttachmentImagePreviewModal } = await import('./AttachmentImagePreviewModal');
-        const setChrome = vi.fn();
-
-        const screen = await renderScreen(<AttachmentImagePreviewModal
-            onClose={() => {}}
-            setChrome={setChrome}
-            images={[{
-                kind: 'composer-staged-image',
-                title: 'incident.png',
-                handle: {
-                    v: 1,
-                    id: 'stage_42',
-                    executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
-                    owner: { pluginId: 'acme.images', localId: 'image' },
-                    mediaKind: 'image',
-                    mimeType: 'image/png',
-                    name: 'incident.png',
-                    sizeBytes: 3,
-                    sha256: 'a'.repeat(64),
-                },
-            }]}
-        />);
-
-        expect(screen.findByType('Image').props.source).toEqual({
-            uri: 'data:image/png;base64,incident.png',
-        });
-    });
-
     it('shows a generic localized error instead of raw preview details', async () => {
         const { AttachmentImagePreviewModal } = await import('./AttachmentImagePreviewModal');
-        previewState.value = { status: 'error', uri: null, error: 'internal disk path leaked' };
         const setChrome = vi.fn();
 
         const screen = await renderScreen(<AttachmentImagePreviewModal
@@ -307,9 +230,10 @@ describe('AttachmentImagePreviewModal', () => {
                     kind: 'session-image',
                     title: 'broken.png',
                     sessionId: 's1',
+                    workspaceScope: { serverId: 'home', machineId: 'machine', rootPath: '/repo' },
                     filePath: '.happier/uploads/messages/m1/file.png',
                     mimeType: 'image/png',
-                    sizeBytes: 10,
+                    sizeBytes: Number.MAX_SAFE_INTEGER,
                     cacheKey: 'hash',
                 },
             ]}
