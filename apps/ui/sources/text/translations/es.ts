@@ -5561,6 +5561,11 @@ export const es: TranslationStructure = {
             showBannerAction: 'Mostrar aviso',
             hideBannerAction: 'Ocultar aviso',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Hay trabajo en segundo plano en ejecución',
+	        body: ({ count }: { count: number }) => `Hay trabajo en segundo plano en ejecución (${count}). Reiniciar lo detendrá.`,
+	        confirmAction: 'Detener y reiniciar',
+	    },
 	    staleRunner: {
 	      title: "La sesión sigue ejecutándose con una CLI anterior",
 	      body: "Reinicia el runner de esta sesión para continuar con la CLI actualizada del daemon. La sesión de Happier se mantiene.",

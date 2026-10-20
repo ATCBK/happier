@@ -5582,6 +5582,11 @@ export const pl: TranslationStructure = {
             showBannerAction: 'Pokaż baner',
             hideBannerAction: 'Ukryj baner',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Praca w tle jest w toku',
+	        body: ({ count }: { count: number }) => `Praca w tle jest w toku (${count}). Ponowne uruchomienie ją zatrzyma.`,
+	        confirmAction: 'Zatrzymaj i uruchom ponownie',
+	    },
 	    staleRunner: {
 	      title: "Sesja nadal działa na starszej CLI",
 	      body: "Uruchom ponownie runner tej sesji, aby kontynuować na zaktualizowanej CLI daemona. Sesja Happier pozostaje ta sama.",

@@ -6098,6 +6098,11 @@ export const ru: TranslationStructure = {
             showBannerAction: 'Показать баннер',
             hideBannerAction: 'Скрыть баннер',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Выполняется фоновая работа',
+	        body: ({ count }: { count: number }) => `Фоновых задач в работе: ${count}. Перезапуск остановит их.`,
+	        confirmAction: 'Остановить и перезапустить',
+	    },
 	    staleRunner: {
 	      title: "Сессия всё ещё работает на старой CLI",
 	      body: "Перезапустите runner этой сессии, чтобы продолжить на обновлённой CLI демона. Сессия Happier останется той же.",

@@ -32,6 +32,15 @@ Before adding or changing a provider/runtime/install/update flow, classify it as
 
 Provider detection, install status, daemon validation, runtime spawning, and UI/installables must reuse the same source of truth. Backend CLIs should prefer user/system installs by default over Happier-managed installs unless an explicit setting says otherwise.
 
+In current development source, Windows command discovery and invocation share
+`packages/cli-common/windowsCommandInvocation.mjs`. A recognized npm wrapper that
+only forwards arguments to an existing native `.exe` resolves to that executable,
+avoiding `cmd.exe`'s smaller command-line limit (including Claude Code's native npm
+installation). Other command scripts retain shell execution and its existing
+quoting, including npm JavaScript wrappers and wrappers whose target is missing
+or still a text placeholder. Recognition does not choose a different installation
+or modify the subprocess environment.
+
 In current development source, vendor installers preserve the Windows process
 environment's `Path` spelling; cloning that environment and replacing it with an
 empty `PATH` prevents executable resolution. Only POSIX recipes prepend user

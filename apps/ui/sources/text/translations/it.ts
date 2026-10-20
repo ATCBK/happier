@@ -5908,6 +5908,11 @@ export const it: TranslationStructure = {
             showBannerAction: 'Mostra banner',
             hideBannerAction: 'Nascondi banner',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Lavoro in background in corso',
+	        body: ({ count }: { count: number }) => `È in corso del lavoro in background (${count}). Il riavvio lo interromperà.`,
+	        confirmAction: 'Interrompi e riavvia',
+	    },
 	    staleRunner: {
 	      title: "La sessione è ancora in esecuzione su una CLI precedente",
 	      body: "Riavvia il runner di questa sessione per continuare con la CLI del daemon aggiornata. La sessione Happier resta la stessa.",
