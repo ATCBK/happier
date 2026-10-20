@@ -81,7 +81,7 @@ import { ListCollectionControlContext, type ListCollectionControl } from './list
 import { CollectionKeyCap, ListCollectionHeader, useListCollectionSearch, useListSelectionModeControl, type ListCollectionSearchToken } from './listCollectionHeader.js';
 import { ListMultiSelectionProvider, useListMultiSelectionStoreSnapshot } from './ListMultiSelection.js';
 import { renderCollectionItemDestination } from './collectionItemDestination.js';
-import { DetailsPane, DetailsPaneBody, PushedDetailHeader, useDetailsPaneAvailable, useDetailsPaneHostInstalled } from './DetailsPane.js';
+import { DetailsPane, DetailsPaneBody, PushedDetailHeader, useDetailsPanePlacement, useDetailsPaneHostInstalled } from './DetailsPane.js';
 import { usePluginTranslation } from './PluginUiProvider.js';
 import type { NavigationListDestination } from './NavigationList.js';
 import { CollectionDetailHeadingFocusContext, useCollectionDetailHeadingFocusInternal } from './Focus.js';
@@ -1508,10 +1508,11 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     gap: 0,
   }), [props.minDetailWidth, props.minListWidth, props.preferredListRatio, size]);
   const openKey = model.openKey;
-  // The page's app details pane, when the host placed this page in a pane host and it sits beside the page now.
-  // In a pane host whose pane is not beside the page (a phone, side panes off) the detail pushes: never a split.
+  // Choose the container on open and retain it across resizing. A fresh phone open pushes in-page;
+  // an already-open app pane fills the viewport without reparenting the detail's local owners.
   const paneHost = useDetailsPaneHostInstalled() && detail === 'auto' && props.renderDetail !== undefined;
-  const pane = useDetailsPaneAvailable() && paneHost;
+  const panePlacement = useDetailsPanePlacement(paneHost && openKey !== null);
+  const pane = panePlacement.inPane && paneHost;
   // The table fits where it clears the list minimum AND can still show a column beside the title: a table that
   // is a title column alone is the list with less in it, so there the rows recompose (COLLECTION.md "Phones").
   const rowAccessoryWidth = (anatomy.peek === undefined ? 0 : TABLE.chevronWidth) + (props.useRowActions !== undefined ? 36 : 0);
@@ -2160,7 +2161,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const headerHosted = (pane || pushedPage) && props.detailHeader !== undefined;
   const detailNode = openKey !== null && props.renderDetail !== undefined && detail !== 'none'
     ? <CollectionDetailHeadingFocusContext.Provider value={headerHosted ? null : headingFocus}>
-        {props.renderDetail(openKey, { headerHosted, pushed: composition === 'detail' })}
+        {props.renderDetail(openKey, { headerHosted, pushed: composition === 'detail' || (pane && !panePlacement.beside) })}
       </CollectionDetailHeadingFocusContext.Provider>
     : transition !== null ? lastDetailRef.current : null;
   lastDetailRef.current = openKey !== null ? detailNode : transition !== null ? lastDetailRef.current : null;

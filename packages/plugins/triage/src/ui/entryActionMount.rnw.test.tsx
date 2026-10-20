@@ -614,6 +614,8 @@ describe('the entry action controls on the mounted detail header', () => {
             await act(async () => { await shell.updateSurface(shell.context.surface); });
             await settle();
             expect(chooserSignal.aborted).toBe(false);
+            expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`) === null)
+                .toBe(openedBeside && next);
         }
         await act(async () => { finishRecipe(SETTLED_DRAFT); });
         await settle();

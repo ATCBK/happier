@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
     lastHostProps: null as any,
     deviceType: 'tablet' as 'phone' | 'tablet',
     pageRenders: 0,
+    detailMounts: 0,
+    deviceListeners: new Set<() => void>(),
 }));
 
 installAppPaneScopeHostCommonModuleMocks({
@@ -32,7 +34,10 @@ vi.mock('@/components/ui/panels/MultiPaneHostWithBottom', () => ({
 }));
 
 vi.mock('@/utils/platform/responsive', () => ({
-    useDeviceType: () => state.deviceType,
+    useDeviceType: () => React.useSyncExternalStore((listener) => {
+        state.deviceListeners.add(listener);
+        return () => { state.deviceListeners.delete(listener); };
+    }, () => state.deviceType),
     useHeaderHeight: () => 56,
 }));
 
@@ -40,6 +45,7 @@ afterEach(() => {
     state.lastHostProps = null;
     state.deviceType = 'tablet';
     state.pageRenders = 0;
+    state.detailMounts = 0;
 });
 
 const { AppPaneProvider } = await import('../AppPaneProvider');
@@ -61,22 +67,26 @@ async function mountPluginPage() {
 
     function Probe() {
         const theme = usePluginTheme();
+        const [instance] = React.useState(() => ++state.detailMounts);
         return (
             <>
-                {React.createElement('ProbeFacts', { text: theme.colors.text })}
+                {React.createElement('ProbeFacts', { text: theme.colors.text, instance })}
                 <Text testID="probe-public-text" value="Plugin text" />
             </>
         );
     }
 
     let setDetailText: (value: string) => void = () => {};
+    let setDetailOpen: (value: boolean) => void = () => {};
     function PluginPage() {
         state.pageRenders += 1;
         const [open, setOpen] = React.useState(true);
+        setDetailOpen = setOpen;
         const [detailText, setText] = React.useState('first');
         setDetailText = setText;
         return (
-            <DetailsPane open={open} title="Entry #2481" onClose={() => setOpen(false)} testID="entry-pane">
+            <DetailsPane open={open} title="Entry #2481" onClose={() => setOpen(false)} testID="entry-pane"
+                footer={<Text testID="detail-primary" value="Run operation" />}>
                 <Probe />
                 {React.createElement('DetailText', { text: detailText })}
             </DetailsPane>
@@ -105,10 +115,35 @@ async function mountPluginPage() {
     const screen = await renderScreen(
         <AppPaneProvider><DetailsPaneSlotHost testID="page-details"><Mount /></DetailsPaneSlotHost></AppPaneProvider>,
     );
-    return { screen, context, setDetailText: (value: string) => act(() => setDetailText(value)) };
+    return { screen, context, setDetailText: (value: string) => act(() => setDetailText(value)),
+        setDetailOpen: (value: boolean) => act(() => setDetailOpen(value)) };
 }
 
 describe('DetailsPaneSlotHost (the page details pane a plugin DetailsPane renders in)', () => {
+    it.each(['tablet', 'phone'] as const)('preserves an external plugin detail across viewport changes (opened on %s)', async (openedOn) => {
+        state.deviceType = openedOn;
+        const { screen, setDetailOpen } = await mountPluginPage();
+        const original = screen.root.findByType('ProbeFacts' as never).props.instance;
+        for (const next of [openedOn === 'tablet' ? 'phone' : 'tablet', openedOn] as const) {
+            await act(async () => {
+                state.deviceType = next;
+                state.deviceListeners.forEach((listener) => listener());
+            });
+            expect(screen.root.findAllByType('ProbeFacts' as never)).toHaveLength(1);
+            expect(screen.root.findByType('ProbeFacts' as never).props.instance).toBe(original);
+            if (openedOn === 'tablet') expect(state.lastHostProps.layout.details).not.toBe('hidden');
+            else expect(screen.findByTestId('entry-pane:back')).toBeTruthy();
+            expect(screen.findAllByTestId('detail-primary').length > 0).toBe(openedOn === 'phone' || next === 'phone');
+        }
+        expect(state.detailMounts).toBe(1);
+        await act(async () => {
+            state.deviceType = openedOn === 'tablet' ? 'phone' : 'tablet';
+            state.deviceListeners.forEach((listener) => listener());
+        });
+        setDetailOpen(false);
+        setDetailOpen(true);
+        expect(screen.root.findAllByType('DetailsColumn' as never)).toHaveLength(openedOn === 'tablet' ? 0 : 1);
+    });
     it('transfers heading focus on an equal-title replacement with an unchanged body', async () => {
         const body = <React.Fragment>Shared detail</React.Fragment>;
         let focusedEntry: string | null = null;

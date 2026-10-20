@@ -70,6 +70,8 @@ Artifact History uses the existing modal chrome as a viewport-filling opaque pag
 
 Opening or replacing an item binds the public opaque focus target to the detail's first semantic `Heading` / `PageHeader`, or to the shared app `PaneHeader` when `detailHeader` is hosted. The existing presentation-host focus adapter performs the transfer and native accessibility announcement; no DOM traversal or second announcement service is involved. A data refresh does not re-request heading focus. Closing returns focus to the item's row/card through the model's physical-focus request.
 
+In 0.3 development source, Collection and standalone `DetailsPane` choose the app pane or in-page placement when the detail opens and retain it until close. A viewport change does not move the detail between React parents or retire its local action/draft owners. The app pane already fills the viewport when side panes cannot fit; its current geometry still projects `pushed: true` and the existing phone footer. The in-page detail keeps its responsive composition. Closing and reopening chooses the current placement. Replacing the host binding still retires the old placement. A caller-owned input chooser must also receive that caller's cancellation signal, so retiring its owner withdraws the host presentation before an abandoned confirmation can be accepted.
+
 For a contributed glyph badge, return `{ mark: (pixelSize) => …, tone? }`.
 Collection supplies the compact mark size and retains plate/tone ownership.
 Public `BrandMark.pixelSize` fits an exact package logo into that slot through

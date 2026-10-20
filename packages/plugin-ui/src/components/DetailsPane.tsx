@@ -1,4 +1,4 @@
-import { useContext, type ReactElement, type ReactNode } from 'react';
+import { useContext, useState, type ReactElement, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { resolveHappierUiPalette, useHappierUiInsets, useOptionalHappierUiPalette } from '../environment/context.js';
@@ -47,13 +47,13 @@ export type DetailsPaneProps = Readonly<{
 const NO_PANE_HOST = null;
 
 /**
- * Whether the page's app details pane sits beside this surface right now. `false` where the host
- * placed the surface in no pane host, on phones and with side panes turned off.
+ * Choose the current pane placement, retaining an open detail's choice until close. Fresh opens
+ * push in-page where the host has no pane beside it (phones or side panes turned off).
  */
 /** @internal The Collection reads it to choose its container. */
-export function useDetailsPaneAvailable(): boolean {
+export function useDetailsPanePlacement(open: boolean) {
   const binding = useOptionalPluginUiPresentationHost()?.detailsPane ?? NO_PANE_HOST;
-  return useBindingAvailable(binding);
+  return useBindingPlacement(binding, open);
 }
 
 /** @internal Whether the host placed this surface in a pane host at all, its pane beside the page or not. */
@@ -65,9 +65,17 @@ export function useDetailsPaneHostInstalled(): boolean {
  * The host binding is installed once per mount, so the same hook runs on every render of a given
  * surface; where there is none a constant stands in.
  */
-function useBindingAvailable(binding: PluginUiDetailsPaneHost | null): boolean {
+function useBindingPlacement(binding: PluginUiDetailsPaneHost | null, open: boolean) {
   const useAvailable = binding?.useAvailable ?? useNoPane;
-  return useAvailable();
+  const beside = useAvailable();
+  // Placement is chosen on open. Moving children between the slot and the page remounts their
+  // owners; the app pane already fills the viewport when side panes no longer fit.
+  const [placement, setPlacement] = useState<Readonly<{ binding: PluginUiDetailsPaneHost | null; available: boolean }> | null>(null);
+  let current = placement;
+  if (!open || current?.binding !== binding) current = null;
+  if (open && current === null) current = { binding, available: beside };
+  if (current !== placement) setPlacement(current);
+  return { inPane: current?.available ?? beside, beside };
 }
 
 function useNoPane(): boolean {
@@ -96,9 +104,9 @@ function useNoPane(): boolean {
 export function DetailsPane(props: DetailsPaneProps): ReactElement | null {
   const headingRef = useCollectionDetailHeadingBindingInternal();
   const binding = useOptionalPluginUiPresentationHost()?.detailsPane ?? NO_PANE_HOST;
-  const available = useBindingAvailable(binding);
+  const { inPane, beside } = useBindingPlacement(binding, props.open);
   const bridge = usePluginUiSurfaceBridge();
-  if (binding !== null && available) {
+  if (binding !== null && inPane) {
     return (
       <>
         {binding.renderDetailsPane({
@@ -111,7 +119,12 @@ export function DetailsPane(props: DetailsPaneProps): ReactElement | null {
           ...(props.actions === undefined ? {} : { actions: bridge(props.actions) }),
           onClose: props.onClose,
           // One element whatever the title, so the detail never remounts when its band comes or goes.
-          children: bridge(<DetailsPaneBody inset={props.title !== undefined}>{props.children}</DetailsPaneBody>),
+          children: bridge(<>
+            <DetailsPaneBody inset={props.title !== undefined}>{props.children}</DetailsPaneBody>
+            {beside || props.footer === undefined ? null : (
+              <DetailsPaneFooter testID={props.testID === undefined ? undefined : `${props.testID}:footer`}>{props.footer}</DetailsPaneFooter>
+            )}
+          </>),
           ...(props.testID === undefined ? {} : { testID: props.testID }),
         })}
       </>
