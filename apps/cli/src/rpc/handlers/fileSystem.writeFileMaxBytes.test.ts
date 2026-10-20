@@ -89,7 +89,7 @@ describe('filesystem WRITE_FILE handler max-bytes', () => {
     }
   });
 
-  it('fails closed (and does not overwrite) when expectedHash is provided for an existing file larger than the inline-write ceiling', async () => {
+  it('verifies an existing file above the inline transport ceiling when the replacement fits inline', async () => {
     process.env[envReadKey] = '1024';
     process.env[envChunkKey] = '1024';
     vi.resetModules();
@@ -116,9 +116,8 @@ describe('filesystem WRITE_FILE handler max-bytes', () => {
         expectedHash,
       });
 
-      expect(result).toMatchObject({ success: false });
-      expect((await stat(path)).size).toBe(2048);
-      expect(await readFile(path)).toEqual(existingPayload);
+      expect(result).toMatchObject({ success: true, hash: createHash('sha256').update('ok').digest('hex') });
+      expect(await readFile(path, 'utf8')).toBe('ok');
     } finally {
       await rm(workingDirectory, { recursive: true, force: true }).catch(() => undefined);
     }

@@ -19,7 +19,7 @@ export type UploadTransferFinalizeResult<TResult = undefined> =
       success: false;
       error: string;
       keepSession?: boolean;
-      errorCode?: never;
+      errorCode?: string;
     }>
   | Readonly<{
       success: false;

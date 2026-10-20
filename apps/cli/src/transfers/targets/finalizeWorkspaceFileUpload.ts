@@ -1,10 +1,10 @@
 import { constants } from 'fs';
 import { copyFile, mkdir, rm, stat } from 'node:fs/promises';
 import { dirname } from 'path';
+import { commitGuardedFileReplace } from '@/rpc/handlers/fileSystem/commitGuardedFileReplace';
 
 import {
   CrossDeviceMoveSourceCleanupError,
-  moveFileWithCrossDeviceFallback,
   type MoveFileOperations,
 } from '../../utils/fs/moveFileWithCrossDeviceFallback';
 import {
@@ -38,9 +38,21 @@ export async function finalizeWorkspaceFileUpload(input: Readonly<{
   destPath: string;
   destDisplayPath: string;
   overwrite: boolean;
+  expectedHash?: string | null;
+  sha256: string;
   sizeBytes: number;
   fileOperations?: WorkspaceFileFinalizeOperations | null;
 }>): Promise<UploadTransferFinalizeResult> {
+  if (input.overwrite || input.expectedHash !== undefined) {
+    const result = await commitGuardedFileReplace({ destPath: input.destPath, expectation: input.expectedHash,
+      source: { kind: 'staged', path: input.tempPath, sha256: input.sha256 }, fileOperations: input.fileOperations ?? undefined });
+    if (result.success) return { success: true, path: input.destDisplayPath, sizeBytes: input.sizeBytes };
+    const retainedSource = await stat(input.tempPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+      throw error;
+    });
+    return { ...result, keepSession: retainedSource !== null };
+  }
   await mkdir(dirname(input.destPath), { recursive: true });
 
   const destStats = await stat(input.destPath).catch((error: unknown) => {
@@ -55,71 +67,44 @@ export async function finalizeWorkspaceFileUpload(input: Readonly<{
     if (destStats.isDirectory()) {
       return { success: false, error: 'Cannot overwrite a directory with a file', keepSession: true };
     }
-    if (!input.overwrite) {
-      return { success: false, error: 'Destination already exists', keepSession: true };
-    }
+    return { success: false, error: 'Destination already exists', keepSession: true };
   }
 
-  if (!input.overwrite) {
-    const copyFileOperation = input.fileOperations?.copyFile ?? copyFile;
-    const rmOperation = input.fileOperations?.rm ?? rm;
-    try {
-      await copyFileOperation(input.tempPath, input.destPath, constants.COPYFILE_EXCL);
-    } catch (error) {
-      const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: unknown }).code : null;
-      if (code === 'EEXIST') {
-        return { success: false, error: 'Destination already exists', keepSession: true };
-      }
-      throw error;
+  const copyFileOperation = input.fileOperations?.copyFile ?? copyFile;
+  const rmOperation = input.fileOperations?.rm ?? rm;
+  try {
+    await copyFileOperation(input.tempPath, input.destPath, constants.COPYFILE_EXCL);
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: unknown }).code : null;
+    if (code === 'EEXIST') {
+      return { success: false, error: 'Destination already exists', keepSession: true };
     }
+    throw error;
+  }
+  try {
+    await rmOperation(input.tempPath, { force: true });
+  } catch (error) {
     try {
-      await rmOperation(input.tempPath, { force: true });
-    } catch (error) {
-      try {
-        await rmOperation(input.destPath, { force: true });
-      } catch (rollbackError) {
-        return mapCrossDeviceRecoveryFailure(new CrossDeviceMoveSourceCleanupError({
-          sourcePath: input.tempPath,
-          destPath: input.destPath,
-          backupPath: null,
-          destinationRolledBack: false,
-          cause: new AggregateError(
-            [error, rollbackError],
-            'Failed to clean up the staged upload source and roll back the copied destination',
-          ),
-        }));
-      }
+      await rmOperation(input.destPath, { force: true });
+    } catch (rollbackError) {
       return mapCrossDeviceRecoveryFailure(new CrossDeviceMoveSourceCleanupError({
         sourcePath: input.tempPath,
         destPath: input.destPath,
         backupPath: null,
-        destinationRolledBack: true,
-        cause: error,
+        destinationRolledBack: false,
+        cause: new AggregateError(
+          [error, rollbackError],
+          'Failed to clean up the staged upload source and roll back the copied destination',
+        ),
       }));
     }
-    return {
-      success: true,
-      path: input.destDisplayPath,
-      sizeBytes: input.sizeBytes,
-    };
+    return mapCrossDeviceRecoveryFailure(new CrossDeviceMoveSourceCleanupError({
+      sourcePath: input.tempPath,
+      destPath: input.destPath,
+      backupPath: null,
+      destinationRolledBack: true,
+      cause: error,
+    }));
   }
-
-  try {
-    await moveFileWithCrossDeviceFallback(
-      input.tempPath,
-      input.destPath,
-      input.fileOperations ?? undefined,
-    );
-  } catch (error) {
-    if (error instanceof CrossDeviceMoveSourceCleanupError) {
-      return mapCrossDeviceRecoveryFailure(error);
-    }
-    throw error;
-  }
-
-  return {
-    success: true,
-    path: input.destDisplayPath,
-    sizeBytes: input.sizeBytes,
-  };
+  return { success: true, path: input.destDisplayPath, sizeBytes: input.sizeBytes };
 }

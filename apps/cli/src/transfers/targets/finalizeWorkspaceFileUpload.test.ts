@@ -1,324 +1,120 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { access, copyFile as copyFileMock, rm, rename as renameMock } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, readdir, writeFile, copyFile as copyFileMock, rename as renameMock, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { TransferSessionStore, createTransferSessionLifecycle, finalizeUploadTransferSession,
+  openUploadTransferSession, writeUploadTransferChunk } from '@happier-dev/transfers/node';
 
-import { TransferSessionStore } from '@happier-dev/transfers/node';
-import {
-  createTransferSessionLifecycle,
-  finalizeUploadTransferSession,
-  openUploadTransferSession,
-  writeUploadTransferChunk,
-} from '@happier-dev/transfers/node';
-
-let renameAttemptCount = 0;
-let firstRenameErrorCode: string | null = 'EXDEV';
-let failingRmPath: string | null = null;
-let failingRmCode: string | null = null;
-let createDestinationBeforeExclusiveCopy = false;
-let failingCopyFromPath: string | null = null;
-let failBackupRestore = false;
-let backupPath: string | null = null;
-
+const faults = vi.hoisted(() => ({ crossDevice: false, cleanupPath: '', publishPath: '', raceCopy: false }));
+// Filesystem operations are the real external boundary; the transfer and writer owners remain real.
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-  const actualRename = actual.rename;
-  const actualRm = actual.rm;
-  const actualCopyFile = actual.copyFile;
-
-  return {
-    ...actual,
-    copyFile: vi.fn(async (from: string, to: string, mode?: number) => {
-      if (from === failingCopyFromPath) {
-        throw new Error('simulated staged destination copy failure');
+  return { ...actual,
+    rename: vi.fn(async (...args: Parameters<typeof actual.rename>) => {
+      if (faults.crossDevice || String(args[1]) === faults.publishPath) {
+        const code = faults.crossDevice ? 'EXDEV' : 'EPERM';
+        faults.crossDevice = false;
+        throw Object.assign(new Error(code), { code });
       }
-      if (createDestinationBeforeExclusiveCopy) {
-        createDestinationBeforeExclusiveCopy = false;
-        writeFileSync(to, 'raced-destination', 'utf8');
-      }
-      await actualCopyFile(from, to, mode);
+      return actual.rename(...args);
     }),
-    rename: vi.fn(async (from: string, to: string) => {
-      renameAttemptCount += 1;
-      if (renameAttemptCount === 1 && firstRenameErrorCode) {
-        const error = new Error('cross-device rename') as NodeJS.ErrnoException;
-        error.code = firstRenameErrorCode;
-        throw error;
-      }
-      if (failBackupRestore && backupPath === from) {
-        throw new Error('simulated destination backup restoration failure');
-      }
-      await actualRename(from, to);
-      if (to.includes('.happier-upload-backup-')) {
-        backupPath = to;
-      }
+    copyFile: vi.fn(async (...args: Parameters<typeof actual.copyFile>) => {
+      if (faults.raceCopy) { faults.raceCopy = false; await actual.writeFile(args[1], 'raced-destination'); }
+      return actual.copyFile(...args);
     }),
-    rm: vi.fn(async (targetPath: string, options?: Parameters<typeof actualRm>[1]) => {
-      if (failingRmPath === targetPath && failingRmCode) {
-        const error = new Error('remove blocked') as NodeJS.ErrnoException;
-        error.code = failingRmCode;
-        failingRmCode = null;
-        throw error;
+    rm: vi.fn(async (...args: Parameters<typeof actual.rm>) => {
+      if (String(args[0]) === faults.cleanupPath) {
+        faults.cleanupPath = '';
+        throw Object.assign(new Error('staged source in use'), { code: 'EPERM' });
       }
-      await actualRm(targetPath, options);
+      return actual.rm(...args);
     }),
   };
 });
 
 import { finalizeWorkspaceFileUpload } from './finalizeWorkspaceFileUpload';
+const payload = Buffer.from('payload');
+const sha256 = createHash('sha256').update(payload).digest('hex');
+const roots: string[] = [];
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), 'happier-finalize-upload-'));
+  roots.push(root);
+  const tempPath = join(root, 'upload');
+  const destPath = join(root, 'dest', 'file.txt');
+  await mkdir(dirname(destPath), { recursive: true });
+  await writeFile(tempPath, payload);
+  return { root, tempPath, destPath, destDisplayPath: 'dest/file.txt', overwrite: true, sizeBytes: payload.length, sha256 };
+}
+afterEach(async () => {
+  Object.assign(faults, { crossDevice: false, cleanupPath: '', publishPath: '', raceCopy: false });
+  vi.clearAllMocks();
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
 
 describe('finalizeWorkspaceFileUpload', () => {
-  const tempDirs: string[] = [];
-
-  afterEach(async () => {
-    renameAttemptCount = 0;
-    firstRenameErrorCode = 'EXDEV';
-    failingRmPath = null;
-    failingRmCode = null;
-    createDestinationBeforeExclusiveCopy = false;
-    failingCopyFromPath = null;
-    failBackupRestore = false;
-    backupPath = null;
-    vi.clearAllMocks();
-    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  it('crosses devices only into a temporary sibling and atomically publishes without moving the destination aside', async () => {
+    const input = await fixture();
+    await writeFile(input.destPath, 'original');
+    faults.crossDevice = true;
+    expect(await finalizeWorkspaceFileUpload(input)).toEqual({ success: true, path: input.destDisplayPath, sizeBytes: payload.length });
+    expect(await readFile(input.destPath)).toEqual(payload);
+    expect(vi.mocked(renameMock).mock.calls.some(([from]) => from === input.destPath)).toBe(false);
+    expect(vi.mocked(copyFileMock).mock.calls.every(([, to]) => to !== input.destPath)).toBe(true);
+    expect(await readdir(dirname(input.destPath))).toEqual(['file.txt']);
   });
 
-  it('survives EXDEV when promoting the uploaded file into place', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'happier-finalize-upload-'));
-    tempDirs.push(root);
-    const tempPath = join(root, 'temp.txt');
-    const destPath = join(root, 'dest', 'file.txt');
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(tempPath, 'payload', 'utf8');
-
-    const result = await finalizeWorkspaceFileUpload({
-      tempPath,
-      destPath,
-      destDisplayPath: '~/dest/file.txt',
-      overwrite: true,
-      sizeBytes: 7,
-    });
-
-    expect(result).toEqual({
-      success: true,
-      path: '~/dest/file.txt',
-      sizeBytes: 7,
-    });
-    expect(readFileSync(destPath, 'utf8')).toBe('payload');
-    await expect(access(tempPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  it('leaves the destination intact and retains the source when cross-device staging cleanup fails', async () => {
+    const input = await fixture();
+    await writeFile(input.destPath, 'original');
+    faults.crossDevice = true;
+    faults.cleanupPath = input.tempPath;
+    expect(await finalizeWorkspaceFileUpload(input)).toMatchObject({ success: false, errorCode: 'file_replace_failed', keepSession: true });
+    expect(await readFile(input.destPath, 'utf8')).toBe('original');
+    expect(await readFile(input.tempPath)).toEqual(payload);
+    expect(await readdir(dirname(input.destPath))).toEqual(['file.txt']);
   });
 
-  it('returns a retryable failure and preserves the existing destination when staged temp cleanup fails after EXDEV copy', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'happier-finalize-upload-'));
-    tempDirs.push(root);
-    const tempPath = join(root, 'temp.txt');
-    const destPath = join(root, 'dest', 'file.txt');
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(destPath, 'original-destination', 'utf8');
-    writeFileSync(tempPath, 'payload', 'utf8');
-    failingRmPath = tempPath;
-    failingRmCode = 'EPERM';
-
-    const result = await finalizeWorkspaceFileUpload({
-      tempPath,
-      destPath,
-      destDisplayPath: '~/dest/file.txt',
-      overwrite: true,
-      sizeBytes: 7,
-    });
-
-    expect(result).toEqual({
-      success: false,
-      error: 'Failed to finalize uploaded file because the staged upload file is still in use. Retry the upload finalization.',
-      keepSession: true,
-    });
-    expect(readFileSync(destPath, 'utf8')).toBe('original-destination');
-    expect(readFileSync(tempPath, 'utf8')).toBe('payload');
+  it('fails closed without a copy fallback when publication itself is denied', async () => {
+    const input = await fixture();
+    await writeFile(input.destPath, 'original');
+    faults.publishPath = input.destPath;
+    expect(await finalizeWorkspaceFileUpload(input)).toMatchObject({ success: false, errorCode: 'file_replace_failed', keepSession: false });
+    expect(await readFile(input.destPath, 'utf8')).toBe('original');
+    expect(copyFileMock).not.toHaveBeenCalled();
+    expect(await readdir(dirname(input.destPath))).toEqual(['file.txt']);
   });
 
-  it('classifies incomplete destination restoration as retained recovery state', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'happier-finalize-upload-rollback-failure-'));
-    tempDirs.push(root);
-    const tempPath = join(root, 'temp.txt');
-    const destPath = join(root, 'dest', 'file.txt');
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(destPath, 'original-destination', 'utf8');
-    writeFileSync(tempPath, 'payload', 'utf8');
-    failingCopyFromPath = tempPath;
-    failBackupRestore = true;
-
-    await expect(finalizeWorkspaceFileUpload({
-      tempPath,
-      destPath,
-      destDisplayPath: '~/dest/file.txt',
-      overwrite: true,
-      sizeBytes: 7,
-    })).resolves.toEqual({
-      success: false,
-      error: 'Failed to finalize uploaded file because destination recovery was incomplete. Recovery files were preserved; inspect the destination before retrying.',
-      errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED',
-      keepSession: true,
-    });
-
-    expect(readFileSync(tempPath, 'utf8')).toBe('payload');
-    expect(backupPath).not.toBeNull();
-    expect(readFileSync(backupPath!, 'utf8')).toBe('original-destination');
-  });
-
-  it('keeps the real upload session attached when destination restoration fails', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'happier-finalize-upload-session-retention-'));
-    tempDirs.push(root);
-    const destPath = join(root, 'dest', 'file.txt');
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(destPath, 'original-destination', 'utf8');
-    const store = new TransferSessionStore({
-      ttlMs: 10_000,
-      tempRoot: join(root, 'transfer-sessions'),
-    });
+  it('keeps the real upload session when source cleanup prevents publication', async () => {
+    const input = await fixture();
+    await writeFile(input.destPath, 'original');
+    const store = new TransferSessionStore({ ttlMs: 10_000, tempRoot: join(input.root, 'sessions') });
     const lifecycle = createTransferSessionLifecycle({ store, chunkSizeBytes: 8 });
-    const payload = Buffer.from('payload', 'utf8');
-
     try {
-      const session = await openUploadTransferSession({
-        lifecycle,
-        target: {
-          destPath,
-          destDisplayPath: '~/dest/file.txt',
-          overwrite: true,
-          expectedSizeBytes: payload.length,
-          finalizeUpload: async (input) => await finalizeWorkspaceFileUpload({
-            tempPath: input.tempPath,
-            destPath,
-            destDisplayPath: '~/dest/file.txt',
-            overwrite: true,
-            sizeBytes: input.sizeBytes,
-          }),
-        },
-      });
-      await expect(writeUploadTransferChunk({
-        lifecycle,
-        uploadId: session.uploadId,
-        index: 0,
-        contentBase64: payload.toString('base64'),
-      })).resolves.toEqual({ success: true });
-      const storedSession = store.getUploadSession(session.uploadId);
-      if (!storedSession) {
-        throw new Error('Expected active upload session');
-      }
-      failingCopyFromPath = storedSession.tempPath;
-      failBackupRestore = true;
-
-      await expect(finalizeUploadTransferSession({
-        lifecycle,
-        uploadId: session.uploadId,
-      })).resolves.toEqual({
-        success: false,
-        error: 'Failed to finalize uploaded file because destination recovery was incomplete. Recovery files were preserved; inspect the destination before retrying.',
-        errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED',
-        keepSession: true,
-      });
-
-      expect(store.getUploadSession(session.uploadId)).toBe(storedSession);
-      expect(readFileSync(storedSession.tempPath)).toEqual(payload);
-      expect(backupPath).not.toBeNull();
-      expect(readFileSync(backupPath!, 'utf8')).toBe('original-destination');
-      await expect(writeUploadTransferChunk({
-        lifecycle,
-        uploadId: session.uploadId,
-        index: 0,
-        contentBase64: payload.toString('base64'),
-      })).resolves.toEqual({ success: true });
-    } finally {
-      await store.dispose();
-    }
+      const opened = await openUploadTransferSession({ lifecycle, target: {
+        destPath: input.destPath, destDisplayPath: input.destDisplayPath, overwrite: true, expectedSizeBytes: payload.length,
+        finalizeUpload: finalized => finalizeWorkspaceFileUpload({ ...input, ...finalized }),
+      } });
+      expect(await writeUploadTransferChunk({ lifecycle, uploadId: opened.uploadId, index: 0,
+        contentBase64: payload.toString('base64') })).toEqual({ success: true });
+      const stored = store.getUploadSession(opened.uploadId);
+      if (!stored) throw new Error('Missing upload session');
+      faults.crossDevice = true;
+      faults.cleanupPath = stored.tempPath;
+      expect(await finalizeUploadTransferSession({ lifecycle, uploadId: opened.uploadId }))
+        .toMatchObject({ success: false, errorCode: 'file_replace_failed', keepSession: true });
+      expect(store.getUploadSession(opened.uploadId)).toBe(stored);
+      expect(await readFile(stored.tempPath)).toEqual(payload);
+      expect(await readFile(input.destPath, 'utf8')).toBe('original');
+    } finally { await store.dispose(); }
   });
 
-  it('retains recovery state when source cleanup and destination rollback both fail', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'happier-finalize-upload-cleanup-rollback-failure-'));
-    tempDirs.push(root);
-    const tempPath = join(root, 'temp.txt');
-    const destPath = join(root, 'dest', 'file.txt');
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(destPath, 'original-destination', 'utf8');
-    writeFileSync(tempPath, 'payload', 'utf8');
-    failingRmPath = tempPath;
-    failingRmCode = 'EPERM';
-    failBackupRestore = true;
-
-    await expect(finalizeWorkspaceFileUpload({
-      tempPath,
-      destPath,
-      destDisplayPath: '~/dest/file.txt',
-      overwrite: true,
-      sizeBytes: 7,
-    })).resolves.toEqual({
-      success: false,
-      error: 'Failed to finalize uploaded file because destination recovery was incomplete. Recovery files were preserved; inspect the destination before retrying.',
-      errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED',
-      keepSession: true,
-    });
-
-    expect(readFileSync(tempPath, 'utf8')).toBe('payload');
-    expect(backupPath).not.toBeNull();
-    expect(readFileSync(backupPath!, 'utf8')).toBe('original-destination');
-    await expect(access(destPath)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-
-  it.each(['EPERM', 'EEXIST'] as const)('overwrites an existing destination when same-volume rename fails with %s', async (renameErrorCode) => {
-    const root = mkdtempSync(join(tmpdir(), 'happier-finalize-upload-'));
-    tempDirs.push(root);
-    const tempPath = join(root, 'temp.txt');
-    const destPath = join(root, 'dest', 'file.txt');
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(destPath, 'original-destination', 'utf8');
-    writeFileSync(tempPath, 'payload', 'utf8');
-    firstRenameErrorCode = renameErrorCode;
-
-    const result = await finalizeWorkspaceFileUpload({
-      tempPath,
-      destPath,
-      destDisplayPath: '~/dest/file.txt',
-      overwrite: true,
-      sizeBytes: 7,
-    });
-
-    expect(result).toEqual({
-      success: true,
-      path: '~/dest/file.txt',
-      sizeBytes: 7,
-    });
-    expect(readFileSync(destPath, 'utf8')).toBe('payload');
-    await expect(access(tempPath)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-
-  it('does not overwrite a destination created after the no-overwrite preflight check', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'happier-finalize-upload-race-'));
-    tempDirs.push(root);
-    const tempPath = join(root, 'temp.txt');
-    const destPath = join(root, 'dest', 'file.txt');
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(tempPath, 'payload', 'utf8');
-    firstRenameErrorCode = null;
-    createDestinationBeforeExclusiveCopy = true;
-
-    const result = await finalizeWorkspaceFileUpload({
-      tempPath,
-      destPath,
-      destDisplayPath: '~/dest/file.txt',
-      overwrite: false,
-      sizeBytes: 7,
-    });
-
-    expect(result).toEqual({
-      success: false,
-      error: 'Destination already exists',
-      keepSession: true,
-    });
-    expect(readFileSync(destPath, 'utf8')).toBe('raced-destination');
-    expect(readFileSync(tempPath, 'utf8')).toBe('payload');
+  it('preserves exclusive creation for an unguarded no-overwrite upload', async () => {
+    const input = await fixture();
+    faults.raceCopy = true;
+    expect(await finalizeWorkspaceFileUpload({ ...input, overwrite: false })).toMatchObject({ success: false, keepSession: true });
+    expect(await readFile(input.destPath, 'utf8')).toBe('raced-destination');
+    expect(await readFile(input.tempPath)).toEqual(payload);
     expect(renameMock).not.toHaveBeenCalled();
-    expect(copyFileMock).toHaveBeenCalled();
   });
 });
