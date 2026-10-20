@@ -7,6 +7,7 @@ import type { SessionListQueryV1 } from '@happier-dev/protocol';
 
 import { createSessionListQuerySourceHarness, waitForSessionListQueryState, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
 import { buildSessionListRenderableFromSession } from './sessionListRenderable';
 import { useSessionListQueryHomeStates, useSessionListQuerySourceState, type SessionListQuerySourceState } from './useSessionListQuerySourceState';
@@ -48,10 +49,13 @@ async function writeMetadata(serverId: string, sessionId: string, version: numbe
 }
 
 describe('session list query source: subscription locality', () => {
-    it('does not re-render a disabled source (the home and summary paths) when a session row changes', async () => {
+    it('does not re-render a disabled source (the home and summary paths) when session rows or Machines change', async () => {
         const serverId = boundary.serverIds[0]!;
         const row = buildSessionListRenderableFromSession(createSessionFixture({ id: 'idle-row', metadataVersion: 1 }));
         storage.getState().applyServerScopedSessionListRows(serverId, [row], { source: 'ordinary', mode: 'replace' });
+        let machine = createMachineFixture({ id: 'disabled-query-machine', activeAt: Date.now(),
+            daemonState: { contributionRegistryProjectionRevision: 1 } });
+        storage.getState().applyMachines([machine], false, { sourceServerId: serverId });
         let renders = 0;
         function Host() {
             useSessionListQuerySourceState({ enabled: false, homes: [] });
@@ -63,6 +67,11 @@ describe('session list query source: subscription locality', () => {
             const settled = renders;
             await writeMetadata(serverId, row.id, 2);
             await writeMetadata(serverId, row.id, 3);
+            for (let index = 0; index < 5; index++) {
+                machine = { ...machine, seq: machine.seq + 1, daemonStateVersion: machine.daemonStateVersion + 1,
+                    activeAt: Date.now(), updatedAt: Date.now() };
+                await act(async () => storage.getState().applyMachines([machine], false, { sourceServerId: serverId }));
+            }
             expect(renders).toBe(settled);
         } finally { await screen.unmount(); }
     });

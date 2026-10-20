@@ -670,7 +670,7 @@ export function useSessionListQuerySourceState(input: SessionListQueryInput): Se
         [input.enabled, layer.homes],
     );
     const rowsByServerId = useSessionListRowsByServerId(homeServerIds);
-    const machineListsByServerId = useMachineListByServerId();
+    const machineListsByServerId = useMachineListByServerId(input.enabled);
     const activeGroupingV1 = useSetting('sessionListActiveGroupingV1');
     const inactiveGroupingV1 = useSetting('sessionListInactiveGroupingV1');
     const sectionModeV1 = useSetting('sessionListSectionModeV1');
