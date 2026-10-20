@@ -154,11 +154,11 @@ describe('bundled Conversation runtime host tool projection', () => {
   });
 
   it('keeps effectful canonical ActionSpecs closed until the provider declares stable call/result custody', () => {
-    // `session.message.send` is a canonical mutation with a non-port-bound
+    // `session.user_action.answer` is a canonical mutation with a non-port-bound
     // handler. Contextual commands intentionally require the injected AppShell
     // port and therefore cannot establish this generic custody invariant.
     const effectfulSpec = resolveEnabledVoiceToolActionSpecsFromState(storage.getState()).find(
-      (spec) => spec.id === 'session.message.send' && !isVoiceSdkSafeActionSpec(spec),
+      (spec) => spec.id === 'session.user_action.answer' && !isVoiceSdkSafeActionSpec(spec),
     );
     expect(effectfulSpec).toBeDefined();
     const effectfulToolName = String(effectfulSpec?.bindings?.voiceClientToolName ?? '').trim();
