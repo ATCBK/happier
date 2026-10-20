@@ -1,9 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { derivePluginAccountContributionRegistrationRights, derivePluginContributionRegistrationRights, derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 import { createPluginRegistrationScope } from '../host/registration/index.js';
 import { definePlugin } from '../definePlugin.js';
+import type { PluginInvocationContext } from '../invocation.js';
+import type { PluginAccountActionContext } from '../actions/contracts.js';
 
 describe('Account action registration through the shared activation ABI', () => {
+    it('infers each handler context from its declared target including the daemon default', () => {
+        const plugin = definePlugin({ id: 'acme.inference', version: '1.0.0', actions: {
+            daemon: { title: 'Daemon', surfaces: ['plugin'], run: (_input, context) => {
+                expectTypeOf(context).toEqualTypeOf<PluginInvocationContext>();
+                return null;
+            } },
+            account: { title: 'Account', surfaces: ['plugin'], execution: { target: 'account',
+                account: { artifactId: 'portable', exportName: 'activate' } }, run: (_input, context) => {
+                expectTypeOf(context).toEqualTypeOf<PluginAccountActionContext>();
+                return null;
+            } },
+        } });
+        expect(plugin.manifest.contributes.actions).toMatchObject([
+            { id: 'daemon', execution: { target: 'daemon' } },
+            { id: 'account', execution: { target: 'account' } },
+        ]);
+    });
     it('accepts declaration-only Account Actions registered by a separate portable artifact', () => {
         const plugin = definePlugin({ id: 'acme.separate', version: '1.0.0', actions: {
             read: { title: 'Read', surfaces: ['plugin'], execution: { target: 'account',

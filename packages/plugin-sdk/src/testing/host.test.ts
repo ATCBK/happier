@@ -99,7 +99,7 @@ it('refuses a Machine-origin request for an Account Action before its effects', 
     module: { activate(api) { api.actions.register('send', async (_input, context) => {
       try {
         await context.services.actions.executeWithExecutionOrigin({ pluginId: definition.manifest.id, localId: 'receive' }, null);
-        return { notStarted: false };
+        return { notStarted: false, code: 'unexpected_success' };
       } catch (error) {
         return { notStarted: isPluginActionHandlerInvocationNotStartedAdvisory(error), code: isPluginError(error) ? error.code : 'unexpected' };
       }
