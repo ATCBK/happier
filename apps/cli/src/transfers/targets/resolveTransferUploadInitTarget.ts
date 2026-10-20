@@ -37,6 +37,7 @@ export type SessionFileUploadInitRequest = Readonly<{
   path: unknown;
   sizeBytes: unknown;
   overwrite?: unknown;
+  expectedHash?: unknown;
   sha256?: unknown;
 }>;
 
@@ -187,6 +188,7 @@ export async function resolveTransferUploadInitTarget(params: Readonly<{
     path: fileRequest.path,
     sizeBytes: fileRequest.sizeBytes,
     overwrite: fileRequest.overwrite,
+    expectedHash: fileRequest.expectedHash,
     additionalAllowedWriteDirs: params.additionalAllowedWriteDirs,
     sessionRpcTransferMaxBytes: params.sessionRpcTransferMaxBytes ?? null,
     finalizeFileOperations: params.finalizeFileOperations,

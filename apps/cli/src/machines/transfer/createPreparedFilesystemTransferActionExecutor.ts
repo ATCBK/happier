@@ -140,6 +140,7 @@ export function createPreparedFilesystemTransferActionExecutor(params: Readonly<
         }
         const prepared = await params.lifecycle.prepareImportSession({ t: 'session_file_upload_v1', workingDirectory: target.rootPath,
           path: target.path, sizeBytes: input.source.sizeBytes, overwrite: input.overwrite,
+          ...('expectedHash' in input && input.expectedHash !== undefined ? { expectedHash: input.expectedHash } : {}),
           additionalAllowedWriteDirs: params.getAdditionalAllowedWriteDirs?.(),
           ...(input.source.sha256 ? { sha256: input.source.sha256 } : {}) }, scope);
         const settlement = params.lifecycle.waitForImportTransferSettlement(prepared.uploadId, scope);

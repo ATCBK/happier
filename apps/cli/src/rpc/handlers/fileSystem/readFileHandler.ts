@@ -1,4 +1,4 @@
-import { readFile, stat } from 'fs/promises';
+import { open, readFile, stat } from 'fs/promises';
 
 import { configuration } from '@/configuration';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
@@ -14,12 +14,13 @@ import {
 import { registerRootedFilesystemRpcHandlers } from './registerRootedFilesystemRpcHandlers';
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
 import type { ActionId } from '@happier-dev/protocol';
+import { FilesystemReadFileInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 
-type ReadFileRequest = Readonly<{ rootPath?: string; path: string }>;
+type ReadFileRequest = Readonly<{ rootPath?: string; path: string; offset?: number; length?: number }>;
 
 type ReadFileResponse =
-  | Readonly<{ success: true; content: string }>
-  | Readonly<{ success: false; error: string }>;
+  | Readonly<{ success: true; content: string; sizeBytes?: number; eof?: boolean }>
+  | Readonly<{ success: false; error: string; errorCode?: string }>;
 
 type ReadFileHandlerDeps = Readonly<{
   workingDirectory: string;
@@ -29,6 +30,13 @@ type ReadFileHandlerDeps = Readonly<{
 }>;
 
 async function readFileForRpc(data: ReadFileRequest | undefined, deps: ReadFileHandlerDeps): Promise<ReadFileResponse> {
+  // Rootless predecessor reads retain their policy and exact-file grants below;
+  // the same current schema owns byte-range admission for both RPC carriers.
+  const parsed = FilesystemReadFileInputSchema.safeParse({ ...data,
+    rootPath: data?.rootPath === undefined ? deps.workingDirectory : data.rootPath });
+  if (!parsed.success) {
+    return { success: false, errorCode: 'invalid_request', error: 'Invalid file read request' };
+  }
   const path = typeof data?.path === 'string' ? data.path : '';
   logger.debug('Read file request:', path);
   const validation = data?.rootPath === undefined
@@ -56,6 +64,31 @@ async function readFileForRpc(data: ReadFileRequest | undefined, deps: ReadFileH
     const stats = await stat(resolvedPath);
     if (stats.isDirectory()) {
       return { success: false, error: 'Path is a directory' };
+    }
+    const length = parsed.data.length;
+    if (length !== undefined) {
+      if (length > configuration.filesReadMaxBytes) {
+        return { success: false, error: 'Requested range is too large to read' };
+      }
+      const file = await open(resolvedPath, 'r');
+      try {
+        const sizeBytes = (await file.stat()).size;
+        const offset = parsed.data.offset ?? 0;
+        const buffer = Buffer.alloc(Math.min(length, Math.max(0, sizeBytes - offset)));
+        let bytesRead = 0;
+        while (bytesRead < buffer.length) {
+          const chunk = await file.read(buffer, bytesRead, buffer.length - bytesRead, offset + bytesRead);
+          if (chunk.bytesRead === 0) break;
+          bytesRead += chunk.bytesRead;
+        }
+        if ((await file.stat()).size !== sizeBytes || bytesRead !== buffer.length) {
+          return { success: false, error: 'File changed during download. Try again' };
+        }
+        return { success: true, content: buffer.subarray(0, bytesRead).toString('base64'), sizeBytes,
+          eof: offset + bytesRead >= sizeBytes };
+      } finally {
+        await file.close();
+      }
     }
     if (stats.size > configuration.filesReadMaxBytes) {
       return { success: false, error: 'File is too large to read' };
