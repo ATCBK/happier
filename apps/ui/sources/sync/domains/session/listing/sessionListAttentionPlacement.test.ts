@@ -270,43 +270,16 @@ describe('unread attention placement', () => {
         ]);
     });
 
-    it('places an unread session in attention ahead of background activity', () => {
+    it('keeps an unread background session working by default', () => {
         const source = createSource(['working-and-unread']);
         const resolveSessionRow = () => createRow({
-            id: 'working-and-unread',
-            latestTurnStatus: undefined,
-            latestTurnStatusObservedAt: undefined,
-            runtimeActivityState: 'active',
-            runtimeActivityActiveCount: 1,
-            runtimeActivityObservedAt: nowMs - 1_000,
-            runtimeActivityRevision: nowMs + 60_000,
-            seq: 12,
-            lastViewedSessionSeq: 4,
-            hasUnreadMessages: true,
-            meaningfulActivityAt: nowMs - 1_000,
+            id: 'working-and-unread', latestTurnStatus: undefined,
+            runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+            runtimeActivityObservedAt: nowMs - 1_000, runtimeActivityRevision: 1,
+            seq: 12, lastViewedSessionSeq: 4, hasUnreadMessages: true,
         });
-
-        expect(buildSessionListAttentionPlacement({
-            source,
-            options: { mode: 'global' },
-            nowMs,
-            resolveSessionRow,
-        })).toMatchObject({
-            attentionItems: [
-                expect.objectContaining({ type: 'header', headerKind: 'attention' }),
-                expect.objectContaining({
-                    type: 'session',
-                    sessionId: 'working-and-unread',
-                    attentionPlacementReason: 'unread',
-                }),
-            ],
-        });
-        expect(buildSessionListWorkingPlacement({
-            source,
-            options: { mode: 'global' },
-            nowMs,
-            resolveSessionRow,
-        })).toBeNull();
+        expect(buildSessionListAttentionPlacement({ source, options: { mode: 'global' }, nowMs, resolveSessionRow })).toBeNull();
+        expect(buildSessionListWorkingPlacement({ source, options: { mode: 'global' }, nowMs, resolveSessionRow })?.promotedCount).toBe(1);
     });
 
     it('keeps ready precedence for a row that is both ready and unread', () => {
@@ -334,9 +307,7 @@ describe('unread attention placement', () => {
         }));
     });
 
-    it('places an unread completed turn in Ready ahead of background activity', () => {
-        // The foreground reply (often a question) is what waits on the person; background work
-        // only claims the row once that reply has been read.
+    it('configures unread completion placement without claiming continuing work is ready', () => {
         const source = createSource(['ready-over-background']);
         const row = createRow({
             id: 'ready-over-background',
@@ -352,15 +323,13 @@ describe('unread attention placement', () => {
             runtimeActivityRevision: 1,
         });
 
-        expect(buildSessionListAttentionPlacement({
-            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row,
-        })?.attentionItems[1]).toEqual(expect.objectContaining({
-            sessionId: 'ready-over-background',
-            attentionPlacementReason: 'ready',
-        }));
-        expect(buildSessionListWorkingPlacement({
-            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row,
-        })?.promotedCount ?? 0).toBe(0);
+        for (const backgroundWorkAttentionMode of ['keepWorking', 'keepWorkingUnread', 'showUnread'] as const) {
+            const params = { source, options: { mode: 'global' as const }, nowMs, resolveSessionRow: () => row, backgroundWorkAttentionMode };
+            const attention = buildSessionListAttentionPlacement(params);
+            expect(attention?.attentionItems[1]?.type === 'session' ? attention.attentionItems[1].attentionPlacementReason : null)
+                .toBe(backgroundWorkAttentionMode === 'showUnread' ? 'unread' : null);
+            expect(buildSessionListWorkingPlacement(params)?.promotedCount ?? 0).toBe(backgroundWorkAttentionMode === 'showUnread' ? 0 : 1);
+        }
 
         const read = { ...row, lastViewedSessionSeq: 9 };
         expect(buildSessionListAttentionPlacement({
@@ -371,7 +340,20 @@ describe('unread attention placement', () => {
         })?.promotedCount).toBe(1);
     });
 
-    it('places a modern viewer attention reason ahead of background activity', () => {
+    it('does not infer readiness from a disconnected runtime with reported background work', () => {
+        const source = createSource(['disconnected-background']);
+        const row = createRow({
+            id: 'disconnected-background', active: false, presence: 'offline',
+            latestTurnStatus: 'completed', latestTurnStatusObservedAt: nowMs - 10_000,
+            meaningfulActivityAt: nowMs - 10_500, seq: 9, lastViewedSessionSeq: 4,
+            runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+        });
+        const params = { source, options: { mode: 'global' as const }, nowMs, resolveSessionRow: () => row };
+        expect(buildSessionListAttentionPlacement(params)?.attentionItems[1]).toMatchObject({ attentionPlacementReason: 'unread' });
+        expect(buildSessionListWorkingPlacement(params)).toBeNull();
+    });
+
+    it('configures background placement using authoritative modern unread facts', () => {
         const source = createSource(['modern-unread-background']);
         const viewer = (needsAttention: boolean) => ({
             readState: { state: 'tracking' as const, lastViewedSessionSeq: 0, unreadSince: 100 },
@@ -391,12 +373,13 @@ describe('unread attention placement', () => {
             viewer: viewer(needsAttention),
         });
 
-        expect(buildSessionListAttentionPlacement({
-            source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row(true),
-        })?.attentionItems[1]).toEqual(expect.objectContaining({
-            sessionId: 'modern-unread-background',
-            attentionPlacementReason: 'unread',
-        }));
+        for (const backgroundWorkAttentionMode of ['keepWorking', 'keepWorkingUnread', 'showUnread'] as const) {
+            const params = { source, options: { mode: 'global' as const }, nowMs, resolveSessionRow: () => row(true), backgroundWorkAttentionMode };
+            const attention = buildSessionListAttentionPlacement(params);
+            expect(attention?.attentionItems[1]?.type === 'session' ? attention.attentionItems[1].attentionPlacementReason : null)
+                .toBe(backgroundWorkAttentionMode === 'showUnread' ? 'unread' : null);
+            expect(buildSessionListWorkingPlacement(params)?.promotedCount ?? 0).toBe(backgroundWorkAttentionMode === 'showUnread' ? 0 : 1);
+        }
         expect(buildSessionListAttentionPlacement({
             source, options: { mode: 'global' }, nowMs, resolveSessionRow: () => row(false),
         })).toBeNull();

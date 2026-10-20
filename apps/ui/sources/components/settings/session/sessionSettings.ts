@@ -70,6 +70,7 @@ export const SESSION_SETTINGS = defineSettingsPage({
             settings: {
                 workingStatusAnimatedText: {},
                 attentionPromotion: {},
+                backgroundWorkAttention: {},
                 reminderAutoClearOnOpen: {},
                 attentionStandingDefault: {},
                 workingPlacement: {

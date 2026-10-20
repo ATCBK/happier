@@ -1,3 +1,4 @@
+import { resolveSessionListBackgroundWorkAttention, type SessionListBackgroundWorkAttentionMode } from './sessionListBackgroundWorkAttention';
 import { describeWorkStatusBucket } from '@/components/work/status/workStatusBuckets';
 import { projectUiSessionRuntimeAwareness } from '@/sync/domains/session/attention/runtimePresentation';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
@@ -95,6 +96,7 @@ type PlacementLane<Reason extends PlacementReason> = Readonly<{
         retainedAttentionPlacements?: ReadonlyMap<string, SessionListRetainedAttentionPlacement>;
         standingPolicy: SessionAttentionStandingPolicy | undefined;
         nowMs: number;
+        backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
         allowArchived?: boolean;
     }>) => PlacementCandidate<Reason> | null;
     compareCandidates: (left: PlacementCandidate<Reason>, right: PlacementCandidate<Reason>) => number;
@@ -232,16 +234,15 @@ function resolveLegacyAttentionReason(
     if (runtimePresentation.working) {
         return null;
     }
-    // A finished turn or unread reply outranks background activity: the person
-    // can act on it now, while the background work needs nothing from them.
-    if (isTerminalTurnAfterReadCursor(session)) {
+    const unseenCompletion = isTerminalTurnAfterReadCursor(session);
+    if (unseenCompletion && runtimePresentation.operational.primary === 'ready') {
         return 'ready';
     }
     // Weakest attention signal, so it is checked last: anything the session
     // explicitly asked for keeps its own reason and its own ordering. Unread is
     // read from the canonical unread fact the row already renders its badge
     // from, so the band and the badge can never disagree.
-    if (session.hasUnreadMessages === true) {
+    if (session.hasUnreadMessages === true || unseenCompletion) {
         return 'unread';
     }
     if (runtimePresentation.runtime === 'background_active') {
@@ -256,7 +257,7 @@ function resolveLegacyAttentionReason(
     return null;
 }
 
-function resolveAttentionReason(
+function resolveUnadjustedAttentionReason(
     session: SessionListRenderableSession,
     runtimePresentation: ReturnType<typeof deriveRuntimePresentationForSession>,
     standingSource: SessionAttentionStandingSource = 'none',
@@ -271,8 +272,8 @@ function resolveAttentionReason(
 
     // A foreground turn keeps its working placement. Every personal reason below
     // comes from the Protocol-owned viewer decision; raw seq/pending/runtime facts
-    // cannot override a quiet modern projection. Background activity yields to a
-    // projected reason, since that reason is something the person can act on now.
+    // cannot override a quiet modern projection. The shared presentation policy
+    // subsequently applies the background-work preference without changing these facts.
     if (runtimePresentation.working) return null;
     const projected = viewer.viewer.attention;
     if (projected.needsAttention) {
@@ -291,6 +292,25 @@ function resolveAttentionReason(
     return null;
 }
 
+function resolveAttentionReason(
+    session: SessionListRenderableSession,
+    runtimePresentation: ReturnType<typeof deriveRuntimePresentationForSession>,
+    standingSource: SessionAttentionStandingSource,
+    backgroundWorkAttentionMode: SessionListBackgroundWorkAttentionMode | undefined,
+): SessionListAttentionPlacementReason | null {
+    const projectedReason = resolveUnadjustedAttentionReason(session, runtimePresentation, standingSource);
+    const reason = projectedReason === 'ready' && runtimePresentation.backgroundActive ? 'unread' : projectedReason;
+    // This is presentation only: the viewer's unread, Follow, relevance and access facts are intact.
+    if (reason !== null && reason !== 'unread' && reason !== 'ready' && reason !== 'standing') return reason;
+    const backgroundAttention = resolveSessionListBackgroundWorkAttention({
+        backgroundActive: runtimePresentation.runtime === 'background_active',
+        hasUnreadMessages: reason === 'unread' || reason === 'ready',
+        mode: backgroundWorkAttentionMode,
+    });
+    if (backgroundAttention) return backgroundAttention.placement === 'unread' ? 'unread' : null;
+    return reason;
+}
+
 type SessionListPlacementProjection = Readonly<{
     attentionReason: SessionListAttentionPlacementReason | null;
     standingSource: SessionAttentionStandingSource;
@@ -302,6 +322,7 @@ function projectSessionListPlacement(params: Readonly<{
     sessionKey: string;
     standingPolicy?: SessionAttentionStandingPolicy;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): SessionListPlacementProjection {
     const runtimePresentation = deriveRuntimePresentationForSession(params.session, params.nowMs);
     const liveWorking = runtimePresentation.working
@@ -313,6 +334,7 @@ function projectSessionListPlacement(params: Readonly<{
         params.session,
         runtimePresentation,
         standingSource,
+        params.backgroundWorkAttentionMode,
     );
     const dueReminder = resolveSessionReminderPresentation(
         params.standingPolicy?.overridesBySessionKey[params.sessionKey], params.nowMs,
@@ -457,6 +479,7 @@ function resolveAttentionCandidate(params: Readonly<{
     retainedAttentionPlacements?: ReadonlyMap<string, SessionListRetainedAttentionPlacement>;
     standingPolicy: SessionAttentionStandingPolicy | undefined;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
     allowArchived?: boolean;
 }>): PlacementCandidate<SessionListAttentionPlacementReason> | null {
     const key = normalizeSessionListKeyParts(params.item.serverId, params.item.sessionId).sessionKey;
@@ -472,6 +495,7 @@ function resolveAttentionCandidate(params: Readonly<{
             sessionKey: key,
             standingPolicy: params.standingPolicy,
             nowMs: params.nowMs,
+            backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
         }),
     });
 }
@@ -517,6 +541,7 @@ function resolveWorkingCandidate(params: Readonly<{
     retainedKeys: ReadonlySet<string>;
     retainedKeyRanks: ReadonlyMap<string, number>;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): PlacementCandidate<'working'> | null {
     const key = normalizeSessionListKeyParts(params.item.serverId, params.item.sessionId).sessionKey;
     if (!key || !params.row) return null;
@@ -529,6 +554,7 @@ function resolveWorkingCandidate(params: Readonly<{
             session: params.row,
             sessionKey: key,
             nowMs: params.nowMs,
+            backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
         }),
     });
 }
@@ -542,6 +568,7 @@ function createWorkingCandidate(params: Readonly<{
     retainedKeys: ReadonlySet<string>;
     retainedKeyRanks: ReadonlyMap<string, number>;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): PlacementCandidate<'working'> | null {
     if (params.item.archivedAt != null || params.row.archivedAt != null) return null;
     if (params.projection.attentionReason) return null;
@@ -677,6 +704,7 @@ export function buildSessionListGlobalPlacements(params: Readonly<{
     workingOptions: SessionListWorkingPlacementOptions | undefined;
     resolveSessionRow: (serverId: string | null | undefined, sessionId: string) => SessionListRenderableSession | null;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): SessionListGlobalPlacementsResult | null {
     if (params.source.length === 0) return null;
 
@@ -709,6 +737,7 @@ export function buildSessionListGlobalPlacements(params: Readonly<{
             sessionKey: key,
             standingPolicy: attentionEnabled ? params.attentionOptions?.standingPolicy : undefined,
             nowMs: params.nowMs,
+            backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
         });
 
         if (
@@ -742,6 +771,7 @@ export function buildSessionListGlobalPlacements(params: Readonly<{
             retainedKeys: retainedWorkingKeys,
             retainedKeyRanks: retainedWorkingKeyRanks,
             nowMs: params.nowMs,
+            backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
         });
         if (!workingCandidate) return;
         workingCandidates.push(workingCandidate);
@@ -799,6 +829,7 @@ function reorderSessionRunWithinGroup<Reason extends PlacementReason>(
     nowMs: number,
     allowArchived?: boolean,
     retainedAttentionPlacements?: ReadonlyMap<string, SessionListRetainedAttentionPlacement>,
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode,
 ): Readonly<{
     items: SessionListIndexItem[];
     changed: boolean;
@@ -814,6 +845,7 @@ function reorderSessionRunWithinGroup<Reason extends PlacementReason>(
             retainedKeyRanks,
             retainedAttentionPlacements,
             standingPolicy,
+            backgroundWorkAttentionMode,
             nowMs,
             allowArchived,
         });
@@ -848,6 +880,7 @@ function applySessionListPlacementWithinGroups<Reason extends PlacementReason>(p
     resolveSessionRow: (serverId: string | null | undefined, sessionId: string) => SessionListRenderableSession | null;
     lane: PlacementLane<Reason>;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
     allowArchived?: boolean;
 }>): SessionListIndexItem[] {
     if (params.source.length === 0) {
@@ -869,6 +902,7 @@ function applySessionListPlacementWithinGroups<Reason extends PlacementReason>(p
             params.nowMs,
             params.allowArchived,
             params.retainedAttentionPlacements,
+            params.backgroundWorkAttentionMode,
         );
         out.push(...reordered.items);
         changed = changed || reordered.changed;
@@ -897,6 +931,7 @@ export function buildSessionListAttentionPlacement(params: Readonly<{
     options: SessionListAttentionPlacementOptions | undefined;
     resolveSessionRow: (serverId: string | null | undefined, sessionId: string) => SessionListRenderableSession | null;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): SessionListAttentionPlacementResult | null {
     if (normalizeSessionListAttentionPlacementMode(params.options?.mode) !== 'global' || !params.options) {
         return null;
@@ -908,6 +943,7 @@ export function buildSessionListAttentionPlacement(params: Readonly<{
         workingOptions: undefined,
         resolveSessionRow: params.resolveSessionRow,
         nowMs: params.nowMs,
+        backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
     });
     return result && result.attentionPromotedCount > 0
         ? {
@@ -932,6 +968,7 @@ export function buildSessionListWorkingPlacement(params: Readonly<{
     options: SessionListWorkingPlacementOptions | undefined;
     resolveSessionRow: (serverId: string | null | undefined, sessionId: string) => SessionListRenderableSession | null;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): SessionListWorkingPlacementResult | null {
     if (normalizeSessionListWorkingPlacementMode(params.options?.mode) !== 'global' || !params.options) {
         return null;
@@ -943,6 +980,7 @@ export function buildSessionListWorkingPlacement(params: Readonly<{
         workingOptions: params.options,
         resolveSessionRow: params.resolveSessionRow,
         nowMs: params.nowMs,
+        backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
     });
     return result && result.workingPromotedCount > 0
         ? {
@@ -958,6 +996,7 @@ export function applySessionListAttentionPlacementWithinGroups(params: Readonly<
     options: SessionListAttentionPlacementOptions | undefined;
     resolveSessionRow: (serverId: string | null | undefined, sessionId: string) => SessionListRenderableSession | null;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): SessionListIndexItem[] {
     if (normalizeSessionListAttentionPlacementMode(params.options?.mode) !== 'withinGroups' || !params.options) {
         return params.source as SessionListIndexItem[];
@@ -972,6 +1011,7 @@ export function applySessionListAttentionPlacementWithinGroups(params: Readonly<
         resolveSessionRow: params.resolveSessionRow,
         lane: ATTENTION_LANE,
         nowMs: params.nowMs,
+        backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
     });
 }
 
@@ -980,6 +1020,7 @@ export function applySessionListWorkingPlacementWithinGroups(params: Readonly<{
     options: SessionListWorkingPlacementOptions | undefined;
     resolveSessionRow: (serverId: string | null | undefined, sessionId: string) => SessionListRenderableSession | null;
     nowMs: number;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): SessionListIndexItem[] {
     if (normalizeSessionListWorkingPlacementMode(params.options?.mode) !== 'withinGroups' || !params.options) {
         return params.source as SessionListIndexItem[];
@@ -991,6 +1032,7 @@ export function applySessionListWorkingPlacementWithinGroups(params: Readonly<{
         resolveSessionRow: params.resolveSessionRow,
         lane: WORKING_LANE,
         nowMs: params.nowMs,
+        backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
     });
 }
 

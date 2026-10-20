@@ -1,3 +1,4 @@
+import type { SessionListBackgroundWorkAttentionMode } from './sessionListBackgroundWorkAttention';
 import { nestSessionListReports, resolveWorkflowRunParentSessionId } from './nestSessionListReports';
 import { canSessionListFilterIncludeRunsV1, normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
@@ -78,6 +79,7 @@ export type ComputeVisibleSessionListIndexParams = Readonly<{
     sessionListSectionModeV1?: SessionListOrderingSectionMode;
     sessionListLayoutChoice?: SessionListLayoutChoice;
     sessionListFolderSortModeV1?: SessionListFolderSortModeV1;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
     attentionPlacement?: SessionListAttentionPlacementOptions;
     workingPlacement?: SessionListWorkingPlacementOptions;
     presentation: Readonly<{
@@ -1086,6 +1088,7 @@ function buildVisibleSessionListGlobalPlacementPlan(params: Readonly<{
     const globalAttentionSource = pruneOrphanHeaders(params.ordered);
     const globalPlacements = buildSessionListGlobalPlacements({
         source: globalAttentionSource,
+        backgroundWorkAttentionMode: params.options.backgroundWorkAttentionMode,
         attentionOptions: params.options.attentionPlacement,
         workingOptions: params.options.workingPlacement,
         resolveSessionRow: params.options.resolveSessionRow,
@@ -1119,6 +1122,7 @@ function applyVisibleSessionListWithinGroupPlacement(params: Readonly<{
         ? remainderPruned
         : applySessionListWorkingPlacementWithinGroups({
             source: remainderPruned,
+            backgroundWorkAttentionMode: params.options.backgroundWorkAttentionMode,
             options: params.options.workingPlacement,
             resolveSessionRow: params.options.resolveSessionRow,
             nowMs: params.nowMs,
@@ -1127,6 +1131,7 @@ function applyVisibleSessionListWithinGroupPlacement(params: Readonly<{
         ? remainderAfterWorking
         : applySessionListAttentionPlacementWithinGroups({
             source: remainderAfterWorking,
+            backgroundWorkAttentionMode: params.options.backgroundWorkAttentionMode,
             options: params.options.attentionPlacement,
             resolveSessionRow: params.options.resolveSessionRow,
             nowMs: params.nowMs,

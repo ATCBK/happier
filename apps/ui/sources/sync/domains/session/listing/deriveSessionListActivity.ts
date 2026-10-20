@@ -1,3 +1,4 @@
+import { hasSessionListUnreadAttention, resolveSessionListBackgroundWorkAttention, type SessionListBackgroundWorkAttentionMode } from './sessionListBackgroundWorkAttention';
 import { SessionAwarenessOperationalPrimaryV1Schema, type SessionAwarenessOperationalPrimaryV1 } from '@happier-dev/protocol/sessions/awareness/projectionV1';
 import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
 
@@ -87,8 +88,8 @@ export function mapSessionAwarenessToListAttentionState(
  * list's presentation vocabulary.
  *
  * Both owners decide their own facts first; this only chooses which of the two a single row of
- * space shows. Unread is deliberately the weakest input — it surfaces a session nothing else has
- * to say about, and never hides a session that is failing, blocked or working.
+ * space shows. Actionable and foreground work retain precedence; the shared background-work
+ * policy decides whether an unread reply replaces its working marker.
  */
 export function resolveSessionListAttentionState(input: Readonly<{
     operational: SessionAwarenessOperationalPrimaryV1;
@@ -99,8 +100,18 @@ export function resolveSessionListAttentionState(input: Readonly<{
      * onto plain unread. Absent on pre-viewer rows, which stay `unread`.
      */
     personalAttentionReason?: SessionPersonalAttentionReasonV1 | null;
+    backgroundActive?: boolean;
+    backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): SessionListAttentionState {
     const operational = mapSessionAwarenessToListAttentionState(input.operational);
+    if (operational === 'failed' || operational === 'permission_required' || operational === 'action_required' || operational === 'thinking') return operational;
+    if (input.backgroundActive === true && input.personalAttentionReason === 'mentioned' && input.hasUnreadMessages) return 'mentioned';
+    const backgroundAttention = resolveSessionListBackgroundWorkAttention({
+        backgroundActive: input.backgroundActive === true,
+        hasUnreadMessages: hasSessionListUnreadAttention(input),
+        mode: input.backgroundWorkAttentionMode,
+    });
+    if (backgroundAttention) return backgroundAttention.attentionState;
     if (operational !== 'quiet' || !input.hasUnreadMessages) return operational;
     return input.personalAttentionReason === 'mentioned' ? 'mentioned' : 'unread';
 }

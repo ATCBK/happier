@@ -165,7 +165,7 @@ describe('projectUiSessionRuntimeAwareness', () => {
         expect(runtimeState.freshThinking).toBe(false);
         expect(runtimeState.backgroundActive).toBe(true);
         expect(runtimeState.working).toBe(false);
-        expect(runtimeState.operational.primary).toBe('ready');
+        expect(runtimeState.operational.primary).toBe('none');
     });
 
     it('keeps foreground working precedence over provider runtime activity', () => {

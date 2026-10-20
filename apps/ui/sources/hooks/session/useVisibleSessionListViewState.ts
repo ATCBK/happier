@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { normalizeSessionListBackgroundWorkAttentionMode, type SessionListBackgroundWorkAttentionMode } from '@/sync/domains/session/listing/sessionListBackgroundWorkAttention';
 import { usePathname } from 'expo-router';
 import { canSessionListFilterIncludeRunsV1, normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -379,6 +380,7 @@ function areVisibleSessionListProjectionInputsEqual(
         && left.sessionListAttentionPromotionModeV1 === right.sessionListAttentionPromotionModeV1
         && areAttentionStandingPoliciesEqual(left.sessionAttentionStandingPolicy, right.sessionAttentionStandingPolicy)
         && left.sessionListWorkingPlacementModeV1 === right.sessionListWorkingPlacementModeV1
+        && left.backgroundWorkAttentionMode === right.backgroundWorkAttentionMode
         && left.sessionListFolderSortModeV1 === right.sessionListFolderSortModeV1
         && areSessionListGroupOrderMapsEqual(leftGroupOrder, rightGroupOrder)
         && areSessionWorkspaceOrderMapsEqual(leftWorkspaceOrder, rightWorkspaceOrder)
@@ -435,6 +437,7 @@ function buildVisibleSessionListIndex(params: Readonly<{
     sessionListAttentionPromotionModeV1: 'off' | 'global' | 'withinGroups';
     sessionAttentionStandingPolicy: SessionAttentionStandingPolicy;
     sessionListWorkingPlacementModeV1: 'off' | 'global' | 'withinGroups';
+    backgroundWorkAttentionMode: SessionListBackgroundWorkAttentionMode;
     sessionListFolderSortModeV1: 'foldersFirst' | 'mixed';
     activeSessionId: string | null;
     normalizedGroupOrder: SessionListGroupOrderV1;
@@ -490,6 +493,7 @@ function buildVisibleSessionListIndex(params: Readonly<{
             retainPlacements: params.retainAttentionPlacements,
             standingPolicy: params.sessionAttentionStandingPolicy,
         },
+        backgroundWorkAttentionMode: params.backgroundWorkAttentionMode,
         workingPlacement: {
             mode: params.sessionListWorkingPlacementModeV1,
             retainSessionKeys: params.retainWorkingSessionKeys,
@@ -599,6 +603,7 @@ export function useVisibleSessionListViewState(
         useSetting('sessionListWorkingPlacementModeV1'),
     );
     const sessionFolderViewModeV1 = useSetting('sessionFolderViewModeV1');
+    const backgroundWorkAttentionMode = normalizeSessionListBackgroundWorkAttentionMode(useSetting('sessionListBackgroundWorkAttentionModeV1'));
     const collapsedGroupKeysV1 = (useLocalSetting('collapsedGroupKeysV1') ?? {}) as Readonly<Record<string, boolean>>;
     const folderFocusInput = useLocalSetting('sessionListFocusedFolderV1') as SessionListFocusedFolderV1;
     const organizationServerIds = React.useMemo(() => resolveSessionListOrganizationServerIds({
@@ -726,6 +731,7 @@ export function useVisibleSessionListViewState(
         sessionListAttentionPromotionModeV1,
         sessionAttentionStandingPolicy,
         sessionListWorkingPlacementModeV1,
+        backgroundWorkAttentionMode,
         normalizedGroupOrder,
         sessionListGroupOrderV1,
         normalizedWorkspaceOrder,
@@ -769,6 +775,7 @@ export function useVisibleSessionListViewState(
         sessionListOrderingModeV1,
         sessionListSectionModeV1,
         sessionListWorkingPlacementModeV1,
+        backgroundWorkAttentionMode,
         sessionRowStateByServerId,
         sessionWorkspaceOrderV1,
         source,

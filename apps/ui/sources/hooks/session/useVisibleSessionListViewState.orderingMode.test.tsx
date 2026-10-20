@@ -19,6 +19,7 @@ const viewState = vi.hoisted(() => ({
     orderingMode: 'updated' as SessionListOrderingModeV1,
     attentionPromotionMode: 'off' as SessionListAttentionPromotionModeV1,
     workingPlacementMode: 'off' as SessionListWorkingPlacementModeV1,
+    backgroundWorkAttentionMode: 'keepWorking' as 'keepWorking' | 'keepWorkingUnread' | 'showUnread',
     sectionMode: 'single' as 'activity' | 'single',
     activeGrouping: 'project' as 'project' | 'date',
     hideInactiveSessions: false,
@@ -57,6 +58,23 @@ const viewState = vi.hoisted(() => ({
     },
     visibleIndexComputeCount: 0,
 }));
+
+function readViewSetting(key: string) {
+    if (key === 'hideInactiveSessions') return viewState.hideInactiveSessions;
+    if (key === 'pinnedSessionKeysV1') return [];
+    if (key === 'sessionListOrderingModeV1') {
+        viewState.observedOrderingMode.push(viewState.orderingMode);
+        return viewState.orderingMode;
+    }
+    if (key === 'sessionListAttentionPromotionModeV1') return viewState.attentionPromotionMode;
+    if (key === 'sessionListBackgroundWorkAttentionModeV1') return viewState.backgroundWorkAttentionMode;
+    if (key === 'sessionListWorkingPlacementModeV1') return viewState.workingPlacementMode;
+    if (key === 'sessionListSectionModeV1') return viewState.sectionMode;
+    if (key === 'sessionListActiveGroupingV1') return viewState.activeGrouping;
+    if (key === 'sessionFoldersV1') return viewState.sessionFolders;
+    if (key === 'sessionFolderViewModeV1') return viewState.sessionFolderViewMode;
+    return null;
+}
 
 function makeSessionRow(id: string, partial?: Partial<SessionListRenderableSession>): SessionListRenderableSession {
     return {
@@ -155,8 +173,15 @@ function setSessionOrganizationProjection(params: Parameters<typeof organization
     viewState.sessionOrganizationProjection = organizationProjection('s1', params);
 }
 
+// Shared presentation hooks import the narrow settings owner directly; both entry points read the
+// same account fixture so layout and attention cannot silently fall back to real-store defaults.
+vi.mock('@/sync/store/settingsReadHooks', async () => {
+    const { createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
+    return { useSetting: createUseSettingMock({ fallback: readViewSetting }) };
+});
+
 vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+    const { createStorageModuleStub, createStorageStoreMock, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
     const store = createStorageStoreMock({ workflowRunListWindows: {}, workflowRunsById: {} });
     return createStorageModuleStub({
             storage: store,
@@ -166,21 +191,7 @@ vi.mock('@/sync/domains/state/storage', async () => {
                 throw new Error('session list view state must use canonical row state instead of full artifacts');
             },
             useOpenApprovalSessionReferences: () => viewState.openApprovalSessionReferences,
-            useSetting: ((key: string) => {
-                if (key === 'hideInactiveSessions') return viewState.hideInactiveSessions;
-                if (key === 'pinnedSessionKeysV1') return [];
-                if (key === 'sessionListOrderingModeV1') {
-                    viewState.observedOrderingMode.push(viewState.orderingMode);
-                    return viewState.orderingMode;
-                }
-                if (key === 'sessionListAttentionPromotionModeV1') return viewState.attentionPromotionMode;
-                if (key === 'sessionListWorkingPlacementModeV1') return viewState.workingPlacementMode;
-                if (key === 'sessionListSectionModeV1') return viewState.sectionMode;
-                if (key === 'sessionListActiveGroupingV1') return viewState.activeGrouping;
-                if (key === 'sessionFoldersV1') return viewState.sessionFolders;
-                if (key === 'sessionFolderViewModeV1') return viewState.sessionFolderViewMode;
-                return null;
-            }) as any,
+            useSetting: createUseSettingMock({ fallback: readViewSetting }),
             useSettingMutable: ((key: string) => {
                 if (key === 'sessionListGroupOrderV1') {
                     return [viewState.groupOrder, viewState.setGroupOrder];
@@ -258,6 +269,7 @@ describe('useVisibleSessionListViewState (index pipeline)', () => {
         viewState.orderingMode = 'updated';
         viewState.attentionPromotionMode = 'off';
         viewState.workingPlacementMode = 'off';
+        viewState.backgroundWorkAttentionMode = 'keepWorking';
         viewState.sectionMode = 'single';
         viewState.activeGrouping = 'project';
         viewState.source = null;
@@ -657,6 +669,41 @@ describe('useVisibleSessionListViewState (index pipeline)', () => {
             expect.objectContaining({ type: 'header', headerKind: 'date' }),
             expect.objectContaining({ type: 'session', sessionId: 'quiet', groupKind: 'date' }),
         ]);
+    });
+
+    it.each([
+        ['global', 'global'], ['withinGroups', 'withinGroups'],
+        ['global', 'withinGroups'], ['withinGroups', 'global'],
+        ['off', 'global'], ['global', 'off'], ['off', 'withinGroups'], ['withinGroups', 'off'],
+    ] as const)('reacts to background unread preferences with attention %s and working %s', async (attentionMode, workingMode) => {
+        viewState.attentionPromotionMode = attentionMode;
+        viewState.workingPlacementMode = workingMode;
+        viewState.source = [{ type: 'session', sessionId: 'background-unread', serverId: 's1', section: 'active', groupKey: 'server:s1:active', groupKind: 'active' }];
+        viewState.rowsByServerId = { s1: { 'background-unread': makeSessionRow('background-unread', {
+            active: true, activeAt: Date.now(), presence: 'online', seq: 5, lastViewedSessionSeq: 1,
+            hasUnreadMessages: true, latestTurnStatus: 'completed', latestTurnStatusObservedAt: Date.now(),
+            runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+            runtimeActivityObservedAt: Date.now(), runtimeActivityRevision: 1,
+        }) } };
+        const hook = await renderHook(() => useVisibleSessionListViewState('all'));
+        const row = () => hook.getCurrent()?.visibleSessionListIndex?.find((item) => item.type === 'session');
+        expect(row()?.workingPlacementReason).toBe(workingMode === 'off' ? undefined : 'working');
+        viewState.backgroundWorkAttentionMode = 'keepWorkingUnread';
+        await hook.rerender();
+        expect(row()?.workingPlacementReason).toBe(workingMode === 'off' ? undefined : 'working');
+        viewState.backgroundWorkAttentionMode = 'showUnread';
+        await hook.rerender();
+        expect(row()?.attentionPlacementReason).toBe(attentionMode === 'off' ? undefined : 'unread');
+        viewState.backgroundWorkAttentionMode = 'keepWorking';
+        await hook.rerender();
+        expect(row()?.workingPlacementReason).toBe(workingMode === 'off' ? undefined : 'working');
+        const retainedVisibleSessionListIndex = hook.getCurrent()?.visibleSessionListIndex;
+        await hook.unmount();
+        viewState.backgroundWorkAttentionMode = 'showUnread';
+        const remounted = await renderHook(() => useVisibleSessionListViewState('all', { retainedVisibleSessionListIndex }));
+        expect(remounted.getCurrent()?.visibleSessionListIndex?.find((item) => item.type === 'session')?.attentionPlacementReason)
+            .toBe(attentionMode === 'off' ? undefined : 'unread');
+        await remounted.unmount();
     });
 
     it('promotes a fresh pending-permission row through the index row-state resolver', async () => {

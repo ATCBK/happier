@@ -23,11 +23,10 @@ import {
 function listAttentionFor(
     input: SessionRuntimePresentationInput & Readonly<{ hasUnreadMessages: boolean; pendingCount: number }>,
 ) {
+    const awareness = projectUiSessionRuntimeAwareness({ ...input, hasPendingUserMessages: input.pendingCount > 0 });
     return resolveSessionListAttentionState({
-        operational: projectUiSessionRuntimeAwareness({
-            ...input,
-            hasPendingUserMessages: input.pendingCount > 0,
-        }).operational.primary,
+        operational: awareness.operational.primary,
+        backgroundActive: awareness.runtime === 'background_active',
         hasUnreadMessages: input.hasUnreadMessages,
     });
 }
@@ -137,6 +136,21 @@ describe('isUrgentSessionListAttentionState', () => {
 });
 
 describe('resolveSessionListAttentionState', () => {
+    it('presents continuing background work according to the chosen unread mode', () => {
+        for (const backgroundWorkAttentionMode of ['keepWorking', 'keepWorkingUnread', 'showUnread'] as const) {
+            const state = { operational: 'none' as const, backgroundActive: true, hasUnreadMessages: true, backgroundWorkAttentionMode };
+            expect(resolveSessionListAttentionState(state)).toBe(backgroundWorkAttentionMode === 'keepWorking' ? 'thinking' : 'unread');
+            expect(resolveSessionListAttentionState({ ...state, hasUnreadMessages: false })).toBe('thinking');
+            expect(resolveSessionListAttentionState({ ...state, operational: 'permission_required' })).toBe('permission_required');
+            expect(resolveSessionListAttentionState({ ...state, operational: 'action_required' })).toBe('action_required');
+            expect(resolveSessionListAttentionState({ ...state, operational: 'failed' })).toBe('failed');
+            expect(resolveSessionListAttentionState({ ...state, operational: 'working' })).toBe('thinking');
+            expect(resolveSessionListAttentionState({ ...state, personalAttentionReason: 'mentioned' })).toBe('mentioned');
+            expect(resolveSessionListAttentionState({ ...state, hasUnreadMessages: false, personalAttentionReason: 'ready_after_read' }))
+                .toBe(backgroundWorkAttentionMode === 'keepWorking' ? 'thinking' : 'unread');
+            expect(resolveSessionListAttentionState({ ...state, backgroundActive: false, operational: 'ready' })).toBe('ready');
+        }
+    });
     it('does not let a stale localized permission status override offline runtime evidence', () => {
         expect(listAttentionFor({
             hasUnreadMessages: false, pendingCount: 0,
@@ -263,7 +277,7 @@ describe('resolveSessionListAttentionState', () => {
         })).toBe('thinking');
     });
 
-    it('uses fresh detached provider runtime activity after a completed turn as ready attention', () => {
+    it('keeps detached provider runtime activity working after a completed turn', () => {
         const nowMs = 1_000_000;
 
         expect(listAttentionFor({
@@ -280,7 +294,7 @@ describe('resolveSessionListAttentionState', () => {
             runtimeActivityObservedAt: nowMs - 1_000,
             runtimeActivityRevision: nowMs + 60_000,
             nowMs,
-        })).toBe('ready');
+        })).toBe('thinking');
     });
 
     it('ignores stale untrusted provider runtime activity after a completed foreground turn for list attention', () => {
