@@ -4197,6 +4197,88 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         });
     });
 
+    it.each(['plain', 'e2ee', 'runner', 'metadata_rejected', 'retired', 'stale', 'automatic', 'shared_editor'] as const)(
+        'persists explicit UI Stop through the real owner tuple before physical Stop (%s)', async scenario => {
+        const sessionId = `ui_explicit_stop_${scenario}`;
+        const { sync } = await import('./sync');
+        installAppliedAccountScope(sync, 'stop-owner');
+        const scope = getActiveServerAccountScope()!;
+        const secret = new Uint8Array(32).fill(9);
+        const previousCredentials = Reflect.get(sync, 'credentials');
+        onTestFinished(() => Reflect.set(sync, 'credentials', previousCredentials));
+        Reflect.set(sync, 'credentials', { token: buildTokenWithSub(scope.accountId), secret: encodeBase64(secret, 'base64url') });
+        Reflect.set(sync, 'encryption', testEncryption);
+        const metadata = { path: '/repo', host: 'test', machineId: 'stop-machine' };
+        const encrypted = scenario === 'e2ee';
+        await testEncryption.initializeSessions(new Map([[sessionId, null]]));
+        const sessionEncryption = testEncryption.getSessionEncryption(sessionId)!;
+        const wireMetadata = encrypted ? await sessionEncryption.encryptMetadata(metadata) : JSON.stringify(metadata);
+        storage.getState().applySessions([{ ...createSession(sessionId), metadata, metadataVersion: 2,
+            encryptionMode: encrypted ? 'e2ee' : 'plain' }]);
+        storage.getState().applyMachines([{ ...createMachine('stop-machine'), encryptionMode: 'plain' }]);
+        const effects: string[] = [];
+        let current = scenario !== 'stale';
+        requestMock.mockImplementation(async (path: string) => {
+            if (path === '/v1/account/encryption/currentness') return encrypted
+                ? Response.json({ mode: 'e2ee', version: 1, signingKeyFingerprint: null,
+                    contentKeyFingerprint: null, updatedAt: 1 }) : currentPlainAccountEncryptionCurrentnessResponse();
+            if (path !== `/v2/sessions/${sessionId}`) throw new Error(`Unexpected Stop read: ${path}`);
+            return Response.json({ session: { id: sessionId, seq: 1, createdAt: 1, updatedAt: 2, active: true, activeAt: 1,
+                encryptionMode: encrypted ? 'e2ee' : 'plain', dataEncryptionKey: null,
+                metadataLayoutVersion: scenario === 'shared_editor' ? 1 : 0,
+                metadataVersion: 2, metadata: scenario === 'shared_editor' ? JSON.stringify({ v: 1 }) : wireMetadata,
+                agentStateVersion: 0, agentState: null, share: scenario === 'shared_editor'
+                    ? { accessLevel: 'edit', canApprovePermissions: false } : null } });
+        });
+        emitSessionMetadataUpdateWithServerScopeMock.mockImplementation(async () => {
+            effects.push('metadata');
+            if (scenario === 'retired') current = false;
+            if (scenario === 'metadata_rejected') throw new Error('Metadata refused');
+            return { result: 'success', metadataLayoutVersion: 1, version: 3, agentStateVersion: 1 };
+        });
+        // Only the final physical transport is replaced. The frontdoor, tuple
+        // writer, currentness, Account-mode and content crypto remain real.
+        const transport = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
+        const physical = vi.spyOn(transport, 'machineRpcWithServerScope').mockImplementation(async () => {
+            if (scenario === 'runner') return { status: 'not_found' };
+            effects.push('physical');
+            return { status: 'stopped' };
+        });
+        onTestFinished(() => physical.mockRestore());
+        const runnerTransport = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc');
+        const runner = vi.spyOn(runnerTransport, 'sessionRpcWithServerAccountScope').mockImplementation(async () => {
+            effects.push('physical');
+            return { status: 'requested' };
+        });
+        onTestFinished(() => runner.mockRestore());
+        const { sessionStopWithServerScope } = await import('./ops/sessions');
+        const result = await sessionStopWithServerScope(sessionId, { serverId: scope.serverId, scope, isCurrent: () => current,
+            ...(scenario === 'automatic' ? { actionContext: { surface: 'ui', authority: 'account_automation' } } : {}) });
+        if (scenario === 'shared_editor' || scenario === 'stale') {
+            expect(effects).toEqual([]);
+            expect(result).toMatchObject({ success: false, code: 'session_stop_control_unavailable' });
+            return;
+        }
+        if (scenario === 'metadata_rejected' || scenario === 'retired') {
+            expect(effects).toEqual(['metadata']);
+            expect(result.success).toBe(false);
+            return;
+        }
+        if (scenario === 'runner') expect(result).toMatchObject({ success: false, code: 'session_stop_requested' });
+        else expect(result.success).toBe(true);
+        expect(effects).toEqual(scenario === 'automatic' ? ['physical'] : ['metadata', 'physical']);
+        if (scenario !== 'automatic') {
+            expect(emitSessionMetadataUpdateWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId,
+                patch: expect.objectContaining({ mode: 'owner_migration', expectedAccountEncryptionMode: encrypted ? 'e2ee' : 'plain',
+                    source: expect.objectContaining({ metadata: { version: 2, ciphertext: wireMetadata } }) }) }));
+            const stored = storage.getState().sessions[sessionId];
+            const { readSessionOwnerMetadataView } = await import('./domains/session/readSessionOwnerMetadataView');
+            const { readSessionExplicitStopV1FromMetadata } = await import('@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1');
+            expect(readSessionExplicitStopV1FromMetadata(readSessionOwnerMetadataView(stored))).toEqual({ v: 1, cause: 'explicit_stop',
+                requestId: expect.any(String), requestedAtMs: expect.any(Number) });
+        }
+    });
+
     it('routes abortSession through the preferred owner server scope', async () => {
         sessionRpcWithPreferredSessionScopeMock.mockResolvedValue(undefined);
 
