@@ -54,6 +54,44 @@ function sessionMetaLine(payload: Record<string, unknown>): string {
 }
 
 describe('Codex rollout candidate discovery', () => {
+  it('skips expired rollout metadata before filling a history-window chunk', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-history-window-'));
+    const codexHome = join(root, 'codex-home');
+    const day = join(codexHome, 'sessions', '2026', '10', '20');
+    await mkdir(day, { recursive: true });
+    const cutoff = Date.parse('2026-10-19T12:00:00.000Z');
+    const expired: string[] = [];
+    for (let index = 0; index < 20; index++) {
+      // No filename identity: resolving this expired row would have to open
+      // session_meta, so the boundary observation detects filtering too late.
+      const path = join(day, `rollout-z-expired-${index}.jsonl`);
+      await writeFile(path, sessionMetaLine({ id: `expired-${index}` }));
+      await utimes(path, new Date(cutoff - 1), new Date(cutoff - 1));
+      expired.push(path);
+    }
+    const active = join(day, 'rollout-2026-10-18T10-00-00-active.jsonl');
+    await writeFile(active, sessionMetaLine({ id: 'active', cwd: '/repo/history-window' })
+      + `${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Do not enrich this title' }] } })}\n`);
+    await utimes(active, new Date(cutoff), new Date(cutoff));
+    const reviewer = join(day, 'rollout-2026-10-18T09-00-00-reviewer.jsonl');
+    await writeFile(reviewer, sessionMetaLine({ id: 'reviewer', thread_source: 'guardian_review', parent_thread_id: 'active' }));
+    await utimes(reviewer, new Date(cutoff), new Date(cutoff));
+    const request = { source: { kind: 'codexHome', home: 'user' } as const, env: { CODEX_HOME: codexHome },
+      limit: 1, updatedAfterMs: cutoff, includeTitles: false };
+    const stop = recordFsCalls();
+    let calls: string[];
+    const first = await scanCodexRolloutCandidateChunk(request);
+    try {
+      expect(first.entries.map(entry => entry.remoteSessionId)).toEqual(['active']);
+      expect(first.entries[0]?.title).toBeUndefined();
+      expect(first.nextBoundary).not.toBeNull();
+    } finally { calls = stop(); }
+    expect(calls.filter(call => call.startsWith('open:') && expired.some(path => call === `open:${path}`))).toEqual([]);
+    const second = await scanCodexRolloutCandidateChunk({ ...request, after: first.nextBoundary });
+    expect(second.entries.map(entry => entry.remoteSessionId)).toEqual(['reviewer']);
+    expect(second.nextBoundary).toBeNull();
+  });
+
   it('groups rollout files by provider session id and chooses earliest/latest by rollout filename chronology', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-rollout-candidates-'));
     const codexHome = join(root, 'codex-home');

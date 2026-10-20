@@ -108,6 +108,25 @@ import {
 
 const roots: string[] = [];
 
+async function expectRecentWindowInventory() {
+    const configDir = await mkdtemp(join(tmpdir(), 'claude-native-window-'));
+    roots.push(configDir);
+    const now = Date.now();
+    for (let index = 0; index < 61; index++) {
+        await createCandidate({ configDir, projectId: 'a-old', remoteSessionId: `expired-${index}`,
+            updatedAt: new Date(now - 8 * 86_400_000) });
+    }
+    await createCandidate({ configDir, projectId: 'z-current', remoteSessionId: 'current', updatedAt: new Date(now) });
+    resetFsObservations();
+    const request = { source: { kind: 'claudeConfig' as const, configDir, projectId: null }, env: {}, limit: 50,
+        updatedAfterMs: now - 86_400_000, includeTitles: false };
+    const page = await listClaudeExternalSessionCandidates(request);
+    expect(page.candidates.map(candidate => candidate.remoteSessionId)).toEqual(['current']);
+    expect(page.nextCursor).toBeNull();
+    expect(page.candidates[0]?.title).toBeUndefined();
+    expect(transcriptPaths(fsMockState.openCalls), 'inventory must not decode optional titles').toEqual([]);
+}
+
 function jsonlLine(value: unknown): string {
     return `${JSON.stringify(value)}\n`;
 }
@@ -190,6 +209,8 @@ describe('Claude external-session candidate listing', () => {
             await rm(root, { recursive: true, force: true });
         }));
     });
+
+    it('inventories a recent window before title reads and candidate pagination', expectRecentWindowInventory);
 
     it('matches full search terms against surfaced session titles', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-plugin-title-search-'));

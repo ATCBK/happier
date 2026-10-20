@@ -132,6 +132,7 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
     skip?: number;
     limit: number;
     order?: 'recent';
+    updatedAfterMs?: number;
     signal?: AbortSignal;
     recentWindow?: Readonly<{ startedAtMs: number; changedBeforeMs?: number }>;
     unfinished?: ClaudeJsonlSessionScanPosition;
@@ -240,6 +241,15 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
                 ...(params.signal ? { signal: params.signal } : {}),
             });
             if (!filePath) continue;
+            // A native inventory's history window is known before optional
+            // title/body reads and before filling its candidate page.
+            let updatedAtMs = 0;
+            if (params.updatedAfterMs !== undefined) {
+                const file = await stat(filePath).catch(() => null);
+                throwIfAborted(params.signal);
+                if (!file?.isFile() || file.mtimeMs < params.updatedAfterMs) continue;
+                updatedAtMs = Math.trunc(file.mtimeMs);
+            }
             if (params.order !== 'recent' && selected.length >= limit) {
                 hasMore = true;
                 break;
@@ -248,7 +258,7 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
                 remoteSessionId,
                 projectId,
                 filePath,
-                updatedAtMs: 0,
+                updatedAtMs,
                 traversalKey,
                 scanPosition: { projectId, sessionEntryOffset },
                 sourceGeneration: projectSourceGeneration,
@@ -264,6 +274,11 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
     const entries: ClaudeJsonlSessionTraversalEntry[] = [];
     for (const entry of selected) {
         throwIfAborted(params.signal);
+        if (params.updatedAfterMs !== undefined) {
+            entries.push({ ...entry, ...(params.order === 'recent' ? { scanPosition: { ...entry.scanPosition,
+                recent: { updatedAtMs: entry.updatedAtMs, remoteSessionId: entry.remoteSessionId } } } : {}) });
+            continue;
+        }
         try {
             const file = await stat(entry.filePath);
             if (!file.isFile()) continue;

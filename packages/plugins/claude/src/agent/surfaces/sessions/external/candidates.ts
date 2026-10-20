@@ -392,6 +392,8 @@ export async function listClaudeExternalSessionCandidates(
     searchTerm?: string;
     searchMode?: 'fast' | 'full';
     searchTarget?: 'metadata' | 'content';
+    updatedAfterMs?: number;
+    includeTitles?: boolean;
     ripgrep?: AgentExternalSessionsInvocation['ripgrep'];
     signal?: AbortSignal;
     deadlineAtMs?: number;
@@ -572,6 +574,7 @@ export async function listClaudeExternalSessionCandidates(
     ? Number.POSITIVE_INFINITY : limit;
   const traversed = await pageClaudeJsonlSessionFiles({
     source: params.source, env: params.env, scanPosition, skip: 0, limit: scanLimit,
+    ...(params.updatedAfterMs === undefined ? {} : { updatedAfterMs: params.updatedAfterMs }),
     ...(search.searchTarget === 'content' ? { order: 'recent' as const,
       recentWindow: { startedAtMs, changedBeforeMs: contentCursor?.changedBeforeMs },
       unfinished: contentCursor?.unfinished,
@@ -769,7 +772,7 @@ export async function listClaudeExternalSessionCandidates(
       }
     } else if (!searchTerm) {
       candidate = buildMetadataCandidate({ session, env: params.env });
-      needsSelectedRowTitle = true;
+      needsSelectedRowTitle = params.includeTitles !== false;
     } else if (search.searchMode === 'fast') {
       const haystack =
         `${session.remoteSessionId} ${session.projectId}`.toLowerCase();

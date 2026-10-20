@@ -312,6 +312,8 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
                     searchTerm: request.searchTerm,
                     searchMode: request.searchMode,
                     searchTarget: request.searchTarget,
+                    updatedAfterMs: request.updatedAfterMs,
+                    includeTitles: request.includeTitles,
                     ripgrep: request.ripgrep,
                     signal: request.signal,
                     deadlineAtMs: request.searchTarget === 'content'

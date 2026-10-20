@@ -344,6 +344,8 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
           searchTarget: request.searchTarget,
           ripgrep: request.ripgrep,
           includeThreads: request.includeThreads,
+          updatedAfterMs: request.updatedAfterMs,
+          includeTitles: request.includeTitles,
           signal: request.signal,
           deadlineAtMs: request.deadlineAtMs,
           scanDeadlineAtMs: request.scanDeadlineAtMs,

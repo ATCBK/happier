@@ -131,7 +131,7 @@ export async function readCodexSessionTitleFromRollout(
  */
 export async function readCodexRolloutHead(
   filePath: string,
-  bounds: CodexExternalSessionInvocationBounds,
+  bounds: CodexExternalSessionInvocationBounds & Readonly<{ includeTitles?: boolean }>,
   budget: CodexRolloutTitleReadBudget = CODEX_ROLLOUT_TITLE_FULL_BUDGET,
 ): Promise<CodexRolloutHead> {
   let thread: CodexSessionThread | null = null;
@@ -156,7 +156,7 @@ export async function readCodexRolloutHead(
       filePath,
       offsetBytes,
       maxBytes: pageMaxBytes,
-      maxItems: CODEX_TITLE_SCAN_CHUNK_MAX_ITEMS,
+      maxItems: bounds.includeTitles === false ? 1 : CODEX_TITLE_SCAN_CHUNK_MAX_ITEMS,
       // One read per page: the scanner opens the file once per chunk it pulls,
       // and this read is performed for every row a candidate chunk returns.
       chunkBytes: pageMaxBytes,
@@ -178,6 +178,9 @@ export async function readCodexRolloutHead(
           thread = classifyCodexSessionThread(line.value.payload);
           if (isRecord(line.value.payload) && typeof line.value.payload.cwd === 'string' && line.value.payload.cwd.trim()) cwd = line.value.payload.cwd;
         }
+        // Index ingestion needs source classification, not a display title.
+        // Keep the same decoder and native head budget for large metadata rows.
+        if (bounds.includeTitles === false) return { title: null, thread, ...(cwd ? { cwd } : {}) };
       }
       if (
         consideredBytes >= budget.maxConsideredBytes

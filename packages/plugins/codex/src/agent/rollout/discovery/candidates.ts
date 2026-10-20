@@ -710,6 +710,7 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
   limit: number;
   after?: CodexRolloutCandidateScanBoundary | null;
   includeTitles?: boolean;
+  updatedAfterMs?: number;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexRolloutCandidateScanChunk> {
   throwIfCodexExternalSessionInvocationStopped(params);
   const containers = await listCandidateCorpusContainers(params);
@@ -742,6 +743,16 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
   }> | null = null;
   let scanned = after?.scanned ?? 0;
   let hasMore = false;
+  const readMtime = async (filePath: string): Promise<number | null> => {
+    try {
+      const metadata = params.preparation ? await params.preparation.readMetadata(filePath) : await stat(filePath);
+      throwIfCodexExternalSessionInvocationStopped(params);
+      return metadata.mtimeMs;
+    } catch {
+      throwIfCodexExternalSessionInvocationStopped(params);
+      return null;
+    }
+  };
 
   outer:
   for (const container of containers) {
@@ -776,6 +787,15 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
         continue;
       }
       const filePath = join(container.dir, fileName);
+      let mtimeMs = params.updatedAfterMs === undefined ? undefined : await readMtime(filePath);
+      // The worker's history window is based on last activity, not the rollout
+      // filename's creation date. Excluded files consume traversal progress but
+      // no candidate slots or native identity/title reads.
+      if (mtimeMs === null || (mtimeMs !== undefined && params.updatedAfterMs !== undefined && mtimeMs < params.updatedAfterMs)) {
+        scanned += 1;
+        lastConsumed = { containerKey: container.key, fileName, sourceGeneration: containerGeneration };
+        continue;
+      }
       const remoteSessionId = await resolveRolloutCandidateSessionId(filePath, params);
       if (!remoteSessionId) {
         scanned += 1;
@@ -788,12 +808,8 @@ export async function scanCodexRolloutCandidateChunk(params: Readonly<{
         hasMore = true;
         break outer;
       }
-      let mtimeMs: number;
-      try {
-        mtimeMs = (params.preparation ? await params.preparation.readMetadata(filePath) : await stat(filePath)).mtimeMs;
-        throwIfCodexExternalSessionInvocationStopped(params);
-      } catch {
-        throwIfCodexExternalSessionInvocationStopped(params);
+      mtimeMs ??= await readMtime(filePath);
+      if (mtimeMs === null) {
         scanned += 1;
         lastConsumed = { containerKey: container.key, fileName, sourceGeneration: containerGeneration };
         continue;

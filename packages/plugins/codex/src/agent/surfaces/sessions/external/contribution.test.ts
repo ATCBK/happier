@@ -1,6 +1,6 @@
 // Load the real Workflow schema owner before the contribution's cyclic SDK graph.
 import '@happier-dev/protocol/workflows/workflowV1';
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -154,6 +154,74 @@ function invocation(overrides: Readonly<{
 }
 
 describe('Codex public Agent External Sessions contribution', () => {
+  it('applies native history-window admission before title work while preserving top-level thread exclusion', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-window-contribution-'));
+    try {
+      const codexHome = join(root, 'codex-home');
+      const day = join(codexHome, 'sessions', '2026', '10', '20');
+      await mkdir(day, { recursive: true });
+      const cutoff = Date.parse('2026-10-19T12:00:00Z');
+      for (const [name, id, mtime, extra] of [
+        ['23', 'expired', cutoff - 1, {}],
+        ['22', 'guardian', cutoff, { thread_source: 'guardian_review', parent_thread_id: 'active', base_instructions: 'x'.repeat(96 * 1024) }],
+        ['21', 'active', cutoff, {}],
+      ] as const) {
+        const path = join(day, `rollout-2026-10-20T${name}-00-00-${id}.jsonl`);
+        await writeFile(path, jsonl({ type: 'session_meta', payload: { id, ...extra } }) + jsonl({
+          type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Optional display title' }] },
+        }));
+        await utimes(path, new Date(mtime), new Date(mtime));
+      }
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: codexHome } });
+      const request = { ...invocation(), source: { kind: 'codexHome', home: 'user' }, maxItems: 10,
+        updatedAfterMs: cutoff, includeTitles: false };
+      const result = await contribution.listCandidates(request);
+      expect(result).toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId: 'active' }], nextCursor: null } });
+      if (!result.ok) throw new Error(result.message);
+      expect(result.value.candidates[0]?.title).toBeUndefined();
+      const revealed = await contribution.listCandidates({ ...request, includeThreads: true });
+      expect(revealed).toMatchObject({ ok: true, value: { candidates: [
+        { remoteSessionId: 'active' }, { remoteSessionId: 'guardian', thread: { kind: 'reviewer', parentRemoteSessionId: 'active' } },
+      ] } });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('keeps an updated continuation eligible without narrowing the root-family transcript to the history window', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-window-family-'));
+    try {
+      const codexHome = join(root, 'codex-home');
+      const day = join(codexHome, 'sessions', '2026', '10', '20');
+      await mkdir(day, { recursive: true });
+      const id = 'aaaaaaaa-1111-4111-8111-111111111111';
+      const childId = 'bbbbbbbb-2222-4222-8222-222222222222';
+      const turnId = 'cccccccc-3333-4333-8333-333333333333';
+      const cutoff = Date.parse('2026-10-19T12:00:00Z');
+      for (const [name, payload, text, mtime] of [
+        [`18T10-00-00-${id}`, { id, source: 'cli' }, 'owned historical root', cutoff - 1],
+        [`20T10-00-00-${id}_${turnId}`, { id, source: 'cli' }, 'owned current continuation', cutoff],
+        [`20T11-00-00-${childId}`, { id: childId, session_id: id, thread_source: 'subagent', parent_thread_id: id }, 'owned child body', cutoff],
+      ] as const) {
+        const path = join(day, `rollout-2026-10-${name}.jsonl`);
+        await writeFile(path, jsonl({ type: 'session_meta', payload }) + jsonl({ type: 'response_item',
+          timestamp: '2026-10-20T12:00:00Z', payload: { type: 'message', role: payload.id === childId ? 'assistant' : 'user',
+            content: [{ type: payload.id === childId ? 'output_text' : 'input_text', text }] } }));
+        await utimes(path, new Date(mtime), new Date(mtime));
+      }
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: codexHome } });
+      const source = { kind: 'codexHome', home: 'user' };
+      const listed = await contribution.listCandidates({ ...invocation(), source, maxItems: 10,
+        updatedAfterMs: cutoff, includeTitles: false });
+      expect(listed).toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId: id }], nextCursor: null } });
+      const page = await contribution.pageTranscript({ ...invocation(), source, remoteSessionId: id, direction: 'older', maxItems: 20 });
+      if (!page.ok) throw new Error(page.message);
+      expect(page.value.items.map(item => item.raw.content)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ text: 'owned historical root' }),
+        expect.objectContaining({ text: 'owned current continuation' }),
+        expect.objectContaining({ data: expect.objectContaining({ message: 'owned child body' }) }),
+      ]));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('advances slow native decoding under identical budgets with rollback and semantic ordinals intact', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-progress-'));
     const clock = Date.now;

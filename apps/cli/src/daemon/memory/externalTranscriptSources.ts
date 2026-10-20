@@ -269,6 +269,8 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         const page = await native.reader.listCandidates({ source: native.source,
           maxItems: EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxItems,
           maxSerializedBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes,
+          includeTitles: false,
+          ...(cutoff === null ? {} : { updatedAfterMs: cutoff }),
           ...(state.cursor ? { cursor: state.cursor } : {}), signal });
         signal.throwIfAborted();
         if (!page.ok) throw new Error(page.code);

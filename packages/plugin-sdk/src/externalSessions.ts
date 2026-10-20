@@ -373,6 +373,13 @@ export type AgentExternalSessionsListCandidatesRequest = AgentExternalSessionsIn
     searchTerm?: string;
     searchMode?: 'fast' | 'full';
     searchTarget?: 'metadata' | 'content';
+    /** Optional inventory optimization: skip sources last updated before this
+     * inclusive timestamp. Callers retain their own eligibility filter because
+     * older readers may ignore it. Does not authorize a path or change identity. */
+    updatedAfterMs?: number;
+    /** Omit optional title enrichment for unsearched inventories. Identity and
+     * thread classification remain unchanged; omitted defaults to enrichment. */
+    includeTitles?: boolean;
     /** Cooperative content-scan deadline; a partial page may finalize afterward.
      * Cancellation and the inherited deadlineAtMs still own invocation lifetime. */
     scanDeadlineAtMs?: number;

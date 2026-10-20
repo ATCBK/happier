@@ -752,6 +752,8 @@ async function scanBoundedRolloutCandidateChunk(params: Readonly<{
   cursor?: string;
   limit: number;
   includeThreads?: boolean;
+  updatedAfterMs?: number;
+  includeTitles?: boolean;
 }> & CodexExternalSessionInvocationBounds): Promise<Readonly<{
   candidates: CodexExternalSessionCandidate[];
   nextCursor: string | null;
@@ -769,6 +771,8 @@ async function scanBoundedRolloutCandidateChunk(params: Readonly<{
     env: params.env,
     limit: params.limit,
     after,
+    updatedAfterMs: params.updatedAfterMs,
+    includeTitles: params.includeTitles,
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
@@ -777,10 +781,18 @@ async function scanBoundedRolloutCandidateChunk(params: Readonly<{
   if (chunk.sourceChanged) {
     throw new CodexExternalSessionCandidateSourceChangedError();
   }
+  const entries = params.includeTitles === false
+    ? await mapCodexExternalSessionWorkWithConcurrency(chunk.entries, resolveCodexRolloutSearchBuildConcurrency(params.env), async entry => {
+      // Title-free inventory still obeys the same native thread admission as
+      // Browse; the head owner stops immediately after classifying metadata.
+      const { thread, cwd } = await readCodexRolloutHead(entry.group.earliestFilePath, params, CODEX_ROLLOUT_TITLE_HEAD_BUDGET);
+      return { ...entry, ...(thread ? { thread } : {}), ...(cwd ? { cwd } : {}) };
+    }, params)
+    : chunk.entries;
   return {
     // Filtering the chunk itself keeps every index built from these chunks —
     // its pages, cursors and total — about the same listing.
-    candidates: chunk.entries
+    candidates: entries
       .filter((entry) => params.includeThreads || !entry.thread)
       .map((entry) => buildRolloutScanCandidate({ entry, env: params.env })),
     nextCursor: chunk.nextBoundary
@@ -1048,6 +1060,8 @@ export async function listCodexSessionCandidates(input: Readonly<{
   resultBudget?: Readonly<{ fits(page: CodexCandidateListPage): boolean }>;
   /** Include internal threads (approval reviewers, spawned sub-agents). Absent: top-level sessions only. */
   includeThreads?: boolean;
+  updatedAfterMs?: number;
+  includeTitles?: boolean;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexCandidateListPage> {
   const contentSearchControl = input.searchTarget === 'content' ? createExternalSessionContentSearchControl({
     signal: input.signal,
@@ -1073,6 +1087,8 @@ export async function listCodexSessionCandidates(input: Readonly<{
       cursor: params.cursor,
       limit,
       includeThreads: params.includeThreads,
+      updatedAfterMs: params.updatedAfterMs,
+      includeTitles: params.includeTitles,
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
