@@ -120,20 +120,52 @@ function consumeLineChunk(bufState, chunk) {
 }
 
 function writePrefixedLines(stream, prefix, lines) {
+  let writable = true;
   for (const line of lines) {
-    stream.write(`${prefix}${line}\n`);
+    if (!stream.write(`${prefix}${line}\n`)) writable = false;
   }
+  return writable;
 }
 
 function writePersistedLogLines(stream, prefix, lines, { timestamps = false } = {}) {
+  let writable = true;
   for (const line of lines) {
     const timestamp = timestamps ? `[${new Date().toISOString()}] ` : '';
-    stream.write(`${prefix}${timestamp}${line}\n`);
+    if (!stream.write(`${prefix}${timestamp}${line}\n`)) writable = false;
   }
+  return writable;
 }
 
 function writeWithPrefix(stream, prefix, bufState, chunk) {
-  writePrefixedLines(stream, prefix, consumeLineChunk(bufState, chunk));
+  return writePrefixedLines(stream, prefix, consumeLineChunk(bufState, chunk));
+}
+
+function createOutputBackpressure(source) {
+  const pending = new Map();
+  source?.once('close', () => {
+    for (const dispose of pending.values()) dispose();
+    pending.clear();
+  });
+  return (destination, writable) => {
+    if (writable || !source || destination.destroyed || pending.has(destination)) return;
+    // Rotation bounds files, but only pausing the producer bounds Writable's
+    // in-memory queue. A pipe can have both terminal and tee destinations.
+    source.pause();
+    const dispose = () => {
+      destination.off('drain', resume);
+      destination.off('close', resume);
+      destination.off('error', resume);
+    };
+    const resume = () => {
+      dispose();
+      pending.delete(destination);
+      if (pending.size === 0) source.resume();
+    };
+    pending.set(destination, dispose);
+    destination.once('drain', resume);
+    destination.once('close', resume);
+    destination.once('error', resume);
+  };
 }
 
 function flushLineBuffer(bufState) {
@@ -320,18 +352,20 @@ export function spawnProc(label, cmd, args, env, options = {}) {
   child.on('error', (error) => {
     spawnError ??= error;
   });
+  const outBackpressure = createOutputBackpressure(child.stdout);
+  const errBackpressure = createOutputBackpressure(child.stderr);
 
   child.stdout?.on('data', (d) => {
     const lines = filterLines('stdout', consumeLineChunk(outState, d));
     emitLines('stdout', lines);
-    if (!silent) writePrefixedLines(process.stdout, outPrefix, lines);
-    if (teeStream) writePersistedLogLines(teeStream, teePrefix, lines, { timestamps: teeTimestamps });
+    if (!silent) outBackpressure(process.stdout, writePrefixedLines(process.stdout, outPrefix, lines));
+    if (teeStream) outBackpressure(teeStream, writePersistedLogLines(teeStream, teePrefix, lines, { timestamps: teeTimestamps }));
   });
   child.stderr?.on('data', (d) => {
     const lines = filterLines('stderr', consumeLineChunk(errState, d));
     emitLines('stderr', lines);
-    if (!silent) writePrefixedLines(process.stderr, errPrefix, lines);
-    if (teeStream) writePersistedLogLines(teeStream, teePrefix, lines, { timestamps: teeTimestamps });
+    if (!silent) errBackpressure(process.stderr, writePrefixedLines(process.stderr, errPrefix, lines));
+    if (teeStream) errBackpressure(teeStream, writePersistedLogLines(teeStream, teePrefix, lines, { timestamps: teeTimestamps }));
   });
   child.completion = new Promise((resolve) => child.on('close', async (code, signal) => {
     child.__happierClosed = true;
@@ -553,14 +587,16 @@ export async function run(cmd, args, options = {}) {
     let capturedErr = '';
     let failureDiagnosticTruncated = false;
     if (shouldCaptureFailure) {
+      const outBackpressure = createOutputBackpressure(proc.stdout);
+      const errBackpressure = createOutputBackpressure(proc.stderr);
       proc.stdout?.on('data', (chunk) => {
-        if (baseStdio === 'inherit' || (Array.isArray(baseStdio) && baseStdio[1] === 'inherit')) process.stdout.write(chunk);
+        if (baseStdio === 'inherit' || (Array.isArray(baseStdio) && baseStdio[1] === 'inherit')) outBackpressure(process.stdout, process.stdout.write(chunk));
         const nextLength = capturedOut.length + chunk.length;
         failureDiagnosticTruncated ||= nextLength > streamMaxChars;
         capturedOut = appendBoundedTail(capturedOut, chunk, streamMaxChars);
       });
       proc.stderr?.on('data', (chunk) => {
-        if (baseStdio === 'inherit' || (Array.isArray(baseStdio) && baseStdio[2] === 'inherit')) process.stderr.write(chunk);
+        if (baseStdio === 'inherit' || (Array.isArray(baseStdio) && baseStdio[2] === 'inherit')) errBackpressure(process.stderr, process.stderr.write(chunk));
         const nextLength = capturedErr.length + chunk.length;
         failureDiagnosticTruncated ||= nextLength > streamMaxChars;
         capturedErr = appendBoundedTail(capturedErr, chunk, streamMaxChars);
@@ -776,15 +812,17 @@ export async function runCaptureResult(cmd, args, options = {}) {
           if (hb) clearInterval(hb);
         }, timeoutMs)
       : null;
+    const outBackpressure = createOutputBackpressure(proc.stdout);
+    const errBackpressure = createOutputBackpressure(proc.stderr);
     proc.stdout?.on('data', (d) => {
       out += d.toString();
-      if (shouldStream) writeWithPrefix(stdoutDiagnosticStream, prefix, outState, d);
-      if (shouldTee && teeStream) writeWithPrefix(teeStream, teePrefix, teeOutState, d);
+      if (shouldStream) outBackpressure(stdoutDiagnosticStream, writeWithPrefix(stdoutDiagnosticStream, prefix, outState, d));
+      if (shouldTee && teeStream) outBackpressure(teeStream, writeWithPrefix(teeStream, teePrefix, teeOutState, d));
     });
     proc.stderr?.on('data', (d) => {
       err += d.toString();
-      if (shouldStream) writeWithPrefix(stderrDiagnosticStream, prefix, errState, d);
-      if (shouldTee && teeStream) writeWithPrefix(teeStream, teePrefix, teeErrState, d);
+      if (shouldStream) errBackpressure(stderrDiagnosticStream, writeWithPrefix(stderrDiagnosticStream, prefix, errState, d));
+      if (shouldTee && teeStream) errBackpressure(teeStream, writeWithPrefix(teeStream, teePrefix, teeErrState, d));
     });
 
     if (input != null && proc.stdin) {
