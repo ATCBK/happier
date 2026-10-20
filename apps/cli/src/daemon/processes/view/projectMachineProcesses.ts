@@ -1,6 +1,7 @@
 import type { MachineProcessesAnswerV1, MachineProcessesTotalsV1, OwnerRowV1, ProcessRowV1, LeftBehindRowV1, AppGroupRowV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import type { createProcessOwnershipRuntime } from '../ownership/processOwnershipRuntime';
 import { equalProcessStart, processOwnerKey, type ProcessOwnerRef, type HappierProcessRoot } from '../ownership/types';
+import { resolveProcessOwnershipLevel } from '../ownership/levelRules';
 import type { LeftBehindItem } from '../leftBehind/leftBehindTracker';
 import { compareProcessPrincipals } from '@/processes/ownership/principal';
 import { ancestorsOf, indexCensus } from '@/processes/tree/processTree';
@@ -84,13 +85,15 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
         const ref = processRef(row.pid, row.start);
         const candidateMetric = options.metrics?.get(row.pid);
         const metric = candidateMetric?.ref === ref ? candidateMetric : undefined;
+        const level = metric?.identityUnavailable ? resolveProcessOwnershipLevel({ samePrincipal: undefined,
+            ownerEnded: resolved.ownerEnded, evidence: resolved.evidence, observationsIncomplete: true }) : resolved.level;
         const facts = { memoryBytes: metric ? metric.memoryBytes : row.memory?.bytes ?? null,
             ...(metric?.cpuPercent === undefined ? {} : { cpuPercent: metric.cpuPercent }) };
         const ownPrincipal = compareProcessPrincipals(row.principal, principal);
         if (!resolved.owner) {
-            if (resolved.level === 'unknown') { if (custodian && !request.sessionId) unverifiableCount++; continue; }
+            if (level === 'unknown') { if (custodian && !request.sessionId) unverifiableCount++; continue; }
             if (custodian && ownPrincipal === 'other') { foreign.push(facts); foreignNames.add(options.principalName?.(row) ?? row.principal!.value); }
-            if (custodian && request.scope === 'all' && ownPrincipal === 'self' && resolved.level === 'not_happier') {
+            if (custodian && request.scope === 'all' && ownPrincipal === 'self' && level === 'not_happier') {
                 const group = appGroup(row, options.platform);
                 const existing = notHappier.get(group) ?? { appGroup: group, members: [] };
                 existing.members.push({ name: row.name, appGroup: group, pid: row.pid, ref, ...facts });
@@ -120,19 +123,20 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
             .map(entry => ({ port: entry.port, inventoryEntryId: entry.id }));
         const processRow: ProcessRowV1 = { rowId: ref, ref, name: row.name || 'unknown', pid: row.pid,
             startedAtMs: options.platform === 'linux' ? options.bootTimeMs! + row.start.startTimeMs : row.start.startTimeMs,
-            ...facts, memoryKind: row.memory?.kind ?? null, level: resolved.level === 'not_happier' ? 'unknown' : resolved.level,
+            ...facts, memoryKind: row.memory?.kind ?? null, level: level === 'not_happier' ? 'unknown' : level,
             ...(parent && parentOwner?.owner && processOwnerKey(parentOwner.owner) === ownerKey ? { parentRowId: processRef(parent.pid, parent.start) } : { parentRowId: ownerKey }),
             ...(command === undefined ? {} : { command }), ...(row.cwd ? { cwd: row.cwd } : {}), ...(classification.role ? { role: classification.role } : {}),
+            ...(classification.displayName ? { displayName: classification.displayName } : {}),
             ...(classification.browserEngine ? { browserEngine: classification.browserEngine, browserHelper: classification.browserHelper } : {}),
             ...(classification.driverLabel ? { driverLabel: classification.driverLabel } : {}),
             ...(ports?.length ? { ports } : {}), ...(request.detailToken === ref ? { evidence: [...resolved.evidence], chain: [...resolved.chain],
                 ...(options.principalName ? { principalName: options.principalName(row) } : {}) } : {}) };
-        if (resolved.level === 'left_behind') {
+        if (level === 'left_behind') {
             if (!matches(processRow, request.query)) continue;
             const item = confirmed.get(ref);
             if (!item || !resolved.ownerEnded) continue;
             leftBehind.push({ ...processRow, level: 'left_behind', owner: resolved.owner, confirmedAtMs: item.confirmedAtMs });
-        } else if (resolved.level === 'proven' || resolved.level === 'likely' || resolved.level === 'unknown') {
+        } else if (level === 'proven' || level === 'likely' || level === 'unknown') {
             const stopping = read.roots.some(root => {
                 const native = index.byPid.get(root.pid);
                 return root.live && native && processOwnerKey(root.owner) === ownerKey && root.state === 'stopping' && equalProcessStart(root.start, native.start);

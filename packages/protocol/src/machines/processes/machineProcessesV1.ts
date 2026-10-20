@@ -39,7 +39,7 @@ export const ProcessSampleV1Schema = lazyZodSchema(() => z.strictObject({
 }));
 export type ProcessSampleV1 = z.infer<typeof ProcessSampleV1Schema>;
 export const ProcessRowV1Schema = lazyZodSchema(() => z.strictObject({
-  rowId: id(), ref: id(), parentRowId: z.optional(id()), name: id(),
+  rowId: id(), ref: id(), parentRowId: z.optional(id()), name: id(), displayName: z.optional(id()),
   role: z.optional(z.enum(['agent', 'tool_shell', 'test_runner', 'type_checker', 'dev_server', 'language_server', 'mcp_server', 'browser', 'database'])),
   browserEngine: z.optional(z.enum(['chromium', 'firefox', 'webkit'])), browserHelper: z.optional(z.boolean()),
   driverLabel: z.optional(z.string()),

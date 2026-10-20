@@ -5,7 +5,9 @@ import { processRef } from './processRef';
 /** The approved detail chart window, not a sample-count limit. */
 export const MACHINE_PROCESS_HISTORY_WINDOW_MS = 60 * 60_000;
 export type ProcessMetricSample = Readonly<{ capturedAtMs: number; memoryBytes: number | null; cpuPercent?: number | null }>;
-export type ProcessMetrics = Readonly<{ ref: string; memoryBytes: number | null; cpuPercent?: number }>;
+export type ProcessMetrics = Readonly<{ ref: string; memoryBytes: number | null; cpuPercent?: number;
+    /** A targeted native observation could not establish this retained generation. */
+    identityUnavailable?: true }>;
 
 export function createProcessMetrics() {
     const rates = new Map<string, ReturnType<typeof createCounterRateReader>>();

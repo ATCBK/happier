@@ -10,6 +10,36 @@ import { createProcessMetrics } from './processMetrics';
 
 const scope = '123456789abc';
 
+it('preserves existing tool and catalog display names beside native identity without enriching external rows', () => {
+    const read = setup();
+    const snapshot = { ...read.snapshot, rows: [
+        ...read.snapshot.rows.map(row => row.pid === 21 ? { ...row, name: 'node' } : row),
+        ...[
+            { pid: 60, argv: ['node', '/tools/catalog-agent', '--token', 'agent-secret'] },
+            { pid: 61, argv: ['python', '/tools/catalog-mcp', '--password', 'mcp-secret'] },
+            { pid: 62, argv: ['python', '-m', 'http.server'] },
+            { pid: 63, argv: ['python', '-c', 'print("inline-private")'] },
+        ].map(row => ({ ...read.snapshot.rows[0], ...row, ppid: 20, name: row.argv[0], start: { startTimeMs: row.pid } })),
+    ] };
+    const current = { ...read, snapshot, rows: resolveProcessOwnership({ snapshot, roots: read.roots,
+        daemonPrincipal: snapshot.rows[0].principal, daemonScopeKey: scope, platform: 'linux' }) };
+    const answer = projectMachineProcesses(current, { ...request, scope: 'all' }, { accountId: 'owner', custodianAccountId: 'owner' }, {
+        ...options, roleCatalog: { agentExecutables: [{ executable: 'catalog-agent', name: 'Catalog Agent' }],
+            mcpServers: [{ executable: 'catalog-mcp', name: 'Catalog MCP' }] },
+    });
+    const members = answer.owners.flatMap(owner => owner.members);
+    expect(members.find(row => row.pid === 21)).toMatchObject({ name: 'node', role: 'dev_server', displayName: 'Vite',
+        ref: processRef(21, snapshot.rows.find(row => row.pid === 21)!.start) });
+    expect(members.find(row => row.pid === 60)).toMatchObject({ name: 'node', role: 'agent', displayName: 'Catalog Agent' });
+    expect(members.find(row => row.pid === 61)).toMatchObject({ name: 'python', role: 'mcp_server', displayName: 'Catalog MCP' });
+    expect(members.find(row => row.pid === 62)).toMatchObject({ name: 'python', displayName: 'Python HTTP server' });
+    expect(members.find(row => row.pid === 63)).not.toHaveProperty('displayName');
+    expect(answer.notHappier?.flatMap(group => group.members)).toEqual([{ name: 'unrelated', appGroup: 'unrelated', pid: 40,
+        ref: processRef(40, snapshot.rows.find(row => row.pid === 40)!.start), memoryBytes: 40 }]);
+    expect(JSON.stringify(answer)).not.toMatch(/agent-secret|mcp-secret|secret with spaces|secret argument|\/private\/unrelated/);
+    expect(MachineProcessesAnswerV1Schema.safeParse(answer).success).toBe(true);
+});
+
 describe('browser process projection', () => {
     it('groups a browser main and helpers with exact refs and deduped totals beneath its real driver', () => {
         const read = setup();
