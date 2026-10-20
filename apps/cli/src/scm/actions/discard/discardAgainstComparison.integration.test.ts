@@ -21,6 +21,7 @@ import { prepareScmFileBytesExport, type ScmFileBytesExportInput } from '../deli
 import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
 import { createDirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 import { commitGuardedFileReplace } from '@/rpc/handlers/fileSystem/commitGuardedFileReplace';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
@@ -327,7 +328,7 @@ describe('comparison discard through the SCM Action executor', () => {
           authorizationToken: endpoint.authorizationToken,
           recipientPublicKeyBase64: new Headers(init?.headers).get('x-happier-transfer-recipient-public-key')!,
           path: new URL(String(input)).pathname, httpMethod: init?.method === 'GET' ? 'GET' : 'POST',
-          ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) as unknown } : {}) });
+          ...(typeof init?.body === 'string' ? { body: StrictJsonValueSchema.parse(JSON.parse(init.body)) } : {}) });
         return new Response(response.body, { status: response.status, headers: { 'content-type': 'application/json' } });
       } });
     const bytes = await readFile(downloaded.destinationPath);

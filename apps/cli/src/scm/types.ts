@@ -15,7 +15,6 @@ import type {
     ScmCapabilities,
     ScmChangeApplyRequest,
     ScmChangeApplyResponse,
-    ScmChangeDiscardRequest,
     ScmChangeDiscardResponse,
     ScmCommitBackoutRequest,
     ScmCommitBackoutResponse,
@@ -27,10 +26,6 @@ import type {
     ScmDiffCommitResponse,
     ScmDiffFileRequest,
     ScmDiffFileResponse,
-    ScmBlameFileRequest,
-    ScmBlameFileResponse,
-    ScmFileAtRevisionRequest,
-    ScmFileAtRevisionResponse,
     ScmLogListRequest,
     ScmLogListResponse,
     ScmHistoryEntriesRequest,
@@ -99,6 +94,7 @@ import type {
     WorkspaceLocationScm,
 } from '@happier-dev/protocol';
 import type { ScmCommitUndoLastRequest, ScmCommitUndoLastResponse, ScmConflictAcceptSideRequest, ScmConflictMarkResolvedRequest } from '@happier-dev/protocol/scm';
+import type { ScmBlameFileRequest, ScmBlameFileResponse, ScmFileAtRevisionRequest, ScmFileAtRevisionResponse } from '@happier-dev/protocol/scm';
 
 import type { ScmWorkspaceIntegrationCheckoutMaterializationRequest } from './workspace/checkoutMaterialization';
 import type {
@@ -304,7 +300,7 @@ export interface ScmBackend {
     }): Promise<ScmChangeApplyResponse>;
     changeDiscard(input: {
         context: ScmBackendContext;
-        request: ScmChangeDiscardRequest;
+        request: Parameters<NonNullable<NonNullable<BackendRuntimeHandlers['changeSet']>['discard']>>[0]['request'];
     }): Promise<ScmChangeDiscardResponse>;
     commitCreate(input: {
         context: ScmBackendContext;

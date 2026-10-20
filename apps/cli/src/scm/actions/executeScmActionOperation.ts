@@ -413,12 +413,13 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                             entry.previousPath ? [entry.path, entry.previousPath] : [entry.path]);
                     }
                     if (request.entries.every(entry => entry.kind !== 'comparison')) return selection.backend.changeDiscard
-                        ? await selection.backend.changeDiscard({ context, request })
+                        ? await selection.backend.changeDiscard({ context, request: { ...request, entries: request.entries } })
                         : { success: false, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED, error: 'SCM backend operation is unavailable' };
                     // Admit every retained Session namespace before any entry can mutate the tree.
                     for (const entry of request.entries) {
                         if (entry.kind !== 'comparison') continue;
-                        const sourceSessionId = 'sessionId' in entry.against.source ? entry.against.source.sessionId : undefined;
+                        const sourceSessionId = entry.against.source.kind === 'session' || entry.against.source.kind === 'turnCheckpoint'
+                            ? entry.against.source.sessionId : undefined;
                         for (const sessionId of new Set([params.sessionId, entry.against.sessionId, sourceSessionId])) {
                             if (!await admitReviewScope(params, { cwd: context.cwd, ...(sessionId ? { sessionId } : {}) })) {
                                 return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMPARISON_UNAVAILABLE,
@@ -430,7 +431,8 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                     for (const entry of request.entries) {
                         if (entry.kind === 'comparison') {
                             const sessionId = entry.against.sessionId
-                                ?? ('sessionId' in entry.against.source ? entry.against.source.sessionId : undefined)
+                                ?? (entry.against.source.kind === 'session' || entry.against.source.kind === 'turnCheckpoint'
+                                    ? entry.against.source.sessionId : undefined)
                                 ?? params.sessionId;
                             prepared.push(await prepareDiscardAgainstComparison({ entry, context, backend: selection.backend,
                                 ...(sessionId ? { sessionId } : {}) }));
@@ -491,7 +493,7 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
                     if (outcome ? outcome.status === 'refused' || outcome.status === 'kept_edited' : !result.success) continue;
                     const source = entry.kind === 'comparison' ? entry.against.source : undefined;
                     const sessionId = (entry.kind === 'comparison' ? entry.against.sessionId : undefined)
-                        ?? (source && 'sessionId' in source ? source.sessionId : undefined)
+                        ?? (source?.kind === 'session' || source?.kind === 'turnCheckpoint' ? source.sessionId : undefined)
                         ?? params.sessionId ?? params.actionContext?.defaultSessionId;
                     if (!sessionId) continue;
                     if (entry.kind !== 'comparison') {

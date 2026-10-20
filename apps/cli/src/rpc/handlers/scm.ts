@@ -22,10 +22,6 @@ import type {
     ScmDiffCommitResponse,
     ScmDiffFileRequest,
     ScmDiffFileResponse,
-    ScmBlameFileRequest,
-    ScmBlameFileResponse,
-    ScmFileAtRevisionRequest,
-    ScmFileReadResponse,
     ScmLogListRequest,
     ScmLogListResponse,
     ScmRemoteAddRequest,
@@ -84,6 +80,7 @@ import type {
     ScmWorktreeRemoveResponse,
 } from '@happier-dev/protocol';
 import type { ScmCommitUndoLastRequest, ScmCommitUndoLastResponse, ScmConflictAcceptSideRequest, ScmConflictMarkResolvedRequest } from '@happier-dev/protocol/scm';
+import type { ScmBlameFileRequest, ScmBlameFileResponse, ScmFileAtRevisionRequest, ScmFileReadResponse } from '@happier-dev/protocol/scm';
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol/scm/operationError';
 import { ScmLogListRequestSchema } from '@happier-dev/protocol/scm';
 import { ScmHistoryEntriesRequestSchema, type ScmHistoryEntriesRequest, type ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';

@@ -18,6 +18,7 @@ export const SAPLING_SCM_BACKEND_CAPABILITIES = {
         diffFile: supportedCapability(),
         diffCommit: supportedCapability(),
         fileAtRevision: unsupportedCapability(),
+        blame: unsupportedCapability(),
         log: supportedCapability(),
         branches: unsupportedCapability(),
         stash: unsupportedCapability(),
