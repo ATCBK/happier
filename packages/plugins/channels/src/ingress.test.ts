@@ -73,7 +73,7 @@ import {
 import { isChannelStateJsonRecord, readConversationConnectionUpdateRow, readConversationBindingUpdateRow, withConversationConnectionPayload } from './accountLocalBindingPolicy.js';
 import { getConversationConnectionExecutionRouting, getConversationConnectionTransportOrigin, startConversationConnectionTransfer } from './connectionLifecycle.js';
 import type { ConversationConnectionTransportOriginV1 } from './connectionLifecycle.js';
-import { pollTelegramObservations } from '../../channel-telegram/src/channelActions.js';
+import { deliverTelegramMessage, pollTelegramObservations } from '../../channel-telegram/src/channelActions.js';
 import { parseDiscordMessageDispatch } from '../../channel-discord/src/discordMessage.js';
 import { mapDiscordMessageToSocketIngress } from '../../channel-discord/src/discordObservation.js';
 import { createConversationPairingManager } from './pairing.js';
@@ -1354,6 +1354,64 @@ function threadSpawnBoundary(actionId: string, input: JsonValue): JsonValue {
 }
 
 describe('thread router admission', () => {
+  it('routes an ordinary Telegram supergroup reply to the existing group binding and replies natively without a topic', async () => {
+    let polled = false;
+    const nativeSends: unknown[] = [];
+    const providerContext = (signal: AbortSignal): PluginInvocationContext => ({
+      plugin: { id: telegramProviderPluginId, version: '0.0.0' },
+      contribution: { id: 'telegram/poll-updates', qualifiedId: `${telegramProviderPluginId}/actions/telegram/poll-updates` },
+      surface: 'plugin', invokedAtMs: Date.now(), signal,
+      caller: { kind: 'plugin', pluginId: 'happier.channels',
+        contribution: { id: 'ingress-supervisor', qualifiedId: 'happier.channels/background/ingress-supervisor' },
+        occurrenceId: 'ordinary-reply', sourceCustody: { kind: 'development', registeredRootId: 'reply-fixture' },
+        materialization: telegramExecutionOrigin.materializationRef },
+      // Only credentials and the provider's HTTP boundary are substituted.
+      services: { connectedAccounts: { materialize: async () => ({ kind: 'environment', env: { TELEGRAM_BOT_TOKEN: '12345:fixture-token' } }) },
+        http: { request: async (request: Parameters<PluginServices['http']['request']>[0]) => {
+          let result: JsonValue;
+          if (request.url.endsWith('/getMe')) result = { id: 12345, is_bot: true, first_name: 'Happier', username: 'happier_bot', can_read_all_group_messages: true };
+          else if (request.url.endsWith('/getChat')) result = { id: -100456, type: 'supergroup', title: 'Group' };
+          else if (request.url.endsWith('/sendMessage')) {
+            nativeSends.push(JSON.parse(new TextDecoder().decode(request.body)));
+            result = { message_id: 99 };
+          } else if (request.url.endsWith('/getUpdates')) {
+            result = polled ? [{ update_id: 9001, message: {
+              message_id: 8, message_thread_id: 11, date: Math.floor(Date.now() / 1000),
+              chat: { id: -100456, type: 'supergroup' }, from: { id: 42, is_bot: false }, text: 'continue here',
+              reply_to_message: { message_id: 7, from: { id: 12345, is_bot: true } },
+            } }] : [];
+            polled = true;
+          } else throw new Error(`Unexpected Telegram request ${request.url}`);
+          return { status: 200, finalUrl: request.url, headers: { 'content-type': 'application/json' },
+            body: new TextEncoder().encode(JSON.stringify({ ok: true, result })) };
+        } },
+      } as unknown as PluginServices,
+    });
+    const harness = createIngressHarness({ pollExecution: (input, signal) => pollTelegramObservations(input, providerContext(signal)) });
+    const binding = channelBinding();
+    const endpoint = { kind: 'shared' as const, audience: 'shared' as const, id: '-100456' };
+    harness.rows.set(binding.id, stateRow({ ...binding, payload: { ...binding.payload, endpoint,
+      inputMode: 'addressedMessages', allowedPrincipalIds: ['42'] } }));
+    replaceConnectionPayload(harness.rows, { providerConfig: { botUsername: 'happier_bot', canReadAllGroupMessages: true } });
+    await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context);
+    await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context);
+    expect(harness.send).toHaveBeenCalledTimes(1);
+    expect(sentUserTextRequest(harness.send.mock.calls[0]?.[0])).toMatchObject({ text: 'continue here' });
+    const stateCollection = harness.context.services.storage.account?.collection(CHANNEL_STATE_COLLECTION);
+    if (!stateCollection) throw new Error('Expected Account storage.');
+    const relations = await readConversationSessionInputReplyRelations({ stateCollection, bindingId: binding.id,
+      connectionId: 'connection-1', sessionId: 'session-1', consumedLocalIds: ['pending-1'], signal: harness.context.signal });
+    expect(relations).toHaveLength(1);
+    await expect(deliverTelegramMessage({ v: 1, connectionId: 'connection-1',
+      providerConnectionKey: telegramConnectionAuthority.providerConnectionKey, providerConfigVersion: 1,
+      providerConfig: { botUsername: 'happier_bot', canReadAllGroupMessages: true }, credentialRef: telegramConnectionAuthority.credentialRef,
+      endpoint, content: { text: 'answer @SomeActualUsername' }, deliveryKey: 'ordinary-reply', replyContext: relations[0]!.replyContext,
+      mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress',
+    }, providerContext(harness.context.signal))).resolves.toMatchObject({ kind: 'delivered' });
+    expect(nativeSends).toEqual([{ chat_id: '-100456', text: 'answer ＠SomeActualUsername',
+      reply_parameters: { message_id: 8 }, link_preview_options: { is_disabled: true } }]);
+  });
+
   it.each(['telegram', 'discord'] as const)('pairs real %s shared proof into a paused parent router before ordinary enable and thread admission', async provider => {
     const providerPluginId = `happier.channel.${provider}`;
     const executionOrigin = {
@@ -1494,8 +1552,8 @@ describe('thread router admission', () => {
       messageNumber += 1;
       if (provider === 'telegram') {
         nextTelegramMessage = { update_id: 9000 + messageNumber, message: {
-          message_id: messageNumber, message_thread_id: threadId,
-          date: Math.floor(Date.now() / 1000), chat: { id: 100, type: 'supergroup', title: 'Forum' },
+          message_id: messageNumber, message_thread_id: threadId, is_topic_message: threadId !== null,
+          date: Math.floor(Date.now() / 1000), chat: { id: 100, type: 'supergroup', title: 'Forum', is_forum: true },
           from: { id: Number(senderId), is_bot: false, first_name: 'Ada' }, text,
           ...(text.startsWith('@happier_bot') ? { entities: [{ type: 'mention', offset: 0, length: 12 }] } : {}),
         } };
@@ -1690,8 +1748,8 @@ describe('thread router admission', () => {
             else if (request.url.endsWith('/getUpdates')) {
               const index = pollNumber++;
               result = index === 0 ? [] : [{ update_id: 9000 + index, message: {
-                message_id: index + 4, message_thread_id: 7, date: Math.floor(Date.now() / 1000),
-                chat: { id: 100, type: 'supergroup', title: 'Forum' },
+                message_id: index + 4, message_thread_id: 7, is_topic_message: true, date: Math.floor(Date.now() / 1000),
+                chat: { id: 100, type: 'supergroup', title: 'Forum', is_forum: true },
                 from: { id: index === 3 ? 99 : 42, is_bot: false, first_name: 'Ada' },
                 text: `topic message ${index}`,
               } }];
