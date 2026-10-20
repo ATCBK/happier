@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   TEAM_CREDENTIAL_EXTERNAL_PROVIDER_API_BASE_PATH_V1,
   TEAM_CREDENTIAL_EXTERNAL_PROVIDER_HTTP_ROUTES_V1,
+  TEAM_CREDENTIAL_EXTERNAL_PROVIDER_BODY_BASE64_MAX_CHARS_V1,
   TeamCredentialExternalProviderApplicationRequestV1Schema,
   TeamCredentialExternalProviderAdmissionResponseV1Schema,
   TeamCredentialExternalProviderModelCatalogAuthorizationV1Schema,
@@ -37,6 +38,18 @@ function request(overrides: Readonly<Record<string, unknown>> = {}) {
 }
 
 describe('Team credential external Provider API v1', () => {
+  it('enforces its declared carrier message bound at and just below the base64 boundary', () => {
+    const maxChars = TEAM_CREDENTIAL_EXTERNAL_PROVIDER_BODY_BASE64_MAX_CHARS_V1;
+    for (const chars of [maxChars - 4, maxChars, maxChars + 4]) {
+      const bodyBase64 = 'A'.repeat(chars);
+      expect(TeamCredentialExternalProviderApplicationRequestV1Schema.safeParse(request({ bodyBase64 })).success).toBe(chars <= maxChars);
+      expect(TeamCredentialResourceTestApplicationRequestV1Schema.safeParse({
+        v: 1, kind: 'resource_test', requestId: 'test-large', teamId: 'team-1', resourceId: 'resource-1',
+        route: 'responses', method: 'POST', pathAndQuery: '/v1/responses', bodyBase64,
+      }).success).toBe(chars <= maxChars);
+    }
+  });
+
   it('publishes one stable base path and an explicit method/path matrix', () => {
     expect(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_API_BASE_PATH_V1).toBe('/api/provider-broker/v1');
     expect(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_HTTP_ROUTES_V1.models).toEqual({
