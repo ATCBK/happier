@@ -73,6 +73,12 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 ? { kind: 'accepted-input-start', target }
                 : machine.retention.kind !== 'until-delete' ? { kind: 'retention' } : null;
             if (!purpose) continue;
+            // Unused retention needs the enrolled guest's positive activity
+            // evidence. Native allocation alone is still creation, not idle.
+            // A reviewed deadline or an already-submitted effect retains its
+            // own lifecycle, including reconciliation before enrollment.
+            if (purpose.kind === 'retention' && machine.retention.kind === 'unused'
+                && !machine.enrolledMachineId && !machine.submittedNativeEffect) continue;
             current.add(machine.id);
             // Intent revisions created by this same driver do not cancel its
             // native completion. A replaced native resource or enrollment does
