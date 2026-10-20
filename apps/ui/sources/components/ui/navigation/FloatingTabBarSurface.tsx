@@ -70,6 +70,13 @@ const styles = StyleSheet.create({
     pillBounds: {
         maxWidth: '100%',
     },
+    pillBoundsStretch: {
+        alignSelf: 'stretch',
+        alignItems: 'center',
+    },
+    pillStretch: {
+        width: '100%',
+    },
     accessoryRow: {
         flexDirection: 'row',
         // `stretch` is load-bearing, not cosmetic: the chrome host publishes this row's measured
@@ -116,6 +123,11 @@ export type FloatingTabBarSurfaceProps = Readonly<{
      * default: every other bottom bar renders the bar alone, and the tree stays flat for them.
      */
     trailingAccessory?: React.ReactNode;
+    /**
+     * The capsule spans the room between the gutters instead of hugging its content: a bar of controls
+     * that sit at both ends (the File page's View | Changes … Find · Edit), not a row of equal tabs.
+     */
+    stretch?: boolean;
     testID?: string;
 }>;
 
@@ -135,7 +147,7 @@ export const FloatingTabBarSurface = React.memo(function FloatingTabBarSurface(p
             radius={TAB_BAR_RADIUS}
             maxWidth={layout.maxWidth}
             softShadow={props.opaqueBand === true}
-            style={styles.pill}
+            style={props.stretch ? [styles.pill, styles.pillStretch] : styles.pill}
         >
             {props.children}
         </GlassPanel>
@@ -146,7 +158,7 @@ export const FloatingTabBarSurface = React.memo(function FloatingTabBarSurface(p
             pointerEvents="box-none"
             style={[styles.positioner, { paddingBottom: bottomPadding }]}
         >
-            {props.trailingAccessory == null ? <View style={styles.pillBounds}>{bar}</View> : (
+            {props.trailingAccessory == null ? <View style={props.stretch ? [styles.pillBounds, styles.pillBoundsStretch] : styles.pillBounds}>{bar}</View> : (
                 // Three cells: a content-sized leading spacer, the bar, then the accessory — so the
                 // bar stays centred on the SCREEN while the accessory rides the trailing edge.
                 // Centring the row as a whole pushes the bar left by half the accessory; the bar is
