@@ -15,7 +15,7 @@ export type UnifiedDiffInput = Readonly<{
     loadDiff: () => Promise<{ success: boolean; diff?: string; error?: string }>;
     diffArea: ScmDiffArea;
     path: string;
-    file: Pick<ScmFileStatus, 'status' | 'hasIncludedDelta'> | null;
+    file: Pick<ScmFileStatus, 'status' | 'hasIncludedDelta' | 'isBinary'> | null;
     normalizeError: (input: unknown) => string;
     fallbackError: string;
     diffCache?: ScmDiffCache | null;
@@ -40,7 +40,7 @@ export async function fetchUnifiedDiffForPath(input: UnifiedDiffInput): Promise<
     const file = input.file;
     const canReadAddedContent = file?.status === 'untracked'
         || (file?.status === 'added' && file.hasIncludedDelta === false);
-    const viewer = resolveFileViewerKind({ path: input.path });
+    const viewer = resolveFileViewerKind({ path: input.path, isBinaryContent: file?.isBinary });
     if (!canReadAddedContent || (viewer.kind !== 'code' && viewer.kind !== 'markdown' && viewer.kind !== 'svg')) return response;
     // Fallback reads have caller-owned preview bounds. Never cache a bounded/unavailable
     // read as backend truth, or share it with a caller using a different read policy.

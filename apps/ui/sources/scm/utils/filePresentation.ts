@@ -112,9 +112,11 @@ export function resolveFileViewerKind(input: Readonly<{
         mimeType = 'application/octet-stream';
         row = undefined;
     }
-    if (input.isBinaryContent === true) {
+    // Git's binary numstat means no text diff; it does not disqualify a media viewer.
+    if (input.isBinaryContent === true && (kind === 'code' || kind === 'markdown')) {
         kind = 'binary';
-        if (!row && !specificMime) mimeType = 'application/octet-stream';
+        mimeType = 'application/octet-stream';
+        row = undefined;
     }
     return {
         kind,

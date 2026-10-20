@@ -53,7 +53,7 @@ describe('resolveFileViewerKind', () => {
         }
         expect(resolveFileViewerKind({ path: 'icon.png', mimeType: 'image/jpeg' }).alphaCapable).toBe(false);
         expect(resolveFileViewerKind({ path: 'photo.jpg', mimeType: 'image/png' }).alphaCapable).toBe(true);
-        expect(resolveFileViewerKind({ path: 'icon.png', isBinaryContent: true }).alphaCapable).toBe(false);
+        expect(resolveFileViewerKind({ path: 'icon.png', isBinaryContent: true }).alphaCapable).toBe(true);
     });
 
     it('provides precise kinds and MIME across file families', () => {
@@ -75,10 +75,27 @@ describe('resolveFileViewerKind', () => {
     it('prefers specific MIME and falls back from generic MIME to the path', () => {
         expect(resolveFileViewerKind({ path: 'photo.jpg', mimeType: ' application/pdf; charset=binary ' }).kind).toBe('pdf');
         expect(resolveFileViewerKind({ path: 'icon.SVG', mimeType: 'application/octet-stream' }).kind).toBe('svg');
-        expect(resolveFileViewerKind({ path: 'icon.svg', isBinaryContent: true }).kind).toBe('binary');
+        expect(resolveFileViewerKind({ path: 'icon.svg', isBinaryContent: true }).kind).toBe('svg');
         expect(resolveFileViewerKind({ path: 'unknown.asset', isBinaryContent: true })).toMatchObject({ kind: 'binary', mimeType: 'application/octet-stream' });
         expect(resolveFileViewerKind({ path: 'photo', mimeType: 'image/heic' })).toMatchObject({ kind: 'image', mimeType: 'image/heic', previewable: true });
         expect(resolveFileViewerKind({ path: 'recording', mimeType: 'audio/opus' })).toMatchObject({ kind: 'audio', mimeType: 'audio/opus', previewable: true });
+    });
+
+    it('treats Git binary metadata as lack of a text diff while preserving recognized media', () => {
+        for (const [path, kind, mimeType] of [
+            ['logo.png', 'image', 'image/png'],
+            ['icon.svg', 'svg', 'image/svg+xml'],
+            ['spec.pdf', 'pdf', 'application/pdf'],
+            ['song.mp3', 'audio', 'audio/mpeg'],
+            ['clip.mp4', 'video', 'video/mp4'],
+        ] as const) {
+            expect(resolveFileViewerKind({ path, isBinaryContent: true })).toMatchObject({ kind, mimeType, previewable: true });
+        }
+        expect(resolveFileViewerKind({ path: 'upload', mimeType: 'image/webp', isBinaryContent: true })).toMatchObject({ kind: 'image', mimeType: 'image/webp', previewable: true });
+        expect(resolveFileViewerKind({ path: 'upload', head: new TextEncoder().encode('%PDF-1.7'), isBinaryContent: true })).toMatchObject({ kind: 'pdf', mimeType: 'application/pdf', previewable: true });
+        for (const path of ['unknown.asset', 'README.md', 'script.ts']) {
+            expect(resolveFileViewerKind({ path, isBinaryContent: true })).toMatchObject({ kind: 'binary', mimeType: 'application/octet-stream', previewable: false });
+        }
     });
 
     it('refines supplied generic bytes without reading anything itself', () => {

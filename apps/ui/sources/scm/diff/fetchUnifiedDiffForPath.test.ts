@@ -82,4 +82,10 @@ describe('fetchUnifiedDiffForPath', () => {
             readFileForFallback: async () => '' };
         expect(await fetchUnifiedDiffForPath(request)).toEqual({ success: true, diff: '', emptyFile: true });
     });
+    it('does not fabricate a text diff for a Git-declared opaque addition', async () => {
+        const request: UnifiedDiffInput = { ...input(), file: { status: 'untracked', isBinary: true },
+            path: 'unknown.asset', loadDiff: async () => ({ success: true, diff: '' }),
+            readFileForFallback: async () => 'readable prefix does not make the whole file text\n' };
+        expect(await fetchUnifiedDiffForPath(request)).toEqual({ success: true, diff: '' });
+    });
 });
