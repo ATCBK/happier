@@ -106,7 +106,7 @@ export async function gitBlameFile(input: {
     const normalized = normalizeRepoRootRelativePath(request.path);
     if (!normalized.ok) return { success: false, errorCode: SCM_OPERATION_ERROR_CODES.INVALID_PATH, error: normalized.error };
     const cwd = context.detection.rootPath ?? context.cwd;
-    const signal = input.signal ?? context.signal;
+    const signal = input.signal;
     try {
         const root = await realpath(cwd);
         const file = resolve(root, normalized.relativePath);
