@@ -2,7 +2,7 @@ import { resolveVitestWorkers } from '../../../scripts/testing/vitestWorkers';
 import { resolve } from 'node:path';
 
 import { configDefaults, defineConfig } from 'vitest/config';
-import { createWorkspacePackageSourcesPlugin } from '../../../scripts/testing/vitestWorkspacePackageResolution';
+import { createWorkspaceHostSourceAlias, createWorkspacePackageSourcesPlugin } from '../../../scripts/testing/vitestWorkspacePackageResolution';
 
 const uiSources = resolve(__dirname, '../../../apps/ui/sources');
 const uiDev = (path: string): string => resolve(uiSources, 'dev', path);
@@ -68,7 +68,7 @@ export default defineConfig({
       { find: '@/platform/hmacSha512', replacement: resolve(uiSources, 'platform/hmacSha512.node.ts') },
       { find: '@/platform/randomUUID', replacement: resolve(uiSources, 'platform/randomUUID.node.ts') },
       { find: '@/platform/digest', replacement: resolve(uiSources, 'platform/digest.node.ts') },
-      { find: '@', replacement: uiSources },
+      createWorkspaceHostSourceAlias(resolve(__dirname, '../../..'), uiSources),
     ],
   },
 });
