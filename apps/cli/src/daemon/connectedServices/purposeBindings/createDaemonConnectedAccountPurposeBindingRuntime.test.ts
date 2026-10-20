@@ -411,6 +411,7 @@ function createSelectionRuntime(
 }
 
 function createInventoryRuntime(input: Readonly<{
+  credentialOwnerAccountId?: string;
   accounts?: readonly QualifiedConnectedAccountProfileV4[];
   group?: QualifiedConnectedAccountGroupV4;
   store?: ConnectedAccountPurposeBindingStore;
@@ -448,6 +449,7 @@ function createInventoryRuntime(input: Readonly<{
       .map((value) => normalizeConnectedAccountConfiguredBase(value));
   });
   const runtime = createDaemonConnectedAccountPurposeBindingRuntime({
+    credentialOwnerAccountId: input.credentialOwnerAccountId,
     resolveQualifiedConnectedAccountV4Support: () => 'advertised',
     establishedRuntimeOwner: { invokeWithReceipt, invokeDirectMaterial } as unknown as Pick<
       QualifiedConnectedAccountEstablishedRuntimeOwner,
@@ -799,6 +801,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
 
   it('preserves a typed Team direct failure from the materialization currentness check', async () => {
     let openCount = 0;
+    const recordOperationCredentialUse = vi.fn();
     const { runtime } = createInventoryRuntime({
       openTeamDirect: async () => {
         openCount += 1;
@@ -833,8 +836,9 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
         return { kind: 'environment', env: { OPENAI_API_KEY: 'should-not-return' } };
       },
     });
-    const sessionLease = runtime.activateSessionPurposeBindings({
-      sessionId: 'session-team-direct-currentness',
+    const sessionLease = runtime.activatePurposeBindings({
+      subject: { kind: 'operation', operationId: 'team-direct-currentness', sessionId: 'session-team-direct-currentness', consumer: purpose.consumer, isCurrent: () => true },
+      recordOperationCredentialUse,
       purposes: [purpose],
       bindings: [{
         purpose,
@@ -853,7 +857,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     await expect(runtime.owner.materialize({
       purpose,
       serviceRefs: [openAiService],
-      sessionId: 'session-team-direct-currentness',
+      exactPurposeBindingSubjectId: sessionLease.subjectId,
       request: { kind: 'environment', keys: ['OPENAI_API_KEY'] },
       signal: new AbortController().signal,
     })).rejects.toMatchObject({
@@ -862,11 +866,13 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
       remediation: { kind: 'retry' },
     } satisfies Partial<PluginError>);
     expect(openCount).toBe(2);
+    expect(recordOperationCredentialUse).not.toHaveBeenCalled();
     sessionLease.dispose();
   });
 
-  it('materializes a Session direct Team selection only through its materialization origin and the Session Team-binding admission', async () => {
+  it.each([true, false])('materializes a Session direct Team selection only through its materialization origin and the Session Team-binding admission (safe label available: %s)', async hasSafeLabel => {
     const opened: unknown[] = [];
+    const recordOperationCredentialUse = vi.fn();
     const disclosedMember = { service: openAiService, accountId: 'source-member' };
     const { runtime, invokeDirectMaterial } = createInventoryRuntime({
       openTeamDirect: async (request) => {
@@ -881,6 +887,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
         });
         return {
           ok: true,
+          ...(hasSafeLabel ? { admittedResource: { displayName: 'Team deployment account', teamId: 'team-1' } } : {}),
           payload: {
             v: 1,
             domain: 'happier.team-credential-direct-material',
@@ -905,17 +912,18 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
         } as const;
       },
     });
-    const sessionLease = runtime.activateSessionPurposeBindings({
-      sessionId: 'session-team-purpose',
+    const sessionLease = runtime.activatePurposeBindings({
+      subject: { kind: 'operation', operationId: 'team-action', sessionId: 'session-team-purpose', consumer: purpose.consumer, isCurrent: () => true },
       purposes: [purpose],
       bindings: [{ purpose, target: { kind: 'account', account: disclosedMember } }],
       directMaterialOrigins: [{ purpose, resourceId: 'resource-1', disclosedMember }],
+      recordOperationCredentialUse,
     });
 
     await expect(runtime.owner.materialize({
       purpose,
       serviceRefs: [openAiService],
-      sessionId: 'session-team-purpose',
+      exactPurposeBindingSubjectId: sessionLease.subjectId,
       request: { kind: 'environment', keys: ['OPENAI_API_KEY'] },
       signal: new AbortController().signal,
     })).resolves.toEqual({ kind: 'environment', env: { OPENAI_API_KEY: 'sk-team-direct' } });
@@ -926,6 +934,12 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
       disclosedMember,
     });
     expect(invokeDirectMaterial).toHaveBeenCalledOnce();
+    expect(recordOperationCredentialUse.mock.calls).toEqual([[{
+      v: 1, kind: 'team_resource', label: hasSafeLabel ? 'Team deployment account' : null,
+      owner: { kind: 'team', teamId: 'team-1' }, service: openAiService,
+      why: { kind: 'purpose_binding', purpose, target: 'account' },
+      currentness: { kind: 'current_at_materialization', resourceRevision: 1 },
+    }]]);
     sessionLease.dispose();
   });
 
@@ -2468,6 +2482,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
   });
 
   it('fails closed when a group target generation changes during listed materialization', async () => {
+    const recordOperationCredentialUse = vi.fn();
     let currentGroup = testQualifiedGroup({
       activeAccountId: 'standard-openai',
       members: [{ accountId: 'standard-openai' }, { accountId: 'backup-openai' }],
@@ -2492,10 +2507,16 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
       },
     });
     qualifiedApi.readGroup.mockImplementation(async () => currentGroup);
+    const lease = runtime.activatePurposeBindings({
+      subject: { kind: 'operation', operationId: 'listed-generation-change', consumer: purpose.consumer, isCurrent: () => true },
+      purposes: [purpose], bindings: [{ purpose, target: { kind: 'group', service: openAiService, groupId: 'primary' } }],
+      recordOperationCredentialUse,
+    });
 
     await expect(runtime.owner.materializeListedAccount({
       purpose,
       serviceRefs: [openAiService],
+      exactPurposeBindingSubjectId: lease.subjectId,
       account: { service: openAiService, accountId: 'standard-openai' },
       request: { kind: 'environment', keys: ['OPENAI_API_KEY'] },
       signal: new AbortController().signal,
@@ -2503,6 +2524,8 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
       code: 'plugin_connected_account_binding_out_of_scope',
     } satisfies Partial<PluginError>);
     expect(invokeWithReceipt).toHaveBeenCalledOnce();
+    expect(recordOperationCredentialUse).not.toHaveBeenCalled();
+    lease.dispose();
   });
 
   it('keeps a configuration-free V4 account usable when its configuration projection is absent', async () => {
@@ -2755,6 +2778,39 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
       purpose,
       target: { kind: 'account', account: { service: openAiService, accountId: 'standard-openai' } },
     }]);
+  });
+
+  it.each(['displayName', 'email', 'providerAccount', 'unknown'] as const)('records an exact listed group member using its own authorized label and materialization Account: %s', async identity => {
+    const recordOperationCredentialUse = vi.fn();
+    const { displayName: _displayName, ...profile } = testQualifiedProfile({ accountId: 'backup-openai' });
+    const backupProfile = { ...profile,
+      ...(identity === 'displayName' ? { displayName: 'Backup actor' } : {}),
+      providerIdentity: identity === 'email' ? { email: 'backup@example.test' }
+        : identity === 'providerAccount' ? { accountId: 'backup-provider-account' } : {},
+    };
+    const { runtime } = createInventoryRuntime({
+      credentialOwnerAccountId: 'authenticated-materialization-account',
+      accounts: [testQualifiedProfile({ accountId: 'standard-openai', displayName: 'Primary actor' }),
+        backupProfile],
+      group: testQualifiedGroup({ activeAccountId: 'standard-openai', members: [{ accountId: 'standard-openai' }, { accountId: 'backup-openai' }] }),
+      store: selectedGroupStore(),
+    });
+    const lease = runtime.activatePurposeBindings({
+      subject: { kind: 'operation', operationId: 'listed-action', consumer: purpose.consumer, isCurrent: () => true },
+      purposes: [purpose], bindings: [{ purpose, target: { kind: 'group', service: openAiService, groupId: 'primary' } }],
+      recordOperationCredentialUse,
+    });
+    await runtime.owner.materializeListedAccount({ purpose, serviceRefs: [openAiService],
+      exactPurposeBindingSubjectId: lease.subjectId, account: { service: openAiService, accountId: 'backup-openai' },
+      request: { kind: 'environment', keys: ['OPENAI_API_KEY'] }, signal: new AbortController().signal });
+    expect(recordOperationCredentialUse.mock.calls).toEqual([[{
+      v: 1, kind: 'connected_account', label: identity === 'displayName' ? 'Backup actor'
+        : identity === 'email' ? 'backup@example.test' : identity === 'providerAccount' ? 'backup-provider-account' : null,
+      owner: { kind: 'account', accountId: 'authenticated-materialization-account' }, service: openAiService,
+      why: { kind: 'purpose_binding', purpose, target: 'listed_account' },
+      currentness: { kind: 'current_at_materialization' },
+    }]]);
+    lease.dispose();
   });
 
   it('rejects an exact-listed materialization for an account outside the authorized set', async () => {

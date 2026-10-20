@@ -81,6 +81,13 @@ export type ConnectedAccountPurposeResolvedTarget = Readonly<{
   }>;
 }>;
 
+/** Authorized profile presentation, without falling back to the opaque row id. */
+export function readConnectedAccountPurposeProfileLabel(
+  profile: Pick<QualifiedConnectedAccountProfileV4, 'displayName' | 'providerIdentity'>,
+): string | null {
+  return profile.displayName ?? profile.providerIdentity?.email ?? profile.providerIdentity?.accountId ?? null;
+}
+
 /** Launch-only pointer to one exact recipient-scoped Team material row. */
 export type ConnectedAccountTeamDirectMaterialOrigin = Readonly<{
   purpose: QualifiedConnectedAccountPurposeV1;
@@ -1343,7 +1350,8 @@ export function createConnectedAccountPurposeBindingOwner(
     const profile = input.resolved.observation?.profiles.find(candidate => sameQualifiedConnectedAccountRef(candidate.ref, input.account));
     const label = input.isTeamResource
       ? input.teamResource?.displayName ?? null
-      : profile?.displayName ?? (!input.resolved.observation && input.target === 'account' ? input.resolved.displayName : null);
+      : profile ? readConnectedAccountPurposeProfileLabel(profile)
+        : !input.resolved.observation && input.target === 'account' ? input.resolved.displayName : null;
     return {
       v: 1,
       kind: input.isTeamResource ? 'team_resource' : 'connected_account',

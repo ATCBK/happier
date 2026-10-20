@@ -35,6 +35,7 @@ import { waitForChangeOrDeadline } from '@/daemon/lifecycle/waitForChangeOrDeadl
 import {
   createActiveAccountSettingsConnectedAccountPurposeBindingStore,
   createConnectedAccountPurposeBindingOwner,
+  readConnectedAccountPurposeProfileLabel,
   type ConnectedAccountPurposeBindingOwner,
   type ConnectedAccountPurposeBindingStore,
   type ConnectedAccountPurposeResolvedTarget,
@@ -71,8 +72,7 @@ type ResolvedDaemonConnectedAccountService = Readonly<{
 type DaemonConnectedAccountSelectionProfile = Readonly<{
   profileId: string;
   active: boolean;
-  providerAccountId?: string | null;
-  providerEmail?: string | null;
+  providerIdentity?: QualifiedConnectedAccountProfileV4['providerIdentity'];
   displayName?: string;
 }>;
 type DaemonConnectedAccountSelectionGroup = Readonly<{
@@ -573,10 +573,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       return null;
     }
     return Object.freeze({
-      displayName: profile.displayName
-        ?? profile.providerIdentity?.email
-        ?? profile.providerIdentity?.accountId
-        ?? profile.ref.accountId,
+      displayName: readConnectedAccountPurposeProfileLabel(profile) ?? profile.ref.accountId,
       account: Object.freeze({
         service: Object.freeze({ ...profile.ref.service }),
         accountId: profile.ref.accountId,
@@ -672,8 +669,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
               authentication: service.authentication,
               now,
             }),
-            providerAccountId: profile.providerIdentity?.accountId,
-            providerEmail: profile.providerIdentity?.email,
+            providerIdentity: profile.providerIdentity,
             displayName: profile.displayName,
           })),
           groupResult.groups.map((group) => Object.freeze({
@@ -696,10 +692,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       )));
       for (const profile of availableProfiles.values()) {
         candidates.push(Object.freeze({
-          label: profile.displayName
-            ?? profile.providerEmail
-            ?? profile.providerAccountId
-            ?? profile.profileId,
+          label: readConnectedAccountPurposeProfileLabel(profile) ?? profile.profileId,
           description: service.service.localId,
           target: Object.freeze({
             kind: 'account' as const,
@@ -867,9 +860,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
             accountId: profile.ref.accountId,
           }),
           displayName: boundedDisplayName(
-            profile.displayName
-              ?? profile.providerIdentity?.email
-              ?? profile.providerIdentity?.accountId,
+            readConnectedAccountPurposeProfileLabel(profile) ?? undefined,
             profile.ref.accountId,
           ),
           state: listedQualifiedConnectedAccountState(

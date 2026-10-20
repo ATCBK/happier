@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import type { ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { ConnectedAccountMaterializationRequestSchema } from '@happier-dev/protocol/connect/connected-account-purposes';
 import type { QualifiedConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connected-account-purposes';
@@ -68,6 +69,8 @@ export type StablePluginConnectedAccountsOwner = Readonly<{
     ): Promise<PluginConnectedAccountBindingSummary>;
     materialize(
         input: StablePluginConnectedAccountsAuthorizedPurpose & Readonly<{
+            /** Host-stamped current Action observation port, never SDK materialization options. */
+            recordOperationCredentialUse?: (use: ActionOperationCredentialUseV1) => void;
             nativeService?: PluginContributionRef;
             exactPurposeBindingSubjectId?: string;
             sessionId?: string;
@@ -97,6 +100,7 @@ export type StablePluginConnectedAccountsOwner = Readonly<{
      */
     materializeListedAccount(
         input: StablePluginConnectedAccountsAuthorizedPurpose & Readonly<{
+            recordOperationCredentialUse?: (use: ActionOperationCredentialUseV1) => void;
             exactPurposeBindingSubjectId?: string;
             sessionId?: string;
             account: PluginConnectedAccountRef;
@@ -644,6 +648,13 @@ export function createStablePluginConnectedAccountsHost(
         },
         bind(seed, authorizedScopes, bindOptions): ConnectedAccountsService {
             const scopes = new Map(authorizedScopes.map((scope) => [scope.purpose, scope]));
+            const recordOperationCredentialUse = seed.approvalContext?.recordOperationCredentialUse;
+            const recordCurrentCredentialUse = recordOperationCredentialUse
+                ? (use: ActionOperationCredentialUseV1) => {
+                    assertCurrent(seed);
+                    recordOperationCredentialUse(use);
+                }
+                : undefined;
             const exactPurposeBindingSubjectId =
                 bindOptions?.exactPurposeBindingSubjectId?.trim() || null;
             return Object.freeze<ConnectedAccountsService>({
@@ -717,6 +728,9 @@ export function createStablePluginConnectedAccountsHost(
                     try {
                         const result = await runTracedExternalActionInnerStage('contributed.connected_account.materialize', () => owner.materialize({
                             ...authorizedPurpose(seed, scope),
+                            ...(recordCurrentCredentialUse
+                                ? { recordOperationCredentialUse: recordCurrentCredentialUse }
+                                : {}),
                             ...(exactPurposeBindingSubjectId
                                 ? { exactPurposeBindingSubjectId }
                                 : {}),
@@ -787,6 +801,9 @@ export function createStablePluginConnectedAccountsHost(
                     try {
                         const result = await runTracedExternalActionInnerStage('contributed.connected_account.materialize_listed', () => owner.materializeListedAccount({
                             ...authorizedPurpose(seed, scope),
+                            ...(recordCurrentCredentialUse
+                                ? { recordOperationCredentialUse: recordCurrentCredentialUse }
+                                : {}),
                             ...(exactPurposeBindingSubjectId
                                 ? { exactPurposeBindingSubjectId }
                                 : {}),
