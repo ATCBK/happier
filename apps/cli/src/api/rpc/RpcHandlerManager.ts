@@ -111,7 +111,8 @@ function readOutcomeCode(value: unknown, thrown = false): string {
     if (!value || typeof value !== 'object') return thrown ? 'unclassified_error' : 'ok';
     const result = value as Record<string, unknown>;
     const code = readRpcErrorCode(value) ?? result.errorCode
-        ?? (thrown || result.ok === false ? result.code : undefined);
+        ?? (thrown || result.ok === false ? result.code : undefined)
+        ?? (result.ok === false ? result.error : undefined);
     // Retain typed native refusals as well as transport codes, never error prose.
     // Match the existing RPC provider diagnostic token budget (128 characters).
     // The end assertion rejects trailing newlines too, unlike JavaScript's `$`.
