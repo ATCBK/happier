@@ -16,8 +16,15 @@ export const SessionManagedSessionsV1Schema = lazyZodSchema(() => z.strictObject
   working: z.number().check(z.int(), z.nonnegative()),
   needsYou: z.number().check(z.int(), z.nonnegative()),
   stalled: z.number().check(z.int(), z.nonnegative()),
+  /** How many of `total` are archived: still the lead's record, no longer sub-sessions anyone is running. */
+  archived: zMini.optional(z.number().check(z.int(), z.nonnegative())),
 }));
 export type SessionManagedSessionsV1 = z.infer<typeof SessionManagedSessionsV1Schema>;
+
+/** Sub-sessions a lead still has: `total` without the archived reports. The one reader behind every "N sub-sessions" count. */
+export function readSessionLiveManagedSessionCountV1(reports: Readonly<{ total: number; archived?: number }> | null | undefined): number {
+  return reports ? Math.max(0, reports.total - (reports.archived ?? 0)) : 0;
+}
 
 export const SessionManagerSetRequestV1Schema = lazyZodSchema(() => z.strictObject({
   managerSessionId: zMini.nullable(SessionIdV1Schema),

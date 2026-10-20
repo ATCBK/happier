@@ -3,6 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useShallow } from 'zustand/react/shallow';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { readSessionLiveManagedSessionCountV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 
 import {
   RAIL_POPOVER_ROSTER_LIST_STYLE,
@@ -470,7 +471,7 @@ export function BotsPopoverContent(
               quietWhenOffline
               actionMenuSurface="botsRoster"
               reportsDepth={items[index]!.reportsDepth}
-              reportsDisclosure={(row.session.managedSessions?.total ?? 0) > 0
+              reportsDisclosure={readSessionLiveManagedSessionCountV1(row.session.managedSessions) > 0
                 ? (collapsed[buildSessionListIndexNodeId(items[index]!)] ?? (row.session.metadata?.bot?.kind === 'bot')) ? 'collapsed' : 'expanded'
                 : undefined}
               onSetReportsCollapsed={setCollapsed}
@@ -479,7 +480,7 @@ export function BotsPopoverContent(
             {readinessServerId ? (
               <BotRosterReadiness serverId={readinessServerId} sessionId={row.session.id} separator={!isLast} />
             ) : null}
-            {(row.session.managedSessions?.total ?? 0) > 0 && collapsed[buildSessionListIndexNodeId(items[index]!)] === false
+            {readSessionLiveManagedSessionCountV1(row.session.managedSessions) > 0 && collapsed[buildSessionListIndexNodeId(items[index]!)] === false
               ? <BotRosterReports lead={row.session} item={items[index]!} />
               : null}
             </React.Fragment>

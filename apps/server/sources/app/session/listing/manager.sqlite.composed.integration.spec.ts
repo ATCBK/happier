@@ -367,7 +367,7 @@ describe("Manager listing (SQLite)", () => {
         await db.sessionFollowEdge.create({ data: managerEdgeData(child.id, lead.id) });
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.find((row) => row.id === lead.id)?.managedSessions)
-            .toEqual({ total: 1, working: 0, needsYou: 0, stalled: 0 });
+            .toEqual({ total: 1, working: 0, needsYou: 0, stalled: 0, archived: 0 });
     });
 
     it("keeps an inactive failed report in Recent instead of counting Needs you", async () => {
@@ -377,7 +377,7 @@ describe("Manager listing (SQLite)", () => {
             active: false, latestTurnStatus: "failed", latestTurnStatusObservedAt: BigInt(Date.now()),
         } });
         await db.sessionFollowEdge.create({ data: managerEdgeData(child.id, lead.id) });
-        const expected = { total: 1, working: 0, needsYou: 0, stalled: 0 };
+        const expected = { total: 1, working: 0, needsYou: 0, stalled: 0, archived: 0 };
         expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions).toEqual(expected);
         await withAuthenticatedTestApp(registerSessionListingRoutes, async app => {
             const response = await app.inject({ method: "GET", url: `/v2/sessions/${lead.id}?accessProjectionVersion=1`,
@@ -391,7 +391,7 @@ describe("Manager listing (SQLite)", () => {
         expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions)
             .toEqual({ ...expected, needsYou: 1 });
         await db.session.update({ where: { id: child.id }, data: { archivedAt: new Date() } });
-        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions).toEqual(expected);
+        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions).toEqual({ ...expected, archived: 1 });
     });
 
     it("counts an active mid-turn report as working rather than stalled", async () => {
@@ -404,7 +404,7 @@ describe("Manager listing (SQLite)", () => {
         await db.sessionFollowEdge.create({ data: managerEdgeData(child.id, lead.id) });
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.find((row) => row.id === lead.id)?.managedSessions)
-            .toEqual({ total: 1, working: 1, needsYou: 0, stalled: 0 });
+            .toEqual({ total: 1, working: 1, needsYou: 0, stalled: 0, archived: 0 });
     });
 
     it("omits a hidden stalled report from list and detail counts and ids", async () => {
@@ -418,12 +418,12 @@ describe("Manager listing (SQLite)", () => {
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.map((row) => row.id).sort()).toEqual([lead.id, child.id].sort());
         expect(page?.sessions.find((row) => row.id === lead.id)?.managedSessions)
-            .toEqual({ total: 1, working: 0, needsYou: 0, stalled: 1 });
+            .toEqual({ total: 1, working: 0, needsYou: 0, stalled: 1, archived: 0 });
         await withAuthenticatedTestApp(registerSessionListingRoutes, async (app) => {
             const headers = { "x-test-user-id": owner.id, "x-happier-account-stored-content-protocol": "2" };
             const detail = await app.inject({ method: "GET", url: `/v2/sessions/${lead.id}?accessProjectionVersion=1`, headers });
             expect(detail.statusCode, detail.body).toBe(200);
-            expect(detail.json().session.managedSessions).toEqual({ total: 1, working: 0, needsYou: 0, stalled: 1 });
+            expect(detail.json().session.managedSessions).toEqual({ total: 1, working: 0, needsYou: 0, stalled: 1, archived: 0 });
             const denied = await app.inject({ method: "GET", url: `/v2/sessions/${foreign.lead.id}?accessProjectionVersion=1`, headers });
             expect(denied.statusCode).toBe(404);
         });
@@ -447,7 +447,7 @@ describe("Manager listing (SQLite)", () => {
         const foreign = await fixture();
         await db.session.update({ where: { id: foreign.lead.id }, data: { active: true, latestTurnStatus: "failed" } });
         await db.sessionFollowEdge.create({ data: managerEdgeData(foreign.lead.id, lead.id) });
-        const expected = { total: primaries.length, working: 1, needsYou: 3, stalled: 0 };
+        const expected = { total: primaries.length, working: 1, needsYou: 3, stalled: 0, archived: 0 };
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.find((row) => row.id === lead.id)?.managedSessions)
             .toEqual(expected);
