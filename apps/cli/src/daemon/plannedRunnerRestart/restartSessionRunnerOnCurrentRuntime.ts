@@ -1,5 +1,5 @@
 import type { TrackedSession } from '@/daemon/types';
-import type { SessionRunnerRestartDisabledReason, SessionRuntimeActivityState } from '@happier-dev/protocol';
+import { hasActiveSessionRuntimeActivity, type SessionRunnerRestartDisabledReason, type SessionRuntimeActivityState } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
 import { readTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo';
 
@@ -97,7 +97,10 @@ async function hasServerProjectedBackgroundActivity(
 ): Promise<boolean> {
   try {
     const activity = await readServerRuntimeActivity(sessionId);
-    return activity?.runtimeActivityState === 'active' && (activity.runtimeActivityActiveCount ?? 0) > 0;
+    return hasActiveSessionRuntimeActivity({
+      state: activity?.runtimeActivityState,
+      activeCount: activity?.runtimeActivityActiveCount,
+    });
   } catch {
     return true;
   }

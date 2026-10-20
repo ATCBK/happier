@@ -1,7 +1,7 @@
 import { Modal } from '@/modal';
 import { storage } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { deriveSessionRuntimePresentationStateForSession } from '@/utils/sessions/sessionUtils';
+import { hasActiveSessionRuntimeActivity } from '@happier-dev/protocol';
 
 // Repeated presses while the dialog is open must not stack dialogs (and restart requests).
 let confirmationOpen = false;
@@ -16,9 +16,10 @@ export async function confirmRunnerRestartStopsBackgroundWork(sessionId: string)
     const session = storage.getState().sessions[sessionId];
     // SessionView renders only stored sessions, so a missing record has no runtime to protect.
     if (!session) return true;
-    const runtime = deriveSessionRuntimePresentationStateForSession(session, Date.now());
-    // Background presentation excludes foreground work; interruption protection must not.
-    if (!runtime.freshProviderRuntimeActivity) return true;
+    if (!hasActiveSessionRuntimeActivity({
+        state: session.runtimeActivityState,
+        activeCount: session.runtimeActivityActiveCount,
+    })) return true;
     if (confirmationOpen) return false;
     confirmationOpen = true;
     try {

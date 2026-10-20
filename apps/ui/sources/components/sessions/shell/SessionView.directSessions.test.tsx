@@ -1724,15 +1724,26 @@ describe('SessionView (direct sessions)', () => {
     });
   });
 
-  it.each(['stale-runner', 'MCP configuration'])('still asks before a %s restart when foreground and background work coexist', async (entryPoint) => {
+  it.each([
+    ['stale-runner', 'foreground and background work coexist'],
+    ['MCP configuration', 'foreground and background work coexist'],
+    ['stale-runner', 'the activity observation is stale'],
+    ['MCP configuration', 'the activity observation is stale'],
+  ])('still asks before a %s restart when %s', async (entryPoint, activityCase) => {
     if (entryPoint === 'stale-runner') installStaleSessionRunnerStatus();
     else installMcpSelectionRestartRequired();
     installBackgroundActivity(2);
-    storageState.sessions.s1 = {
-      ...storageState.sessions.s1,
-      latestTurnStatus: 'in_progress',
-      latestTurnStatusObservedAt: Date.now(),
-    };
+    storageState.sessions.s1 = activityCase === 'the activity observation is stale'
+      ? {
+        ...storageState.sessions.s1,
+        activeAt: 1,
+        runtimeActivityObservedAt: 1,
+      }
+      : {
+        ...storageState.sessions.s1,
+        latestTurnStatus: 'in_progress',
+        latestTurnStatusObservedAt: Date.now(),
+      };
 
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
     await pressTestInstanceAsync(screen.findByTestId(entryPoint === 'stale-runner'
