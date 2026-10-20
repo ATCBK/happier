@@ -8,6 +8,28 @@ const folders = { v: 1 as const, folders: [{ id: 'parent', name: 'Parent', paren
     { id: 'child', name: 'Child', parentId: 'parent' }] };
 
 describe('Artifact browser entity drag and drop', () => {
+    it('keys the admitted folder independently of revision and preview text', () => {
+        let revision = 1;
+        const target = createArtifactBrowserDropTarget({ id: 'library', scope,
+            getCatalog: () => ({ folders, revision, canWrite: true }), getBounds: () => bounds,
+            getRows: () => [], getDropZones: () => [], describeFolder: folder => `${revision}:${folder?.name ?? 'Library'}`,
+            describeMove: name => name, describeRefusal: code => code, execute: async () => ({ status: 'applied' }) });
+        const key = (folderId: string | null, item = createArtifactBrowserDragSource({ scope,
+            entity: { kind: 'artifact', artifactId: 'doc' }, isCurrent: () => true }).getItem()!) => {
+            const context = { item, pointer: null, destination: { folderId }, input: 'keyboard' as const };
+            const admission = target.resolve(context);
+            expect(admission.status).toBe('allowed');
+            if (admission.status !== 'allowed') throw new Error('Expected an admitted folder');
+            return target.getDestinationKey?.(context, admission);
+        };
+        const child = key('child');
+        expect(child).toEqual(expect.any(String));
+        revision++;
+        expect(key('child')).toBe(child);
+        expect(key(null)).not.toBe(child);
+        expect(key(null, createArtifactBrowserDragSource({ scope, entity: { kind: 'artifact-folder', folderId: 'child' }, isCurrent: () => true }).getItem()!))
+            .toBe(key(null));
+    });
     it('uses the shared chooser runtime for personal artifact moves and prevents folder cycles', () => {
         const runtime = createEntityDragDropRuntime();
         runtime.registerSource(createArtifactBrowserDragSource({ scope, entity: { kind: 'artifact', artifactId: 'shared' },

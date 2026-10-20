@@ -144,6 +144,122 @@ function makeContext(overrides?: Partial<Parameters<typeof commitSessionListDrag
     };
 }
 
+describe('admitted session-list destination identity', () => {
+    function destinationKey(intent: SessionListDragIntent, context: Parameters<typeof resolveSessionListDragIntent>[0]['context']) {
+        const admission = resolveSessionListDragIntent({ intent, context });
+        expect(admission.ok).toBe(true);
+        if (!admission.ok) throw new Error(`Unexpected refusal: ${admission.reason}`);
+        expect(admission.destinationKey).toEqual(expect.any(String));
+        return admission.destinationKey;
+    }
+
+    function sessionPlacement(targetSessionId: string, instructionKind: 'reorder-before' | 'reorder-after'): SessionListDragIntent {
+        return {
+            sourceRowId: treeRowId.session('server-a', 'inside-a'), sourceKind: 'leaf', instructionKind,
+            targetRowId: treeRowId.session('server-a', targetSessionId),
+            containerId: treeRowId.workspaceRoot(projectGroupKey), parentRowId: null, depth: 0,
+            edge: instructionKind === 'reorder-before' ? 'top' : 'bottom', sourceSnapshotSignature: 'snapshot',
+        };
+    }
+
+    it('shares one key for the same effective gap and changes it for another placement', () => {
+        const { context } = makeContext();
+        const afterA = destinationKey(sessionPlacement('root-a', 'reorder-after'), context);
+        expect(destinationKey(sessionPlacement('root-b', 'reorder-before'), context)).toBe(afterA);
+        expect(destinationKey(sessionPlacement('root-a', 'reorder-before'), context)).not.toBe(afterA);
+        expect(destinationKey(sessionPlacement('root-b', 'reorder-after'), context)).not.toBe(afterA);
+        const rootEdge = { ...sessionPlacement('root-a', 'reorder-before'),
+            instructionKind: 'move-to-root' as const, targetRowId: null };
+        expect(destinationKey(rootEdge, context)).toBe(destinationKey(sessionPlacement('root-a', 'reorder-before'), context));
+        expect(destinationKey({ ...rootEdge, edge: 'bottom' }, context)).toBe(destinationKey(sessionPlacement('root-b', 'reorder-after'), context));
+        const renamedItems = context.latestItems.map(item => item.type === 'header' ? { ...item, title: 'Renamed' } : item);
+        expect(destinationKey({ ...sessionPlacement('root-a', 'reorder-after'), sourceSnapshotSignature: 'new-snapshot' }, {
+            ...context, latestItems: renamedItems, sessionListGroupOrderV1: { unrelated: ['unrelated-session'] },
+        })).toBe(afterA);
+    });
+
+    it('normalizes gaps against the canonical current order rather than rendered sibling order', () => {
+        const { context } = makeContext({ latestItems: [
+            ...items(), sessionItem('root-c', projectGroupKey, null, 0),
+        ] });
+        const tree = buildSessionListTreeRows({ items: context.latestItems });
+        const orderKey = (id: string) => tree.rowMetadataById.get(treeRowId.session('server-a', id))!.orderKey!;
+        const current = { ...context, sessionListGroupOrderV1: {
+            [projectGroupKey]: [orderKey('root-b'), orderKey('root-a'), orderKey('root-c')],
+        } };
+        const afterB = destinationKey(sessionPlacement('root-b', 'reorder-after'), current);
+        expect(destinationKey(sessionPlacement('root-a', 'reorder-before'), current)).toBe(afterB);
+        expect(destinationKey(sessionPlacement('root-a', 'reorder-after'), current)).not.toBe(afterB);
+    });
+
+    it('shares nesting and anchored placement keys for the same effective folder position', async () => {
+        const { context, spies } = makeContext({ latestItems: [
+            projectHeader(), folderHeader('folder-b', folderBGroupKey, 0),
+            folderHeader('folder-a', folderAGroupKey, 0), sessionItem('inside-a', folderAGroupKey, 'folder-a', 1),
+            sessionItem('root-a', projectGroupKey, null, 0),
+        ] });
+        const tree = buildSessionListTreeRows({ items: context.latestItems });
+        const folderA = tree.rowMetadataById.get(treeRowId.folder('server-a', 'folder-a'))!;
+        const sourceRowId = treeRowId.folder('server-a', 'folder-b');
+        const nest: SessionListDragIntent = {
+            sourceRowId, sourceKind: 'container', instructionKind: 'nest-into', targetRowId: folderA.rowId,
+            containerId: folderA.childContainerId, parentRowId: folderA.rowId, depth: 1,
+            edge: null, sourceSnapshotSignature: '',
+        };
+        const placement: SessionListDragIntent = { ...nest, instructionKind: 'reorder-before',
+            targetRowId: treeRowId.session('server-a', 'inside-a'), edge: 'top' };
+        expect(destinationKey(placement, context)).toBe(destinationKey(nest, context));
+        const anchored = makeContext({ latestItems: context.latestItems });
+        expect(await commitSessionListDragIntent({ intent: nest, context })).toEqual({ ok: true });
+        expect(await commitSessionListDragIntent({ intent: placement, context: anchored.context })).toEqual({ ok: true });
+        expect(spies.setSessionFoldersV1).toHaveBeenCalledOnce();
+        expect(spies.setSessionListGroupOrderV1).toHaveBeenCalledOnce();
+        expect(anchored.spies.setSessionFoldersV1.mock.calls).toEqual(spies.setSessionFoldersV1.mock.calls);
+        expect(anchored.spies.setSessionListGroupOrderV1.mock.calls).toEqual(spies.setSessionListGroupOrderV1.mock.calls);
+        const sessionNest = { ...nest, sourceRowId: treeRowId.session('server-a', 'root-a'), sourceKind: 'leaf' as const };
+        const firstSlot = destinationKey(sessionNest, context);
+        expect(destinationKey({ ...sessionNest, instructionKind: 'reorder-before',
+            targetRowId: treeRowId.session('server-a', 'inside-a'), edge: 'top' }, context)).toBe(firstSlot);
+        expect(destinationKey({ ...sessionNest, instructionKind: 'reorder-after',
+            targetRowId: treeRowId.session('server-a', 'inside-a'), edge: 'bottom' }, context)).not.toBe(firstSlot);
+        const folderB = tree.rowMetadataById.get(sourceRowId)!;
+        expect(destinationKey({ ...sessionNest, targetRowId: folderB.rowId, containerId: folderB.childContainerId,
+            parentRowId: folderB.rowId }, context)).not.toBe(firstSlot);
+    });
+
+    it('identifies the manager target without treating changing CAS anchors as another destination', () => {
+        const { context } = makeContext({ putSessionUnder: async () => 'applied',
+            latestItems: [...items(), sessionItem('root-c', projectGroupKey, null, 0)] });
+        const intent: SessionListDragIntent = {
+            sourceRowId: treeRowId.session('server-a', 'inside-a'), sourceKind: 'leaf', instructionKind: 'nest-into',
+            targetRowId: treeRowId.session('server-a', 'root-a'), containerId: null, parentRowId: null,
+            depth: 1, edge: null, sourceSnapshotSignature: '',
+        };
+        const first = destinationKey(intent, context);
+        expect(destinationKey(intent, { ...context, resolvePutSessionUnder: () => ({ allowed: true, expectedManagerSessionId: 'root-c' }) })).toBe(first);
+        expect(destinationKey({ ...intent, targetRowId: treeRowId.session('server-a', 'root-b') }, context)).not.toBe(first);
+        expect(destinationKey(sessionPlacement('root-a', 'reorder-after'), context)).not.toBe(first);
+    });
+
+    it('normalizes workspace reorder gaps through the workspace order owner', () => {
+        const headers = ['a', 'b', 'c', 'd'].map(id => ({ ...projectHeader(),
+            groupKey: `workspace-${id}`, workspaceKey: `workspace-${id}`,
+            workspace: { ...workspaceA, rootPath: `/repo/${id}` },
+        }));
+        const { context } = makeContext({ latestItems: headers });
+        const tree = buildSessionListTreeRows({ items: headers });
+        const rows = headers.map(header => tree.rowMetadataById.get(resolveWorkspaceRootTreeRowId(header))!);
+        const intent: SessionListDragIntent = {
+            sourceRowId: rows[0]!.rowId, sourceKind: 'container', instructionKind: 'reorder-after',
+            targetRowId: rows[1]!.rowId, containerId: rows[0]!.containerId, parentRowId: null,
+            depth: 0, edge: 'bottom', sourceSnapshotSignature: '',
+        };
+        const gap = destinationKey(intent, context);
+        expect(destinationKey({ ...intent, instructionKind: 'reorder-before', targetRowId: rows[2]!.rowId, edge: 'top' }, context)).toBe(gap);
+        expect(destinationKey({ ...intent, targetRowId: rows[2]!.rowId }, context)).not.toBe(gap);
+    });
+});
+
 describe('session list chooser destinations independent of folder presentation', () => {
     it.each(['project', 'date'] as const)('keeps folder assignment available through the real %s producer and Recent activity projection', grouping => {
         const session = createSessionFixture({ id: 'root-a', metadata: { machineId: 'machine-a', path: '/repo/a', host: 'a' } });

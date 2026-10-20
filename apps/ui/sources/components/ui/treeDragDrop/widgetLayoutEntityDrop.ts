@@ -3,7 +3,7 @@ import { z } from 'zod/mini';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDropAdmissionV1, type EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
 import {
-    findWidgetLayoutItemV1, findWidgetLayoutParentV1, getWidgetLayoutItemIdV1, resolveWidgetGroupWidthFitV1, supportsWidgetGroupsV1,
+    WidgetInstanceActionInputSchemasV1, findWidgetLayoutItemV1, findWidgetLayoutParentV1, getWidgetLayoutItemIdV1, resolveWidgetGroupWidthFitV1, supportsWidgetGroupsV1,
     type WidgetInstanceRefV1, type WidgetLayoutGroupV1, type WidgetLayoutItemV1, type WidgetSurfaceRefV1, type WidgetProjectAreaV1,
 } from '@happier-dev/protocol/widgets';
 import { t } from '@/text';
@@ -28,6 +28,15 @@ export function widgetEntitySourceRef(item: EntityDragItemV1): WidgetInstanceRef
     if (item.kind === 'session-board-item') return { surface: { ...item.scope, owner: { kind: 'sessionBoard', sessionId: item.address.sessionId } }, instanceId: item.itemId };
     if (item.kind === 'companion-item' && item.item.kind === 'instance') return { surface: { ...item.scope, owner: { kind: 'companion', sessionId: item.address.sessionId } }, instanceId: item.item.instance.id };
     return null;
+}
+
+/** Local feedback identity comes from the admitted owner-native position, never an anchor or preview. */
+export function widgetLayoutEntityDropDestinationKey(admission: Extract<EntityDropAdmissionV1, { status: 'allowed' }>): string | null {
+    if (admission.effect.actionId !== 'widgets.item.move') return null;
+    const parsed = WidgetInstanceActionInputSchemasV1['widgets.item.move'].safeParse(admission.effect.input);
+    if (!parsed.success || !('to' in parsed.data)) return null;
+    const { to } = parsed.data;
+    return JSON.stringify(['widget-position', to.surface, to.tabId ?? null, to.area ?? null, to.groupId ?? null, to.index]);
 }
 
 /** An anchored insertion uses the destination's order after an empty source group dissolves. */

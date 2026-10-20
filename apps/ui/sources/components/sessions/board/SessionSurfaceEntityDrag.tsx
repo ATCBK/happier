@@ -95,6 +95,7 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
                     ? latest.current?.admitWidgetMovement?.(admission.effect) ?? { status: 'refused', reason: { code: 'widget_admission_unavailable', message: t('entityDragDrop.surface.widgetMoveUnavailable') } }
                     : admission;
             },
+            get getDestinationKey() { return latest.current?.target?.getDestinationKey; },
             execute: effect => effect.actionId === 'widgets.item.move' ? (latest.current?.widgetMovement?.execute ?? executeWidgetEntityMovement)(effect, scope)
                 : latest.current?.target?.execute(effect) ?? Promise.resolve({ status: 'refused', reason: { code: 'target-gone', message: t('entityDragDrop.reasons.gone') } }),
             autoscroll: pointer => latest.current?.target?.autoscroll?.(pointer),

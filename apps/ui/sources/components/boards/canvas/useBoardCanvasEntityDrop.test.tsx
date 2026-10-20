@@ -95,6 +95,7 @@ describe('Canvas browser drop at the shared entity owner', () => {
             const over = drag('dragover', 721, 460, data);
             act(() => { viewport.dispatchEvent(over); });
             expect(runtime.getSnapshot().admission?.status).toBe('allowed');
+            expect(runtime.getSnapshot().destinationKey).toBeNull();
             expect(over.defaultPrevented).toBe(true);
             const overlap = drag('dragover', 578, 140, data);
             act(() => { viewport.dispatchEvent(overlap); });

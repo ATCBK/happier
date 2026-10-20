@@ -24,6 +24,32 @@ function fixture() {
 }
 
 describe('mounted entity drag owner', () => {
+    it('publishes resolver-owned discrete keys while keeping same-place pointer frames on their own channel', () => {
+        const f = fixture();
+        f.runtime.registerTarget({ ...f.target,
+            getDestinationKey: ({ pointer }) => pointer && pointer.y < 50 ? 'before' : 'after' });
+        const carry = f.runtime.begin('source')!;
+        carry.move({ x: 20, y: 20 });
+        const before = f.runtime.getSnapshot();
+        expect(before.destinationKey).toBe('before');
+        carry.move({ x: 30, y: 30 });
+        expect(f.runtime.getSnapshot()).toBe(before);
+        carry.move({ x: 30, y: 70 });
+        expect(f.runtime.getSnapshot().destinationKey).toBe('after');
+        f.setVerdict(refusal);
+        f.runtime.refresh();
+        expect(f.runtime.getSnapshot().destinationKey).toBeNull();
+    });
+
+    it('uses fixed target identity by default and preserves an explicit continuous-target null', () => {
+        const f = fixture();
+        const carry = f.runtime.begin('source')!;
+        carry.move({ x: 20, y: 20 });
+        expect(f.runtime.getSnapshot().destinationKey).toBe('target');
+        f.runtime.registerTarget({ ...f.target, getDestinationKey: () => null });
+        expect(f.runtime.getSnapshot().destinationKey).toBeNull();
+    });
+
     it('refuses release when the last allowed hover loses its measured target', async () => {
         const f = fixture();
         f.runtime.registerTarget({ ...f.target, measureBounds: async () => {
@@ -47,6 +73,12 @@ describe('mounted entity drag owner', () => {
         const outside = f.runtime.begin('source')!;
         outside.move({ x: 300, y: 300 });
         expect(await outside.release()).toBeNull();
+        // The list can still own the pointer region while resolving no current insertion place.
+        const uncued = f.runtime.begin('source')!;
+        uncued.move({ x: 50, y: 50 });
+        expect(f.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'no-target' } });
+        expect(await uncued.release()).toBeNull();
+        expect(f.runtime.getSnapshot().phase).toBe('idle');
     });
 
     it('keeps the pointer source held through target retirement and re-admits the current replacement', async () => {
@@ -260,23 +292,28 @@ describe('mounted entity drag owner', () => {
 
     it('omits unchanged chooser destinations while retaining denied and pending choices and pointer admission', async () => {
         const f = fixture();
-        const unchanged = ['same-position', 'no-change', 'board-no-change', 'widget_position_unchanged', 'workspace_tab_already_here'];
-        const codes = [...unchanged, 'manager_forbidden', 'widget_admission_pending'];
+        const unchanged = ['same-position', 'no-change', 'board-no-change', 'widget_position_unchanged', 'workspace_tab_already_here', 'already-kept', 'already-placed', 'board-already-here', 'unchanged', 'already_under'];
+        const codes = [...unchanged, 'changed-place', 'manager_forbidden', 'widget_admission_pending'];
         f.runtime.registerTarget({ ...f.target,
             listDestinations: () => codes.map(code => ({ destination: code, label: code })),
-            resolve: ({ destination }) => ({ status: 'refused', reason: { code: String(destination), message: 'Unavailable' } }),
+            resolve: ({ destination }) => destination === 'changed-place' ? allowed : { status: 'refused', reason: { code: String(destination), message: 'Unavailable' } },
         });
         f.runtime.registerTarget({ ...f.target, id: 'unchanged-direct',
             resolve: () => ({ status: 'refused', reason: { code: 'same-position', message: 'Already here' } }),
         });
         expect(f.runtime.getDestinations('source').map(destination => destination.label)).toEqual([
-            'manager_forbidden', 'widget_admission_pending',
+            'changed-place', 'manager_forbidden', 'widget_admission_pending',
         ]);
+        const changed = f.runtime.begin('source', 'keyboard')!;
+        changed.choose('target', 'changed-place');
+        expect(f.runtime.getSnapshot().admission?.status).toBe('allowed');
+        expect(await changed.release()).toEqual({ status: 'applied' });
+        expect(f.effects).toHaveLength(1);
         const carry = f.runtime.begin('source', 'pointer')!;
         carry.choose('unchanged-direct');
         expect(f.runtime.getSnapshot().admission).toMatchObject({ status: 'refused', reason: { code: 'same-position' } });
         expect(await carry.release()).toMatchObject({ status: 'refused', reason: { code: 'same-position' } });
-        expect(f.effects).toEqual([]);
+        expect(f.effects).toHaveLength(1);
     });
 
     it('realm cancellation retires uncommitted input, preserves dispatched outcomes and removes its listeners', async () => {

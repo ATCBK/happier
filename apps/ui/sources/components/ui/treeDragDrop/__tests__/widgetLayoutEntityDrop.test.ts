@@ -10,7 +10,7 @@ import { resolveWidgetAreaEntityDrop } from '@/components/widgets/area/widgetAre
 import { resolveSessionSurfaceIndicatorEdge } from '@/components/sessions/board/sessionSurfaceIndicatorEdge';
 import { resolveSurfaceChooserSections } from '@/components/sessions/board/SessionSurfaceEntityDrag';
 import { createEntityDragDropRuntime } from '../entityDragDropRuntime';
-import { resolveWidgetLayoutEntityDrop, WIDGET_MOVE_PENDING_CODE } from '../widgetLayoutEntityDrop';
+import { resolveWidgetLayoutEntityDrop, widgetLayoutEntityDropDestinationKey, WIDGET_MOVE_PENDING_CODE } from '../widgetLayoutEntityDrop';
 import { widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
 import { describeEntityDropOutcome } from '../ui/entityDropOutcome';
 import { resolveWidgetCardPointerDestination, resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetGroupTakesEffect, widgetLayoutCardDropTarget, widgetLayoutSiblingIds } from '@/components/widgets/group/widgetGroupDropTarget';
@@ -39,6 +39,39 @@ const carry: EntityDragItemV1 = { kind: 'home-section', scope, sectionId: 'movin
 const destination = { groupId: 'group', anchorId: null, placement: 'after' };
 
 describe('shared layout DnD admission', () => {
+    it('keeps the supported ordinal widget move shape discrete without confusing it with native mixed-content indices', () => {
+        const ref = { surface, instanceId: 'moving' };
+        const key = (input: PluginUiJsonValueV1) => widgetLayoutEntityDropDestinationKey({ status: 'allowed', effect: {
+            actionId: 'widgets.item.move', input: WidgetInstanceActionInputSchemasV1['widgets.item.move'].parse(input), preview,
+        } });
+        const ordinal = key({ ref, toIndex: 1 });
+        expect(ordinal).toEqual(expect.any(String));
+        expect(key({ ref, toIndex: 1 })).toBe(ordinal);
+        expect(key({ ref, toIndex: 2 })).not.toBe(ordinal);
+        expect(key({ ref, toIndex: 1, groupId: 'group' })).not.toBe(ordinal);
+        // The Action owner treats toIndex as a widget ordinal and to.index as a native content index.
+        expect(key({ ref, to: { surface, index: 1 } })).not.toBe(ordinal);
+    });
+
+    it('gives neighboring card edges the same effective gap identity, while distinguishing group membership', () => {
+        const items = [widget('a'), widget('b'), widget('moving'), group];
+        const target = (id: string) => widgetLayoutCardDropTarget({ surface, items, itemId: id, title: id, groupLabel: 'Home' });
+        const key = (drop: ReturnType<typeof target>, destination: PluginUiJsonValueV1) => {
+            const context = { item: carry, pointer: null, destination, input: 'keyboard' as const };
+            const admission = drop.resolve(context);
+            expect(admission.status).toBe('allowed');
+            if (admission.status !== 'allowed') throw new Error('Expected an admitted gap');
+            return drop.getDestinationKey?.(context, admission);
+        };
+        const afterA = key(target('a'), { anchorId: 'a', placement: 'after' });
+        expect(afterA).toEqual(expect.any(String));
+        expect(key(target('b'), { anchorId: 'b', placement: 'before' })).toBe(afterA);
+        expect(key(target('a'), { anchorId: 'a', placement: 'before' })).not.toBe(afterA);
+        const into = widgetGroupDropTarget({ surface, items, group, name: 'Group' });
+        const groupEnd = key(into, { groupId: 'group', anchorId: null, placement: 'after' });
+        expect(groupEnd).toEqual(expect.any(String));
+        expect(groupEnd).not.toBe(afterA);
+    });
     it('treats a group over its own body as unchanged, but still refuses nesting into another group', () => {
         const carried: EntityDragItemV1 = { kind: 'widget-layout-group', scope, ref: { surface, instanceId: group.id } };
         const other = { ...group, id: 'other' };

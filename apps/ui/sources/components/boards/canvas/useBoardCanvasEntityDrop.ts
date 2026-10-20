@@ -72,6 +72,7 @@ export function useBoardCanvasEntityDrop(binding: WorkBoardEntityBinding, measur
     useEntityDropTarget(runtime, {
         id: targetId, scope: binding.scope, acceptedKinds: ['work-board-item', 'work-board-widget', 'home-section', 'session-board-item', 'companion-item', 'widget-area-instance'],
         isCurrent: () => latest.current.binding.isCurrent(), getBounds,
+        getDestinationKey: () => null,
         listDestinations: item => {
             const context = latest.current.binding.getContext();
             if ((item.kind !== 'work-board-item' && item.kind !== 'work-board-widget') || item.boardId !== context.board.id) {

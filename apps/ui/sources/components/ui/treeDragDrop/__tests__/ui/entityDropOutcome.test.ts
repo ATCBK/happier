@@ -20,7 +20,7 @@ describe('Happier core outcome vocabulary (lab SYS verbs)', () => {
     });
 
     it('treats every "nothing would change" code as a quiet Already here, never a refusal', () => {
-        for (const code of ['no-change', 'same-position', 'board-no-change', 'workspace_tab_already_here']) {
+        for (const code of ['no-change', 'same-position', 'board-no-change', 'workspace_tab_already_here', 'already-kept', 'already-placed', 'board-already-here', 'unchanged', 'already_under']) {
             expect(describeEntityDropOutcome({ phase: 'carrying', admission: { status: 'refused', reason: { code, message: 'It’s already here' } } }))
                 .toMatchObject({ tone: 'quiet', glyph: 'here', title: 'Already here', detail: 'Release to leave it where it is' });
         }

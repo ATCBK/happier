@@ -51,6 +51,8 @@ export type EntityDropTarget = Readonly<{
     /** Current domain destinations, including virtualized/unmounted rows. Admission stays in resolve. */
     listDestinations?: (item: EntityDragItemV1) => readonly EntityDropSemanticDestination[];
     resolve: (context: EntityDropResolveContext) => EntityDropAdmissionV1;
+    /** Local identity of an admitted discrete place. Null keeps continuous movement quiet inside this target. */
+    getDestinationKey?: (context: EntityDropResolveContext, admission: Extract<EntityDropAdmissionV1, { status: 'allowed' }>) => string | null;
     execute: (effect: EntityDropEffectV1) => Promise<EntityDropOutcomeV1>;
     /** Supplied by the existing scroll owner, with its own metrics and speed policy. */
     autoscroll?: (pointer: WindowPointer) => void;
@@ -60,6 +62,8 @@ export type EntityDragDropSnapshot = Readonly<{
     item: EntityDragItemV1 | null;
     sourceId: string | null;
     targetId: string | null;
+    /** Resolver-owned place, independent of pointer frames, translated previews and revision checks. */
+    destinationKey: string | null;
     admission: EntityDropAdmissionV1 | null;
     outcome: EntityDropOutcomeV1 | null;
 }>;

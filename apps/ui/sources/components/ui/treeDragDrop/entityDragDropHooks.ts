@@ -71,6 +71,7 @@ export function useEntityDropTarget(runtime: EntityDragDropRuntime, target: Enti
             && current.current.scope.accountId === target.scope.accountId
             && current.current.isCurrent?.() !== false,
         resolve: context => current.current.resolve(context),
+        get getDestinationKey() { return current.current.getDestinationKey; },
         execute: effect => current.current.execute(effect),
         autoscroll: pointer => current.current.autoscroll?.(pointer),
     }), [runtime, target.id, target.scope.serverId, target.scope.accountId]);

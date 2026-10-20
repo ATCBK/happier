@@ -199,6 +199,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
     const scopeRef = React.useRef(scope);
     scopeRef.current = scope;
     const factsRef = React.useRef<SessionManagerEligibilitySnapshot | null>(null);
+    const destinationKeysRef = React.useRef(new WeakMap<EntityDropEffectV1, string | null>());
     const pointerVisualRef = React.useRef<TreeDropVisualGeometry>(NO_GEOMETRY);
     /** The topology the current carry started from (pointer or keyboard). */
     const carriedSnapshotRef = React.useRef<SessionListDragSnapshot | null>(null);
@@ -265,16 +266,23 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
             });
         } else {
             const assignment = readSessionListFolderAssignmentDestination(context.destination);
-            if (assignment) return resolveSessionListFolderAssignmentDrop({ item: context.item, folderId: assignment.folderId,
-                context: commitContext, preview: previewForFolderAssignment, reason: describeSessionListDropReason });
+            if (assignment) {
+                const admission = resolveSessionListFolderAssignmentDrop({ item: context.item, folderId: assignment.folderId,
+                    context: commitContext, preview: previewForFolderAssignment, reason: describeSessionListDropReason });
+                if (admission.status === 'allowed') destinationKeysRef.current.set(admission.effect,
+                    JSON.stringify(['folder-assignment', assignment.folderId]));
+                return admission;
+            }
             intent = readSessionListDestinationIntent(context.destination, current);
         }
         if (!intent || intent.instructionKind === 'idle') return refuse(SESSION_LIST_NO_TARGET_CODE);
+        let destinationKey: string | null = null;
         const admission = resolveSessionListEntityDrop({
             item: context.item,
             intent,
             context: commitContext,
             preview: admitted => {
+                destinationKey = admitted.destinationKey;
                 if (context.input === 'keyboard') {
                     const visual: TreeInstructionVisual = admitted.effect === 'manager'
                         ? { kind: 'outline', targetId: admitted.lead.rowId } : admitted.result.visual;
@@ -286,6 +294,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
                 ? describeSessionListRefusedPutUnder(rowName(target)) : undefined,
             reason: describeSessionListDropReason,
         });
+        if (admission.status === 'allowed') destinationKeysRef.current.set(admission.effect, destinationKey);
         // Refusals light nothing: only an admitted place draws its line or outline.
         if (context.input === 'pointer') pointerVisualRef.current = admission.status === 'allowed' ? geometry : NO_GEOMETRY;
         return admission;
@@ -311,6 +320,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
                 return context ? listSessionListEntityDropDestinations({ item, context, preview: previewForDestination, folderPreview: previewForFolderAssignment }) : [];
             },
             resolve,
+            getDestinationKey: (_context, admission) => destinationKeysRef.current.get(admission.effect) ?? null,
             execute,
         });
     }, [buildContext, execute, resolve, runtime, scope, targetId]);
