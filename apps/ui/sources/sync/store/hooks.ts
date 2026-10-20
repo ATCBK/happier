@@ -3002,7 +3002,7 @@ export function useSessionLastMobileSurface(
       next[currentStorageKey] = currentPredecessorSurface;
     }
     delete next[predecessorStorageKey];
-    state.applyLocalSettings({ sessionLastMobileSurfaceBySessionId: next }, { source: 'sync' });
+    state.applyLocalSettings({ sessionLastMobileSurfaceBySessionId: next }, { source: 'ui' });
   }, [currentStorageKey, predecessorStorageKey, predecessorSurface]);
 
   return selection?.surface ?? null;

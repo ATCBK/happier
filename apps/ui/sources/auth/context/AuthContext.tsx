@@ -231,7 +231,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         // screen reads it via useLocalSetting('hasCompletedAuthOnce') to swap to
         // the warmer "Good to have you back" copy on subsequent visits.
         if (!loadLocalSettings().hasCompletedAuthOnce) {
-            getStorage().getState().applyLocalSettings({ hasCompletedAuthOnce: true }, { source: 'sync' });
+            getStorage().getState().applyLocalSettings({ hasCompletedAuthOnce: true }, { source: 'ui' });
         }
         if (target && !isSameServerTarget(target, getActiveServerSnapshot())) {
             // The credential belongs to a Home that is no longer focused. It is

@@ -50,7 +50,6 @@ const settingsState = vi.hoisted((): PetNativeMountTestState => ({
         petsDismissedCompanionTrayItemKeys: [],
     },
 }));
-const applyLocalSettingsSpy = vi.hoisted(() => vi.fn());
 const hapticsSpy = vi.hoisted(() => vi.fn(async () => {}));
 const dimensionsState = vi.hoisted(() => ({ width: 390, height: 844 }));
 const safeAreaState = vi.hoisted(() => ({
@@ -166,10 +165,6 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     },
 }));
 
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplyLocalSettings: () => applyLocalSettingsSpy,
-}));
-
 vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
     createDefaultActionExecutor: () => ({
         execute: executePetCompanionActionSpy,
@@ -181,7 +176,8 @@ const initialStorageState = storage.getState();
 function seedPetsStorage(runtimeStorage = storage) {
     const source = activitySourceState.source;
     runtimeStorage.setState({
-        settings: { ...settingsDefaults, ...settingsState.account },
+        settings: { ...settingsDefaults, ...settingsState.account,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } },
         localSettings: { ...localSettingsDefaults, ...settingsState.local },
         isDataReady: source.isDataReady,
         sessions: source.sessionsById,
@@ -210,7 +206,6 @@ describe('PetAppShellCompanionMount.native', () => {
         vi.restoreAllMocks();
         standardCleanup();
         storage.setState(initialStorageState, true);
-        applyLocalSettingsSpy.mockReset();
         hapticsSpy.mockClear();
         featureState.companion = { state: 'enabled' };
         featureState.sync = { state: 'disabled' };
@@ -274,7 +269,7 @@ describe('PetAppShellCompanionMount.native', () => {
         expect(spriteStyle.height).toBeCloseTo(149.5, 4);
     });
 
-    it('persists normalized position and fires light haptics only for tap without drag', async () => {
+    it('remembers normalized geometry with Settings writes Off and fires light haptics only for tap without drag', async () => {
         const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount.native');
         const screen = await renderScreen(<PetAppShellCompanionMount />);
         const gesture = screen.root.findByType('GestureDetector').props.gesture;
@@ -306,13 +301,11 @@ describe('PetAppShellCompanionMount.native', () => {
             }, true);
         });
 
-        expect(applyLocalSettingsSpy).toHaveBeenCalledWith({
-            petsCompanionPosition: expect.objectContaining({
-                schemaVersion: 1,
-                surface: 'mobile-app-shell',
-                normalizedX: 0,
-                normalizedY: 1,
-            }),
+        expect(storage.getState().localSettings.petsCompanionPosition).toMatchObject({
+            schemaVersion: 1,
+            surface: 'mobile-app-shell',
+            normalizedX: 0,
+            normalizedY: 1,
         });
         expect(hapticsSpy).not.toHaveBeenCalled();
 
@@ -547,9 +540,7 @@ describe('PetAppShellCompanionMount.native', () => {
 
         expect(screen.findByTestId('desktop-pet-overlay-tray-item-native-close-reply-session')).not.toBeNull();
         expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-native-close-reply-session')).toBeNull();
-        expect(applyLocalSettingsSpy).not.toHaveBeenCalledWith(expect.objectContaining({
-            petsDismissedCompanionTrayItemKeys: expect.anything(),
-        }));
+        expect(storage.getState().localSettings.petsDismissedCompanionTrayItemKeys).toEqual([]);
     });
 });
 
