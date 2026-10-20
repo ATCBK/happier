@@ -2615,7 +2615,7 @@ export type UpdatePendingRequestedActionResult =
         recipientCursors: RecipientCursor[];
         activationTarget?: PendingActivationTarget;
       }
-    | { ok: false; error: PendingSessionAccessError | "forbidden" | "invalid-params" | "not-found" | "action-conflict" | "reset-start-unsupported" | "internal" };
+    | { ok: false; error: PendingSessionAccessError | "forbidden" | "invalid-params" | "not-found" | "already-sent" | "action-conflict" | "reset-start-unsupported" | "internal" };
 
 export async function updatePendingRequestedAction(params: Readonly<{
     actorUserId: string;
@@ -2682,7 +2682,19 @@ export async function updatePendingRequestedAction(params: Readonly<{
                 authorAccountId: true,
             },
         });
-        if (!existing) return { ok: false, error: "not-found" } as const;
+        if (!existing) {
+            // Provider settlement retires Pending but retains the exact accepted
+            // input in the transcript. A stale confirmation must not infer
+            // delivery from absence, manual handling, or another recipient.
+            const committed = !params.automaticResetReleaseTarget
+                ? await db.sessionMessage.findFirst({
+                    where: { sessionId, localId, targetExecutionRunId, messageRole: "user" },
+                    select: { deliveryResolution: true },
+                })
+                : null;
+            return { ok: false, error: readStoredSessionMessageDeliveryResolutionV1(committed?.deliveryResolution)?.kind === "provider_accepted"
+                ? "already-sent" : "not-found" } as const;
+        }
         const currentActionResult = PendingRequestedActionV1StoredSchema.safeParse(
             existing.requestedAction ?? { v: 1, kind: "enqueue" },
         );

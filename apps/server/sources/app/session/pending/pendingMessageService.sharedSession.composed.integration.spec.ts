@@ -4569,6 +4569,39 @@ describe("pendingMessageService (shared sessions)", () => {
         })).resolves.toEqual({ content,
             deliveryResolution: { v: 1, kind: "provider_accepted", content: acceptedDelivery },
         });
+        await withAuthenticatedTestApp(sessionPendingRoutes, async app => {
+            const response = await app.inject({ method: 'PATCH',
+                url: `/v2/sessions/${session.id}/pending/${localId}/action`,
+                headers: { 'x-test-user-id': owner.id },
+                payload: { requestedAction: { v: 1, kind: 'send_now' } },
+            });
+            expect(response.statusCode, response.body).toBe(409);
+            expect(response.json()).toEqual({ error: 'already-sent' });
+            const missing = await app.inject({ method: 'PATCH',
+                url: `/v2/sessions/${session.id}/pending/missing-input/action`,
+                headers: { 'x-test-user-id': owner.id },
+                payload: { requestedAction: { v: 1, kind: 'send_now' } },
+            });
+            expect(missing.statusCode, missing.body).toBe(404);
+            expect(missing.json()).toEqual({ error: 'not-found' });
+            const otherRecipient = await app.inject({ method: 'PATCH',
+                url: `/v2/sessions/${session.id}/execution-runs/another-run/pending/${localId}/action`,
+                headers: { 'x-test-user-id': owner.id },
+                payload: { requestedAction: { v: 1, kind: 'send_now' } },
+            });
+            expect(otherRecipient.statusCode, otherRecipient.body).toBe(404);
+            expect(otherRecipient.json()).toEqual({ error: 'not-found' });
+            const outsider = await createAccount(`stale-action-outsider-${mode}`);
+            const forbidden = await app.inject({ method: 'PATCH',
+                url: `/v2/sessions/${session.id}/pending/${localId}/action`,
+                headers: { 'x-test-user-id': outsider.id },
+                payload: { requestedAction: { v: 1, kind: 'send_now' } },
+            });
+            expect(forbidden.statusCode, forbidden.body).toBe(404);
+            expect(forbidden.json()).toEqual({ error: 'session-not-found' });
+        });
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id } })).toBe(0);
+        expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId } })).toBe(1);
     });
 
     it("defers queued materialization for after-runtime-idle timing while runtime activity projection is live", async () => {
@@ -5478,6 +5511,8 @@ describe("pendingMessageService (shared sessions)", () => {
                 deliveryResolution: { v: 1, kind: "manual_handled" },
             },
         });
+        expect(await updatePendingRequestedAction({ actorUserId: owner.id, sessionId: session.id, localId,
+            requestedAction: { v: 1, kind: 'send_now' } })).toEqual({ ok: false, error: 'not-found' });
         await expect(db.sessionPendingMessage.count({ where: { sessionId: session.id, localId } })).resolves.toBe(0);
         await expect(db.sessionMessage.count({ where: { sessionId: session.id, localId } })).resolves.toBe(1);
         await expect(db.$queryRaw<Array<{ kind: string | null }>>`
