@@ -4705,7 +4705,40 @@
                                   ],
                                   "type": "object"
                                 },
-                                "input": {}
+                                "input": {},
+                                "messageActionReference": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "messageId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "observedRevision": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "v": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "v",
+                                    "sessionId",
+                                    "messageId",
+                                    "observedRevision"
+                                  ],
+                                  "type": "object"
+                                }
                               },
                               "required": [
                                 "action"

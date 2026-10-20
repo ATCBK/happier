@@ -103,7 +103,7 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
   }>) => boolean | Promise<boolean>;
 }> = {}): NonNullable<ActionExecutorDeps['invokeContributedAction']> {
   const acquire = input.acquireRuntimeRegistryLease ?? acquireAuthoritativePluginRuntimeRegistryLease;
-  return async ({ action, input: actionInput, context, approvalExecutionOrigin, requiredDangerLevel, signal }) => {
+  return async ({ action, input: actionInput, messageActionReference, context, approvalExecutionOrigin, requiredDangerLevel, signal }) => {
     const invocationSignal = signal ?? context.signal ?? new AbortController().signal;
     invocationSignal.throwIfAborted();
     const surface = readSurface(context.surface) ?? input.defaultInvocationSurface;
@@ -136,6 +136,7 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
         runtimeRegistry: lease.registry,
         actionId: buildQualifiedPluginContributionKey(action),
         input: actionInput,
+        ...(messageActionReference ? { messageActionReference } : {}),
         ...(requiredDangerLevel ? { requiredDangerLevel } : {}),
         approvalContext: context,
         ...(approvalExecutionOrigin ? { approvalExecutionOrigin } : {}),

@@ -457,6 +457,8 @@ export type InvokeContributedAction = (request: Readonly<{
   action: import('../../plugins/contributionIdentity.js').PluginContributionIdentityV1;
   input: unknown;
   context: ActionExecutorContext;
+  /** Opaque committed Message identity, never caller-authored disclosure text. */
+  messageActionReference?: import('../../sessions/messages/messageActionReferenceV1.js').MessageActionReferenceV1;
   approvalExecutionOrigin?: ApprovalExecutionOriginV1;
   /** Host-only source-read constraint, enforced against the leased manifest. */
   requiredDangerLevel?: 'safe';

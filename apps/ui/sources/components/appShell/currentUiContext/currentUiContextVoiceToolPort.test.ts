@@ -438,6 +438,7 @@ function createCurrentUiClientActionFixture(input: Readonly<{
     surfaces?: PluginProjectedActionV2['surfaces'];
     serverId?: string;
     dangerLevel?: PluginProjectedActionV2['dangerLevel'];
+    placementBindings?: PluginProjectedActionV2['placementBindings'];
 }>) {
     actionSchemasByQualifiedId.set(`${CLIENT_ACTION_ID.pluginId}/${CLIENT_ACTION_ID.localId}`, { inputSchema: {} });
     const action = PluginProjectedActionV2Schema.parse({
@@ -460,6 +461,7 @@ function createCurrentUiClientActionFixture(input: Readonly<{
         ...(input.dangerLevel && input.dangerLevel !== 'safe' ? { confirmation: { title: 'Confirm client mutation' } } : {}),
         available: true,
         authorization: CLIENT_ACTION_AUTHORIZATION,
+        ...(input.placementBindings ? { placementBindings: input.placementBindings } : {}),
     });
     const hostOrigin = { ...CLIENT_ACTION_HOST_ORIGIN, serverId: input.serverId ?? CLIENT_ACTION_HOST_ORIGIN.serverId };
     const projectedAction = Object.freeze({
@@ -616,6 +618,53 @@ function requireActionInvoker(port: ReturnType<typeof createCurrentUiContextVoic
 }
 
 describe('current UI context Voice tool port', () => {
+    it('resolves an opaque committed message reference after reverse CLI Action admission before the client handler sees text', async () => {
+        const reference = { v: 1 as const, sessionId: 'message-session', messageId: 'committed-message', observedRevision: 'revision-1' };
+        const snapshot = { sessionId: reference.sessionId, messageId: reference.messageId, observedRevision: reference.observedRevision,
+            role: 'agent', contentCategory: 'text', seq: 3, visibleText: 'Committed task request',
+            structuredPresentationSummary: null, provenanceCategory: 'owner' };
+        const handler = vi.fn<PluginClientActionHandler>(async (_input, context) => ({ message: context.messageAction ?? null, surface: context.invocationSurface }));
+        const fixture = createCurrentUiClientActionFixture({ handler, surfaces: ['cli'], scopes: ['message', 'session'],
+            placementBindings: ['message.menu'], dangerLevel: 'writesRemote' });
+        const defaultReply = daemonReply.getMockImplementation()!;
+        daemonReply.mockImplementation(async request => request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE
+            ? { ok: true, result: snapshot } : defaultReply(request));
+        const unregister = registerCurrentUiContextActionPort((invocationSurface, hostAction) => createCurrentUiContextVoiceToolPort({
+            invocationSurface, hostAction,
+            reader: { readCurrentUiContext: () => null, resolveCurrentUiCommand: () => null, subscribe: () => () => {} },
+            readProjection: () => fixture.projection, readNavigationBinding: () => null,
+        }));
+        await fixture.composition.unload();
+        try {
+            await fixture.composition.reconcile([fixture.activation]);
+            const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+            const receive = createCurrentUiContributedActionRpcHandler({ machineId: CLIENT_ACTION_HOST_ORIGIN.machineId,
+                serverId: clientHomeId, readProjection: () => fixture.projection, isCurrent: () => true,
+                execute: createDefaultActionExecutor().execute });
+            const request = { v: 1, action: CLIENT_ACTION_ID, input: null, surface: 'cli',
+                expectedContributorOccurrenceId: fixture.action.occurrenceId, messageActionReference: reference };
+            let pending!: ReturnType<typeof receive>;
+            await act(async () => { pending = receive(request); });
+            await vi.waitFor(() => expect(modalScreen.findByTestId('app-shell-confirmation-confirm')).not.toBeNull());
+            expect(daemonReply.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE)).toEqual([]);
+            expect(handler).not.toHaveBeenCalled();
+            await modalScreen.pressByTestIdAsync('app-shell-confirmation-confirm');
+            expect(await pending).toEqual({ ok: true, result: { message: snapshot, surface: 'cli' } });
+            expect(daemonReply).toHaveBeenCalledWith(expect.objectContaining({ method: RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE,
+                payload: expect.objectContaining({ executionSurface: 'cli', resolveClientMessageContext: true,
+                    messageActionReference: reference, invocation: { kind: 'clientPluginAction', clientActionBinding: expect.objectContaining({
+                        pluginId: CLIENT_ACTION_ID.pluginId, contributionLocalId: CLIENT_ACTION_ID.localId, occurrenceId: fixture.action.occurrenceId,
+                    }) } }) }));
+            expect(handler).toHaveBeenCalledTimes(1);
+            daemonReply.mockImplementation(async request => request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE
+                ? { ok: false, code: 'plugin_message_action_unavailable' } : defaultReply(request));
+            await act(async () => { pending = receive(request); });
+            await vi.waitFor(() => expect(modalScreen.findByTestId('app-shell-confirmation-confirm')).not.toBeNull());
+            await modalScreen.pressByTestIdAsync('app-shell-confirmation-confirm');
+            expect(await pending).toMatchObject({ ok: false, errorCode: 'plugin_message_action_unavailable' });
+            expect(handler).toHaveBeenCalledTimes(1);
+        } finally { unregister(); await fixture.composition.unload(); }
+    });
     it('delivers contributed Actions through the real Machine reverse registration and refuses a mis-bound receiver', async () => {
         const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://current-ui-client.test',
@@ -1706,6 +1755,7 @@ describe('current UI context Voice tool port', () => {
         await expect(requireCommandInvoker(port)({ commandId: COMMAND_ID })).resolves.toEqual({
             ok: false,
             code: 'unavailable',
+            errorCode: 'plugin_action_unavailable',
         });
         expect(current).toBeNull();
         expect(daemonReply).toHaveBeenCalledWith(expect.objectContaining({
@@ -1736,7 +1786,7 @@ describe('current UI context Voice tool port', () => {
         current = null;
         await act(async () => {
             retirement.abort(new Error('the exact command retired before dispatch'));
-            await expect(pending).resolves.toEqual({ ok: false, code: 'unavailable' });
+            await expect(pending).resolves.toEqual({ ok: false, code: 'unavailable', errorCode: 'plugin_ui_invocation_aborted' });
         });
         await vi.waitFor(() => expect(visibleModalCount).toBe(0));
         expect(daemonRequests).toEqual([]);
@@ -1855,7 +1905,7 @@ describe('current UI context Voice tool port', () => {
             await expect(requireActionInvoker(port)({
                 action: CLIENT_ACTION_ID,
                 input: { sessionId: 'caller-chosen-session' },
-            })).resolves.toEqual({ ok: false, code: 'unavailable' });
+            })).resolves.toEqual({ ok: false, code: 'unavailable', errorCode: 'plugin_action_session_required' });
             expect(handler).not.toHaveBeenCalled();
         } finally {
             await fixture.composition.unload();

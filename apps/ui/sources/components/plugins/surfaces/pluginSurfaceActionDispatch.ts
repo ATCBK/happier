@@ -227,7 +227,7 @@ export type PluginSurfaceClientActionBinding = Readonly<{
     sessionId?: string;
     openSurface?: PluginSurfaceOpenHandler;
     currentUiContext?: () => CurrentUiContextSnapshotV1 | null | undefined;
-    /** The incumbent Message carrier, consumed only with host-presented Message intent. */
+    /** Opaque committed identity; resolved after the client's Action admission. */
     messageActionReference?: MessageActionReferenceV1;
 }>;
 
@@ -474,6 +474,22 @@ type ClientContributedActionSelection = Readonly<{
     isCurrent: () => boolean;
 }>;
 
+function clientActionInvocation(selection: ClientContributedActionSelection): Extract<
+    DaemonPluginStructuredMessageActionInvocationV1, { kind: 'clientPluginAction' }
+> {
+    return {
+        kind: 'clientPluginAction',
+        clientActionBinding: {
+            pluginId: selection.action.pluginId,
+            contributionLocalId: selection.action.id,
+            occurrenceId: selection.registration.occurrenceId,
+            // Source-backed development occurrences have no materialization.
+            ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
+                ? { materializationRef: selection.registration.executionOrigin.materializationRef } : {}),
+        },
+    };
+}
+
 /**
  * Reads one Action from the producer-owned generic executable index. The raw
  * descriptor, exact target/origin and registration generation must all remain
@@ -602,19 +618,7 @@ function clientActionExecuteAction(
                     ? {}
                     : { resolveContributedAction: input.resolveContributedAction }),
                 invocationSurface: input.invocationSurface ?? 'ui',
-                invocation: {
-                    kind: 'clientPluginAction',
-                    clientActionBinding: {
-                        pluginId: selection.action.pluginId,
-                        contributionLocalId: selection.action.id,
-                        occurrenceId: selection.registration.occurrenceId,
-                        // An originless (bundled/development) plugin has no
-                        // materialization; the daemon admits that exact case.
-                        ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
-                            ? { materializationRef: selection.registration.executionOrigin.materializationRef }
-                            : {}),
-                    },
-                },
+                invocation: clientActionInvocation(selection),
                 signal: cancellation.signal,
                 isCurrent: selection.isCurrent,
             });
@@ -1151,7 +1155,11 @@ async function executeClientContributedAction(
                 }
             };
             const reference = current.binding.messageActionReference;
-            if (!reference || input.invocation?.kind !== 'hostPresentedMessage') return invokeHandler();
+            if (!reference) return invokeHandler();
+            const messageInvocation = input.invocation?.kind === 'hostPresentedMessage' ? input.invocation
+                : invocationSurface === 'cli' || invocationSurface === 'agent' || invocationSurface === 'mcp'
+                    ? clientActionInvocation(current) : null;
+            if (!messageInvocation) throw new PluginError({ code: 'plugin_message_action_unavailable' });
             // Reuse daemon Actions' exact current-row resolver after client
             // policy/confirmation, through the same strict Action RPC carrier.
             const execute = current.binding.execute ?? machinePluginStructuredMessageActionExecute;
@@ -1159,8 +1167,8 @@ async function executeClientContributedAction(
                 serverId: authority.serverId,
                 expectedContributorOccurrenceId: current.action.occurrenceId,
                 qualifiedActionId: buildQualifiedPluginContributionKey(identity),
-                executionSurface: 'ui',
-                invocation: input.invocation,
+                executionSurface: invocationSurface,
+                invocation: messageInvocation,
                 ...(current.binding.sessionId ? { sessionId: current.binding.sessionId } : {}),
                 messageActionReference: reference,
                 resolveClientMessageContext: true,

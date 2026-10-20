@@ -103,21 +103,26 @@ activation therefore cannot block an already applied client handler, while a
 missing, replaced or retired client registration still refuses execution. This
 applies to bundled and installed plugins in 0.3 development source.
 
-In 0.3 development source, a client Action selected from `message.menu` receives
+In 0.3 development source, a client Action declared for `message.menu` receives
 the same optional `context.messageAction` bounded snapshot as a daemon Action.
 The existing contributed-Action controller stamps the selected row's opaque
-reference; after client input, policy and confirmation admission, dispatch sends
+reference. CLI, Agent and MCP callers can supply that same committed
+`messageActionReference` beside `action` and `input` to `action.invoke`; the
+generic daemon-to-client delivery preserves it outside plugin-authored input.
+After client input, policy and confirmation admission, dispatch sends
 that reference through the existing structured Action RPC with
 `resolveClientMessageContext: true`. This preparation mode checks the current
 client Action occurrence and message placement, then reuses the daemon's exact
 access/revision/content resolver. It returns the snapshot without running a
 daemon handler. The client validates its identity and revision and rechecks
-invocation currentness before calling the registered handler.
+invocation currentness before calling the registered handler. Automated callers
+retain their actual execution surface and a daemon-validated client Action
+binding; an opaque reference grants no present-user intent.
 
 This is one Message carrier, not Action input or a plugin transcript reader.
 It works for installed external plugins through `PluginClientActionContext` in
-the public SDK. Other placements and nested Action calls receive no Message
-context; a palette/composer declaration alongside `message.menu` does not cause
+the public SDK. Other placements and nested Action calls receive no implicit
+Message context; a palette/composer declaration alongside `message.menu` does not cause
 those placements to inherit a row. Existing persisted-reference and daemon
 legacy placement semantics remain unchanged. Missing, stale, inaccessible or
 invalid snapshots refuse the message invocation. Older daemons reject the new

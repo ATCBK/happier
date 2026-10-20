@@ -103,6 +103,7 @@ export async function executeCurrentUiContextContributedAction(
     const outcome = await port.invokeAction({
         action: request.action,
         input: input.data,
+        ...(request.messageActionReference ? { messageActionReference: request.messageActionReference } : {}),
         ...(request.context.expectedContributedActionOccurrenceId ? { expectedContributorOccurrenceId: request.context.expectedContributedActionOccurrenceId } : {}),
         ...(request.context.defaultSessionId ? { defaultSessionId: request.context.defaultSessionId } : {}),
         ...(request.requiredDangerLevel ? { requiredDangerLevel: request.requiredDangerLevel } : {}),

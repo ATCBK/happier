@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { ActionInvokeInputSchema } from './actionInvokeInput.js';
 import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
 import { QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema } from '../connect/connectedAccountPurposeBindings.js';
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
@@ -7482,8 +7483,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               error: 'contributed_action_unavailable',
             };
           }
-          const action = PluginContributionIdentityV1Schema.safeParse(data.action);
-          if (!action.success) {
+          const invocation = ActionInvokeInputSchema.safeParse(data);
+          if (!invocation.success) {
             return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           }
           const approvalExecutionOrigin = buildApprovalExecutionOriginV1({
@@ -7493,8 +7494,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             targetSessionId: normalizeId(ctx.defaultSessionId) || null,
           });
           return await deps.invokeContributedAction({
-            action: action.data,
-            input: data.input,
+            action: invocation.data.action,
+            input: invocation.data.input,
+            ...(invocation.data.messageActionReference ? { messageActionReference: invocation.data.messageActionReference } : {}),
             context: ctx,
             ...(approvalExecutionOrigin ? { approvalExecutionOrigin } : {}),
             ...(ctx.requiredContributedActionDangerLevel ? { requiredDangerLevel: ctx.requiredContributedActionDangerLevel } : {}),
