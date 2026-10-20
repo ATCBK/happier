@@ -109,9 +109,10 @@ describe('browser control reducer', () => {
     });
     it('keeps a relay preview\'s one-use admission out of its address, so its first load is the opened document', async () => {
         const { applyBrowserControlEvent, createBrowserControlState } = await import('./reducer');
-        const [opened, ...rest] = openLocalPreviewEvents();
         // The opener seeds the status row's access URL; the frame then commits the freshly admitted one.
-        let state = [{ ...opened, currentUrl: 'https://preview.happier.test/app?tab=1&previewToken=listed' } as BrowserEventV1, ...rest]
+        let state = openLocalPreviewEvents()
+            .map((event) => event.kind === 'viewOpened'
+                ? { ...event, currentUrl: 'https://preview.happier.test/app?tab=1&previewToken=listed' } as BrowserEventV1 : event)
             .reduce(applyBrowserControlEvent, createBrowserControlState());
         expect(state.viewsById.view_1?.currentUrl).toBe('https://preview.happier.test/app?tab=1');
         state = applyBrowserControlEvent(state, { kind: 'navigationFinished', eventId: 'loaded', browserSessionId: 'browser_session_1', viewId: 'view_1',
@@ -124,7 +125,12 @@ describe('browser control reducer', () => {
     it('settles an ended relay preview so its chrome no longer offers the page\'s history or address', async () => {
         const { applyBrowserControlEvent, createBrowserControlState } = await import('./reducer');
         const { selectBrowserToolbarModel } = await import('../shell/selectors');
-        let state = openLocalPreviewEvents().reduce(applyBrowserControlEvent, createBrowserControlState());
+        // A preview engine that reports its history, so Back is live before the preview ends.
+        const historyCapabilities = { ...localPreviewCapabilities,
+            navigation: { ...localPreviewCapabilities.navigation, canGoBack: true, canGoForward: true } };
+        let state = openLocalPreviewEvents()
+            .map((event) => event.kind === 'viewOpened' ? { ...event, adapterCapabilities: historyCapabilities } as BrowserEventV1 : event)
+            .reduce(applyBrowserControlEvent, createBrowserControlState());
         state = applyBrowserControlEvent(state, { kind: 'navigationStateChanged', eventId: 'history', browserSessionId: 'browser_session_1', viewId: 'view_1',
             occurredAt: 10, loadingState: 'ready', canGoBack: true, canGoForward: false });
         expect(selectBrowserToolbarModel(state.viewsById.view_1 ?? null)).toMatchObject({ canNavigate: true, canGoBack: true });
