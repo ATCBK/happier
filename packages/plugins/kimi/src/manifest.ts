@@ -5,6 +5,7 @@ import { AGENT_DEFINITION } from './agent/definition.js';
 import { KIMI_ACP_COMMAND } from './agent/acp/preflight.js';
 import { KIMI_SYSTEM_TOOL_READINESS } from './agent/readiness/declaration.js';
 import { KIMI_TERMINAL_CONTRIBUTION } from './agent/terminal/contribution.js';
+import { kimiExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 import { KIMI_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 
 export const KIMI_PLUGIN = definePlugin({
@@ -14,6 +15,11 @@ export const KIMI_PLUGIN = definePlugin({
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: {
     required: [{
+      id: 'kimi-native-history',
+      capability: 'filesystem',
+      reason: 'Read native Kimi Code conversation history.',
+      scope: { locations: [{ root: 'workspace' }], access: ['read'] },
+    }, {
       id: 'kimi-process',
       capability: 'process',
       reason: 'Run the declared Kimi CLI executable.',
@@ -84,18 +90,17 @@ export const KIMI_PLUGIN = definePlugin({
           acpRegistryIds: [...AGENT_DEFINITION.acpRegistryIds],
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
-        // Resume-only: current Kimi Code answers `session/list`, so the host
-        // composes its own generic ACP session-listing producer for this
-        // declaration. The source promises discovery for resume-in-Happier and
-        // nothing else — no link, transcript, follow, takeover or writer-safety
-        // claim — so this plugin contributes no External Sessions runtime.
         surfaces: {
           externalSession: {
+            externalLinkedTakeover: { writerSafety: 'unsupported' },
             sources: [{
-              sourceKind: 'kimiAcpSessionList',
-              resumeOnly: true,
-              schema: { fields: [{ kind: 'literal', name: 'kind', value: 'kimiAcpSessionList' }] },
-              key: { segments: [{ kind: 'literal', value: 'kimiAcpSessionList' }] },
+              sourceKind: 'kimiCodeHome',
+              contentSearch: true,
+              schema: { fields: [
+                { kind: 'literal', name: 'kind', value: 'kimiCodeHome' },
+                { kind: 'string', name: 'homeDir', nullish: true },
+              ] },
+              key: { segments: [{ kind: 'literal', value: 'kimiCodeHome' }] },
               instances: [{ kind: 'default', constants: {} }],
             }],
           },
@@ -114,6 +119,7 @@ export const KIMI_PLUGIN = definePlugin({
         }),
       },
       terminal: KIMI_TERMINAL_CONTRIBUTION,
+      externalSessions: kimiExternalSessionsContribution,
     },
   },
   systemTools: {
