@@ -17,11 +17,54 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 
 installApprovalCommonModuleMocks();
 afterEach(() => { retireActiveServerAccountScopeLifetime(); resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks(); });
 
 describe('managed Machine inventory', () => {
+    it('isolates shared demand by Home and retires old Account reads before accepting a replacement', async () => {
+        const oldReply = createDeferred<Response>();
+        let delayAlice = false;
+        const row = (homeId: string, accountId: string) => ManagedMachineV1Schema.parse({ id: 'guest', homeId,
+            custodianAccountId: accountId,
+            launch: { provider: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, name: `${accountId} guest`, choices: {} },
+            controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'may-exist', creationState: 'active',
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false });
+        const homes = await serveAccountHomes({ homes: [
+            { key: 'a', serverUrl: 'https://shared-inventory-a.test', serverIdentityId: 'srv_shared_a', accountId: 'alice' },
+            { key: 'b', serverUrl: 'https://shared-inventory-b.test', serverIdentityId: 'srv_shared_b', accountId: 'cara' },
+        ], route: request => request.path === '/v1/machines/managed/actions/get'
+            ? delayAlice && request.accountId === 'alice' ? oldReply.promise
+                : Response.json(row(request.home === 'a' ? 'srv_shared_a' : 'srv_shared_b', request.accountId!)) : undefined });
+        const execute = createDefaultActionExecutor().execute;
+        const a = homes.homes.a!.id;
+        const b = homes.homes.b!.id;
+        const hook = await renderHook(() => ({
+            first: useManagedMachineInventory([a], 'guest', execute),
+            second: useManagedMachineInventory([a], 'guest', execute),
+            other: useManagedMachineInventory([b], 'guest', execute),
+        }), { flushOptions: { cycles: 25 } });
+        try {
+            const requests = () => homes.requests.filter(request => request.path === '/v1/machines/managed/actions/get');
+            expect(requests().map(request => request.accountId).sort()).toEqual(['alice', 'cara']);
+            expect(hook.getCurrent().first.machinesByServerId[a]).toBe(hook.getCurrent().second.machinesByServerId[a]);
+            const otherRows = hook.getCurrent().other.machinesByServerId[b];
+            delayAlice = true;
+            await act(async () => publishHomeAccountChange(a));
+            await flushHookEffects({ cycles: 25 });
+            await act(async () => homes.switchAccount('a', 'bob'));
+            await flushHookEffects({ cycles: 25 });
+            expect(hook.getCurrent().first.machinesByServerId[a]).toMatchObject([{ launch: { name: 'bob guest' } }]);
+            expect(hook.getCurrent().second.machinesByServerId[a]).toBe(hook.getCurrent().first.machinesByServerId[a]);
+            await act(async () => oldReply.resolve(Response.json(row('srv_shared_a', 'alice'))));
+            await flushHookEffects({ cycles: 25 });
+            expect(hook.getCurrent().first.machinesByServerId[a]).toMatchObject([{ launch: { name: 'bob guest' } }]);
+            expect(hook.getCurrent().other.machinesByServerId[b]).toBe(otherRows);
+            expect(requests().filter(request => request.home === 'a').map(request => request.accountId)).toEqual(['alice', 'alice', 'bob']);
+        } finally { oldReply.resolve(Response.json(row('srv_shared_a', 'alice'))); await hook.unmount(); await homes.dispose(); }
+    });
     it('reads archived recovery alongside current resources only for the Machines collection', async () => {
         const target = await upsertAndActivateServer({ serverUrl: 'https://archived-inventory.test', scope: 'tab' });
         await setServerProfileIdentityForUrl(target.serverUrl, 'srv_archived');
@@ -95,11 +138,16 @@ describe('managed Machine inventory', () => {
             return Response.json({ error: 'unexpected_route' }, { status: 404 });
         });
         const execute = createDefaultActionExecutor().execute;
-        const hook = await renderHook(({ id }: { id?: string }) => useManagedMachineInventory([target.id, other.id], id, execute),
+        const hook = await renderHook(({ id }: { id?: string }) => {
+            const inventory = useManagedMachineInventory([target.id, other.id], id, execute);
+            const joined = useManagedMachineInventory([target.id], id, execute);
+            return { ...inventory, joined };
+        },
             { initialProps: {}, flushOptions: { cycles: 20 } });
         const pending = () => {
             const entry = hook.getCurrent().entries.srv_inventory_approval;
             expect(entry).toMatchObject({ status: 'loading', approval: { artifactId: expect.any(String) } });
+            expect(hook.getCurrent().joined.entries.srv_inventory_approval?.approval).toBe(entry?.approval);
             if (!entry?.approval || typeof entry.approval === 'string') throw new Error('Expected a result-bearing read continuation');
             return entry.approval;
         };

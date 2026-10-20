@@ -18,6 +18,8 @@ const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { ActionOperationDetailModal } =
   await import('./ActionOperationDetailModal');
+const { ActionOperationLedger } = await import('./ActionOperationLedger');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const { actionOperationStore } =
   await import('@/sync/domains/actionOperations/actionOperationStore');
 const { storage } = await import('@/sync/domains/state/storage');
@@ -115,6 +117,39 @@ describe('Action details for a managed power operation', () => {
   afterEach(() => {
     standardCleanup();
     actionOperationStore.reset();
+  });
+
+  it('shares one demanded managed-resource read across operation rows, details and a Home refresh', async () => {
+    const home = await seedManagedPowerOperation({});
+    const prototype = actionOperationStore.getSnapshot();
+    const { actionOperationSelectors } = await import('@/sync/domains/actionOperations/actionOperationSelectors');
+    const snapshot = actionOperationSelectors.selectAll(prototype)[0]!.snapshot;
+    actionOperationStore.mergeSnapshots({ serverId: home, snapshots: [
+      { ...snapshot, operationId: 'power-second' }, { ...snapshot, operationId: 'power-third' },
+    ] });
+    const readCount = () => harness.requests.filter(request => request.path === '/v1/machines/managed/actions/get').length;
+    const detail = <ActionOperationDetailModal key="detail" serverId={home} operationId="power-operation" onClose={vi.fn()} setChrome={vi.fn()} />;
+    const ledger = <ActionOperationLedger key="ledger" />;
+    const screen = await renderScreen(<>{ledger}</>);
+    await flushHookEffects({ cycles: 25 });
+    expect(screen.getTextContent()).toContain('lima-happier-studio');
+    expect(readCount()).toBe(1);
+    // A later detail demand joins the settled inventory; removing the original
+    // rows does not retire the detail's shared read or its next refresh.
+    await screen.update(<>{ledger}{detail}</>);
+    await flushHookEffects({ cycles: 25 });
+    expect(readCount()).toBe(1);
+    await screen.update(<>{detail}</>);
+    await flushHookEffects({ cycles: 25 });
+    expect(readCount()).toBe(1);
+    await act(async () => publishHomeAccountChange(home));
+    await flushHookEffects({ cycles: 25 });
+    expect(screen.getTextContent()).toContain('lima-happier-studio');
+    expect(readCount()).toBe(2);
+    await screen.unmount();
+    await act(async () => publishHomeAccountChange(home));
+    await flushHookEffects({ cycles: 25 });
+    expect(readCount()).toBe(2);
   });
 
   it('names the managed guest rather than the controller it runs on', async () => {
