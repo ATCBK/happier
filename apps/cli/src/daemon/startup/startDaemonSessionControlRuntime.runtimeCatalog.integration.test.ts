@@ -18290,7 +18290,7 @@ describe('startDaemonSessionControlRuntime', () => {
     });
 
     it.each(['idle', 'transcript-only input after stopped narrator', 'activity observation unavailable', 'remainder capture unavailable', 'active child', 'child exceeds existing budget', 'replacement exceeds observer budget', 'credential retirement',
-        'Stop before exit', 'shutdown before exit', 'adopted runner survives', 'native active', 'confirmed native with child', 'native starts during child', 'native active at startup'] as const)('finishes a planned refresh after the child is idle, including shutdown respawn (%s)', async (childActivity) => {
+        'Stop before exit', 'shutdown before exit', 'adopted runner survives', 'native active', 'confirmed native with child', 'native starts during child', 'native active at startup', 'native read failure', 'native report omitted'] as const)('finishes a planned refresh after the child is idle, including shutdown respawn (%s)', async (childActivity) => {
         const home = await mkdtemp(join(tmpdir(), 'runner-child-restart-'));
         const previousConfiguration = { happyHomeDir: configuration.happyHomeDir,
             deviceLocalSecretKeyFile: configuration.deviceLocalSecretKeyFile };
@@ -18387,8 +18387,12 @@ describe('startDaemonSessionControlRuntime', () => {
             if (request.method === `${tracked.happySessionId}:${SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION}`
                 || request.method === SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION) {
                 const action = Reflect.get(request.request as object, 'action');
-                if (action === 'activity_read') { nativeReads++; return { session: 'settled', input: 'settled', agents: 'settled', attention: 'settled',
-                    nativeRuntimeActivity: nativeActive ? 'active' : 'settled' }; }
+                if (action === 'activity_read') {
+                    nativeReads++;
+                    if (childActivity === 'native read failure') throw new Error('fixture native activity transport unavailable');
+                    return { session: 'settled', input: 'settled', agents: 'settled', attention: 'settled',
+                        ...(childActivity === 'native report omitted' ? {} : { nativeRuntimeActivity: nativeActive ? 'active' : 'settled' }) };
+                }
                 expect(request.request).toMatchObject({ expectedPid: tracked.sessionRunnerPid ?? tracked.pid });
                 if (action === 'restart_hold') {
                     await new Promise<void>(resolve => {
@@ -18488,7 +18492,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 expect(executeSpawnSessionRequest).not.toHaveBeenCalled();
                 return;
             }
-            if (childActivity === 'activity observation unavailable') {
+            if (childActivity === 'activity observation unavailable' || childActivity === 'native read failure') {
                 expect(RestartSessionRunnerResultV1Schema.parse(await refresh)).toMatchObject({ ok: false, status: 'partial_failure',
                     diagnostics: { activityObservation: 'unavailable' } });
                 expect(signalSent).toBe(false);
