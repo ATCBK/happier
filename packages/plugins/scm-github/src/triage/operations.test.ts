@@ -50,6 +50,32 @@ import {
 const REPOSITORY_KEY = `${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`.toLowerCase();
 
 describe('registered GitHub REST → Triage source contract', () => {
+  it('scans both selected repositories through the registered Action without an account-wide query', async () => {
+    const transport = createStubGithubTransport({ respond: (request) => new URL(request.url).pathname === '/search/issues'
+      ? { status: 200, body: githubSearchResponse({ items: [] }) } : undefined });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
+    } });
+    const instance = { ...configuredInstance({ scope: 'account' }), configuration: {
+      v: 1, token: JSON.stringify({ v: 1, selection: { kind: 'selected', unitIds: ['octo-org/app', 'octo-org/api'] } }),
+    } };
+    try {
+      let page: import('@happier-dev/triage-protocol/v1').TriageScanInputV1['page'] = { kind: 'initial', limit: 64 };
+      for (let step = 0; step < 4; step += 1) {
+        const result = TriageScanResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.scan,
+          { v: 1, instance, page }, { surface: 'plugin' }));
+        expect(result.kind).not.toBe('failed');
+        if (result.kind !== 'page') break;
+        page = { kind: 'continuation', continuation: result.continuation };
+      }
+      const queries = transport.requests.filter((request) => new URL(request.url).pathname === '/search/issues')
+        .map((request) => new URL(request.url).searchParams.get('q') ?? '');
+      expect(queries.length).toBeGreaterThan(0);
+      expect(queries.every((query) => /repo:octo-org\/(app|api)/u.test(query))).toBe(true);
+      expect(queries.some((query) => query.includes('repo:octo-org/app'))).toBe(true);
+      expect(queries.some((query) => query.includes('repo:octo-org/api'))).toBe(true);
+    } finally { await plugin.dispose(); }
+  });
   it('loads exact task fields despite honest row-fact truncation through the registered get Action', async () => {
     const body = 'Full task body\n\nKeep the Markdown whitespace.  \n';
     const issue = { ...GITHUB_ISSUE_RESPONSE, number: 7, title: '界'.repeat(1000), body,

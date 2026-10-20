@@ -140,6 +140,18 @@ describe('parseTriageSavedViews', () => {
 });
 
 describe('mutateTriageSavedViews', () => {
+    it('persists two instances of one source as distinct filter choices', async () => {
+        const fixture = createTestkitAccountKv();
+        const deps = createDeps(fixture);
+        const selected = filters({ sources: [
+            { source: SOURCE, sourceInstanceId: '11111111-1111-4111-8111-111111111111' },
+            { source: SOURCE, sourceInstanceId: '22222222-2222-4222-8222-222222222222' },
+        ] });
+        const result = await create(fixture, deps, 'Two accounts', { filters: selected });
+        expect(result.status).toBe('applied');
+        expect((await readTriageSavedViews(deps)).value.views[0]?.filters).toEqual(selected);
+    });
+
     it('refuses a stale full-view draft instead of overwriting a newer rename', async () => {
         const fixture = createTestkitAccountKv();
         const deps = createDeps(fixture);

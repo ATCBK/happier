@@ -46,6 +46,12 @@ describe('GitHub Triage source declaration', () => {
 });
 
 describe('GitHub Triage configured-instance token', () => {
+  it('reads a non-empty repository set and rejects an empty set instead of silently scanning everything', () => {
+    const selection = { kind: 'selected', unitIds: ['octo-org/app', 'octo-org/api'] };
+    const decoded = decodeGithubTriageConfiguration(JSON.stringify({ v: 1, selection }));
+    expect(decoded).toEqual({ ok: true, configuration: { v: 1, selection } });
+    expect(decodeGithubTriageConfiguration(JSON.stringify({ v: 1, selection: { kind: 'selected', unitIds: [] } })).ok).toBe(false);
+  });
   it('round-trips its own scopes and refuses anything it did not write', () => {
     const accountToken = encodeGithubTriageConfiguration({ v: 1, scope: { kind: 'account' } });
     const repositoryToken = encodeGithubTriageConfiguration({

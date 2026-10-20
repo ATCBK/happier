@@ -58,6 +58,14 @@ async function list(listing: Parameters<typeof connectedAccounts>[0]) {
 }
 
 describe('GitLab listInstances', () => {
+  it('reads a selected project set and rejects a malformed or empty selection instead of scanning the deployment', () => {
+    const selection = { kind: 'selected', unitIds: ['11', '22'] };
+    expect(decodeGitlabConfiguration({ v: 1, token: JSON.stringify({ v: 1, selection }) }))
+      .toEqual({ v: 1, selection });
+    for (const unitIds of [[], ['../foreign'], ['11', '11']]) {
+      expect(decodeGitlabConfiguration({ v: 1, token: JSON.stringify({ v: 1, selection: { kind: 'selected', unitIds } }) })).toBeNull();
+    }
+  });
   it('reads a retained configuration with unknown fields and keeps encoded output canonical', () => {
     const read = decodeGitlabConfiguration({ v: 1, token: JSON.stringify({ v: 1, retired: true }) });
     expect(read).toEqual({ v: 1 });

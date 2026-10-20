@@ -70,6 +70,13 @@ function hostApiWith(input: Readonly<{
 }
 
 describe('PRs & Issues route owner', () => {
+  it('round trips instance-qualified source filters without collapsing two accounts', () => {
+    const value = lens({ filters: { ...TRIAGE_LIST_NO_FILTERS_V1, sources: [
+      { source: SOURCE, sourceInstanceId: '11111111-1111-4111-8111-111111111111' },
+      { source: SOURCE, sourceInstanceId: '22222222-2222-4222-8222-222222222222' },
+    ] } });
+    expect(parseTriageRouteSubPathV1(buildTriageRouteSubPathV1(value))).toEqual(value);
+  });
   it('round trips the Tasks audience with selection and the ordinary saved-view lens', () => {
     const tasks = lens({ filters: { ...TRIAGE_LIST_NO_FILTERS_V1, tasks: 'agents' }, query: 'auth', selectedViewId: 'work', selection: entryRef() });
     expect(parseTriageRouteSubPathV1(buildTriageRouteSubPathV1(tasks))).toEqual(tasks);

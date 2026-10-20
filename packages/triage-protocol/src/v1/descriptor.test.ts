@@ -30,6 +30,14 @@ const MINIMAL = Object.freeze({
 });
 
 describe('the V1 source descriptor', () => {
+    it('preserves a separately authored source’s natural selection unit', () => {
+        const scopeUnit = { singularLabel: 'Repository', pluralLabel: 'Repositories' };
+        const parsed = TriageSourceDescriptorV1Schema.parse({ ...MINIMAL, scopeUnit });
+        expect(parsed).toMatchObject({ scopeUnit });
+        expect(TriageSourceDescriptorV1Schema.safeParse({
+            ...MINIMAL, scopeUnit: { ...scopeUnit, authority: 'invented' },
+        }).success).toBe(false);
+    });
     it('declares task edits and native transitions while retaining read-only source admission', () => {
         const taskCapabilities = {
             createFields: ['title', 'body', 'scopeId'], editFields: ['title', 'body', 'assigneeIds'],

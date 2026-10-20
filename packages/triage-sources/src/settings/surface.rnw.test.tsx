@@ -106,6 +106,7 @@ type Recorded = Readonly<{ action: unknown; input: unknown }>;
 
 function createHarness(options: Readonly<{
   discovery: JsonValue | ((signal: AbortSignal) => Promise<JsonValue>);
+  scopeUnits?: JsonValue;
   /**
    * What the target says this source has already configured. Defaults to nothing
    * configured, which is the state a first visit is in.
@@ -131,6 +132,10 @@ function createHarness(options: Readonly<{
   ): Promise<JsonValue> {
     recorded.push({ action, input });
     const ref = action as Readonly<{ pluginId?: string; localId?: string }>;
+    if (ref.localId === 'author/list-units') return options.scopeUnits ?? {
+      kind: 'page', status: 'complete', selection: { kind: 'all' },
+      units: [{ id: 'unit-1', label: 'First team' }, { id: 'unit-2', label: 'Second team' }],
+    };
     if (ref.localId === LIST_INSTANCES_LOCAL_ACTION_ID) {
       return typeof options.discovery === 'function'
         ? await options.discovery(signal)
@@ -226,6 +231,31 @@ afterEach(async () => {
 });
 
 describe('the mounted PRs & Issues source settings page', () => {
+  it('lets a separately authored source configure a selected set through the shared editor and real administration schema', async () => {
+    const surface = createTriageSourceSettingsSurface({
+      pluginId: PLUGIN_ID, listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
+      connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID,
+      connectedAccountPurpose: PURPOSE, sourceDisplayName: SOURCE_DISPLAY_NAME,
+      scopeSelection: {
+        unitLabel: 'Teams', listScopeUnitsLocalActionId: 'author/list-units',
+        readSelection: () => ({ kind: 'all' }),
+        writeSelection: (draft, selection) => ({ ...draft, configuration: { v: 1, token: JSON.stringify({ v: 1, selection }) } }),
+      },
+    });
+    const harness = createHarness({ discovery: { kind: 'complete', candidates: [candidate('Workspace')], failures: [] } });
+    const page = await mountSettings(harness, {}, surface);
+    await pressControl(page, 'Add Workspace to PRs & Issues');
+    expect(harness.administrations()).toEqual([]);
+    await act(async () => { await page.press(await page.getByRole('radio', { name: 'Selected…' })); });
+    await expect(page.getByRole('button', { name: 'Save selection', state: { disabled: true } })).resolves.toBeDefined();
+    await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'First team' })); });
+    await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Second team' })); });
+    await pressControl(page, 'Save selection');
+    expect(harness.administrations()).toMatchObject([{ kind: 'create', draft: {
+      configuration: { token: JSON.stringify({ v: 1, selection: { kind: 'selected', unitIds: ['unit-1', 'unit-2'] } }) },
+      localInstanceKey: 'Workspace', binding: binding('account-1'),
+    } }]);
+  });
   it('configures the native login with source-owned translated copy and no connected-account editor', async () => {
     const nativeBinding = { purpose: PURPOSE, source: 'native', service: { pluginId: PLUGIN_ID, localId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID } };
     const nativeDraft = { v: 1, binding: nativeBinding, localInstanceKey: 'native-scope', keyStability: 'stable', configuration: { v: 1, token: 'scope:native' }, locator: { v: 1, displayLabel: 'local-user' } };

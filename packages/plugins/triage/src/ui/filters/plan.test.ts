@@ -42,10 +42,10 @@ describe('the filter rail facet plan', () => {
     expect(facetOf(plan, 'sources').options.map((option) => option.label))
       .toEqual(['acme/widgets', 'acme errors']);
     expect(facetOf(plan, 'sources').options.map((option) => option.selection.value))
-      .toEqual([{ source: GITHUB }, { source: SENTRY }]);
+      .toEqual([{ source: GITHUB, sourceInstanceId: 'instance-1' }, { source: SENTRY, sourceInstanceId: 'instance-2' }]);
   });
 
-  it('names a source by its qualified contribution id when one name cannot answer for it', () => {
+  it('offers distinct named options for two configured instances of the same source', () => {
     const plan = planTriageFilterFacetsV1({
       configuredSources: [
         configured(GITHUB, 'instance-1', 'acme/widgets'),
@@ -54,10 +54,8 @@ describe('the filter rail facet plan', () => {
       filters: TRIAGE_LIST_NO_FILTERS_V1,
     });
 
-    // One facet value covers both connections, so borrowing either label would
-    // tell the reader this option filters to that one connection.
-    expect(facetOf(plan, 'sources').options).toHaveLength(1);
-    expect(facetOf(plan, 'sources').options[0]?.label).toBe('happier.scm-github/github');
+    expect(facetOf(plan, 'sources').options.map((option) => option.label)).toEqual(['acme/widgets', 'acme/api']);
+    expect(new Set(facetOf(plan, 'sources').options.map((option) => option.key)).size).toBe(2);
   });
 
   it('keeps offering a selected source the reader has since unconfigured', () => {

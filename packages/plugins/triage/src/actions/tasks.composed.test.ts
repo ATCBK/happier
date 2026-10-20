@@ -17,6 +17,7 @@ import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
 import { CORPUS_SESSION_LINKS_INDEX_ID, CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../corpus/collections/ids.js';
 import { TriageListEntriesResultV1Schema } from './listEntriesProtocol.js';
 import { TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1 } from './sessionLinksProtocol.js';
+import { TRIAGE_LIST_NO_FILTERS_V1 } from '../projection/listWindow.js';
 
 const fixture = createTriageSourceV1Fixture();
 const configured = fixture.configuredInstance;
@@ -203,6 +204,19 @@ async function withExternalTaskSource(
 }
 
 describe('Tasks through a separately authored source and registered aggregate Actions', () => {
+    it('applies an agent instance filter after scanning both separately admitted source instances', async () => {
+        await withExternalTaskSource(async ({ aggregate }) => {
+            const result = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {
+                v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest',
+                filters: { ...TRIAGE_LIST_NO_FILTERS_V1, sources: [{ source, sourceInstanceId: secondInstanceId }] },
+            }, { surface: 'agent' }));
+            expect(result.window.rows.map((row) => row.entryRef.entryId)).toEqual(['task-2']);
+            expect(result.window.lanes.map((lane) => [lane.sourceInstanceId, lane.health.kind]))
+                .toEqual([[instanceId, 'walkFinished'], [secondInstanceId, 'walkFinished']]);
+            expect(result.configuredSources.map((summary) => summary.sourceInstanceId)).toEqual([instanceId, secondInstanceId]);
+        }, { secondInstance: true, initialTaskPage: true });
+    });
+
     it('lists tasks after an entire non-task page through the shared scan and strict result consumer', async () => {
         await withExternalTaskSource(async ({ aggregate }) => {
             const result = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {

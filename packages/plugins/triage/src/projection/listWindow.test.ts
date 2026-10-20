@@ -113,6 +113,22 @@ function fold(input: Readonly<{
 }
 
 describe('the content winner of one folded entry', () => {
+    it('filters by the observing configured instance without losing a shared entry or scanning a different set', () => {
+        const observations = [
+            present({ sourceInstanceId: INSTANCE[0], entryId: 'first-only' }),
+            present({ sourceInstanceId: INSTANCE[1], entryId: 'second-only' }),
+            present({ sourceInstanceId: INSTANCE[0], entryId: 'shared' }),
+            present({ sourceInstanceId: INSTANCE[1], entryId: 'shared' }),
+        ];
+        const window = fold({ observations, lens: { filters: {
+            ...TRIAGE_LIST_NO_FILTERS_V1,
+            sources: [{ source: TRIAGE_TESTKIT_SOURCE, sourceInstanceId: INSTANCE[1] }],
+        } } });
+        expect(window.rows.map((row) => row.entryRef.entryId).sort()).toEqual(['second-only', 'shared']);
+        expect(window.rows.find((row) => row.entryRef.entryId === 'shared')?.observations).toHaveLength(2);
+        expect(window.lanes).toHaveLength(2);
+    });
+
     it('replaces one connection answer through the canonical fold after a mutation', () => {
         const before = fold({
             observations: [present({

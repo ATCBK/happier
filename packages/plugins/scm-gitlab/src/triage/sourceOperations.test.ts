@@ -120,6 +120,31 @@ function harness(
 
 type ScanSeam = ReturnType<typeof harness>;
 
+it('scans every selected GitLab project through project-scoped provider lanes', async () => {
+  const seam = harness({ '/api/v4/user': { body: VIEWER },
+    '/api/v4/projects/11/issues': { body: [] }, '/api/v4/projects/11/merge_requests': { body: [] },
+    '/api/v4/projects/22/issues': { body: [] }, '/api/v4/projects/22/merge_requests': { body: [] },
+  });
+  const instance = configuredInstance({ configuration: { v: 1,
+    token: JSON.stringify({ v: 1, selection: { kind: 'selected', unitIds: ['11', '22'] } }),
+  } });
+  let page: TriageScanInputV1['page'] = { kind: 'initial', limit: 64 };
+  for (let step = 0; step < 4; step += 1) {
+    const result = TriageScanResultV1Schema.parse(await scanGitlabTriageSource({
+      scan: { v: 1, instance, page }, connectedAccounts: seam.connectedAccounts,
+      fetcher: seam.fetcher, signal: new AbortController().signal, nowMs: NOW_MS,
+    }));
+    expect(result.kind).not.toBe('failed');
+    if (result.kind !== 'page') break;
+    page = { kind: 'continuation', continuation: result.continuation };
+  }
+  const paths = seam.requested.map((url) => new URL(url).pathname).filter((path) => path !== '/api/v4/user');
+  expect(paths.length).toBeGreaterThan(0);
+  expect(paths.every((path) => /^\/api\/v4\/projects\/(11|22)\/(issues|merge_requests)$/u.test(path))).toBe(true);
+  expect(paths.some((path) => path.includes('/11/'))).toBe(true);
+  expect(paths.some((path) => path.includes('/22/'))).toBe(true);
+});
+
 async function scanPage(
   seam: ScanSeam,
   page: TriageScanInputV1['page'],
