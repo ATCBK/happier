@@ -1,6 +1,7 @@
 import { ProviderSettingsLimitError } from '@happier-dev/protocol/providers/settings/v1';
 import { isProviderContributionAuthoringMachineRequiredV1 } from '@happier-dev/protocol/providers/connections/creationV1';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { createProviderOperationLifetime } from '@/providers/operationLifetime';
 import type { DaemonProviderConnectionsDescribeRequestV1, DaemonProviderContributionAuthoringPreviewV1 } from '@happier-dev/protocol/rpc/providers';
 import { DaemonProviderConnectionMutationResponseV1Schema, DaemonProviderModelSettingsMutationResponseV1Schema, DaemonProviderConnectionsDescribeResponseV1Schema,
   type DaemonProviderConnectionMutationRequestV1 } from '@happier-dev/protocol/rpc/providers';
@@ -77,10 +78,11 @@ export function createProviderConnectionService(deps: ProviderConnectionServiceD
   }
 
   const machine = Object.freeze({
-    describe: (input: DaemonProviderConnectionsDescribeRequestV1) =>
+    describe: (input: DaemonProviderConnectionsDescribeRequestV1, signal?: AbortSignal) =>
       normalizeMutationResult(input.connectionId ?? input.authoringPreview?.connectionId ?? '', async () => {
         const described = await context.describe({
           machineId: input.machineId,
+          lifetime: createProviderOperationLifetime({ signal }),
           ...(input.connectionId ? { connectionId: input.connectionId } : {}),
         });
         if (described.status === 'error' || !input.authoringPreview) return described;

@@ -23,6 +23,7 @@ import {
   type ProviderOperationLifetime,
 } from '@/providers/operationLifetime';
 import type { ProviderConnectionRegistryProjection } from './types';
+import type { ProviderLocalInstallationReadResult } from '@/providers/discovery/installations';
 
 const EMPTY_RUNTIME_SUMMARY: ProviderConnectionRuntimeSummary = Object.freeze({
   health: 'not_checked', modelCount: null, checkedAt: null, endpoints: [],
@@ -418,17 +419,26 @@ export async function describeProviderConnections(
     : [];
   const discoveryCandidates = allDiscoveryCandidates;
   const localInstallationsReader = deps.localInstallations;
-  const localInstallations = deps.featureGate.isEnabled('providers.localDiscovery') && localInstallationsReader
-    ? (await readAdvisoryProjection(() => localInstallationsReader({
+  let installationRead: ProviderLocalInstallationReadResult = {
+    status: deps.featureGate.isEnabled('providers.localDiscovery') ? 'incomplete' : 'complete', installations: [],
+  };
+  if (deps.featureGate.isEnabled('providers.localDiscovery') && localInstallationsReader) {
+    try {
+      installationRead = await localInstallationsReader({
         machineId: input.machineId,
         registry: snapshot.registry,
         candidates: allDiscoveryCandidates,
-      }))).map((installation) => ({
-        ...installation,
-        managedStartAvailable: installation.managedStartAvailable
-          && deps.startManagedProviderRuntime !== undefined,
-      }))
-    : [];
+        signal: lifetime.signal,
+      });
+    } catch {
+      installationRead = { status: 'incomplete', installations: [] };
+    }
+  }
+  const localInstallations = installationRead.installations.map((installation) => ({
+    ...installation,
+    managedStartAvailable: installation.managedStartAvailable
+      && deps.startManagedProviderRuntime !== undefined,
+  }));
   const deletedConnection = input.connectionId === undefined
     ? undefined
     : settings.connectionTombstones.find((entry) => entry.id === input.connectionId) ?? null;
@@ -437,6 +447,7 @@ export async function describeProviderConnections(
     discoveryCandidates: [...discoveryCandidates],
     discoveryCandidatesTruncated: false,
     localInstallations: [...localInstallations],
+    localInstallationsStatus: installationRead.status,
     diagnostics: read.diagnostics
       .slice(0, PROVIDER_SETTINGS_LIMITS_V1.readDiagnostics)
       .map(redactProviderSettingsDiagnostic),

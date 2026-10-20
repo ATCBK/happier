@@ -269,7 +269,7 @@ export function createRuntimeProviderOperationsProducer(input: Readonly<{
                 ...request,
                 machineId: input.machineId,
               }),
-              dispatch: async (parsed) => await input.machineServices.describeConnections(parsed),
+              dispatch: async (parsed) => await input.machineServices.describeConnections(parsed, composeOperationSignal(binding, options)),
               parseResult: (value) => DaemonProviderConnectionsDescribeResponseV1Schema.parse(value),
             }),
           mutate: async (request: ProviderConnectionMutationRequest, options?: PluginCancellationOptions) =>

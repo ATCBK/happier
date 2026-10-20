@@ -149,7 +149,7 @@ describe('runtime Provider operation production boundary', () => {
       .resolves.toMatchObject({ status: 'success' });
     expect(machineServices.describeConnections).toHaveBeenCalledWith({
       machineId: 'machine-a',
-    });
+    }, binding.signal);
   });
 
   it('binds the exact eleven machine-scoped operations over the same owner used by RPC', async () => {
@@ -176,11 +176,11 @@ describe('runtime Provider operation production boundary', () => {
     expect(Object.keys(operations.migrations)).toEqual(['preview', 'confirm', 'confirmConflict']);
 
     await expect(operations.connections.describe({})).resolves.toMatchObject({ status: 'success' });
-    expect(machineServices.describeConnections).toHaveBeenCalledWith({ machineId: 'machine-a' });
+    expect(machineServices.describeConnections).toHaveBeenCalledWith({ machineId: 'machine-a' }, binding.signal);
 
     await expect(operations.connections.describe({ machineId: 'machine-b' } as never))
       .resolves.toMatchObject({ status: 'success' });
-    expect(machineServices.describeConnections).toHaveBeenLastCalledWith({ machineId: 'machine-a' });
+    expect(machineServices.describeConnections).toHaveBeenLastCalledWith({ machineId: 'machine-a' }, binding.signal);
 
     await expect(operations.catalog.probe({ connectionId })).resolves.toMatchObject({ status: 'success' });
     expect(machineServices.probe).toHaveBeenCalledWith(
@@ -282,7 +282,9 @@ describe('runtime Provider operation production boundary', () => {
 
     const pending = operations.connections.describe({}, { signal: caller.signal });
     await vi.waitFor(() => expect(machineServices.describeConnections).toHaveBeenCalledOnce());
+    const operationSignal = vi.mocked(machineServices.describeConnections).mock.calls[0]?.[1];
     caller.abort();
+    expect(operationSignal?.aborted).toBe(true);
     const callerOutcome = await Promise.race([
       pending.then(
         () => ({ status: 'resolved' as const }),

@@ -4,7 +4,6 @@ import type {
   PluginContributionIdentityV1,
   ProviderDiscoveryCandidateV1,
   ProviderErrorV1,
-  ProviderLocalInstallationSummaryV1,
   QualifiedConnectedAccountPurposeBindingsV1,
   SavedSecret,
   ProviderSettingsV1,
@@ -25,6 +24,7 @@ import type {
 } from '@/providers/registry';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ProviderOperationLifetime } from '@/providers/operationLifetime';
+import type { ProviderLocalInstallationReadResult } from '@/providers/discovery/installations';
 import type { ResolveManagedProviderPurposeBindingIntent } from '@/providers/managed/resolvePurposeBindingSnapshot';
 import type {
   SavedSecretCatalogResourceInputV1,
@@ -168,7 +168,8 @@ export type ProviderConnectionServiceDeps = Readonly<{
     machineId: string;
     registry: ProviderContributionRegistryView;
     candidates: readonly ProviderDiscoveryCandidateV1[];
-  }>): Promise<readonly ProviderLocalInstallationSummaryV1[]>;
+    signal?: AbortSignal;
+  }>): Promise<ProviderLocalInstallationReadResult>;
   /**
    * The one authoritative lease for an executable explicit-start operation.
    * Production composes this from the plugin runtime; fixtures may omit it.

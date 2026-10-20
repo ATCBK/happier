@@ -32,7 +32,8 @@ import {
   acquireAuthoritativePluginRuntimeRegistryLease,
   tryAcquireAuthoritativePluginRuntimeRegistryLease,
 } from '@/plugins/runtime/reload/runtimeLease';
-import type { ProviderDiscoveryCandidateV1, ProviderLocalInstallationSummaryV1 } from '@happier-dev/protocol';
+import type { ProviderDiscoveryCandidateV1 } from '@happier-dev/protocol';
+import type { ProviderConnectionServiceDeps } from './service/types';
 import type { ProviderConnectionView } from './service';
 
 const EMPTY_RUNTIME_SUMMARY: ProviderConnectionRuntimeSummary = Object.freeze({
@@ -71,11 +72,7 @@ export function createRuntimeProviderConnectionServices(input: Readonly<{
     registry: ProviderContributionRegistryView;
     connections: readonly ProviderConnectionView[];
   }>) => Promise<readonly ProviderDiscoveryCandidateV1[]>;
-  localInstallations?: (input: Readonly<{
-    machineId: string;
-    registry: ProviderContributionRegistryView;
-    candidates: readonly ProviderDiscoveryCandidateV1[];
-  }>) => Promise<readonly ProviderLocalInstallationSummaryV1[]>;
+  localInstallations?: ProviderConnectionServiceDeps['localInstallations'];
   startManagedProviderRuntime?: NonNullable<
     Parameters<typeof createProviderConnectionService>[0]['startManagedProviderRuntime']
   >;
@@ -265,7 +262,7 @@ export function createRuntimeProviderConnectionServices(input: Readonly<{
       };
     },
     discoveryCandidates: input.discoveryCandidates ?? (async () => []),
-    localInstallations: input.localInstallations ?? (async () => []),
+    localInstallations: input.localInstallations,
     ...(useAuthoritativeManagedStartLease
       ? {
           acquireManagedProviderRuntimeRegistryLease: () =>

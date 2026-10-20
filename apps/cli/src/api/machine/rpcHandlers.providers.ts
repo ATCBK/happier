@@ -32,7 +32,7 @@ export type MachineProviderRpcServices = Readonly<{
   models(input: Readonly<{ connectionId: string; machineId: string }>): Promise<ProviderSavedModelsRpcResult>;
   loadModel(input: ProviderModelLoadRequest): Promise<ProviderModelLoadResult>;
   cancelModelLoad(input: ProviderModelLoadRequest): Promise<ProviderModelLoadResult>;
-  describeConnections(input: DaemonProviderConnectionsDescribeRequestV1): Promise<DaemonProviderConnectionsDescribeResponseV1>;
+  describeConnections(input: DaemonProviderConnectionsDescribeRequestV1, signal?: AbortSignal): Promise<DaemonProviderConnectionsDescribeResponseV1>;
   mutateConnection(input: DaemonProviderConnectionMutationRequestV1): Promise<DaemonProviderConnectionMutationResponseV1>;
   projectModels(input: DaemonProviderModelProjectionRequestV1): Promise<DaemonProviderModelProjectionResponseV1>;
   resolveTeamCredentialRequestPolicySupport(
@@ -85,7 +85,7 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
   );
   input.rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE,
-    async (raw) => {
+    async (raw, context) => {
       const request = DaemonProviderConnectionsDescribeRequestV1Schema.parse(raw);
       const result = !input.featureGate.isEnabled('providers')
         ? featureDisabled(request)
@@ -94,7 +94,7 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
               ...(request.connectionId ? { connectionId: request.connectionId } : {}),
               machineId: request.machineId,
             }) }
-          : await input.services.describeConnections(request);
+          : await input.services.describeConnections(request, context?.signal);
       return DaemonProviderConnectionsDescribeResponseV1Schema.parse(result);
     },
   );

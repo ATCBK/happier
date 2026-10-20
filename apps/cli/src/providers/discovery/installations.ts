@@ -6,6 +6,7 @@ import { ProviderLocalInstallationSummaryV1Schema } from '@happier-dev/protocol/
 import type { ProviderLocalInstallationSummaryV1 } from '@happier-dev/protocol';
 
 import type { ProviderContributionRegistryView } from '@/providers/registry';
+import { awaitWithinProviderOperation, createProviderOperationLifetime, ProviderOperationAbandonedError } from '@/providers/operationLifetime';
 import {
   resolveDeclaredProviderInstallation,
   runDeclaredProviderLocalCommand,
@@ -17,20 +18,18 @@ import {
   type ProviderRuntimeStateStore,
 } from '@/providers/runtimeState';
 
-const DEFAULT_INSTALLATION_RESOLUTION_TIMEOUT_MS = 2_000;
-const INSTALLATION_RESOLUTION_TIMED_OUT = Symbol('installation-resolution-timed-out');
+export type ProviderLocalInstallationReadResult = Readonly<{
+  status: 'complete' | 'incomplete';
+  installations: readonly ProviderLocalInstallationSummaryV1[];
+}>;
 
 export function createProviderLocalInstallationReader(input: ProviderLocalToolResolver & ProviderLocalCommandRunner & Readonly<{
   runtimeStore: Pick<ProviderRuntimeStateStore, 'read' | 'update'>;
   now?: () => number;
   ttlMs?: number;
-  installationResolutionTimeoutMs?: number;
 }>) {
   const now = input.now ?? Date.now;
   const ttlMs = Math.max(1_000, Math.min(input.ttlMs ?? 30_000, 5 * 60_000));
-  const installationResolutionTimeoutMs = Number.isFinite(input.installationResolutionTimeoutMs)
-    ? Math.max(10, Math.min(Math.trunc(input.installationResolutionTimeoutMs!), 10_000))
-    : DEFAULT_INSTALLATION_RESOLUTION_TIMEOUT_MS;
   const inFlight = new Map<string, Promise<boolean>>();
 
   const inspectPresence = async (params: Readonly<{
@@ -66,6 +65,7 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
     machineId: string;
     contributionKey: string;
     installedCheck: Readonly<{ lookupNames: readonly string[] }>;
+    signal?: AbortSignal;
   }>): Promise<boolean> => {
     const descriptorFingerprint = createHash('sha256')
       .update(JSON.stringify(params.installedCheck))
@@ -78,6 +78,7 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
     };
     const serializedKey = serializeProviderInstallationRuntimeStateKeyV1(key);
     const state = await input.runtimeStore.read();
+    if (params.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
     const cached = state.installationChecks.find((record) =>
       serializeProviderInstallationRuntimeStateKeyV1(record.key) === serializedKey);
     if (cached && now() < cached.state.observedAt + ttlMs) return cached.state.status === 'present';
@@ -97,9 +98,9 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
     };
 
     // The declared installation lookup reaches an OS filesystem/PATH boundary
-    // with no abort handle, so a waiter timeout never stops it. Custody of the
+    // with no abort handle, so waiter cancellation never stops it. Custody of the
     // single-flight key therefore follows the underlying operation, not the
-    // waiter: an expired cached absence must join the same lookup rather than
+    // waiter: another read must join the same lookup rather than
     // start a second one that the first is already performing.
     let pending = inFlight.get(serializedKey);
     if (!pending) {
@@ -119,22 +120,7 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
       pending = started;
     }
 
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const observed = await Promise.race([
-      pending,
-      new Promise<typeof INSTALLATION_RESOLUTION_TIMED_OUT>((resolve) => {
-        timeout = setTimeout(() => resolve(INSTALLATION_RESOLUTION_TIMED_OUT), installationResolutionTimeoutMs);
-      }),
-    ]).finally(() => {
-      if (timeout) clearTimeout(timeout);
-    });
-    if (observed === INSTALLATION_RESOLUTION_TIMED_OUT) {
-      // Fail this advisory read closed and cache the absence so the projection
-      // stops asking while the underlying lookup remains outstanding.
-      await persistPresence(false);
-      return false;
-    }
-    return observed;
+    return await pending;
   };
 
   return Object.freeze({
@@ -142,7 +128,11 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
       machineId: string;
       registry: ProviderContributionRegistryView;
       candidates: readonly Readonly<{ contributionKey: string }>[];
-    }>): Promise<readonly ProviderLocalInstallationSummaryV1[]> {
+      signal?: AbortSignal;
+    }>): Promise<ProviderLocalInstallationReadResult> {
+      if (params.signal?.aborted) return { status: 'incomplete', installations: [] };
+      const lifetime = createProviderOperationLifetime({ signal: params.signal });
+      let incomplete = false;
       const serving = new Set(params.candidates.map((candidate) =>
         canonicalizeProviderContributionKeyV1(candidate.contributionKey)));
       const reads: Promise<ProviderLocalInstallationSummaryV1 | null>[] = [];
@@ -158,7 +148,9 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
             machineId: params.machineId,
             contributionKey,
             installedCheck,
+            signal: params.signal,
           });
+          if (params.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
           if (!installed) return null;
           return inspectPresence({
             machineId: params.machineId,
@@ -170,10 +162,19 @@ export function createProviderLocalInstallationReader(input: ProviderLocalToolRe
           });
         })());
       }
-      return (await Promise.all(reads))
+      const installations = (await Promise.all(reads.map(async read => {
+        try {
+          return await awaitWithinProviderOperation(read, lifetime);
+        } catch (error) {
+          if (!(error instanceof ProviderOperationAbandonedError)) throw error;
+          incomplete = true;
+          return null;
+        }
+      })))
         .filter((value): value is ProviderLocalInstallationSummaryV1 => value !== null)
         .sort((left, right) => left.providerName.localeCompare(right.providerName)
           || left.contributionKey.localeCompare(right.contributionKey));
+      return { status: incomplete ? 'incomplete' : 'complete', installations };
     },
   });
 }

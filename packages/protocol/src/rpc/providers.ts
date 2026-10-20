@@ -636,6 +636,7 @@ export const DaemonProviderConnectionsDescribeResponseV1Schema = lazyZodSchema((
     discoveryCandidates: z.array(ProviderDiscoveryCandidateV1Schema),
     discoveryCandidatesTruncated: z._default(z.boolean(), false),
     localInstallations: z._default(z.array(ProviderLocalInstallationSummaryV1Schema).check(z.maxLength(4_096)), []),
+    localInstallationsStatus: z.optional(z.enum(['complete', 'incomplete'])),
     diagnosticsTruncated: z.boolean(),
     diagnostics: z.array(z.strictObject({
       path: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),

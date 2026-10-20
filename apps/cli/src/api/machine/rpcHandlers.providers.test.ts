@@ -318,7 +318,8 @@ describe('machine provider RPC registration', () => {
 
   it('registers strict connection describe/mutate handlers and validates redacted responses', async () => {
     const h = harness();
-    await expect(h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE)!({ machineId: 'machine-a' }))
+    const controller = new AbortController();
+    await expect(h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE)!({ machineId: 'machine-a' }, { signal: controller.signal }))
       .resolves.toEqual({
         status: 'success', connections: [], available: [], availableTruncated: false,
         discoveryCandidates: [], discoveryCandidatesTruncated: false, localInstallations: [],
@@ -327,7 +328,7 @@ describe('machine provider RPC registration', () => {
     const request = { action: 'delete' as const, connectionId: 'pc_1', machineId: 'machine-a' };
     await expect(h.handlers.get(RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE)!(request))
       .resolves.toEqual({ status: 'success', action: 'delete', deletedConnectionId: 'pc_1' });
-    expect(h.services.describeConnections).toHaveBeenCalledWith({ machineId: 'machine-a' });
+    expect(h.services.describeConnections).toHaveBeenCalledWith({ machineId: 'machine-a' }, controller.signal);
     expect(h.services.mutateConnection).toHaveBeenCalledWith(request);
 
     h.services.describeConnections.mockResolvedValueOnce({

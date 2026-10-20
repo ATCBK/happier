@@ -30,12 +30,12 @@ function projectFlatConnectionMutationResult(
 }
 
 export function createProviderConnectionRpcAdapter(service: ProviderConnectionService): Readonly<{
-  describeConnections(input: DaemonProviderConnectionsDescribeRequestV1): Promise<DaemonProviderConnectionsDescribeResponseV1>;
+  describeConnections(input: DaemonProviderConnectionsDescribeRequestV1, signal?: AbortSignal): Promise<DaemonProviderConnectionsDescribeResponseV1>;
   mutateConnection(input: DaemonProviderConnectionMutationRequestV1, preparedSavedSecret?: PreparedSavedSecret): Promise<DaemonProviderConnectionMutationResponseV1>;
 }> {
   return Object.freeze({
-    describeConnections: async (input) => DaemonProviderConnectionsDescribeResponseV1Schema.parse(
-      await service.describe(input),
+    describeConnections: async (input, signal) => DaemonProviderConnectionsDescribeResponseV1Schema.parse(
+      await service.describe(input, signal),
     ),
     mutateConnection: async (input, preparedSavedSecret) => {
       switch (input.action) {

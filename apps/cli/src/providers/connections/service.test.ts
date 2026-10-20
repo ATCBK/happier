@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isDeepStrictEqual } from 'node:util';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   AccountSettingsSchema,
   CustomProviderTemplateV1Schema,
@@ -29,6 +32,8 @@ import { resolveProviderConnectionForMachine, type ProviderContributionRegistryV
 import { collectProviderConnectionDnsEvidence } from '@/providers/registry/dnsEvidence';
 import { createProviderConnectionRpcAdapter } from './rpcAdapter';
 import { createProviderConnectionService } from './service';
+import { createProviderLocalInstallationReader } from '@/providers/discovery/installations';
+import { createProviderRuntimeStateStore } from '@/providers/runtimeState';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
@@ -284,6 +289,7 @@ function harness(options: Readonly<{
   providerSettings?: ProviderSettingsV1;
   resolveManagedBindingTarget?: Parameters<typeof createConnectedAccountPurposeBindingOwner>[0]['resolveTarget'];
   readSharedGatewayRuntime?: ProviderConnectionServiceDeps['readSharedGatewayRuntime'];
+  localInstallations?: ProviderConnectionServiceDeps['localInstallations'];
 }> = {}) {
   let raw: Readonly<Record<string, unknown>> = {
     providerSettingsV1: DEFAULT_PROVIDER_SETTINGS_V1,
@@ -365,14 +371,14 @@ function harness(options: Readonly<{
     ownership: 'adopted' as const,
     connection: { status: 'enable_default' as const },
   }]);
-  const localInstallations = vi.fn(async () => [{
+  const localInstallations = vi.fn<NonNullable<ProviderConnectionServiceDeps['localInstallations']>>(async () => ({ status: 'complete', installations: [{
     v: 1 as const,
     machineId: 'machine-a',
     contributionKey,
     providerName: 'Gateway',
     status: 'installed_not_running' as const,
     managedStartAvailable: true,
-  }]);
+  }] }));
   const refreshOnEnable = vi.fn(async () => undefined);
   const startManagedProviderRuntime = vi.fn<
     NonNullable<ProviderConnectionServiceDeps['startManagedProviderRuntime']>
@@ -422,7 +428,7 @@ function harness(options: Readonly<{
     acquireCompatibilityProjection,
     ...(options.readSharedGatewayRuntime ? { readSharedGatewayRuntime: options.readSharedGatewayRuntime } : {}),
     discoveryCandidates,
-    localInstallations,
+    localInstallations: options.localInstallations ?? localInstallations,
     refreshOnEnable,
     ...(managedRuntimeRegistryLease
       ? { acquireManagedProviderRuntimeRegistryLease: async () => managedRuntimeRegistryLease }
@@ -1926,6 +1932,36 @@ describe('provider connection service', () => {
     await expect(managedDisabled.service.describe({ machineId: 'machine-a' })).resolves.toMatchObject({
       status: 'success', localInstallations: [{ managedStartAvailable: true }],
     });
+  });
+
+  it('carries describe cancellation through the real installation reader and strict response adapter', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'provider-installation-describe-'));
+    const store = createProviderRuntimeStateStore({ happyHomeDir, machineId: 'machine-a' });
+    let started!: () => void;
+    const lookupStarted = new Promise<void>(resolve => { started = resolve; });
+    const reader = createProviderLocalInstallationReader({ runtimeStore: store,
+      resolveSystemTool: async () => { started(); return await new Promise<never>(() => {}); },
+      runSystemTool: vi.fn(),
+    });
+    const h = harness({ localInstallations: request => reader.read(request) });
+    const source = contribution();
+    h.providersByContributionKey.set(contributionKey, { ...source,
+      definition: ProviderContributionV1Schema.parse({ ...source.definition,
+        kind: 'local', discovery: { v: 1, listener: { executableBasenames: ['gateway'], defaultPorts: [1234] },
+          availabilityProbe: { endpointTemplateId: 'responses', path: '/v1/models', parser: 'openai-models' },
+          installedCheck: { lookupNames: ['gateway'] } },
+      }),
+    });
+    // The inventory candidate would suppress its installation check.
+    h.discoveryCandidates.mockResolvedValue([]);
+    const controller = new AbortController();
+    try {
+      const result = createProviderConnectionRpcAdapter(h.service).describeConnections({ machineId: 'machine-a' }, controller.signal);
+      await lookupStarted;
+      controller.abort();
+      await expect(result).resolves.toMatchObject({ status: 'success', localInstallationsStatus: 'incomplete', localInstallations: [] });
+      await expect(store.read()).resolves.toMatchObject({ installationChecks: [] });
+    } finally { await rm(happyHomeDir, { recursive: true, force: true }); }
   });
 
   it('preserves configured connections when advisory local installation projection rejects', async () => {
