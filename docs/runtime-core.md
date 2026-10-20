@@ -99,6 +99,26 @@ queue entries so one cancellation cannot reject a valid peer. This applies to
 bundled and installed Agents; context-only host inputs retain their existing
 separate admission owner.
 
+The host's native foreground assistant projection waits for Home acknowledgement
+before publishing terminal Turn anchors. The lifecycle joins the exact input's
+existing Pending settlement attempt before reading acknowledged user sequences,
+and captures the terminal assistant snapshot in the ordered per-turn projection,
+before a native successor can replace the Session-global snapshot. A settled
+attempt alone is not commit evidence. The Session client keeps the existing
+outbox and close/cancellation lifetimes; sidechain output retains its own path.
+The [Session result reader](pending-delivery.md#correlated-session-answers-03-development)
+owns observation of retained turns with incomplete anchors.
+
+A host-proven native-mode startup refusal uses that same exact-input outcome
+owner in 0.3 development source. Session creation can be acknowledged before its
+caller offers the first input, so the failed host keeps its existing Pending
+consumer available until ordinary Stop. Later originals receive the terminal
+pre-effect refusal; no native prompt, Ready event or successful startup hook runs.
+The existing retained-settlement owner reoffers a failed terminal-block write on
+its normal connection/materialization wakes, without redelivering input. Generic
+plugin errors, generation retirement and native-resume failures retain their
+normal cleanup behavior. No Pending format or public plugin error contract changes.
+
 In 0.3 development source, Role, prompt Artifact and Session Project association
 preparation classify Home read failures through the shared endpoint policy.
 Network, timeout and retryable HTTP failures publish the existing
