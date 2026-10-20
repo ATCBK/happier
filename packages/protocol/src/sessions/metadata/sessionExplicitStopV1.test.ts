@@ -6,11 +6,25 @@ import { createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1,
 import {
   clearSessionExplicitStopV1FromMetadata,
   readSessionExplicitStopV1FromMetadata,
+  resolveSessionExplicitControlIntent,
   writeSessionExplicitStopV1ToMetadata,
 } from './sessionExplicitStopV1.js';
 
 describe('explicit Session Stop intent', () => {
   const stop = { v: 1, cause: 'explicit_stop', requestId: 'stop-request-1', requestedAtMs: 123 } as const;
+
+  it('distinguishes admitted self Stop from unavailable author evidence and admitted descendant Stop', () => {
+    const caller = { kind: 'session', sessionId: 'lead', starterDepth: 0, turnDepth: 1 } as const;
+    const agentStartContext = { caller, baseline: { machineId: 'machine', directory: '/repo' },
+      ledSubtreeSessionIds: ['child'], workDepthLimit: 4, roles: {}, callerPermissionCeiling: 'default' } as const;
+    const actionContext = { surface: 'agent', actionCaller: caller, agentStartContext } as const;
+    expect(resolveSessionExplicitControlIntent({ rawSession: { id: 'lead' }, actionContext })).toBe('self_stop_forbidden');
+    expect(resolveSessionExplicitControlIntent({ rawSession: { id: 'child' }, actionContext })).toBe('manager');
+    expect(resolveSessionExplicitControlIntent({ rawSession: { id: 'lead' },
+      actionContext: { ...actionContext, agentStartContext: undefined } })).toBe('unauthorized');
+    expect(resolveSessionExplicitControlIntent({ rawSession: { id: 'lead' }, actionContext: { ...actionContext,
+      agentStartContext: { ...agentStartContext, caller: { ...caller, sessionId: 'other' } } } })).toBe('unauthorized');
+  });
 
   it.each([undefined, 'manager-session'])('survives the persisted owner metadata projection and is readable after reload (manager %s)', managerSessionId => {
     const recorded = { ...stop, ...(managerSessionId ? { managerSessionId } : {}) };
