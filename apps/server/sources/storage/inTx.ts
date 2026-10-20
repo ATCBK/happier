@@ -382,7 +382,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
             // Prisma's interactive deadline does not interrupt an in-flight SQL
             // lock wait. Charge earlier operations to the same execution budget so
             // an expired callback cannot retain a pooled connection indefinitely.
-            void withPostgresStatementBudget;
+            tx = await withPostgresStatementBudget(tx, timeoutMs, attemptStartedAtMs);
         }
         // Keep all per-attempt state on this closure-owned object, rather than
         // assigning through Prisma's proxy onto a potentially shared client.
