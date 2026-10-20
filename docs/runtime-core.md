@@ -15,7 +15,7 @@ Session awareness keeps a completed foreground Turn separate from continuing bac
 `projectSessionAwarenessOperationalV1` suppresses operational readiness while the runtime still
 reports background activity; `readSessionAwarenessWorkStatusV1` maps that activity to Working.
 The Session-list presentation owner composes these facts with the Account's
-`sessionListBackgroundWorkAttentionModeV1`: keep the working indicator with an unread mark
+`sessionListBackgroundWorkAttentionModeV1`: show a blue center dot on the working indicator for unread replies
 (default), show unread status within Working, or temporarily move unread replies to Needs
 attention. Reading returns the latter two to working presentation while work continues.
 This preference never changes the Protocol-owned personal attention, read cursor, Follow or

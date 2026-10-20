@@ -27,13 +27,13 @@ Unread state appears in the session list, Inbox, and other attention surfaces.
 ## Unread replies while work continues
 
 In 0.3 development source, sessions with continuing background work stay **Working** by default, even
-when the foreground turn has ended with an unread reply. The row keeps an unread indication alongside
-its working status. Reading the reply clears that indication without moving the session between
-Working and Needs attention.
+when the foreground turn has ended with an unread reply. A blue dot at the center of the working
+loader signals unread replies while its normal color and animation continue. Reading the reply
+clears the blue dot without moving the session between Working and Needs attention.
 
 **Settings → Session → Unread replies during background work** offers three choices:
 
-- **Keep working status**: keep the working indicator and show a separate unread mark.
+- **Keep working status**: keep the working indicator and show a blue center dot for unread replies.
 - **Show unread status in Working**: keep the session in Working, with unread as its main indicator
   until you read it.
 - **Move unread sessions to Needs attention**: temporarily promote the session until you read it,
