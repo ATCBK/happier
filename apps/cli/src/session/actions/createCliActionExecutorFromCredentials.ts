@@ -95,7 +95,7 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCustody';
 import { ensureCliActionPolicySettings } from './ensureCliActionPolicySettings';
 import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
-import { resolveExternalActionMachineTarget } from '@/daemon/externalActions/reconcileExternalActionTarget';
+import { reconcileExternalActionTarget, resolveExternalActionMachineTarget } from '@/daemon/externalActions/reconcileExternalActionTarget';
 import { dispatchOriginalAccountAction, readExternalActionInstalledMachine, requiresOriginalAccountMachineActionProof, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import { MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import {
@@ -1342,7 +1342,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       // already owns client placement, Account binding and terminal policy.
       const settingsAction = isSettingsDeclarationActionIdV1(actionId);
       const settingsInput = settingsAction ? SettingsDeclarationActionInputSchemasV1[actionId].safeParse(input) : null;
-      const admittedInput = settingsInput?.success ? settingsInput.data : input;
+      let admittedInput = settingsInput?.success ? settingsInput.data : input;
       const spec = getActionSpec(ActionIdSchema.parse(actionId));
       // A show-once result needs the same live invocation that receives the
       // authenticated decision. The daemon already owns exact approval replay;
@@ -1383,30 +1383,41 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         || params.machineId && params.machineId !== selectedOriginalMachine.machineId)) return { context,
           invocation: createOneShotPatInvocation(async () => actionFailure('target_unavailable')) };
       const pairedTerminal = originalCliCaller && provenance?.provenance.kind === 'terminal';
-      let requiresDaemonInputAdmission = false;
-      let sessionInputDispatch: Readonly<{
+      let requiresSessionDaemonAdmission = false;
+      let sessionDispatch: Readonly<{
         sessionId: string;
         machineId: string;
         active: boolean;
       }> | null = null;
-      const sessionInputTarget = actionId === 'session.message.send'
-        ? readNonEmptyString(readRecord(admittedInput)?.sessionId) : null;
-      if (sessionInputTarget && originalCliCaller && !machineAdmissionTransport
+      // Reuse ingress's schema-admitted Session selector/placement owner. Group
+      // selector intent stays with the executor rather than naming one publisher.
+      const sessionPlaced = resolveActionExecutionPlacementForInput(spec, admittedInput) === 'session';
+      const sessionDefault = readNonEmptyString(context.defaultSessionId);
+      if (originalCliCaller && sessionDefault && sessionPlaced
+        && !readRecord(admittedInput)?.sessionId) {
+        const withDefault = { ...readRecord(admittedInput), sessionId: sessionDefault };
+        if (spec.inputSchema.safeParse(withDefault).success) admittedInput = withDefault;
+      }
+      const reconciliation = reconcileExternalActionTarget({ actionId: spec.id, rawInput: admittedInput,
+        target: context.externalActionTarget, currentMachineId: params.machineId ?? '' });
+      const sessionTarget = sessionPlaced && reconciliation.kind === 'ready' && reconciliation.target?.kind === 'session'
+        ? reconciliation.target.sessionId : null;
+      if (sessionTarget && originalCliCaller && !machineAdmissionTransport
         && hasStoredSessionCredentialProvenance(credentials)) {
         const signal = combineInvocationSignals(invocationSignal, context.signal);
         const transport = await resolveSessionTransportContext({
-          credentials, idOrPrefix: sessionInputTarget,
+          credentials, idOrPrefix: sessionTarget,
           ...(signal ? { signal } : {}),
         });
         if (!transport.ok) return { context,
           invocation: createOneShotPatInvocation(async () => actionResolutionFailure(transport)) };
-        // Protected input needs the daemon's authenticated Machine transport,
-        // not a provider process. Plain human sends retain HTTP Pending admission.
-        requiresDaemonInputAdmission = requiresMachineAdmissionForSessionInput({
+        // Session Actions enter their owning daemon. Protected message input
+        // retains publisher custody; plain human sends retain HTTP Pending admission.
+        requiresSessionDaemonAdmission = actionId !== 'session.message.send' || requiresMachineAdmissionForSessionInput({
           request: buildTrustedHostSessionInputAdmissionV1(context.surface).request,
           mode: transport.mode,
         });
-        if (requiresDaemonInputAdmission) {
+        if (requiresSessionDaemonAdmission) {
           const machineId = resolveSessionInputTargetMachineId({ rawSession: transport.rawSession,
             decryptedMetadata: tryDecryptSessionOwnerMetadataView({ credentials, rawSession: transport.rawSession,
               accountEncryptionMode: transport.accountEncryptionCurrentness.mode }),
@@ -1417,16 +1428,22 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             ? selectedTarget.machineId !== machineId : selectedTarget.sessionId !== transport.sessionId)) {
             return { context, invocation: createOneShotPatInvocation(async () => actionFailure('target_unavailable')) };
           }
-          sessionInputDispatch = {
+          sessionDispatch = {
             sessionId: transport.sessionId,
             machineId,
             active: transport.rawSession.active !== false,
           };
+          // The resolved id must also reach receiver reconciliation and the
+          // Action owner; routing a prefix while retaining it as an operand
+          // would disagree with the exact Session target at the destination.
+          if (readRecord(admittedInput)?.sessionId === sessionTarget) {
+            admittedInput = { ...readRecord(admittedInput), sessionId: transport.sessionId };
+          }
         }
       }
       // A semantic Machine selector needs the same admitted delivery as an
       // outer CLI selector, even for Machine-placed friendly commands.
-      const usesDaemonIngress = params.externalActionClient || requiresDaemonInputAdmission
+      const usesDaemonIngress = params.externalActionClient || requiresSessionDaemonAdmission
         || selectedOriginalMachine?.kind === 'ready' || liveResultCustody || requireDaemonIngress;
       const originalDaemonTarget = usesDaemonIngress && originalCliCaller
         ? await resolveLiveDaemonControlTargetForServer(fixedServerId ?? approvalServerId).catch(() => null)
@@ -1445,7 +1462,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         ? await resolveCurrentAccountAdministrationMachine({ token: credentials.token,
           serverHttpBaseUrl: resolveActionServerApiUrl(),
           signal: combineInvocationSignals(invocationSignal, context.signal) }) : null;
-      const originalMachineTarget = sessionInputDispatch !== null || selectedOriginalMachine?.kind === 'ready' || (context.externalActionTarget
+      const originalMachineTarget = sessionDispatch !== null || selectedOriginalMachine?.kind === 'ready' || (context.externalActionTarget
         ? context.externalActionTarget.kind === 'machine' : Boolean(params.machineId || liveResultMachineId));
       if (liveResultCustody && originalCliCaller && hasStoredSessionCredentialProvenance(credentials)
         && !ownDaemon && !originalMachineTarget) return { context: originalContext,
@@ -1464,11 +1481,11 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           ?? (liveResultMachineId ? { kind: 'machine' as const, machineId: liveResultMachineId } : undefined)
           ?? (selectedOriginalMachine?.kind === 'ready'
             ? { kind: 'machine' as const, machineId: selectedOriginalMachine.machineId } : undefined);
-        if (sessionInputDispatch) {
-          // A live Session already owns requester custody on its publisher. An
-          // explicitly inactive Session has no publisher to receive the Action,
-          // so its owning Machine daemon must run the existing enqueue/resume path.
-          target = resolveProtectedSessionInputActionTarget(sessionInputDispatch);
+        if (sessionDispatch) {
+          // Message input uses its live publisher or the Machine enqueue/resume
+          // path. Other Session Actions enter the owning Machine's executor.
+          target = actionId === 'session.message.send' ? resolveProtectedSessionInputActionTarget(sessionDispatch)
+            : { kind: 'machine', machineId: sessionDispatch.machineId };
         }
         if (originalMachineEnvironment?.success) {
           if (target && (target.kind !== 'machine' || target.machineId !== originalMachineEnvironment.data.machineId)) return { context: originalContext,
@@ -1503,10 +1520,10 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           const credentialsCurrent = sameStoredCredentials(credentials, await readCurrentCredentials());
           if (signal?.aborted) return actionFailure('cancelled');
           if (!credentialsCurrent) return actionFailure('credential_scope_retired');
-          if (sessionInputDispatch && target?.kind === 'session') {
+          if (sessionDispatch && target?.kind === 'session') {
             try {
               return await dispatchOriginalAccountAction({ actionId: parsedActionId.data,
-                input: { ...readRecord(admittedInput), sessionId: sessionInputDispatch.sessionId },
+                input: { ...readRecord(admittedInput), sessionId: sessionDispatch.sessionId },
                 requestId: context.actionRequestId ?? randomUUID(), target, credentials,
                 serverHttpBaseUrl: resolveActionServerApiUrl(), serverIdentityId: context.serverIdentityId,
                 ...(originalContext.authority ? { authority: originalContext.authority } : {}),

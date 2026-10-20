@@ -21,6 +21,14 @@ Plain Session IDs retain their existing result shape. Group sends/status reads
 return each target's outcome. Native participant recipients remain separate
 inside-Session routing identities.
 
+For Session-placed Actions with exact targets in 0.3 development, original CLI
+invocation reuses the ingress selector owner and the protected-message Session transport lookup
+to derive the owning Machine before delivery. Session Actions enter that
+Machine's daemon; protected message input retains its existing live-publisher
+or inactive-Session resume route. The receiving daemon still proves locality
+and admission. An unavailable owner returns the existing admission failure;
+the caller's local daemon does not become a replacement execution target.
+
 In 0.3 development source, Claude's contributed Create agent team and Launch
 teammate Actions are discoverable and callable from CLI and MCP with a current
 Session, as well as UI and Agent tools. They use the existing Session input

@@ -404,8 +404,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
     expect(mocks.fetchSessionById).toHaveBeenCalledWith({
       token: 'daemon-token',
       sessionId: 'c111111111111111111111111',
-      signal: expect.any(AbortSignal),
-      deadlineAtMs: expect.any(Number),
+      signal,
     });
     expect(mocks.fetchAccountMachineReplacements).not.toHaveBeenCalled();
   });
@@ -434,8 +433,6 @@ describe('createDaemonExternalActionTargetResolver', () => {
       token: 'daemon-token',
       sessionId: 'c111111111111111111111111',
       serverFeaturesSnapshot,
-      signal: expect.any(AbortSignal),
-      deadlineAtMs: expect.any(Number),
     });
   });
 
