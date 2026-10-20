@@ -165,6 +165,7 @@ import {
 import {
   getGithubTriageEntry,
   listGithubTriageInstancesOperation,
+  listGithubTriageScopeUnits,
   prepareGithubTriageReviewWorkspace,
   scanGithubTriageSource,
   verifyGithubTriageReviewWorkspace,
@@ -529,6 +530,17 @@ function createGithubPlugin() {
     ]),
   },
   actions: {
+    [GITHUB_TRIAGE_ACTION_IDS_V1.listScopeUnits]: {
+      title: 'List GitHub repositories',
+      description: 'Lists selectable repositories or the retained configured selection.',
+      surfaces: sources.operations.listScopeUnits.declaration.surfaces,
+      dangerLevel: sources.operations.listScopeUnits.declaration.dangerLevel,
+      inputSchema: TriageSourceCredentialInputsV1.listScopeUnits.jsonSchema,
+      resultSchema: sources.operations.listScopeUnits.declaration.resultSchema.jsonSchema,
+      hostAccess: TRIAGE_READ_HOST_ACCESS,
+      connectedAccountPurposeBindings: [{ path: 'draft.binding.account', nativeServicePath: 'draft.binding.service', purpose: GITHUB_CONNECTED_ACCOUNT_PURPOSE }],
+      run: listGithubTriageScopeUnits,
+    },
     [GITHUB_TRIAGE_ACTION_IDS_V1.listInstances]: {
       title: 'Discover GitHub accounts',
       description: 'Lists the GitHub accounts each authorized connection can reach.',
@@ -1494,6 +1506,7 @@ function createGithubPlugin() {
             create: sources.operations.create.bind(GITHUB_TRIAGE_ACTION_IDS_V1.create),
             edit: sources.operations.edit.bind(GITHUB_TRIAGE_ACTION_IDS_V1.edit),
             transition: sources.operations.transition.bind(GITHUB_TRIAGE_ACTION_IDS_V1.transition),
+            listScopeUnits: sources.operations.listScopeUnits.bind(GITHUB_TRIAGE_ACTION_IDS_V1.listScopeUnits),
             listInstances: sources.operations.listInstances
               .bind(GITHUB_TRIAGE_ACTION_IDS_V1.listInstances),
             scan: sources.operations.scan.bind(GITHUB_TRIAGE_ACTION_IDS_V1.scan),

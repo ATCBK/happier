@@ -104,7 +104,8 @@ describe('GitHub Triage discovery', () => {
     });
     if (create.kind !== 'create') throw new Error('Expected source creation');
     expect(create.draft.binding).toEqual(draft.binding);
-    expect(decodeGithubTriageConfiguration(create.draft.configuration.token)).toEqual({ ok: true, configuration });
+    expect(decodeGithubTriageConfiguration(create.draft.configuration.token)).toEqual({ ok: true,
+      configuration: { v: 1, selection: { kind: 'selected', unitIds: ['acme/widgets'] } } });
     expect(JSON.stringify(create)).not.toContain(nativeToken);
   });
 
@@ -213,7 +214,7 @@ describe('GitHub Triage discovery', () => {
       // A candidate is a Settings choice; it mints no configured-instance identity.
       expect(JSON.stringify(candidate)).not.toContain('sourceInstanceId');
       const decoded = decodeGithubTriageConfiguration(candidate.configuration.token);
-      expect(decoded.ok && decoded.configuration.scope.kind).toBe('account');
+      expect(decoded.ok && decoded.configuration.selection.kind).toBe('all');
       expect(candidate.configuration.token).not.toContain(candidate.binding.account.accountId);
     }
   });

@@ -68,9 +68,9 @@ describe('GitLab listInstances', () => {
   });
   it('reads a retained configuration with unknown fields and keeps encoded output canonical', () => {
     const read = decodeGitlabConfiguration({ v: 1, token: JSON.stringify({ v: 1, retired: true }) });
-    expect(read).toEqual({ v: 1 });
+    expect(read).toEqual({ v: 1, selection: { kind: 'all' } });
     if (read === null) throw new Error('stored configuration was unreadable');
-    expect(encodeGitlabConfiguration(read)).toEqual({ v: 1, token: '{"v":1}' });
+    expect(encodeGitlabConfiguration(read)).toEqual({ v: 1, token: '{"v":1,"selection":{"kind":"all"}}' });
     expect(decodeGitlabConfiguration({ v: 1, token: JSON.stringify({ v: 2, retired: true }) })).toBeNull();
   });
 
@@ -116,7 +116,7 @@ describe('GitLab listInstances', () => {
       expect(candidate.localInstanceKey).not.toContain(GITLAB_CONNECTED_ACCOUNT_PURPOSE);
       // The source-private configuration is this source's own strict envelope
       // and never duplicates the configured origin.
-      expect(decodeGitlabConfiguration(candidate.configuration)).toEqual({ v: 1 });
+      expect(decodeGitlabConfiguration(candidate.configuration)).toEqual({ v: 1, selection: { kind: 'all' } });
       expect(candidate.configuration.token).not.toContain('gitlab.com');
       expect(candidate.configuration.token).not.toContain('account-');
     }

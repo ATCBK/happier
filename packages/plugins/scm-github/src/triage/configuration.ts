@@ -151,10 +151,3 @@ export function decodeGithubTriageConfiguration(token: unknown): GithubTriageCon
   return configuration === null ? failure : { ok: true, configuration };
 }
 
-/** The lane-query scope: `owner/name` for a repository instance, `null` account-wide. */
-export function readGithubScanRepositoryKey(
-  configuration: GithubTriageConfigurationV1,
-): string | null {
-  return configuration.selection.kind === 'selected' && configuration.selection.unitIds.length === 1
-    ? configuration.selection.unitIds[0] ?? null : null;
-}

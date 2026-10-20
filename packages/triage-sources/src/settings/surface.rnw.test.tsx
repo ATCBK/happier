@@ -10,6 +10,7 @@ import {
   TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1,
   TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1,
   TriageSourceAdministrationActionInputV1Schema,
+  TriageListScopeUnitsInputV1Schema,
   TriageSourceInstanceDraftV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -246,7 +247,7 @@ describe('the mounted PRs & Issues source settings page', () => {
     });
     const harness = createHarness({ discovery: { kind: 'complete', candidates: [candidate('Workspace')], failures: [] },
       scopeUnits: (input) => {
-        const key = Reflect.get(Reflect.get(input as object, 'draft') as object, 'localInstanceKey');
+        const key = TriageListScopeUnitsInputV1Schema.parse(input).draft.localInstanceKey;
         return { kind: 'page', status: 'complete', selection: { kind: 'all' }, units: key === 'Other workspace'
           ? [{ id: 'unit-3', label: 'Third team' }, { id: 'unit-4', label: 'Fourth team' }]
           : [{ id: 'unit-1', label: 'First team' }, { id: 'unit-2', label: 'Second team' }] };

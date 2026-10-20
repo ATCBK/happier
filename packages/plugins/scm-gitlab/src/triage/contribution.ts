@@ -86,6 +86,7 @@ export const GITLAB_TRIAGE_CONTRIBUTION_LOCAL_ID = 'gitlab-forge';
 
 export const GITLAB_TRIAGE_ACTION_IDS = Object.freeze({
   listInstances: 'triage/list-gitlab-instances',
+  listScopeUnits: 'triage/list-gitlab-scope-units',
   scan: 'triage/scan-gitlab',
   get: 'triage/get-gitlab-entry',
   readPullRequestStatus: 'triage/read-gitlab-pull-request-status',
@@ -209,6 +210,7 @@ export const GITLAB_TRIAGE_SOURCE_DESCRIPTOR_V1: TriageSourceDescriptorV1 =
     // name another plugin's page.
     settingsPageId: GITLAB_TRIAGE_SETTINGS_PAGE_ID,
     displayName: 'GitLab',
+    scopeUnit: { singularLabel: 'Project', pluralLabel: 'Projects' },
     kinds: [
       {
         id: 'merge-request',
@@ -320,7 +322,7 @@ function declareOperationAction(input: Readonly<{
   title: string;
   description: string;
   scopes: readonly ['settings'] | readonly ['global'];
-  role: 'listInstances' | 'scan' | 'get' | 'readPullRequestStatus' | 'prepareReviewWorkspace' | 'verifyReviewWorkspace';
+  role: 'listInstances' | 'listScopeUnits' | 'scan' | 'get' | 'readPullRequestStatus' | 'prepareReviewWorkspace' | 'verifyReviewWorkspace';
   connectedAccountPurposeBindings?: readonly Readonly<{ path: string; purpose: string }>[];
 }>): TriageActionDeclaration {
   const declaration = sourceOperations[input.role].declaration;
@@ -348,6 +350,13 @@ function declareOperationAction(input: Readonly<{
 
 /** Action declarations derive their contracts from the contribution's shared operation roles. */
 export const GITLAB_TRIAGE_ACTION_DECLARATIONS: readonly TriageActionDeclaration[] = Object.freeze([
+  declareOperationAction({
+    id: GITLAB_TRIAGE_ACTION_IDS.listScopeUnits,
+    title: 'List GitLab projects',
+    description: 'Lists selectable projects or the retained configured selection.',
+    scopes: ['settings'], role: 'listScopeUnits',
+    connectedAccountPurposeBindings: [{ path: 'draft.binding.account', purpose: GITLAB_CONNECTED_ACCOUNT_PURPOSE }],
+  }),
   declareOperationAction({
     id: GITLAB_TRIAGE_ACTION_IDS.listInstances,
     title: 'List GitLab deployments',
@@ -765,6 +774,7 @@ export const GITLAB_TRIAGE_MUTATION_ACTION_DECLARATIONS:
 export const GITLAB_TRIAGE_CONTRIBUTION_DECLARATION = TriageSourcesContributionProtocolV1.contribute({
   descriptor: GITLAB_TRIAGE_SOURCE_DESCRIPTOR_V1,
   operations: {
+    listScopeUnits: sourceOperations.listScopeUnits.bind(GITLAB_TRIAGE_ACTION_IDS.listScopeUnits),
     listInstances: sourceOperations.listInstances.bind(GITLAB_TRIAGE_ACTION_IDS.listInstances),
     scan: sourceOperations.scan.bind(GITLAB_TRIAGE_ACTION_IDS.scan),
     get: sourceOperations.get.bind(GITLAB_TRIAGE_ACTION_IDS.get),

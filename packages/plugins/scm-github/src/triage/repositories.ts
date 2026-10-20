@@ -53,6 +53,23 @@ export type GithubRepositoryReaderV1 = Readonly<{
   readById(repositoryId: string): Promise<GithubRepositoryReadV1>;
 }>;
 
+/** Current immutable directory ids and retained path ids share one route resolver. */
+export async function resolveGithubSelectedRepository(
+  unitId: string,
+  repositories: GithubRepositoryReaderV1,
+): Promise<Readonly<{ kind: 'resolved'; route: GithubRepositoryRouteV1; repositoryKey: string }>
+  | Readonly<{ kind: 'failed'; failure: GithubTriageFailureV1 }>> {
+  const retainedRoute = parseGithubRoutingToken(unitId);
+  if (retainedRoute !== null) return { kind: 'resolved', route: retainedRoute, repositoryKey: `${retainedRoute.owner.toLowerCase()}/${retainedRoute.name.toLowerCase()}` };
+  const repository = await repositories.readById(unitId);
+  if (repository.kind === 'unreadable') return { kind: 'failed', failure: repository.failure };
+  const route = parseGithubRoutingToken(repository.repositoryKey);
+  if (route === null || repository.repositoryKey === null) return {
+    kind: 'failed', failure: { class: 'unsupportedContract', code: 'github_repository_locator_missing' },
+  };
+  return { kind: 'resolved', route, repositoryKey: repository.repositoryKey };
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

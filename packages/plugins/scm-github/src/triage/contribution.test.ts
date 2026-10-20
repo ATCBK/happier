@@ -11,7 +11,6 @@ import {
 import {
   decodeGithubTriageConfiguration,
   encodeGithubTriageConfiguration,
-  readGithubScanRepositoryKey,
 } from './configuration.js';
 
 /** `PluginContributionLocalIdSchema`: lowercase segments joined by `-` or `/`. */
@@ -62,9 +61,10 @@ describe('GitHub Triage configured-instance token', () => {
 
     const account = decodeGithubTriageConfiguration(accountToken);
     const repository = decodeGithubTriageConfiguration(repositoryToken);
-    expect(account.ok && readGithubScanRepositoryKey(account.configuration)).toBeNull();
-    expect(repository.ok && readGithubScanRepositoryKey(repository.configuration))
-      .toBe('octo-org/example-app');
+    expect(account.ok && account.configuration.selection).toEqual({ kind: 'all' });
+    expect(repository.ok && repository.configuration.selection).toEqual({ kind: 'selected', unitIds: ['octo-org/example-app'] });
+    expect(decodeGithubTriageConfiguration(JSON.stringify({ v: 1, scope: { kind: 'repository', repositoryKey: 'Octo-Org/Example-App' } })))
+      .toEqual({ ok: true, configuration: { v: 1, selection: { kind: 'selected', unitIds: ['octo-org/example-app'] } } });
 
     // A foreign, malformed, versionless or path-escaping token is an explicit
     // unsupported-contract failure, never a guessed scope.
@@ -96,7 +96,6 @@ describe('GitHub Triage configured-instance token', () => {
 
     const decoded = decodeGithubTriageConfiguration(token);
 
-    expect(decoded.ok && readGithubScanRepositoryKey(decoded.configuration))
-      .toBe('octo-org/example-app');
+    expect(decoded.ok && decoded.configuration.selection).toEqual({ kind: 'selected', unitIds: ['octo-org/example-app'] });
   });
 });

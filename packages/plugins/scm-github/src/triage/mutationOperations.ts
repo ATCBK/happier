@@ -72,6 +72,8 @@ import {
 import { setGithubReviewThreadResolution } from './mutations/reviewThread.js';
 import { openGithubTriageClient, resolveGithubTriageInstance } from './operations.js';
 import { parseGithubRoutingToken } from './locator.js';
+import { createGithubRepositoryReader, resolveGithubSelectedRepository } from './repositories.js';
+import { toTriageFailure } from './mapping/protocol.js';
 import { GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1 } from './contribution.js';
 
 function taskFieldsSupported(fields: TriageTaskFieldsV1, create: boolean): boolean {
@@ -95,12 +97,14 @@ export async function createGithubIssueAction(input: unknown, context: PluginInv
   if (!taskFieldsSupported(request.fields, true)) return { kind: 'refused', reason: 'unsupported_field' };
   const resolved = resolveGithubTriageInstance(request.instance);
   if (!resolved.ok) return failed(resolved.failure);
-  const route = parseGithubRoutingToken(request.fields.scopeId
-    ?? (resolved.configuration.scope.kind === 'repository' ? resolved.configuration.scope.repositoryKey : undefined));
-  if (route === null) return { kind: 'refused', reason: 'scope_required' };
+  const selection = resolved.configuration.selection;
+  const scopeId = request.fields.scopeId ?? (selection.kind === 'selected' && selection.unitIds.length === 1 ? selection.unitIds[0] : undefined);
+  if (scopeId === undefined) return { kind: 'refused', reason: 'scope_required' };
   const opened = await openGithubTriageClient(request.instance, context);
   if (!opened.ok) return failed(opened.failure);
-  return createGithubIssue({ route, fields: request.fields }, { client: opened.client, now: Date.now, signal: context.signal });
+  const repository = await resolveGithubSelectedRepository(scopeId, createGithubRepositoryReader({ client: opened.client, now: Date.now }));
+  if (repository.kind === 'failed') return failed(toTriageFailure(repository.failure));
+  return createGithubIssue({ route: repository.route, fields: request.fields }, { client: opened.client, now: Date.now, signal: context.signal });
 }
 
 export async function editGithubIssueAction(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {

@@ -219,6 +219,19 @@ describe('PostHog Triage source operations', () => {
         expect(result).toMatchObject({ kind: 'failed', failure: { code: POSTHOG_FAILURE_CODES.malformedRows } });
     });
 
+    it('retains readable environments from an incomplete All directory with explicit partial scan evidence', async () => {
+        const host = context([{ next: null, results: [{
+            ...projectsPage.results[0], organization: '00000000-0000-4000-8000-0000000000a1',
+        }, { invalid: true }] }, { results: [], hasMore: false }]);
+        const result = await scanPosthogSource({
+            v: 1, instance: allEnvironmentsInstance(), page: { kind: 'initial', limit: 10 },
+        }, host.value);
+        expect(result).toMatchObject({ kind: 'complete', evidence: {
+            kind: 'partial', reason: POSTHOG_FAILURE_CODES.malformedRows,
+        } });
+        expect(host.request.mock.calls.at(-1)?.[0].url).toContain('/api/projects/4821/');
+    });
+
     it('lists live environment scope units by immutable UUID through the registered read Action', async () => {
         const register = vi.fn();
         await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
