@@ -96,10 +96,10 @@ test('dispatch recovery rescans transient scan problems and rejects persistent o
     '    if [ "$PROBLEM_MODE" = transition ] || [ "$PROBLEM_MODE" = mixed ]; then transition=1/0; fi',
     '    if [ "$PROBLEM_MODE" = conflict ]; then conflicts=1; fi',
     '    printf "%s|Watching|false|true|%s|%s|%s|true|%s|0/0|0/0|active|%s|ok|%s|0\\n" "$3" "$scanned" "$scan" "$transition" "$scanned" "$cycles" "$conflicts"',
-    '    if [ "$PROBLEM_MODE" = transition ]; then printf "%s\\n" "apply failed"; fi',
-    '    if [ "$PROBLEM_MODE" = mixed ]; then printf "%s\\n" "unable to validate existing file: modification detected"; fi',
+    '    if [ "$PROBLEM_MODE" = transition ]; then printf "%s\\n" "source|apply failed"; fi',
+    '    if [ "$PROBLEM_MODE" = mixed ]; then printf "%s\\n" "source|unable to validate existing file: modification detected"; fi',
     // The Mutagen boundary only emits scan errors if production requests them.
-    '    case "$5" in *"{{range .Alpha.ScanProblems}}"*) [ "$scan" = 0/0 ] || printf "%s\\n" "$SCAN_ERROR" ;; esac ;;',
+    '    case "$5" in *"{{range .Alpha.ScanProblems}}"*) [ "$scan" = 0/0 ] || printf "source|%s\\n" "$SCAN_ERROR" ;; esac ;;',
     'esac',
   ].join('\n'));
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`,
@@ -157,7 +157,7 @@ test('the causal barrier retries known transient transition problems once and re
     '    if [ "$PROBLEM_MODE" = postflush ] && [ "$(cat "$FLUSH_MARKER" 2>/dev/null)" = cyclecycle ]; then transition=0/0; fi',
     '    if [ "$PROBLEM_MODE" = excluded ]; then transition=1/1; fi',
     '    printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|%s|active|2|ok|0|0\\n" "$3" "$transition"',
-    '    [ "$transition" = 0/0 ] || printf "%s\\n" "$TRANSITION_ERROR" ;;',
+    '    [ "$transition" = 0/0 ] || printf "source|%s\\n" "$TRANSITION_ERROR" ;;',
     'esac',
   ].join('\n'));
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`,
@@ -192,6 +192,41 @@ test('the causal barrier retries known transient transition problems once and re
   const postflush = run('postflush', errors[0], true);
   assert.equal(postflush.status, 0, postflush.stderr);
   assert.equal(await readFile(marker, 'utf8'), 'cyclecycle', 'a race during the admitted flush gets one fresh cycle');
+});
+
+test('native barrier admits project capture warnings but rejects command inputs and mixed problems', {
+  skip: process.platform === 'win32',
+}, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-sync-evidence-'));
+  t.after(() => removeFixture(root));
+  const binDir = join(root, 'bin');
+  await mkdir(binDir);
+  await executable(join(binDir, 'mutagen'), [
+    '#!/bin/sh',
+    '[ "$2" != list ] && exit 0',
+    'scan=0; transition=1',
+    '[ "$PROBLEM_KIND" != scan ] || { scan=1; transition=0; }',
+    'printf "%s|Watching|false|true|1|%s/0|0/0|true|1|%s/0|%s/%s|active|%s|ok|%s|0\\n" "$3" "$SCAN_COUNT" "$scan" "$transition" "$EXCLUDED" "$CYCLES" "$CONFLICTS"',
+    'case "$5" in *".Path"*) printf "%s|apply failed\\n" "$PROBLEM_PATH" ;; *) printf "apply failed\\n" ;; esac',
+    '[ "$SCAN_COUNT" = 0 ] || printf "source.ts|unreadable\\n"',
+  ].join('\n'));
+  const capture = '.project/plans/qa/lanes/live/browser-diagnostics.json';
+  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}`,
+    MUTAGEN_DATA_DIRECTORY: join(root, 'mutagen', 'data'), DBUS_SESSION_BUS_ADDRESS: '',
+    SCAN_COUNT: '0', EXCLUDED: '0', CYCLES: '7', CONFLICTS: '0', PROBLEM_PATH: capture };
+  const run = extra => spawnSync(controlExecutable, ['--sync-check', 'happier-linux'], {
+    env: { ...env, ...extra }, encoding: 'utf8',
+  });
+  for (const PROBLEM_KIND of ['scan', 'transition']) {
+    const result = run({ PROBLEM_KIND });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stderr.includes(capture), result.stderr);
+  }
+  for (const extra of [{ PROBLEM_PATH: '.project/helper.mjs' }, { PROBLEM_PATH: 'source.json' },
+    { SCAN_COUNT: '1' }, { EXCLUDED: '1' }, { CYCLES: '0' }, { CONFLICTS: '1' },
+    { PROBLEM_PATH: '' }, { PROBLEM_PATH: '.project/../source.json' }]) {
+    assert.notEqual(run(extra).status, 0, JSON.stringify(extra));
+  }
 });
 
 test('no-watch first dispatch is eligible but its barrier still requires a completed clean cycle', {

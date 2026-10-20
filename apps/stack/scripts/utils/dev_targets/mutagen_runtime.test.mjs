@@ -256,6 +256,39 @@ test('Mutagen list parsing rejects nonterminal scan and transition problems incl
   assert.equal(excludedAlone.recovery, undefined);
 });
 
+test('Mutagen evidence problems warn only for approved project data paths', () => {
+  const base = {
+    name: 'happier-linux', paused: false, status: 'watching', successfulCycles: 7,
+    alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true },
+  };
+  const inspect = (problems, extra = {}, kind = 'transitionProblems') => parseMutagenSyncList(JSON.stringify([{
+    ...base, ...extra, beta: { ...base.beta, [kind]: problems, ...extra.beta },
+  }]), base.name);
+  const capture = { path: '.project/plans/qa/lanes/live/browser-diagnostics.json', error: 'apply failed' };
+  for (const kind of ['scanProblems', 'transitionProblems']) {
+    for (const extension of ['json', 'md', 'txt', 'csv', 'html', 'svg', 'png', 'jpg', 'jpeg', 'webp', 'gif']) {
+      const problem = { ...capture, path: `.project/plans/qa/capture.${extension}` };
+      const result = inspect([problem], {}, kind);
+      assert.equal(result.state, 'ready', problem.path);
+      assert.ok(result.warnings.some(warning => warning.includes(problem.path)), problem.path);
+    }
+    for (const path of ['apps/stack/config.json',
+      ...['mjs', 'mts', 'cjs', 'js', 'ts', 'tsx', 'sh', 'ps1', 'yaml', 'yml', 'toml'].map(extension => `.project/input.${extension}`),
+      '.project/script', '.project/../source.json', '.project//capture.json', '.project/capture.json/child',
+      '.project/a|b.json', '.project/a\nb.json', '', null]) {
+      const problem = { ...capture, path };
+      for (const problems of [[problem], [capture, problem]]) {
+        assert.equal(inspect(problems, {}, kind).state, 'unhealthy', JSON.stringify(problems));
+      }
+    }
+    assert.equal(inspect([capture, { path: capture.path }], {}, kind).state, 'unhealthy');
+  }
+  assert.equal(inspect([capture], { beta: { excludedTransitionProblems: 1 } }).state, 'unhealthy');
+  assert.equal(inspect([capture], { conflicts: [{ root: '.project/data.json' }] }).state, 'unhealthy');
+  assert.equal(inspect([capture], { beta: { connected: false } }).state, 'unhealthy');
+  assert.equal(inspect([capture], { successfulCycles: 0 }).state, 'synchronizing');
+});
+
 test('Mutagen scan races recover before the first cycle but never mask unsafe scan evidence', () => {
   const race = { path: 'source.ts', error: 'hashed size mismatch: 847308 != 28672' };
   for (const cycles of [0, 7]) {

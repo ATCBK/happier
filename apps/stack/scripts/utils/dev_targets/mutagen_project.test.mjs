@@ -180,6 +180,7 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     '/.project/plans/**/*.pyc',
     '/.project/plans/**/*.log',
     '/.project/plans/**/*.trace',
+    '/.project/plans/**/browser-diagnostics.json',
     '/.project/plans/**/.DS_Store',
   ]) {
     assert.ok(rendered.includes(`- "${ignored}"`));

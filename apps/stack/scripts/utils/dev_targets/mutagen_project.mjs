@@ -180,6 +180,9 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   '/.project/plans/**/*.pyc',
   '/.project/plans/**/*.log',
   '/.project/plans/**/*.trace',
+  // Browser QA owners rewrite this diagnostics snapshot continuously; it races
+  // every remote barrier exactly like the append-only traces above.
+  '/.project/plans/**/browser-diagnostics.json',
   '/.project/plans/**/.DS_Store',
 ];
 
