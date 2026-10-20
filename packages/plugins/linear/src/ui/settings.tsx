@@ -3,7 +3,7 @@ import { Item, ItemGroup, Select, usePluginTranslation } from '@happier-dev/plug
 import { TriageSourceInstanceConfigurationV1Schema } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceSettingsSurface, type TriageSourceSettingsDraftFieldsPropsV1 } from '@happier-dev/triage-sources/ui';
 import { LINEAR_PLUGIN_ID, LINEAR_SERVICE_ID, LINEAR_PURPOSE, LINEAR_ACTIONS, LinearConfigurationSchema,
-  readLinearConfiguration, linearConfiguredTeamUnits } from '../contracts.js';
+  readLinearConfiguration, writeLinearScopeSelection } from '../contracts.js';
 
 function DraftFields({ draft, busy, onChange }: TriageSourceSettingsDraftFieldsPropsV1): React.ReactElement {
   const text = usePluginTranslation();
@@ -37,12 +37,7 @@ export const renderSurface = createTriageSourceSettingsSurface({
       try { return readLinearConfiguration(draft.configuration.token).teams; } catch { return null; }
     },
     writeSelection(draft, teams, units) {
-      try {
-        const previous = readLinearConfiguration(draft.configuration.token);
-        const configuration = LinearConfigurationSchema.parse({ ...previous, teams, teamUnits: units });
-        return { ...draft, configuration: TriageSourceInstanceConfigurationV1Schema.parse({ v: 1,
-          token: JSON.stringify({ ...configuration, teamUnits: linearConfiguredTeamUnits(configuration) }) }) };
-      } catch { return null; }
+      try { return writeLinearScopeSelection(draft, teams, units); } catch { return null; }
     },
   },
 });

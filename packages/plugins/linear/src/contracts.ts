@@ -7,7 +7,8 @@ import {
   TriageConfiguredSourceConnectedAccountInstanceV1Schema, TriageSourceEntryLocalRefV1Schema,
   TriageEntryLocatorV1Schema,
   TriageSourceScopeSelectionV1Schema, TriageSourceScopeUnitV1Schema,
-  type TriageSourceScopeUnitV1,
+  TriageSourceInstanceConfigurationV1Schema,
+  type TriageSourceScopeUnitV1, type TriageSourceScopeSelectionV1, type TriageSourceInstanceDraftV1,
 } from '@happier-dev/triage-protocol/v1';
 
 export const LINEAR_PLUGIN_ID = 'happier.linear';
@@ -76,6 +77,13 @@ export function linearConfiguredTeamUnits(configuration: LinearConfiguration): T
     // Teams do not own distinct entry collision scopes. Retained labels are presentation only.
     return { id, label: unit?.label ?? id, ...(unit?.secondaryText === undefined ? {} : { secondaryText: unit.secondaryText }) };
   });
+}
+export function writeLinearScopeSelection(draft: TriageSourceInstanceDraftV1, teams: TriageSourceScopeSelectionV1,
+  units: readonly TriageSourceScopeUnitV1[]): TriageSourceInstanceDraftV1 {
+  const previous = readLinearConfiguration(draft.configuration.token);
+  const configuration = LinearConfigurationSchema.parse({ ...previous, teams, teamUnits: units });
+  return { ...draft, configuration: TriageSourceInstanceConfigurationV1Schema.parse({ v: 1,
+    token: JSON.stringify({ ...configuration, teamUnits: linearConfiguredTeamUnits(configuration) }) }) };
 }
 export const LinearTeamCursorSchema = defineProtocolObject({
   v: defineProtocolLiteral(1), after: id, query: text,

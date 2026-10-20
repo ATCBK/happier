@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { getLinearEntry, listLinearInstances, listLinearScopeUnits, scanLinearSource, readLinearDetail } from './source.js';
 
 import { account, instance, localRef, issue, page, host } from './fixtures.test-support.js';
+import { writeLinearScopeSelection } from './contracts.js';
 
 const workspaceInstance = (teams: unknown) => ({ ...instance, localInstanceKey: 'linear',
   configuration: { v: 1 as const, token: JSON.stringify({ v: 1, teams, involvement: 'everyone' }) } });
@@ -97,6 +98,21 @@ describe('Linear source through provider HTTP', () => {
     expect(await listLinearScopeUnits({ v: 1, mode: 'configured', draft: {
       v: 1, binding: instance.binding, localInstanceKey: instance.localInstanceKey, configuration: instance.configuration,
     } }, h.context)).toMatchObject({ kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['team-1'] }, units: [{ id: 'team-1' }] });
+  });
+
+  it('writes the shared selection through the Linear codec while retaining identity and involvement', async () => {
+    const previous = { v: 1 as const, binding: instance.binding, localInstanceKey: instance.localInstanceKey,
+      configuration: instance.configuration, keyStability: 'stable' as const, locator: { v: 1 as const, displayLabel: 'Engineering' } };
+    const draft = writeLinearScopeSelection(previous, { kind: 'selected', unitIds: ['team-2'] },
+      [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS', collisionScope: 'incorrect-team-identity' }]);
+    expect(draft.localInstanceKey).toBe(previous.localInstanceKey);
+    expect(draft.binding).toEqual(previous.binding);
+    expect(JSON.parse(draft.configuration.token)).toEqual({ v: 1, involvement: 'mine', teams: { kind: 'selected', unitIds: ['team-2'] },
+      teamUnits: [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS' }] });
+    const h = host(() => { throw new Error('Configured projection must not call Linear'); });
+    expect(await listLinearScopeUnits({ v: 1, draft, mode: 'configured' }, h.context)).toEqual({ kind: 'page', status: 'complete',
+      selection: { kind: 'selected', unitIds: ['team-2'] }, units: [{ id: 'team-2', label: 'Operations', secondaryText: 'OPS' }] });
+    expect(h.materializeListedAccount).not.toHaveBeenCalled();
   });
 
   it('refuses empty, duplicate and unknown selections before provider authorization', async () => {
