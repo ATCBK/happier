@@ -10,10 +10,15 @@ import { rehydratePluginContributionPointSemanticsV1 } from '@happier-dev/protoc
 import type { JsonValue, PluginActionSurfaceV2, PreparedPluginJsonSchema, RehydratedPluginContributionPointOperationV1, RehydratedPluginContributionPointSemanticsV1, RehydratedPluginContributionPointSurfaceV1 } from '@happier-dev/protocol';
 import { PLUGIN_UI_TARGETED_CONTRIBUTIONS_MAX_V1 } from '@happier-dev/protocol/plugins/ui/targetedContributions';
 
-export type TargetedContributionPointDeclaration = Readonly<{ pluginId: string; definition: PluginContributionPointV1 }>;
-export type TargetedContributionDeclaration = Readonly<{ pluginId: string; definition: PluginTargetedContributionV1 }>;
+type TargetedOperationSource = Readonly<{ occurrenceId: string; localId: string; unavailable?: true }>;
+export type TargetedContributionPointDeclaration = Readonly<{ pluginId: string; definition: PluginContributionPointV1; occurrenceId?: string }>;
+export type TargetedContributionDeclaration = Readonly<{
+    pluginId: string; definition: PluginTargetedContributionV1; occurrenceId?: string;
+    operationSourcesByRole?: Readonly<Record<string, TargetedOperationSource>>;
+}>;
 export type TargetedContributionActionDeclaration = Readonly<{
     pluginId?: string;
+    occurrenceId?: string;
     definition: Readonly<{
         id: string;
         inputSchema?: unknown;
@@ -26,6 +31,7 @@ export type TargetedContributionActionDeclaration = Readonly<{
 }>;
 export type TargetedContributionRendererDeclaration = Readonly<{
     pluginId: string;
+    occurrenceId?: string;
     identity: PluginContributionIdentityV1;
     definition: Readonly<{ id: string }>;
 }>;
@@ -49,15 +55,15 @@ export type TargetedContributionManifestDeclaration = Readonly<{
     }>;
     occurrenceId: string;
     sourceCustody: PluginSourceCustodyV1;
+    /** Host-selected physical role sources, never authored manifest data. */
+    operationSourcesByContributionId?: Readonly<Record<string, Readonly<Record<string, TargetedOperationSource>>>>;
 }>;
 
 function readBoundTargetedActionPlacement(
     row: TargetedContributionManifestDeclaration,
-    targetPluginId: string,
+    contribution: PluginTargetedContributionV1,
 ): 'account' | 'machine' | 'mixed' | 'none' {
-    const actionIds = new Set(row.manifest.contributes.targetedPluginContributions
-        .filter((entry) => entry.target.pluginId === targetPluginId)
-        .flatMap((entry) => Object.values(entry.operations)));
+    const actionIds = new Set(Object.values(contribution.operations));
     let account = false;
     let machine = false;
     for (const action of row.manifest.contributes.actions) {
@@ -75,33 +81,81 @@ export function mergeTargetedContributionManifestDeclarations(params: Readonly<{
     machineDeclarations: readonly TargetedContributionManifestDeclaration[];
 }>): readonly TargetedContributionManifestDeclaration[] {
     const machineRows = new Map(params.machineDeclarations.map((row) => [row.manifest.id, row]));
-    const rows = new Map(params.accountDeclarations.map((row) => {
-        if (row.manifest.id === params.targetPluginId) return [row.manifest.id, row] as const;
-        const placement = readBoundTargetedActionPlacement(row, params.targetPluginId);
-        if (placement === 'mixed') {
-            // The existing admission ABI binds one occurrence per plugin. Do
-            // not fabricate a cross-release identity for mixed placements;
-            // omit only this unsupported source slice, not its personal peers.
-            return [row.manifest.id, { ...row, manifest: { ...row.manifest, contributes: {
-                ...row.manifest.contributes,
-                targetedPluginContributions: row.manifest.contributes.targetedPluginContributions
-                    .filter((entry) => entry.target.pluginId !== params.targetPluginId),
-            } } }] as const;
+    const accountIds = new Set(params.accountDeclarations.map((row) => row.manifest.id));
+    const machineContributions = new Map<string, Map<string, PluginTargetedContributionV1>>();
+    const usedMachineRows = new Set<string>();
+    const rows: TargetedContributionManifestDeclaration[] = [];
+    for (const row of params.accountDeclarations) {
+        const machine = machineRows.get(row.manifest.id);
+        const retained: PluginTargetedContributionV1[] = [];
+        const sources: Record<string, Record<string, TargetedOperationSource>> = {};
+        for (const contribution of row.manifest.contributes.targetedPluginContributions) {
+            if (contribution.target.pluginId !== params.targetPluginId || !machine) {
+                // Descriptive Machine-only declarations survive without a
+                // selected Machine; the Action dispatcher owns Machine-required.
+                retained.push(contribution);
+                continue;
+            }
+            const current = machine.manifest.contributes.targetedPluginContributions.find((entry) => (
+                entry.id === contribution.id && entry.target.pluginId === contribution.target.pluginId
+                && entry.target.pointId === contribution.target.pointId
+                && entry.protocol.id === contribution.protocol.id && entry.protocol.version === contribution.protocol.version
+            ));
+            const roleSources: Record<string, TargetedOperationSource> = {};
+            for (const [role, localId] of Object.entries(contribution.operations)) {
+                const action = row.manifest.contributes.actions.find((entry) => entry.id === localId);
+                if (!action || action.execution.target === 'account') continue;
+                const currentLocalId = current?.operations[role];
+                const currentAction = machine.manifest.contributes.actions.find((entry) => entry.id === currentLocalId);
+                roleSources[role] = currentAction && currentAction.execution.target !== 'account'
+                    ? { occurrenceId: machine.occurrenceId, localId: currentAction.id }
+                    : { occurrenceId: row.occurrenceId, localId, unavailable: true };
+            }
+            if (current && readBoundTargetedActionPlacement(row, contribution) === 'machine'
+                && readBoundTargetedActionPlacement(machine, current) === 'machine'
+                && Object.values(roleSources).every((source) => !source.unavailable)) {
+                const selected = machineContributions.get(row.manifest.id) ?? new Map();
+                selected.set(current.id, current);
+                machineContributions.set(row.manifest.id, selected);
+                usedMachineRows.add(row.manifest.id);
+                continue;
+            }
+            retained.push(contribution);
+            if (Object.keys(roleSources).length > 0) {
+                sources[contribution.id] = roleSources;
+                if (Object.values(roleSources).some((source) => source.occurrenceId === machine.occurrenceId)) usedMachineRows.add(row.manifest.id);
+            }
         }
-        const machineRow = machineRows.get(row.manifest.id);
-        // Without an actual Machine source, retain the selected declaration
-        // descriptively; the existing Action dispatcher reports Machine-required.
-        return [row.manifest.id, placement === 'machine' && machineRow
-            && readBoundTargetedActionPlacement(machineRow, params.targetPluginId) === 'machine'
-            ? machineRow : row] as const;
-    }));
-    for (const row of params.machineDeclarations) {
-        if (!rows.has(row.manifest.id) && row.manifest.id !== params.targetPluginId
-            && readBoundTargetedActionPlacement(row, params.targetPluginId) === 'machine') {
-            rows.set(row.manifest.id, row);
+        if (retained.length > 0 || row.manifest.id === params.targetPluginId
+            || row.manifest.contributes.pluginContributionPoints.length > 0
+            || row.manifest.contributes.targetedPluginContributions.length === 0) {
+            rows.push(retained.length === row.manifest.contributes.targetedPluginContributions.length && Object.keys(sources).length === 0
+                ? row : { ...row, manifest: { ...row.manifest, contributes: { ...row.manifest.contributes,
+                    targetedPluginContributions: retained,
+                } }, ...(Object.keys(sources).length === 0 ? {} : { operationSourcesByContributionId: sources }) });
         }
     }
-    return [...rows.values()];
+    for (const machine of params.machineDeclarations) {
+        const selected = machineContributions.get(machine.manifest.id);
+        const contributions = accountIds.has(machine.manifest.id) ? [...(selected?.values() ?? [])]
+            : machine.manifest.contributes.targetedPluginContributions.filter((entry) => entry.target.pluginId === params.targetPluginId);
+        if (contributions.length === 0 && !usedMachineRows.has(machine.manifest.id)) continue;
+        const sources: Record<string, Record<string, TargetedOperationSource>> = {};
+        if (!accountIds.has(machine.manifest.id)) {
+            for (const contribution of contributions) {
+                const roleSources: Record<string, TargetedOperationSource> = {};
+                for (const [role, localId] of Object.entries(contribution.operations)) {
+                    if (machine.manifest.contributes.actions.find((action) => action.id === localId)?.execution.target !== 'account') continue;
+                    roleSources[role] = { occurrenceId: machine.occurrenceId, localId, unavailable: true };
+                }
+                if (Object.keys(roleSources).length > 0) sources[contribution.id] = roleSources;
+            }
+        }
+        rows.push({ ...machine, manifest: { ...machine.manifest, contributes: { ...machine.manifest.contributes,
+            pluginContributionPoints: [], targetedPluginContributions: contributions,
+        } }, ...(Object.keys(sources).length === 0 ? {} : { operationSourcesByContributionId: sources }) });
+    }
+    return rows;
 }
 
 /** The canonical targeted-admission projection of a normalized Action declaration. */
@@ -127,21 +181,26 @@ export function projectTargetedContributionActionDefinition(definition: PluginAc
 /** Projects already-admitted manifests into the existing cold admission owner without retaining a catalog. */
 export function resolveManifestTargetedContributions(declarations: readonly TargetedContributionManifestDeclaration[]): TargetedContributionAdmissionResult {
     return resolveAdmittedTargetedContributions({
-        pluginContributionPoints: declarations.flatMap(({ manifest }) => (
-            manifest.contributes.pluginContributionPoints.map((definition) => ({ pluginId: manifest.id, definition }))
+        pluginContributionPoints: declarations.flatMap(({ manifest, occurrenceId }) => (
+            manifest.contributes.pluginContributionPoints.map((definition) => ({ pluginId: manifest.id, definition, occurrenceId }))
         )),
-        targetedPluginContributions: declarations.flatMap(({ manifest }) => (
-            manifest.contributes.targetedPluginContributions.map((definition) => ({ pluginId: manifest.id, definition }))
+        targetedPluginContributions: declarations.flatMap(({ manifest, occurrenceId, operationSourcesByContributionId }) => (
+            manifest.contributes.targetedPluginContributions.map((definition) => ({ pluginId: manifest.id, definition, occurrenceId,
+                ...(operationSourcesByContributionId && Object.hasOwn(operationSourcesByContributionId, definition.id)
+                    ? { operationSourcesByRole: operationSourcesByContributionId[definition.id] } : {}),
+            }))
         )),
-        actions: declarations.flatMap(({ manifest }) => (
+        actions: declarations.flatMap(({ manifest, occurrenceId }) => (
             manifest.contributes.actions.map((definition) => ({
                 pluginId: manifest.id,
+                occurrenceId,
                 definition: projectTargetedContributionActionDefinition(definition),
             }))
         )),
-        uiRenderersV2: declarations.flatMap(({ manifest }) => (
+        uiRenderersV2: declarations.flatMap(({ manifest, occurrenceId }) => (
             manifest.contributes.ui.renderers.map((definition) => ({
                 pluginId: manifest.id,
+                occurrenceId,
                 identity: createPluginContributionIdentity({ pluginId: manifest.id, localId: definition.id }),
                 definition,
             }))
@@ -247,6 +306,14 @@ function admittedSnapshotKey(
 
 function actionKey(pluginId: string, localId: string): string {
     return buildQualifiedPluginContributionKey(createPluginContributionIdentity({ pluginId, localId }));
+}
+
+function occurrenceKey(pluginId: string, occurrenceId: string): string {
+    return `${pluginId}\u0000${occurrenceId}`;
+}
+
+function scopedActionKey(pluginId: string, localId: string, occurrenceId: string): string {
+    return `${actionKey(pluginId, localId)}\u0000${occurrenceId}`;
 }
 
 function candidateSortKey(candidate: Candidate): string {
@@ -511,7 +578,7 @@ export function resolveAdmittedTargetedContributions<TRenderer extends TargetedC
     for (const declaration of [...params.pluginContributionPoints].sort((left, right) => (
         snapshotKey(left.pluginId, left.definition.id).localeCompare(snapshotKey(right.pluginId, right.definition.id))
     ))) {
-        const occurrenceId = params.occurrenceIdsByPluginId[declaration.pluginId];
+        const occurrenceId = declaration.occurrenceId ?? params.occurrenceIdsByPluginId[declaration.pluginId];
         if (!occurrenceId) continue;
         const key = snapshotKey(declaration.pluginId, declaration.definition.id);
         if (!pointsByKey.has(key)) {
@@ -523,13 +590,17 @@ export function resolveAdmittedTargetedContributions<TRenderer extends TargetedC
     const actionsByQualifiedId = new Map<string, TargetedContributionActionDeclaration>();
     for (const action of params.actions) {
         if (!action.pluginId) continue;
-        const key = actionKey(action.pluginId, action.definition.id);
+        const key = scopedActionKey(action.pluginId, action.definition.id,
+            action.occurrenceId ?? params.occurrenceIdsByPluginId[action.pluginId] ?? '');
         if (!actionsByQualifiedId.has(key)) actionsByQualifiedId.set(key, action);
     }
-    const renderersByQualifiedId = new Map<string, TRenderer>();
+    const renderersByOccurrence = new Map<string, Map<string, TRenderer>>();
     for (const renderer of params.uiRenderersV2) {
+        const source = occurrenceKey(renderer.pluginId, renderer.occurrenceId ?? params.occurrenceIdsByPluginId[renderer.pluginId] ?? '');
+        const renderersByQualifiedId = renderersByOccurrence.get(source) ?? new Map<string, TRenderer>();
         const key = buildPluginUiRendererContributionKey(renderer.pluginId, renderer.definition.id);
         if (!renderersByQualifiedId.has(key)) renderersByQualifiedId.set(key, renderer);
+        renderersByOccurrence.set(source, renderersByQualifiedId);
     }
 
     const candidates: Candidate[] = [];
@@ -562,7 +633,7 @@ export function resolveAdmittedTargetedContributions<TRenderer extends TargetedC
             );
             continue;
         }
-        const contributorOccurrenceId = params.occurrenceIdsByPluginId[declaration.pluginId];
+        const contributorOccurrenceId = declaration.occurrenceId ?? params.occurrenceIdsByPluginId[declaration.pluginId];
         if (!contributorOccurrenceId) {
             oneDiagnostic(diagnostics, declaration, 'contributor_retired');
             continue;
@@ -701,7 +772,8 @@ export function resolveAdmittedTargetedContributions<TRenderer extends TargetedC
         }
         const knownRoles = Object.keys(pointProtocol.operations).sort();
         const requiredRole = knownRoles.find((role) => (
-            pointProtocol.operations[role]!.required && definition.operations[role] === undefined
+            pointProtocol.operations[role]!.required
+                && (!Object.hasOwn(definition.operations, role) || definition.operations[role] === undefined)
         ));
         if (requiredRole !== undefined) {
             oneDiagnostic(diagnostics, candidate.declaration, 'required_operation_missing');
@@ -723,8 +795,21 @@ export function resolveAdmittedTargetedContributions<TRenderer extends TargetedC
         let failure: TargetedContributionAdmissionDiagnosticCode | undefined;
         const operations: PendingAdmittedTargetedContributionOperation[] = [];
         for (const role of Object.keys(definition.operations).sort()) {
-            const localId = definition.operations[role]!;
-            const action = actionsByQualifiedId.get(actionKey(candidate.declaration.pluginId, localId));
+            const roleSources = candidate.declaration.operationSourcesByRole;
+            const source = roleSources && Object.hasOwn(roleSources, role) ? roleSources[role] : undefined;
+            const localId = source?.localId ?? definition.operations[role]!;
+            const roleContributor = source ? Object.freeze({ ...contributor, occurrenceId: source.occurrenceId }) : contributor;
+            const action = actionsByQualifiedId.get(scopedActionKey(candidate.declaration.pluginId, localId, roleContributor.occurrenceId));
+            const requirement = Object.hasOwn(pointProtocol.operations, role) ? pointProtocol.operations[role] : undefined;
+            if (source && (source.unavailable || !action || !hasUsableSchema(action)
+                || (requirement && (!hasRequiredActionSurfaces(action, requirement.action.surfaces)
+                    || action.definition.dangerLevel !== requirement.action.dangerLevel)))) {
+                if (requirement) operations.push(Object.freeze({ role,
+                    action: Object.freeze({ pluginId: candidate.declaration.pluginId, localId }),
+                    contributor: roleContributor, selectedActionInput: Object.freeze({ kind: 'none' as const }), unavailable: true,
+                }));
+                continue;
+            }
             if (!action) {
                 failure = 'action_not_found';
                 break;
@@ -736,7 +821,6 @@ export function resolveAdmittedTargetedContributions<TRenderer extends TargetedC
             // An additive role from a newer contributor has no authority on
             // an older target, but its reference still belongs to the
             // contributor's structurally admitted declaration.
-            const requirement = pointProtocol.operations[role];
             if (!requirement) continue;
             if (!hasRequiredActionSurfaces(action, requirement.action.surfaces)) {
                 failure = 'action_surface_mismatch';
@@ -749,7 +833,7 @@ export function resolveAdmittedTargetedContributions<TRenderer extends TargetedC
             operations.push(Object.freeze({
                 role,
                 action: Object.freeze({ pluginId: candidate.declaration.pluginId, localId }),
-                contributor,
+                contributor: roleContributor,
                 selectedActionInput: selectedActionInputForAction(action),
             }));
         }
@@ -760,7 +844,8 @@ export function resolveAdmittedTargetedContributions<TRenderer extends TargetedC
                 const chain = resolvePluginUiRendererChain({
                     binding,
                     contributorPluginId: candidate.declaration.pluginId,
-                    renderersByQualifiedId,
+                    renderersByQualifiedId: renderersByOccurrence.get(occurrenceKey(candidate.declaration.pluginId, candidate.contributorOccurrenceId))
+                        ?? new Map<string, TRenderer>(),
                 });
                 if (!chain.ok) {
                     failure = chain.code;

@@ -1,6 +1,6 @@
 /** @moduleRealm any */
 import type { JsonValue, PluginContributionRef } from '../../identity.js';
-import { pluginSourceCustodyV1Equal, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { normalizePluginSourceCustodyV1, pluginSourceCustodyV1Equal, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginError } from '../../errors.js';
 import type { AdmittedTargetedOperationExecutionHandle, AdmittedTargetedOperationIdentity } from '../../actions/admittedTargetedOperation.js';
 import type { PluginUiTargetedContributionOperationV1 } from '@happier-dev/protocol/plugins/ui';
@@ -26,6 +26,7 @@ export type AdmittedTargetedOperationExecutionBinding = Readonly<{
     /** Exact process-local target occurrence that admitted this operation. */
     targetOccurrenceId: string;
     targetSourceCustody?: PluginSourceCustodyV1;
+    unavailable?: true;
     /** Exact Action-definition selection fact, never carrier supplied. */
     selectedActionInput: AdmittedTargetedOperationSelectedActionInput;
     /** Exact target parser pair, retained only through this original handle. */
@@ -59,6 +60,7 @@ export function createAdmittedTargetedOperationExecutionHandle<
     /** Exact target occurrence from the admitted snapshot, never public handle data. */
     targetOccurrenceId: string;
     targetSourceCustody?: PluginSourceCustodyV1;
+    unavailable?: true;
     /** Host-private fact derived from the exact admitted Action definition. */
     selectedActionInput?: AdmittedTargetedOperationSelectedActionInput;
     /** Exact target parser pair selected by cold targeted-contribution admission. */
@@ -77,7 +79,7 @@ export function createAdmittedTargetedOperationExecutionHandle<
             pluginId: params.identity.contributor.pluginId,
             contributionId: params.identity.contributor.contributionId,
             occurrenceId: params.identity.contributor.occurrenceId,
-            sourceCustody: params.identity.contributor.sourceCustody,
+            sourceCustody: normalizePluginSourceCustodyV1(params.identity.contributor.sourceCustody),
         }),
         role: params.identity.role,
     });
@@ -120,7 +122,8 @@ export function createAdmittedTargetedOperationExecutionHandle<
             operation,
             targetPluginId: identity.target.pluginId,
             targetOccurrenceId: params.targetOccurrenceId,
-            ...(params.targetSourceCustody === undefined ? {} : { targetSourceCustody: params.targetSourceCustody }),
+            ...(params.targetSourceCustody === undefined ? {} : { targetSourceCustody: normalizePluginSourceCustodyV1(params.targetSourceCustody) }),
+            ...(params.unavailable ? { unavailable: true } : {}),
             selectedActionInput: freezeSelectedActionInput(params.selectedActionInput),
             targetProtocol: params.targetProtocol,
         }),
@@ -156,8 +159,8 @@ export function requireAdmittedTargetedOperationExecutionBinding(
         });
     }
     if (currentDeclarations !== undefined) {
-        const currentTarget = currentDeclarations.find((row) => row.manifest.id === binding.targetPluginId);
-        const currentContributor = currentDeclarations.find((row) => row.manifest.id === binding.action.pluginId);
+        const currentTarget = currentDeclarations.find((row) => row.manifest.id === binding.targetPluginId && row.occurrenceId === binding.targetOccurrenceId);
+        const currentContributor = currentDeclarations.find((row) => row.manifest.id === binding.action.pluginId && row.occurrenceId === binding.contributorOccurrenceId);
         if (!currentTarget || !currentContributor
             || currentTarget.occurrenceId !== binding.targetOccurrenceId
             || currentContributor.occurrenceId !== binding.contributorOccurrenceId
@@ -177,15 +180,24 @@ export function requireAdmittedTargetedOperationExecutionBinding(
         const contribution = snapshot?.contributions.find((candidate) => (
             candidate.contributor.pluginId === binding.operation.contributor.pluginId
             && candidate.contributor.contributionId === binding.operation.contributor.contributionId
-            && candidate.contributor.occurrenceId === binding.contributorOccurrenceId
         ));
-        if (!contribution?.operations.some((candidate) => (
+        const currentOperation = contribution?.operations.find((candidate) => (
             candidate.role === binding.operation.role
             && candidate.action.pluginId === binding.action.pluginId
             && candidate.action.localId === binding.action.localId
-        ))) throw invalidAdmittedTargetedOperationHandle();
+            && candidate.contributor.occurrenceId === binding.contributorOccurrenceId
+        ));
+        if (!currentOperation) throw invalidAdmittedTargetedOperationHandle();
+        if (currentOperation.unavailable) throw targetedOperationUnavailable();
     }
+    if (binding.unavailable) throw targetedOperationUnavailable();
     return binding;
+}
+
+function targetedOperationUnavailable(): PluginError {
+    return createPluginActionHandlerNotStartedError({ code: 'plugin_targeted_contributions_unavailable',
+        message: 'The current source cannot execute this declared targeted operation',
+    });
 }
 
 function invalidAdmittedTargetedOperationHandle(): PluginError {

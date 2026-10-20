@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 
 import { definePlugin } from '../../definePlugin.js';
 import { ingestPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest';
-import { AccountReleasePluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { AccountReleasePluginSourceCustodyV1Schema, DevelopmentPluginSourceCustodyV1Schema, normalizePluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { defineContributionProtocol } from '../../targetedContributionAuthoring.js';
+import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { defineProtocolLiteral, defineProtocolObject, defineProtocolString } from '../../protocol/protocolFacade.js';
+import { selectCurrentTargetedContribution } from '../../services/targetedContributions.js';
+import { QualifiedConnectedAccountRefSchema } from '../../connected-accounts/index.js';
+import { PluginUiSelectedActionInputCarrierV1Schema } from '@happier-dev/protocol/plugins/ui/selectedActionInput';
 import {
     createManifestTargetedContributionsService,
     mergeTargetedContributionManifestDeclarations,
+    projectTargetedContributionActionDefinition,
+    resolveAdmittedTargetedContributions,
     requireAdmittedTargetedOperationExecutionBinding,
+    resolveAdmittedTargetedOperationInput,
     validateTargetedOperationInput,
     validateTargetedOperationResult,
     type TargetedContributionManifestDeclaration,
@@ -22,6 +29,18 @@ const protocol = defineContributionProtocol({
     operations: {
         inspect: {
             required: true,
+            input: { kind: 'protocolDefined', schema: inputSchema },
+            resultSchema,
+            action: { surfaces: ['plugin'], dangerLevel: 'safe' },
+        },
+        scan: {
+            required: false,
+            input: { kind: 'protocolDefined', schema: inputSchema },
+            resultSchema,
+            action: { surfaces: ['plugin'], dangerLevel: 'safe' },
+        },
+        call: {
+            required: false,
             input: { kind: 'protocolDefined', schema: inputSchema },
             resultSchema,
             action: { surfaces: ['plugin'], dangerLevel: 'safe' },
@@ -73,8 +92,7 @@ function rows() {
     });
 }
 
-async function admittedOperation() {
-    const declarations = rows();
+async function admittedOperation(declarations: readonly TargetedContributionManifestDeclaration[] = rows()) {
     const controller = new AbortController();
     const service = createManifestTargetedContributionsService({
         readCurrentDeclarations: () => declarations,
@@ -85,13 +103,336 @@ async function admittedOperation() {
         const snapshot = await observation.readCurrent();
         const contribution = snapshot.contributions[0];
         if (!contribution) throw new Error('Expected separately authored source to be admitted');
-        return { declarations, operation: contribution.operations.inspect };
+        return { declarations, operation: contribution.operations.inspect, targetSourceCustody: snapshot.sourceCustody,
+            contributorSourceCustody: contribution.contributor.sourceCustody };
     } finally {
         observation.dispose();
     }
 }
 
+async function readContributions(declarations: readonly TargetedContributionManifestDeclaration[]) {
+    const service = createManifestTargetedContributionsService({
+        readCurrentDeclarations: () => declarations, subscribeToCatalogChanges: () => () => {},
+    }).bind({ pluginId: target.manifest.id, signal: new AbortController().signal, isCurrent: () => true });
+    const observation = service.observeForSelf(target.contributionPoints.sources, { onInvalidated() {} });
+    try { return (await observation.readCurrent()).contributions; }
+    finally { observation.dispose(); }
+}
+
+function mixedRoleRows() {
+    const declarations = rows();
+    const selected = declarations[1]!;
+    const account: TargetedContributionManifestDeclaration = {
+        ...selected,
+        manifest: { ...selected.manifest, contributes: { ...selected.manifest.contributes,
+            actions: [...selected.manifest.contributes.actions,
+                { ...selected.manifest.contributes.actions[0]!, id: 'machine-inspect', execution: { target: 'daemon' } }],
+            targetedPluginContributions: selected.manifest.contributes.targetedPluginContributions.map((entry) => ({
+                ...entry, operations: { inspect: 'inspect', scan: 'machine-inspect' },
+            })),
+        } },
+    };
+    const machine: TargetedContributionManifestDeclaration = {
+        ...account, occurrenceId: 'actual-machine-source',
+        sourceCustody: DevelopmentPluginSourceCustodyV1Schema.parse({ kind: 'development', registeredRootId: 'actual-machine-root' }),
+        manifest: { ...account.manifest, contributes: { ...account.manifest.contributes,
+            pluginContributionPoints: [],
+            actions: account.manifest.contributes.actions.map((action) => action.id === 'machine-inspect'
+                ? { ...action, id: 'machine-inspect-current' } : action),
+            targetedPluginContributions: account.manifest.contributes.targetedPluginContributions.map((entry) => ({
+                ...entry, operations: { inspect: 'inspect', scan: 'machine-inspect-current' },
+            })),
+        } },
+    };
+    return { targetRow: declarations[0]!, account, machine };
+}
+
 describe('portable targeted contribution admission', () => {
+    it('does not disclose an old selected Account to a new source custody with the same operation occurrence', async () => {
+        const providerInput = defineProtocolObject({ id: defineProtocolString(), account: QualifiedConnectedAccountRefSchema }, { policy: 'closed' });
+        const credentialProtocol = defineContributionProtocol({ id: 'credential-source', version: 1, operations: {
+            inspect: { required: true, input: { kind: 'contributorDefined' }, resultSchema,
+                action: { surfaces: ['plugin'], dangerLevel: 'safe' } },
+        } });
+        const credentialTarget = definePlugin({ id: 'external.credential-target', version: '1.0.0',
+            contributionPoints: { sources: credentialProtocol.point() },
+        });
+        const credentialSource = definePlugin({ id: 'external.credential-source', version: '1.0.0', actions: {
+            inspect: { title: 'Inspect', surfaces: ['plugin'], dangerLevel: 'safe', inputSchema: providerInput, resultSchema,
+                inputHints: { fields: [{ path: 'account', title: 'Account', widget: 'select', connectedAccountOptions: true }] },
+                execution: { target: 'account', account: { artifactId: 'credential-source', exportName: 'activateAccount' } },
+                run: async () => ({ accepted: true as const }),
+            },
+        }, contributesTo: { [credentialTarget.manifest.id]: { sources: {
+            source: credentialProtocol.contribute({ operations: { inspect: credentialProtocol.operations.inspect.bind('inspect') } }),
+        } } } });
+        let declarations: readonly TargetedContributionManifestDeclaration[] = [credentialTarget, credentialSource].map(plugin => {
+            const parsed = ingestPluginManifestV2(plugin.manifest);
+            if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+            return { manifest: parsed.manifest, occurrenceId: `${plugin.manifest.id}:current`,
+                sourceCustody: AccountReleasePluginSourceCustodyV1Schema.parse({ kind: 'account_release',
+                    pluginId: plugin.manifest.id, version: plugin.manifest.version, archiveDigestSha256: `sha256:${'a'.repeat(64)}` }),
+            };
+        });
+        const signal = new AbortController().signal;
+        const observation = createManifestTargetedContributionsService({ readCurrentDeclarations: () => declarations,
+            subscribeToCatalogChanges: () => () => {},
+        }).bind({ pluginId: credentialTarget.manifest.id, signal, isCurrent: () => true })
+            .observeForSelf(credentialTarget.contributionPoints.sources, { onInvalidated() {} });
+        const account = QualifiedConnectedAccountRefSchema.parse({ service: { pluginId: 'external.accounts', localId: 'mailbox' }, accountId: 'account-a' });
+        const seed = { plugin: { id: credentialTarget.manifest.id }, occurrenceId: declarations[0]!.occurrenceId };
+        const input = { id: 'selected-row' };
+        try {
+            const original = (await observation.readCurrent()).contributions[0]!.operations.inspect;
+            const originalBinding = requireAdmittedTargetedOperationExecutionBinding(original, seed, declarations);
+            const carrierFor = (binding: typeof originalBinding) => PluginUiSelectedActionInputCarrierV1Schema.parse({
+                operation: binding.operation, result: { kind: 'submitted', action: binding.action, input,
+                    selection: { target: { pluginId: seed.plugin.id, sourceCustody: declarations[0]!.sourceCustody },
+                        point: binding.operation.point, contributor: { pluginId: binding.operation.contributor.pluginId,
+                            contributionId: binding.operation.contributor.contributionId, sourceCustody: binding.operation.contributor.sourceCustody } },
+                    connectedAccount: { kind: 'selected', fieldPath: 'account', ref: account },
+                    presentation: { connectedAccountLabel: 'Selected account', machineDisplayName: null },
+                },
+            });
+            const retained = carrierFor(originalBinding);
+            declarations = declarations.map((row, index) => index === 1 ? { ...row, sourceCustody:
+                AccountReleasePluginSourceCustodyV1Schema.parse({ kind: 'account_release', pluginId: credentialSource.manifest.id,
+                    version: credentialSource.manifest.version, archiveDigestSha256: `sha256:${'b'.repeat(64)}` }),
+            } : row);
+            const current = (await observation.readCurrent()).contributions[0]!.operations.inspect;
+            const binding = requireAdmittedTargetedOperationExecutionBinding(current, seed, declarations);
+            const reconstruct = (carrier: typeof retained) => resolveAdmittedTargetedOperationInput({
+                seed: { plugin: seed.plugin, sourceCustody: declarations[0]!.sourceCustody,
+                    selectedActionInputCarrier: carrier,
+                    // The mounted target remains current at the external UI boundary.
+                    isMountedCallerCurrent: async () => true,
+                },
+                assertCurrent() { requireAdmittedTargetedOperationExecutionBinding(current, seed, declarations); },
+                binding, input, expectedSelectedConnectedAccountRef: account, selectedActionInputClaimed: { current: false }, signal,
+            });
+            expect(providerInput.parse(await reconstruct(carrierFor(binding))).account).toEqual(account);
+            await expect(reconstruct(retained)).rejects.toMatchObject({
+                code: 'plugin_selected_action_input_invalid', actionHandlerInvocation: 'notStarted',
+            });
+            expect(input).toEqual({ id: 'selected-row' });
+        } finally { observation.dispose(); }
+    });
+
+    it('omits a contributor-owned constructor role unknown to the current target', async () => {
+        const declarations = rows().map((row, index) => index === 1 ? { ...row, manifest: { ...row.manifest,
+            contributes: { ...row.manifest.contributes, targetedPluginContributions: row.manifest.contributes.targetedPluginContributions
+                .map(entry => ({ ...entry, operations: { ...entry.operations, constructor: 'inspect' } })),
+            },
+        } } : row);
+        const contributions = await readContributions(declarations);
+        expect(contributions).toHaveLength(1);
+        expect(Object.keys(contributions[0]!.operations)).toEqual(['inspect']);
+    });
+
+    it('rejects a contribution missing a target-required constructor role', async () => {
+        const operation = { required: true, input: { kind: 'protocolDefined' as const, schema: inputSchema },
+            resultSchema, action: { surfaces: ['plugin'] as const, dangerLevel: 'safe' as const } };
+        const required = definePlugin({ id: target.manifest.id, version: target.manifest.version,
+            contributionPoints: { sources: defineContributionProtocol({ id: 'external-account-source', version: 1,
+                operations: { inspect: operation, constructor: operation },
+            }).point() },
+        });
+        const parsed = ingestPluginManifestV2(required.manifest);
+        if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+        const declarations = rows().map((row, index) => index === 0 ? { ...row, manifest: parsed.manifest } : row);
+        await expect(readContributions(declarations)).resolves.toEqual([]);
+    });
+
+    it('resolves a retained selection only from its requested exact current operation source', async () => {
+        const { targetRow, account, machine } = mixedRoleRows();
+        let current = mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
+            accountDeclarations: [targetRow, account], machineDeclarations: [machine],
+        });
+        const service = createManifestTargetedContributionsService({ readCurrentDeclarations: () => current,
+            subscribeToCatalogChanges: () => () => {},
+        }).bind({ pluginId: target.manifest.id, signal: new AbortController().signal, isCurrent: () => true });
+        const selection = { target: { pluginId: target.manifest.id, sourceCustody: targetRow.sourceCustody },
+            point: { pointId: 'sources', protocol: target.contributionPoints.sources.protocol },
+            contributor: { pluginId: account.manifest.id, contributionId: 'personal-source', sourceCustody: machine.sourceCustody },
+        };
+        const selected = await selectCurrentTargetedContribution({ service, point: target.contributionPoints.sources, selection, operationRole: 'scan' });
+        expect(selected.kind).toBe('selected');
+        if (selected.kind !== 'selected') throw new Error('Expected the current operation source selection');
+        expect(requireAdmittedTargetedOperationExecutionBinding(selected.contribution.operations.scan, {
+            plugin: { id: target.manifest.id }, occurrenceId: targetRow.occurrenceId,
+        }, current).contributorOccurrenceId).toBe(machine.occurrenceId);
+        await expect(selectCurrentTargetedContribution({ service, point: target.contributionPoints.sources, selection, operationRole: 'inspect' }))
+            .resolves.toEqual({ kind: 'unavailable', reason: 'contributor_unavailable' });
+        await expect(selectCurrentTargetedContribution({ service, point: target.contributionPoints.sources, selection }))
+            .resolves.toEqual({ kind: 'unavailable', reason: 'contributor_unavailable' });
+        current = mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
+            accountDeclarations: [targetRow, account], machineDeclarations: [{ ...machine, sourceCustody:
+                DevelopmentPluginSourceCustodyV1Schema.parse({ kind: 'development', registeredRootId: 'replacement-machine-root' }),
+            }],
+        });
+        await expect(selectCurrentTargetedContribution({ service, point: target.contributionPoints.sources, selection, operationRole: 'scan' }))
+            .resolves.toEqual({ kind: 'unavailable', reason: 'contributor_unavailable' });
+    });
+
+    it('keeps an independently bound Account constructor source current beside a Machine role', async () => {
+        const { targetRow, account, machine } = mixedRoleRows();
+        const selected = { ...account, manifest: { ...account.manifest, contributes: { ...account.manifest.contributes,
+            targetedPluginContributions: [...account.manifest.contributes.targetedPluginContributions, {
+                ...account.manifest.contributes.targetedPluginContributions[0]!, id: 'constructor',
+                operations: { inspect: 'inspect', call: 'inspect' },
+            }],
+        } } };
+        const current = mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
+            accountDeclarations: [targetRow, selected], machineDeclarations: [machine],
+        });
+        const contributions = await readContributions(current);
+        const independent = contributions.find(entry => entry.contributor.contributionId === 'constructor');
+        expect(independent).toBeDefined();
+        expect(requireAdmittedTargetedOperationExecutionBinding(independent!.operations.call, {
+            plugin: { id: target.manifest.id }, occurrenceId: targetRow.occurrenceId,
+        }, current).contributorOccurrenceId).toBe(account.occurrenceId);
+    });
+
+    it('retains privately issued bundled source custody when a public nested bundle identity is mutated', async () => {
+        const declarations = rows().map((row, index) => index === 1 ? { ...row, sourceCustody: {
+            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'app-bundle-a' },
+        } } : row);
+        const operation = (await readContributions(declarations))[0]!.operations.inspect;
+        const custody = operation.identity.contributor.sourceCustody;
+        if (custody.kind !== 'bundled_first_party') throw new Error('Expected the real bundled Account source shape');
+        Reflect.set(custody.packagedRuntime, 'bundleId', 'app-bundle-b');
+        const changed = declarations.map((row, index) => index === 1 ? { ...row, sourceCustody: {
+            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'app-bundle-b' },
+        } } : row);
+        expect(() => requireAdmittedTargetedOperationExecutionBinding(operation, {
+            plugin: { id: target.manifest.id }, occurrenceId: declarations[0]!.occurrenceId,
+        }, changed)).toThrowError(expect.objectContaining({ code: 'plugin_action_generation_retired' }));
+    });
+
+    it('does not expose mutable host custody state through public descriptor snapshots', async () => {
+        const declarations = rows().map(row => ({ ...row, sourceCustody: {
+            kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: row.manifest.id },
+        } }));
+        const { targetSourceCustody, contributorSourceCustody } = await admittedOperation(declarations);
+        const original = declarations.map(row => normalizePluginSourceCustodyV1(row.sourceCustody));
+        for (const custody of [targetSourceCustody, contributorSourceCustody]) {
+            if (custody.kind !== 'bundled_first_party') throw new Error('Expected the bundled host custody shape');
+            Reflect.set(custody.packagedRuntime, 'bundleId', 'replacement-bundle');
+        }
+        expect(declarations.map(row => row.sourceCustody)).toEqual(original);
+    });
+
+    it('releases an in-flight host declaration read when its observation read is cancelled', async () => {
+        const cancellation = new AbortController();
+        let startRead!: () => void;
+        const started = new Promise<void>(resolve => { startRead = resolve; });
+        let settleRead!: (value: readonly TargetedContributionManifestDeclaration[]) => void;
+        let transportReleased = false;
+        const service = createManifestTargetedContributionsService({
+            readCurrentDeclarations(signal?: AbortSignal) {
+                const read = new Promise<readonly TargetedContributionManifestDeclaration[]>(resolve => { settleRead = resolve; });
+                signal?.addEventListener('abort', () => { transportReleased = true; settleRead(rows()); }, { once: true });
+                startRead();
+                return read;
+            },
+            subscribeToCatalogChanges: () => () => {},
+        }).bind({ pluginId: target.manifest.id, signal: new AbortController().signal, isCurrent: () => true });
+        const observation = service.observeForSelf(target.contributionPoints.sources, { onInvalidated() {} });
+        const pending = observation.readCurrent({ signal: cancellation.signal });
+        try {
+            await started;
+            cancellation.abort();
+            await expect(pending).rejects.toMatchObject({ code: 'plugin_targeted_contributions_aborted' });
+            expect(transportReleased).toBe(true);
+        } finally { settleRead(rows()); observation.dispose(); }
+    });
+
+    it('selects renderer chains from each contribution occurrence rather than another release of the same plugin', () => {
+        const detailProtocol = defineContributionProtocol({ id: 'source-detail', version: 1,
+            operations: { inspect: { required: true, input: { kind: 'protocolDefined', schema: inputSchema },
+                resultSchema, action: { surfaces: ['plugin'], dangerLevel: 'safe' } } },
+            surfaces: { detail: { required: true, inputSchema, presentation: 'content' } },
+        });
+        const detailTarget = definePlugin({ id: 'external.detail-target', version: '1.0.0', contributionPoints: { sources: detailProtocol.point() } });
+        const parsed = ingestPluginManifestV2(detailTarget.manifest);
+        if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+        const pluginId = source.manifest.id;
+        const action = rows()[1]!.manifest.contributes.actions[0]!;
+        const occurrences = ['account-source', 'machine-source'];
+        const resolved = resolveAdmittedTargetedContributions({
+            pluginContributionPoints: parsed.manifest.contributes.pluginContributionPoints.map(definition => ({
+                pluginId: detailTarget.manifest.id, occurrenceId: 'account-target', definition,
+            })),
+            targetedPluginContributions: occurrences.map(occurrenceId => ({ pluginId, occurrenceId, definition: {
+                id: occurrenceId, target: { pluginId: detailTarget.manifest.id, pointId: 'sources' },
+                protocol: { id: 'source-detail', version: 1 }, operations: { inspect: action.id }, surfaces: { detail: { renderer: 'detail' } },
+            } })),
+            actions: occurrences.map(occurrenceId => ({ pluginId, occurrenceId, definition: projectTargetedContributionActionDefinition(action) })),
+            uiRenderersV2: occurrences.map(occurrenceId => ({ pluginId, occurrenceId,
+                identity: createPluginContributionIdentity({ pluginId, localId: 'detail' }),
+                definition: { id: 'detail', sourceOccurrence: occurrenceId },
+            })),
+            occurrenceIdsByPluginId: {},
+        });
+        const snapshot = resolved.read({ targetPluginId: detailTarget.manifest.id, pointId: 'sources', protocol: { id: 'source-detail', version: 1 } });
+        expect(snapshot?.contributions.map(entry => [entry.contributor.occurrenceId, entry.surfaces[0]?.rendererChain[0]?.definition.sourceOccurrence]))
+            .toEqual(occurrences.map(occurrenceId => [occurrenceId, occurrenceId]));
+    });
+
+    it('keeps Machine roles of a mixed source when no Account release of that source is selected', async () => {
+        const { targetRow, machine } = mixedRoleRows();
+        const merged = mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
+            accountDeclarations: [targetRow], machineDeclarations: [machine],
+        });
+        const contributions = await readContributions(merged);
+        expect(contributions).toHaveLength(1);
+        const seed = { plugin: { id: target.manifest.id }, occurrenceId: targetRow.occurrenceId };
+        expect(requireAdmittedTargetedOperationExecutionBinding(contributions[0]!.operations.scan, seed, merged).contributorOccurrenceId)
+            .toBe(machine.occurrenceId);
+        expect(() => requireAdmittedTargetedOperationExecutionBinding(contributions[0]!.operations.inspect, seed, merged))
+            .toThrowError(expect.objectContaining({ code: 'plugin_targeted_contributions_unavailable' }));
+    });
+
+    it('binds Account and Machine roles of the same contribution to their own exact declarations', async () => {
+        const { targetRow, account, machine } = mixedRoleRows();
+        const merged = mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
+            accountDeclarations: [targetRow, account], machineDeclarations: [machine],
+        });
+        const contributions = await readContributions(merged);
+        expect(contributions).toHaveLength(1);
+        const contribution = contributions[0]!;
+        expect(contribution.operations.inspect.identity.contributor).toMatchObject({ occurrenceId: account.occurrenceId, sourceCustody: account.sourceCustody });
+        expect(contribution.operations.scan!.identity.contributor).toMatchObject({ occurrenceId: machine.occurrenceId, sourceCustody: machine.sourceCustody });
+        const binding = requireAdmittedTargetedOperationExecutionBinding(contribution.operations.scan, {
+            plugin: { id: target.manifest.id }, occurrenceId: targetRow.occurrenceId,
+        }, merged);
+        expect(binding.action.localId).toBe('machine-inspect-current');
+        expect(() => requireAdmittedTargetedOperationExecutionBinding(contribution.operations.scan, {
+            plugin: { id: target.manifest.id }, occurrenceId: targetRow.occurrenceId,
+        }, merged.filter((row) => row.occurrenceId !== machine.occurrenceId))).toThrowError(
+            expect.objectContaining({ code: 'plugin_action_generation_retired' }),
+        );
+    });
+
+    it('keeps the Account role usable when the actual Machine no longer declares the other role', async () => {
+        const { targetRow, account, machine } = mixedRoleRows();
+        const missing = { ...machine, manifest: { ...machine.manifest, contributes: { ...machine.manifest.contributes,
+            targetedPluginContributions: machine.manifest.contributes.targetedPluginContributions.map((entry) => ({
+                ...entry, operations: { inspect: 'inspect' },
+            })),
+        } } };
+        const merged = mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
+            accountDeclarations: [targetRow, account], machineDeclarations: [missing],
+        });
+        const contributions = await readContributions(merged);
+        expect(contributions).toHaveLength(1);
+        const seed = { plugin: { id: target.manifest.id }, occurrenceId: targetRow.occurrenceId };
+        expect(requireAdmittedTargetedOperationExecutionBinding(contributions[0]!.operations.inspect, seed, merged).contributorOccurrenceId)
+            .toBe(account.occurrenceId);
+        expect(() => requireAdmittedTargetedOperationExecutionBinding(contributions[0]!.operations.scan, seed, merged))
+            .toThrowError(expect.objectContaining({ code: 'plugin_targeted_contributions_unavailable' }));
+    });
+
     it('uses exact Machine source identity only for bound Machine roles, ignoring unrelated Actions', () => {
         const declarations = rows();
         const accountSource = declarations[1]!;
@@ -119,10 +460,10 @@ describe('portable targeted contribution admission', () => {
         }).find((row) => row.manifest.id === machineOnly.manifest.id)).toBe(machineOnly);
         expect(mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
             accountDeclarations: declarations, machineDeclarations: [actualMachine],
-        }).find((row) => row.manifest.id === machineOnly.manifest.id)).toBe(actualMachine);
+        }).find((row) => row.manifest.id === machineOnly.manifest.id)).toEqual(actualMachine);
     });
 
-    it('does not hide personal sources when one plugin binds roles from incompatible placements', () => {
+    it('preserves independent Account and Machine sources declared by one plugin without a Machine', async () => {
         const declarations = rows();
         const accountSource = declarations[1]!;
         const mixed: TargetedContributionManifestDeclaration = {
@@ -137,10 +478,23 @@ describe('portable targeted contribution admission', () => {
             } },
         };
         const merged = mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
-            accountDeclarations: [...declarations, mixed], machineDeclarations: [{ ...mixed, occurrenceId: 'machine-mixed' }],
+            accountDeclarations: [...declarations, mixed], machineDeclarations: [],
         });
         expect(merged.find((row) => row.manifest.id === source.manifest.id)).toBe(accountSource);
-        expect(merged.find((row) => row.manifest.id === mixed.manifest.id)?.manifest.contributes.targetedPluginContributions).toEqual([]);
+        expect(merged.find((row) => row.manifest.id === mixed.manifest.id)?.manifest.contributes.targetedPluginContributions
+            .map((entry) => entry.id)).toEqual(mixed.manifest.contributes.targetedPluginContributions.map((entry) => entry.id));
+        const machine = { ...mixed, occurrenceId: 'machine-mixed', sourceCustody: DevelopmentPluginSourceCustodyV1Schema.parse({
+            kind: 'development', registeredRootId: 'machine-mixed-root',
+        }) };
+        const current = mergeTargetedContributionManifestDeclarations({ targetPluginId: target.manifest.id,
+            accountDeclarations: [...declarations, mixed], machineDeclarations: [machine],
+        });
+        const admitted = (await readContributions(current)).filter((entry) => entry.contributor.pluginId === mixed.manifest.id);
+        expect(admitted).toHaveLength(2);
+        expect(admitted.find((entry) => entry.contributor.contributionId === 'personal-source')?.operations.inspect.identity.contributor.occurrenceId)
+            .toBe(mixed.occurrenceId);
+        expect(admitted.find((entry) => entry.contributor.contributionId === 'machine-source')?.operations.inspect.identity.contributor.occurrenceId)
+            .toBe(machine.occurrenceId);
     });
 
     it('preserves an Account source release when a different release is also installed on the Machine', async () => {

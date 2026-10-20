@@ -227,13 +227,12 @@ export const PluginUiTargetedContributionV1Schema = lazyZodSchema(() => z.strict
     if (
       operation.contributor.pluginId !== contribution.contributor.pluginId
       || operation.contributor.contributionId !== contribution.contributor.contributionId
-      || operation.contributor.occurrenceId !== contribution.contributor.occurrenceId
       || !operation.contributor.sourceCustody
       || !contribution.contributor.sourceCustody
-      || !pluginSourceCustodyV1Equal(
+      || (operation.contributor.occurrenceId === contribution.contributor.occurrenceId && !pluginSourceCustodyV1Equal(
         operation.contributor.sourceCustody,
         contribution.contributor.sourceCustody,
-      )
+      ))
     ) {
       ctx.addIssue({
         code: "custom",
@@ -255,13 +254,12 @@ export const PluginUiTargetedContributionV1Schema = lazyZodSchema(() => z.strict
     if (
       surface.contributor.pluginId !== contribution.contributor.pluginId
       || surface.contributor.contributionId !== contribution.contributor.contributionId
-      || surface.contributor.occurrenceId !== contribution.contributor.occurrenceId
       || !surface.contributor.sourceCustody
       || !contribution.contributor.sourceCustody
-      || !pluginSourceCustodyV1Equal(
+      || (surface.contributor.occurrenceId === contribution.contributor.occurrenceId && !pluginSourceCustodyV1Equal(
         surface.contributor.sourceCustody,
         contribution.contributor.sourceCustody,
-      )
+      ))
     ) {
       ctx.addIssue({
         code: "custom",
@@ -492,7 +490,6 @@ function selectAdmittedRoleEntry<
     && sameTargetedProtocol(entry.point.protocol, selector.protocol)
     && entry.contributor.pluginId === contribution.contributor.pluginId
     && entry.contributor.contributionId === contribution.contributor.contributionId
-    && entry.contributor.occurrenceId === contribution.contributor.occurrenceId
   )));
 }
 

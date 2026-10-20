@@ -85,10 +85,15 @@ UI or CLI without a Machine. It is not implied by Account-scoped data or UI:
 ```ts
 const plugin = definePlugin({
   id: 'acme.personal', version: '1.0.0',
+  hostAccess: { required: [{
+    id: 'account-storage', capability: 'storage.account',
+    reason: 'Read personal values in this Account.', scope: { enabled: true },
+  }], optional: [] },
   actions: {
     read: {
       title: 'Read personal value', surfaces: ['ui', 'cli', 'agent', 'plugin'],
       placementBindings: [], dangerLevel: 'safe', inputSchema,
+      hostAccess: ['account-storage'],
       execution: { target: 'account', account: { artifactId: 'account-runtime', exportName: 'activate' } },
       run: async ({ key }, context) => {
         const entry = await context.services.storage.account.kv.get(key, { signal: context.signal });
@@ -102,6 +107,9 @@ export const activate = plugin.activateAccount;
 ```
 
 Export that module as `./happier-plugin-ui/account-runtime` in `package.json`.
+KV readers and writers require the declared Account storage grant. The fixture's
+pure `echo` and `source` Actions leave `hostAccess` omitted and do not use storage.
+Optional storage declarations do not grant access.
 The existing portable-artifact compiler rejects Node builtins. Account handlers
 receive Account storage, ordinary host Action execution and admitted targeted
 contributions, not Machine services or UI navigation. When several artifact/export
@@ -167,6 +175,13 @@ declarative `.node(...)` helper. Those are two authoring forms over the same
 host surface owner, not separate renderer or currentness paths. The
 [cross-plugin contribution guide](../../apps/docs/content/docs/plugins/guides/cross-plugin-contributions.mdx)
 shows both forms.
+
+In 0.3 development source, resume a host-selected operation with
+`selectCurrentTargetedContribution({ ..., operationRole: '<declared role>' })`.
+For mixed placements, the selection retains that exact role's custody, which
+can differ from the parent descriptor or another role. A replaced or missing
+selected role is unavailable; a sibling role cannot renew its authority. The
+default selector still matches the parent contributor when no role is supplied.
 
 Only a reusable feature-protocol package imports the cross-plugin constructors
 `defineContributionProtocol` and `defineContributionPoint` from

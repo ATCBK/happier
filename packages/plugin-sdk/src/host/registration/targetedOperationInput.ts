@@ -82,7 +82,11 @@ export async function resolveAdmittedTargetedOperationInput(params: Readonly<{
     }
     const carrier = parsedCarrier.data;
     const carrierMatchesBinding = pluginUiTargetedContributionOperationKey(carrier.operation)
-        === pluginUiTargetedContributionOperationKey(params.binding.operation);
+        === pluginUiTargetedContributionOperationKey(params.binding.operation)
+        && pluginSourceCustodyV1Equal(
+            carrier.operation.contributor.sourceCustody,
+            params.binding.operation.contributor.sourceCustody,
+        );
     if (!carrierMatchesBinding) {
         // Supplying an outer selected-account fact to any other handle is a
         // confused-deputy attempt, never a request to run it ordinarily.

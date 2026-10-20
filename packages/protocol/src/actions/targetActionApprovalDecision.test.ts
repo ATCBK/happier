@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1';
 import { createTargetActionApprovalDecision } from './targetActionApprovalDecision';
+import { getActionSpec } from './actionSpecs';
+import { admitTargetActionApprovalTransition } from '../approvals/targetActionApprovalRequestTransition';
 
 function accountApproval() {
   return TargetActionApprovalRequestV1Schema.parse({ v: 1, kind: 'plugin_target_action', status: 'open',
@@ -11,6 +13,32 @@ function accountApproval() {
 }
 
 describe('target Action approval decision custody', () => {
+  it.each([false, true])('settles an unclaimed approved target Action without racing execution (claim wins: %s)', async claimWins => {
+    let stored = TargetActionApprovalRequestV1Schema.parse({ ...accountApproval(), status: 'approved',
+      decision: { kind: 'approve', decidedAtMs: 2 } });
+    const decide = createTargetActionApprovalDecision({ read: async () => stored, hasLiveInvocation: () => false,
+      update: async ({ request }) => {
+        if (claimWins) stored = TargetActionApprovalRequestV1Schema.parse({ ...stored, status: 'executing' });
+        const transition = admitTargetActionApprovalTransition(stored, request);
+        if (!transition.ok) return transition;
+        stored = TargetActionApprovalRequestV1Schema.parse(request);
+        return { ok: true };
+      } });
+    const canceled = await decide({ artifactId: 'unclaimed', decision: 'cancel' });
+    if (claimWins) {
+      expect(canceled).toMatchObject({ ok: false, errorCode: 'invalid_transition' });
+      expect(stored.status).toBe('executing');
+      expect(stored.execution).toBeUndefined();
+    } else {
+      expect(canceled).toMatchObject({ ok: true, result: { status: 'failed',
+        execution: { ok: false, effectAttempted: false, errorCode: 'approval_canceled' } } });
+      expect(stored.decision).toEqual({ kind: 'approve', decidedAtMs: 2 });
+      expect(getActionSpec('approval.request.decide').outputSchema?.safeParse(canceled?.ok ? canceled.result : null).success).toBe(true);
+      expect(await decide({ artifactId: 'unclaimed', decision: 'cancel' })).toEqual(canceled);
+      expect(await decide({ artifactId: 'unclaimed', decision: 'approve' })).toEqual(canceled);
+    }
+  });
+
   it('records an Account decision when the original live invocation belongs to another process', async () => {
     let stored = accountApproval();
     const decide = createTargetActionApprovalDecision({ read: async () => stored,
@@ -28,8 +56,10 @@ describe('target Action approval decision custody', () => {
         stored = request.status === 'approved' ? TargetActionApprovalRequestV1Schema.parse({ ...request, status: 'executing' }) : request;
         return { ok: true };
       } });
-    expect(await decide({ artifactId: 'already-claimed', decision: 'approve' }))
-      .toMatchObject({ ok: true, result: { status: 'executing' } });
+    const decided = await decide({ artifactId: 'already-claimed', decision: 'approve' });
+    expect(decided).toMatchObject({ ok: true, result: { status: 'executing' } });
+    if (!decided?.ok) throw new Error('Missing approval decision');
+    expect(getActionSpec('approval.request.decide').outputSchema?.safeParse(decided.result).success).toBe(true);
     expect(stored.status).toBe('executing');
   });
 });

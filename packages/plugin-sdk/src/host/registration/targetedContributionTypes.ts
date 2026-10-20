@@ -27,6 +27,8 @@ export type AdmittedTargetedContributionOperation<TOccurrence extends string = s
     }>;
     /** Exact parent contributor identity, retained for independent role projection. */
     contributor: AdmittedTargetedContributionContributor<TOccurrence>;
+    /** Current physical source cannot admit this declared role; no handler may begin. */
+    unavailable?: true;
     /**
      * Current Action-definition selection fact retained only for the opaque
      * admitted-operation execution handle. It never crosses the public

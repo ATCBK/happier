@@ -1,5 +1,6 @@
 /** @moduleRealm any */
 import type { Disposable, PluginCancellationOptions } from '../lifecycle.js';
+import type { AdmittedTargetedOperationIdentity } from '../actions/admittedTargetedOperation.js';
 import type {
     PluginTargetedContributionSelectionV1,
     PluginTargetedContributionSourceCustodyV1,
@@ -67,6 +68,9 @@ export type TargetedContributionAdmittedEntry = Readonly<{
         id: string;
         version: number;
     }>;
+    operations?: Readonly<Record<string, Readonly<{
+        identity: AdmittedTargetedOperationIdentity;
+    }> | undefined>>;
 }>;
 
 export type TargetedContributionSelectionUnavailableReason =
@@ -99,15 +103,29 @@ function selectionAddressesPoint(
 function contributionMatchesSelection(
     contribution: TargetedContributionAdmittedEntry,
     selection: PluginTargetedContributionSelectionV1,
+    operationRole: string | undefined,
 ): boolean {
-    return contribution.protocol.id === selection.point.protocol.id
+    if (!(contribution.protocol.id === selection.point.protocol.id
         && contribution.protocol.version === selection.point.protocol.version
         && contribution.contributor.pluginId === selection.contributor.pluginId
-        && contribution.contributor.contributionId === selection.contributor.contributionId
-        && pluginSourceCustodyV1Equal(
-            contribution.contributor.sourceCustody,
-            selection.contributor.sourceCustody,
-        );
+        && contribution.contributor.contributionId === selection.contributor.contributionId)) return false;
+    if (operationRole === undefined) return pluginSourceCustodyV1Equal(
+        contribution.contributor.sourceCustody,
+        selection.contributor.sourceCustody,
+    );
+    const operations = contribution.operations;
+    const operation = operations && Object.hasOwn(operations, operationRole)
+        ? operations[operationRole]?.identity
+        : undefined;
+    return operation !== undefined
+        && operation.role === operationRole
+        && operation.target.pluginId === selection.target.pluginId
+        && operation.point.pointId === selection.point.pointId
+        && operation.point.protocol.id === selection.point.protocol.id
+        && operation.point.protocol.version === selection.point.protocol.version
+        && operation.contributor.pluginId === selection.contributor.pluginId
+        && operation.contributor.contributionId === selection.contributor.contributionId
+        && pluginSourceCustodyV1Equal(operation.contributor.sourceCustody, selection.contributor.sourceCustody);
 }
 
 /**
@@ -119,6 +137,10 @@ function contributionMatchesSelection(
  * target or contributor generation has changed. Consumers receive the host's
  * original typed entry, so opaque operation handles retain their authority and
  * lifetime rather than being recreated by a UI or application layer.
+ * By default the selection fences the contributor descriptor's source. An
+ * explicit operationRole instead fences that exact role's source, as retained
+ * Action-input selections do. A changed or missing role never falls back to
+ * the descriptor or another role, including in a mixed-placement contribution.
  *
  * @realm any
  *
@@ -133,6 +155,9 @@ export async function selectCurrentTargetedContribution<
     service: TargetedContributionsService;
     point: TargetedContributionPointRef<TContribution>;
     selection: PluginTargetedContributionSelectionV1;
+    operationRole?: TContribution extends Readonly<{ operations: infer Operations }>
+        ? Extract<keyof Operations, string>
+        : never;
     signal?: AbortSignal;
 }>): Promise<TargetedContributionSelectionResult<TContribution>> {
     if (!selectionAddressesPoint(input.selection, input.point)) {
@@ -147,7 +172,7 @@ export async function selectCurrentTargetedContribution<
         }
 
         const matches = snapshot.contributions.filter((contribution) => (
-            contributionMatchesSelection(contribution, input.selection)
+            contributionMatchesSelection(contribution, input.selection, input.operationRole)
         ));
         if (matches.length !== 1) {
             return Object.freeze({ kind: 'unavailable', reason: 'contributor_unavailable' });

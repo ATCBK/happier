@@ -79,6 +79,25 @@ const admittedSnapshot = {
 } as const;
 
 describe('targeted Host API contribution projection', () => {
+  it('admits exact role occurrences distinct from their Account descriptor parent without crossing contribution identity', () => {
+    const original = admittedSnapshot.points[0].protocols[0].contributions[0];
+    const role = { ...original.operations[0], contributor: { ...original.contributor,
+      occurrenceId: 'machine-source-current', sourceCustody: { kind: 'development' as const, registeredRootId: 'machine-root' },
+    } };
+    const project = (operation: typeof role) => ({ ...admittedSnapshot, points: [{ ...admittedSnapshot.points[0], protocols: [{
+      ...admittedSnapshot.points[0].protocols[0], contributions: [{ ...original, operations: [operation] }],
+    }] }] });
+    const parsed = PluginUiTargetedContributionsV1Schema.parse(project(role));
+    expect(selectPluginUiTargetedContributionOperationV1(parsed, {
+      pointId: role.point.pointId, protocol: role.point.protocol,
+      contributor: { pluginId: original.contributor.pluginId, contributionId: original.contributor.contributionId }, role: role.role,
+    })).toEqual(role);
+    for (const contributor of [
+      { ...role.contributor, pluginId: 'acme.other' },
+      { ...role.contributor, contributionId: 'other-source' },
+    ]) expect(PluginUiTargetedContributionsV1Schema.safeParse(project({ ...role, contributor })).success).toBe(false);
+  });
+
   it('derives one deterministic, opaque mount identity from the logical targeted Surface entry', () => {
     const surface = admittedSnapshot.points[0].protocols[0].contributions[0].surfaces[0];
     const base = {
@@ -500,7 +519,7 @@ describe('targeted Host API contribution projection', () => {
           }],
         }],
       }],
-    }).success).toBe(false);
+    }).success).toBe(true);
     expect(PluginUiTargetedContributionsV1Schema.safeParse({
       ...admittedSnapshot,
       points: [{
@@ -529,7 +548,7 @@ describe('targeted Host API contribution projection', () => {
           }],
         }],
       }],
-    }).success).toBe(false);
+    }).success).toBe(true);
     expect(PluginUiTargetedContributionsV1Schema.safeParse({
       ...admittedSnapshot,
       points: [{
@@ -658,7 +677,7 @@ describe('target-local contribution selection', () => {
       .toBeUndefined();
   });
 
-  it('fails closed for a stale nested occurrence and for duplicated candidates', () => {
+  it('selects the role occurrence independently and fails closed for duplicated candidates', () => {
     const staleSurfaceGeneration = {
       ...admitted,
       points: [{
@@ -681,7 +700,7 @@ describe('target-local contribution selection', () => {
     expect(selectPluginUiTargetedContributionSurfaceV1(
       staleSurfaceGeneration,
       { ...selector, role: 'detail' },
-    )).toBeUndefined();
+    )).toBe(staleSurfaceGeneration.points[0]!.protocols[0]!.contributions[0]!.surfaces[0]);
 
     const duplicatedPoints = { ...admitted, points: [...admitted.points, ...admitted.points] };
     expect(selectPluginUiTargetedContributionV1(duplicatedPoints, selector)).toBeUndefined();

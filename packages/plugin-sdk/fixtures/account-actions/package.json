@@ -4,6 +4,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./happier-plugin-ui/account-runtime": "./src/index.ts"
+    "./happier-plugin-ui/account-runtime": "./src/index.ts",
+    "./happier-plugin-ui/account-source-provider-runtime": "./src/index.ts"
+  },
+  "dependencies": {
+    "@happier-dev/plugin-sdk": "0.0.0"
   }
 }

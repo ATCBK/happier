@@ -5,12 +5,15 @@ import type { PluginSourceCustodyV1 } from '../runtime/sourceCustody.js';
 import { PluginPortableReleaseManifestV1Schema, type PluginPortableReleaseManifestV1 } from './compatibilityProjectionV1.js';
 import { normalizePluginReleaseFactsV1, type PluginAccountAvailabilityIntentReadResponseV1, type PluginReleaseFactsV1 } from './v1.js';
 
-/** Cross-host declaration correspondence, independent of each host's executable bytes. */
+/** Cross-host correspondence of the canonical manifest parser's output,
+ * independent of each host's executable bytes. Acquisition/selection already
+ * parses this typed value; hashing must not repeat the whole contribution walk.
+ */
 export function computePluginAccountBundledDeclarationDigestV1(
   manifest: PluginPortableReleaseManifestV1,
 ): `sha256:${string}` {
   return `sha256:${computeCanonicalDomainSeparatedHexDigest('happier.plugin.account.declaration.v1', [
-    createCanonicalJsonSigningInput(PluginPortableReleaseManifestV1Schema.parse(manifest)),
+    createCanonicalJsonSigningInput(manifest),
   ])}`;
 }
 

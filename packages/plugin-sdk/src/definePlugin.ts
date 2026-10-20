@@ -100,6 +100,7 @@ import type { VoiceProviderContribution, VoiceProvidersRegistrationApi } from '.
 import {
     type PluginManifest,
     type PluginLocalizedStringV2,
+    type PluginLanguageServerContributionV1,
     type PluginSkillContributionV1,
 } from './manifest.js';
 import {
@@ -307,17 +308,6 @@ export type PluginActionDeclaration = Readonly<{
     }>
 );
 
-type PluginDaemonActionDeclaration = PluginActionDeclaration & Readonly<{
-    execution?: Extract<PluginActionExecutionV2, Readonly<{ target: 'daemon' }>>;
-}>;
-
-type PluginClientActionDeclaration = PluginActionDeclaration & Readonly<{
-    execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'client' }>>;
-}>;
-type PluginAccountActionDeclaration = PluginActionDeclaration & Readonly<{
-    execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'account' }>>;
-}>;
-
 export type ProtocolActionSchemaInput<TSchema> = TSchema extends ProtocolComposableSchema<unknown, unknown>
     ? ProtocolSchemaInput<TSchema> extends JsonValue ? ProtocolSchemaInput<TSchema> : JsonValue
     : JsonValue;
@@ -325,19 +315,19 @@ export type ProtocolActionSchemaOutput<TSchema> = TSchema extends ProtocolCompos
     ? ProtocolSchemaOutput<TSchema> extends JsonValue ? ProtocolSchemaOutput<TSchema> : JsonValue | void
     : JsonValue | void;
 
-type PluginActionRuntimeDeclaration<TDefinition extends PluginActionDeclaration> =
+export type PluginActionRuntimeDeclaration<TDefinition extends PluginActionDeclaration> =
     TDefinition extends Readonly<{ execution: Readonly<{ target: 'account' }> }>
     ? Readonly<{
-        execution: PluginAccountActionDeclaration['execution'];
+        execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'account' }>>;
         run?: PluginAccountActionHandler<
             ProtocolActionSchemaInput<TDefinition extends { inputSchema: infer TSchema } ? TSchema : undefined>,
             ProtocolActionSchemaOutput<TDefinition extends { resultSchema: infer TSchema } ? TSchema : undefined>
         >;
     }>
     : TDefinition extends Readonly<{ execution: Readonly<{ target: 'client' }> }>
-    ? Readonly<{ execution: PluginClientActionDeclaration['execution']; run?: never }>
+    ? Readonly<{ execution: Extract<PluginActionExecutionV2, Readonly<{ target: 'client' }>>; run?: never }>
     : Readonly<{
-        execution?: PluginDaemonActionDeclaration['execution'];
+        execution?: Extract<PluginActionExecutionV2, Readonly<{ target: 'daemon' }>>;
         run: ActionHandler<
             ProtocolActionSchemaInput<TDefinition extends { inputSchema: infer TSchema } ? TSchema : undefined>,
             ProtocolActionSchemaOutput<TDefinition extends { resultSchema: infer TSchema } ? TSchema : undefined>
@@ -914,7 +904,7 @@ export type DefinePluginInput<
         >>;
         languageServers?: Readonly<Record<
             PluginContributionLocalId,
-            Omit<ContributionRow<'languageServers'>, 'id'>
+            Omit<PluginLanguageServerContributionV1, 'id'>
         >>;
         machineProvisioners?: Readonly<Record<PluginContributionLocalId, MachineProvisionerAuthorDefinitionV1>>;
         systemTools?: Readonly<Record<

@@ -5,26 +5,27 @@ import type { PluginCancellationOptions } from '../../lifecycle.js';
 import type { AdmittedTargetedContributionSnapshot } from './targetedContributionTypes.js';
 import { createAdmittedTargetedOperationExecutionHandle } from './admittedTargetedOperation.js';
 import { resolveManifestTargetedContributions, type TargetedContributionManifestDeclaration } from './targetedContributionAdmission.js';
+import { normalizePluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 
 /** Binds current host-owned manifest custody to the existing target-local admission and observation owners. */
 export function createManifestTargetedContributionsService(host: Readonly<{
-    readCurrentDeclarations(): readonly TargetedContributionManifestDeclaration[] | Promise<readonly TargetedContributionManifestDeclaration[]>;
+    readCurrentDeclarations(signal?: AbortSignal): readonly TargetedContributionManifestDeclaration[] | Promise<readonly TargetedContributionManifestDeclaration[]>;
     subscribeToCatalogChanges(listener: () => void): () => void;
 }>): StableTargetedContributionsOwner {
     return createTargetedContributionsService({
         subscribeToCatalogChanges(listener) {
             return host.subscribeToCatalogChanges(listener);
         },
-        async readAdmittedSnapshot({ pluginId, point }) {
-            const declarations = await host.readCurrentDeclarations();
+        async readAdmittedSnapshot({ pluginId, point, signal }) {
+            const declarations = await host.readCurrentDeclarations(signal);
             const admitted = resolveManifestTargetedContributions(declarations).read({
                 targetPluginId: pluginId,
                 pointId: point.id,
                 protocol: point.protocol,
             });
             if (!admitted) throw targetedContributionsUnavailable();
-            return projectAdmittedTargetedContributionSnapshot(point, admitted, (id) => (
-                declarations.find((row) => row.manifest.id === id)?.sourceCustody ?? null
+            return projectAdmittedTargetedContributionSnapshot(point, admitted, (id, occurrenceId) => (
+                declarations.find((row) => row.manifest.id === id && row.occurrenceId === occurrenceId)?.sourceCustody ?? null
             ));
         },
     });
@@ -88,13 +89,15 @@ function targetedContributionsUnavailable(): PluginError {
 export function projectAdmittedTargetedContributionSnapshot(
     point: TargetedContributionPointRef<unknown>,
     snapshot: AdmittedTargetedContributionSnapshot,
-    readPluginSourceCustody: (pluginId: string) => import('@happier-dev/protocol').PluginSourceCustodyV1 | null,
+    readPluginSourceCustody: (pluginId: string, occurrenceId: string) => import('@happier-dev/protocol').PluginSourceCustodyV1 | null,
 ): TargetedContributionSnapshot<unknown> {
-    const targetSourceCustody = readPluginSourceCustody(snapshot.target.pluginId);
-    if (!targetSourceCustody) throw targetedContributionsUnavailable();
+    const rawTargetSourceCustody = readPluginSourceCustody(snapshot.target.pluginId, snapshot.target.occurrenceId);
+    if (!rawTargetSourceCustody) throw targetedContributionsUnavailable();
+    const targetSourceCustody = normalizePluginSourceCustodyV1(rawTargetSourceCustody);
     const contributions = snapshot.contributions.map((contribution) => {
-        const sourceCustody = readPluginSourceCustody(contribution.contributor.pluginId);
-        if (!sourceCustody) throw targetedContributionsUnavailable();
+        const rawSourceCustody = readPluginSourceCustody(contribution.contributor.pluginId, contribution.contributor.occurrenceId);
+        if (!rawSourceCustody) throw targetedContributionsUnavailable();
+        const sourceCustody = normalizePluginSourceCustodyV1(rawSourceCustody);
         const contributor = Object.freeze({
             pluginId: contribution.contributor.pluginId,
             contributionId: contribution.contributor.contributionId,
@@ -110,25 +113,30 @@ export function projectAdmittedTargetedContributionSnapshot(
             protocol,
             ...(contribution.descriptor === undefined ? {} : { descriptor: contribution.descriptor }),
             operations: Object.freeze(Object.fromEntries(
-                contribution.operations.map((operation) => [
-                    operation.role,
-                    createAdmittedTargetedOperationExecutionHandle({
-                        action: operation.action,
-                        targetOccurrenceId: snapshot.target.occurrenceId,
-                        targetSourceCustody,
-                        identity: {
-                            target: { pluginId: point.targetPluginId },
-                            point: {
-                                pointId: point.id,
-                                protocol,
+                contribution.operations.map((operation) => {
+                    const operationSourceCustody = readPluginSourceCustody(operation.contributor.pluginId, operation.contributor.occurrenceId);
+                    if (!operationSourceCustody) throw targetedContributionsUnavailable();
+                    return [
+                        operation.role,
+                        createAdmittedTargetedOperationExecutionHandle({
+                            action: operation.action,
+                            targetOccurrenceId: snapshot.target.occurrenceId,
+                            targetSourceCustody,
+                            ...(operation.unavailable ? { unavailable: true } : {}),
+                            identity: {
+                                target: { pluginId: point.targetPluginId },
+                                point: {
+                                    pointId: point.id,
+                                    protocol,
+                                },
+                                contributor: Object.freeze({ ...operation.contributor, sourceCustody: operationSourceCustody }),
+                                role: operation.role,
                             },
-                            contributor,
-                            role: operation.role,
-                        },
-                        selectedActionInput: operation.selectedActionInput,
-                        targetProtocol: operation.targetProtocol,
-                    }),
-                ]),
+                            selectedActionInput: operation.selectedActionInput,
+                            targetProtocol: operation.targetProtocol,
+                        }),
+                    ];
+                }),
             )),
             surfaces: Object.freeze(Object.fromEntries(contribution.surfaces.map((surface) => [
                 surface.role,
