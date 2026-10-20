@@ -122,6 +122,18 @@ The app's [`SettingsCollectionLayout`](../apps/ui/sources/components/settings/sh
 
 A settings collection's rail takes its width from a role, never a page-local number: `SettingsCollectionLayout` reads `railWidth: 'standard' | 'detailed'` from `HAPPIER_COLLECTION_RAIL_WIDTH_PX` in [`pageMetrics.ts`](../packages/plugin-ui/src/presentation/layout/pageMetrics.ts) (`standard` for one-line rows, `detailed` for rows that carry a description or facts line). The role is host-internal: no plugin draws a settings collection's rail. Every settings collection takes a role; no page keeps a number.
 
+In unreleased 0.3 development, that role supplies the default rather than a fixed width.
+`HappierListDetailLayout`, public `ListDetailLayout` and `Collection` accept controlled
+`listWidthPx` with change, commit and reset callbacks. The shared split geometry clamps rendered
+width between the row-derived list minimum and the remaining detail budget; resizing does not
+change the Collection's presentation target. Rails use Plugin UI's shared resize handle, reset to
+their owner default on double-click, and never collapse when dragged below minimum.
+The app's `useCollectionRailWidth` stores widths in device-local `collectionRailWidthsV1`, keyed
+by the collection's stable resize key. Plugin-authored layouts can supply `resizeKey`; the optional
+presentation-host `panelSizing` binding namespaces it with the plugin id and uses the same record.
+Without that binding the component retains the width only for its mounted lifetime. See
+[App shell panes](app-shell-panes.md) for the shared geometry and visibility owners.
+
 A collection's root route renders its homepage, not a redirect to its first item (the Machines precedent: All machines, beside the rail and on phones). The rail's first row is the index row, [`CollectionIndexRow`](../apps/ui/sources/components/ui/lists/collection/CollectionIndexRow.tsx) ("All …", selected at the root), the one drawing every collection uses for that row.
 
 ### Machines page doors (0.3 development)
