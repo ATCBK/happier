@@ -10,6 +10,16 @@ function createGestureChain(): any {
         chain.__config.minDistance = value;
         return chain;
     };
+    for (const name of ['minPointers', 'maxPointers', 'numberOfTaps', 'maxDelay'] as const) {
+        chain[name] = (value: number) => {
+            chain.__config[name] = value;
+            return chain;
+        };
+    }
+    chain.enableTrackpadTwoFingerGesture = (value: boolean) => {
+        chain.__config.enableTrackpadTwoFingerGesture = value;
+        return chain;
+    };
     chain.maxDistance = (value: number) => {
         chain.__config.maxDistance = value;
         return chain;
@@ -77,6 +87,7 @@ function createGestureChain(): any {
 
 export const Gesture = {
     Pan: () => createGestureChain(),
+    Pinch: () => createGestureChain(),
     Tap: () => createGestureChain(),
     LongPress: () => createGestureChain(),
     Hover: () => createGestureChain(),
@@ -86,6 +97,7 @@ export const Gesture = {
 };
 
 export const GestureDetector = 'GestureDetector' as any;
+export const PointerType = { TOUCH: 0, STYLUS: 1, MOUSE: 2, KEY: 3, OTHER: 4 } as const;
 
 // Many UI components use gesture-handler's ScrollView for better nested gesture interop.
 export const ScrollView = 'GestureHandlerScrollView' as any;

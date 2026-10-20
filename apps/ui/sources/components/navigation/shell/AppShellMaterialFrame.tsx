@@ -115,6 +115,8 @@ export function AppShellMaterialFrame(props: Readonly<{
     dragEnabled: boolean;
     leftOffsetPx: number;
     sidebarWidth: number;
+    /** Resize feedback supplied by the shared core; the sidebar presentation owns its paint. */
+    columnResizeState?: Readonly<{ collapseArmed: boolean; overshootPx: number }>;
     titleStrip: React.ReactNode;
     rail: React.ReactNode;
     column: React.ReactNode;
