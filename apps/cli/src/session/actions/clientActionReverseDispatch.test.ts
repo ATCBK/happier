@@ -15,6 +15,61 @@ const disconnectedClient: ClientActionMachineRpc = {
 };
 
 describe('client Action reverse delivery', () => {
+  it.each([
+    { actionId: 'ui.find', input: { op: 'read' }, sessionId: 'invoking-session' },
+    { actionId: 'ui.prompts.picker.open', input: {}, sessionId: 'invoking-session' },
+    { actionId: 'ui.prompts.picker.open', input: { composerRef: { kind: 'session', sessionId: 'target-session' } }, sessionId: 'target-session' },
+    { actionId: 'ui.current_context.read', input: {}, sessionId: 'invoking-session' },
+    { actionId: 'session.pending.next', input: {}, sessionId: 'invoking-session' },
+    { actionId: 'search.conversations', input: { query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'auto' } }, sessionId: 'invoking-session' },
+    { actionId: 'composer.transaction.apply', input: { scope: { serverId: 'home', accountId: 'account' },
+      ref: { kind: 'session', sessionId: 'target-session' }, transaction: { expectedRevision: 1,
+        operations: [{ kind: 'text.insert', position: { offset: 0 }, text: 'needle' }] } }, sessionId: 'target-session' },
+  ] as const)('addresses $actionId to the client viewing its Session without generic fallback', async ({ actionId, input, sessionId }) => {
+    const method = `${RPC_METHODS.UI_ACTION_EXECUTE}.session.${encodeURIComponent(JSON.stringify(sessionId))}`;
+    const delivered: string[] = [];
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (actual, _request, options) => {
+        delivered.push(actual);
+        expect(actual).toBe(method);
+        expect(options.answeringClient).toEqual({ requireSingle: true });
+        return { ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' };
+      },
+    };
+    const dispatch = createClientActionReverseDispatcher(() => client);
+    const result = await dispatch({ actionId, input, context: { surface: 'agent', defaultSessionId: 'invoking-session' } });
+    expect(delivered).toEqual([method]);
+    expect(result).not.toMatchObject({ errorCode: 'outcome_uncertain' });
+  });
+  it('does not replace an explicit new-session composer with the invoking Session', async () => {
+    const methods: string[] = [];
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (method, _request, options) => {
+        methods.push(method);
+        expect(options.answeringClient).toEqual({ requireSingle: true });
+        return { ok: false, errorCode: 'RPC_CLIENT_AMBIGUOUS' };
+      },
+    }));
+    expect(await dispatch({ actionId: 'ui.prompts.picker.open', input: { composerRef: { kind: 'newSession', instanceId: 'new-composer' } },
+      context: { surface: 'agent', defaultSessionId: 'invoking-session' } }))
+      .toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
+    expect(methods).toEqual([RPC_METHODS.UI_ACTION_EXECUTE]);
+  });
+  it.each(['cli-global', 'plugin-global'])('does not treat Account host label %s as a viewed Session', async defaultSessionId => {
+    const methods: string[] = [];
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async method => {
+        methods.push(method);
+        return { ok: true, result: { v: 1, execution: { ok: true, result: { status: 'idle' } } } };
+      },
+    }));
+    expect(await dispatch({ actionId: 'ui.find', input: { op: 'read' }, context: { surface: 'mcp', defaultSessionId } }))
+      .toEqual({ ok: true, result: { status: 'idle' } });
+    expect(methods).toEqual([RPC_METHODS.UI_ACTION_EXECUTE]);
+  });
   it.each(['cli', 'mcp'] as const)('addresses Run-on mutations to an exact answering client from %s', async surface => {
     const client: ClientActionMachineRpc = {
       hasConnectedClientRpcHandler: () => true,

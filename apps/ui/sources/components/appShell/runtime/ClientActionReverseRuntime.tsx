@@ -12,6 +12,7 @@ import {
     currentUiContextCommandClientRpcMethod,
     currentUiContextReadClientRpcMethod,
     mountedWorkReadClientRpcMethod,
+    sessionUiActionClientRpcMethod,
 } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { getMountedWorkReadAddresses, subscribeMountedWorkReadOwners } from '@/sync/ops/actions/mountedWorkReadAction';
 import { createCurrentUiContributedActionRpcHandler } from '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort';
@@ -20,19 +21,22 @@ import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/App
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 
-function MachineClientActionBinding({ serverId, generation, accountId, machineId, method }: Readonly<{
+function MachineClientActionBinding({ serverId, generation, accountId, machineId, method, sessionId, readCurrentSessionId }: Readonly<{
     serverId: string;
     generation: number;
     accountId: string;
     machineId: string;
     method: string;
+    sessionId?: string;
+    readCurrentSessionId?: () => string | null;
 }>): null {
     React.useEffect(() => {
         let mounted = true;
         const binding = { serverId, accountId, isCurrent: () => {
             const active = getActiveServerSnapshot();
             return mounted && active.serverId === serverId && active.generation === generation
-                && storage.getState().profile?.id === accountId;
+                && storage.getState().profile?.id === accountId
+                && (sessionId === undefined || readCurrentSessionId?.() === sessionId);
         } };
         const handler = method === RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE
             ? createCurrentUiContributedActionRpcHandler({
@@ -50,7 +54,7 @@ function MachineClientActionBinding({ serverId, generation, accountId, machineId
             mounted = false;
             dispose();
         };
-    }, [serverId, generation, accountId, machineId, method]);
+    }, [serverId, generation, accountId, machineId, method, sessionId, readCurrentSessionId]);
     return null;
 }
 
@@ -75,7 +79,8 @@ export function ClientActionReverseRuntime(): React.ReactElement | null {
     const readCurrentUiRegistration = React.useCallback(() => {
         const snapshot = currentUiReader?.readCurrentUiContext() ?? null;
         // The reader rebuilds its DTO on every call; only method membership is a stable store snapshot.
-        return snapshot ? JSON.stringify(snapshot.commands.map(command => command.id)) : null;
+        return snapshot ? JSON.stringify([currentUiReader?.readCurrentSessionId?.() ?? null,
+            snapshot.commands.map(command => command.id)]) : null;
     }, [currentUiReader]);
     React.useSyncExternalStore(
         subscribeCurrentUiRegistration,
@@ -83,6 +88,7 @@ export function ClientActionReverseRuntime(): React.ReactElement | null {
         readCurrentUiRegistration,
     );
     const currentUiSnapshot = currentUiReader?.readCurrentUiContext() ?? null;
+    const currentSessionId = currentUiReader?.readCurrentSessionId?.() ?? null;
     if (!serverId || !accountId) return null;
     // Inventory changes retire only the removed Machine, not unrelated in-flight Actions.
     const methods = [...new Set([RPC_METHODS.UI_ACTION_EXECUTE, ...addresses.flatMap(address =>
@@ -93,8 +99,12 @@ export function ClientActionReverseRuntime(): React.ReactElement | null {
         ...(currentUiSnapshot ? [currentUiContextReadClientRpcMethod(), ...currentUiSnapshot.commands.map(command =>
             currentUiContextCommandClientRpcMethod(command.id))] : []),
     ])];
+    const sessionMethod = currentSessionId ? sessionUiActionClientRpcMethod(currentSessionId) : null;
     return <>{selectableMachineIds.flatMap(machineId => [...methods,
+        ...(sessionMethod ? [sessionMethod] : []),
         ...(contributedMachineIds.has(machineId) ? [RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE] : []),
     ].map(method => <MachineClientActionBinding key={`${machineId}:${method}`}
-        serverId={serverId} generation={generation} accountId={accountId} machineId={machineId} method={method} />))}</>;
+        serverId={serverId} generation={generation} accountId={accountId} machineId={machineId} method={method}
+        {...(method === sessionMethod && currentSessionId ? { sessionId: currentSessionId,
+            readCurrentSessionId: currentUiReader?.readCurrentSessionId } : {})} />))}</>;
 }

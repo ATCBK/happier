@@ -16,6 +16,20 @@ import { isUpdatesActionId } from './updatesActionFamily.js';
 import { isAppUpdateActionId } from './appUpdateActionFamily.js';
 import { isAccountLifecycleActionId } from './accountLifecycleActionFamily.js';
 
+/** A mounted Session view, rather than any signed-in client on the Account. */
+export function sessionUiActionClientRpcMethod(sessionId: string): string {
+  return `${RPC_METHODS.UI_ACTION_EXECUTE}.session.${encodeURIComponent(JSON.stringify(sessionId))}`;
+}
+
+export function isSessionUiActionClientRpcMethod(method: string): boolean {
+  const prefix = `${RPC_METHODS.UI_ACTION_EXECUTE}.session.`;
+  if (!method.startsWith(prefix)) return false;
+  try {
+    const sessionId: unknown = JSON.parse(decodeURIComponent(method.slice(prefix.length)));
+    return typeof sessionId === 'string' && sessionId.trim().length > 0;
+  } catch { return false; }
+}
+
 /** Existing reverse-RPC rooms select a mounted read owner, rather than an arbitrary App. */
 export function mountedWorkReadClientRpcMethod(actionId: 'session.work.get' | 'inbox.get', sessionId?: string): string {
   return actionId === 'inbox.get' ? `${RPC_METHODS.UI_ACTION_EXECUTE}.inbox`

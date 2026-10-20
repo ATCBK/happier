@@ -6,6 +6,7 @@ import {
   currentUiContextCommandClientRpcMethod,
   currentUiContextReadClientRpcMethod,
   mountedWorkReadClientRpcMethod,
+  sessionUiActionClientRpcMethod,
   parseClientActionDispatchResult,
 } from '@happier-dev/protocol/actions/clientDispatchV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
@@ -13,6 +14,7 @@ import { projectApprovalExecutionOriginCaller } from '@happier-dev/protocol/acti
 import { isWorkflowAuthoringActionId, workflowDraftClientRpcMethod, WorkflowDraftGetInputV1Schema } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 import { PluginExecutionOriginActionIdSchema, PluginExecutionOriginActionInputSchemas } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
 import type { SocketRpcAnsweringClientV1 } from '@happier-dev/protocol/socketRpc';
+import { readCliActionBoundSessionId } from './resolveCliActionCallerSession';
 
 export type ClientActionMachineRpc = Readonly<{
   hasConnectedClientRpcHandler(method: string): boolean;
@@ -31,14 +33,28 @@ export function createClientActionReverseDispatcher(
       ok: false as const, errorCode, error: errorCode,
     });
     const client = getMachineClient();
+    // These operations consume the addressed mounted UI. Other client Actions
+    // (for example Account configuration) do not require its Session to be open.
+    const sessionUiAction = actionId === 'ui.find' || actionId === 'ui.prompts.picker.open'
+      || actionId === 'ui.current_context.read' || actionId === 'session.pending.next'
+      || actionId === 'search.conversations' || actionId === 'composer.transaction.apply'
+      || actionId === 'composer.attachments.pick';
+    const composerRef = input && typeof input === 'object'
+      ? Reflect.get(input, 'composerRef') ?? Reflect.get(input, 'ref') : undefined;
+    const targetSessionId = composerRef
+      ? typeof composerRef === 'object' && 'sessionId' in composerRef && typeof composerRef.sessionId === 'string'
+        ? composerRef.sessionId : null
+      : context.defaultSessionId ? readCliActionBoundSessionId(context.defaultSessionId) : null;
+    const sessionMethod = sessionUiAction && targetSessionId ? sessionUiActionClientRpcMethod(targetSessionId) : null;
     const originAction = PluginExecutionOriginActionIdSchema.safeParse(actionId);
     const originInput = originAction.success ? PluginExecutionOriginActionInputSchemas[originAction.data].parse(input) : null;
     const answeringClient = originInput ? { ...(originInput.clientId ? { clientId: originInput.clientId } : {}),
-      ...(actionId === 'plugins.execution_origin.list' ? {} : { requireSingle: true as const }) } : undefined;
+      ...(actionId === 'plugins.execution_origin.list' ? {} : { requireSingle: true as const }) }
+      : sessionUiAction ? { requireSingle: true as const } : undefined;
     // Project only the address from the already-admitted full Action input.
     const address = isWorkflowAuthoringActionId(actionId) && input && typeof input === 'object'
       ? WorkflowDraftGetInputV1Schema.safeParse({ scope: Reflect.get(input, 'scope'), draftId: Reflect.get(input, 'draftId') }) : null;
-    const method = actionId === 'session.work.get' && input && typeof input === 'object'
+    const method = sessionMethod ?? (actionId === 'session.work.get' && input && typeof input === 'object'
       && typeof Reflect.get(input, 'sessionId') === 'string'
       ? mountedWorkReadClientRpcMethod(actionId, Reflect.get(input, 'sessionId'))
       : actionId === 'inbox.get' ? mountedWorkReadClientRpcMethod(actionId)
@@ -47,7 +63,7 @@ export function createClientActionReverseDispatcher(
         && input && typeof input === 'object'
         && typeof Reflect.get(input, 'commandId') === 'string'
         ? currentUiContextCommandClientRpcMethod(Reflect.get(input, 'commandId'))
-      : address?.success ? workflowDraftClientRpcMethod(address.data) : RPC_METHODS.UI_ACTION_EXECUTE;
+      : address?.success ? workflowDraftClientRpcMethod(address.data) : RPC_METHODS.UI_ACTION_EXECUTE);
     if (!client) return machineTransportUnavailable();
     if (!client.hasConnectedClientRpcHandler(method)) return unavailable();
     if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };

@@ -28,14 +28,15 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import type { CurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 
-const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+const navigation = vi.hoisted(() => ({ push: vi.fn(), segments: [] as string[], sessionId: '' }));
 // The cross-package daemon dispatcher can import Socket before the UI installs
 // its transport; every consumer must retain the same canonical boundary.
 vi.mock('socket.io-client', async (importOriginal) =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-  return createExpoRouterMock({ router: navigation }).module;
+  return createExpoRouterMock({ router: navigation, segments: () => navigation.segments,
+    params: () => navigation.sessionId ? { id: navigation.sessionId } : {} }).module;
 });
 
 const clientSockets: Socket[] = [];
@@ -74,6 +75,8 @@ const releases: (() => void)[] = [];
 let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 beforeEach(async () => {
+  navigation.segments = [];
+  navigation.sessionId = '';
   clientSockets.length = 0;
   connectDaemonSockets = false;
   answerDaemonRpc = () => { throw Object.assign(new Error('RPC method not available'), { code: 'RPC_METHOD_NOT_AVAILABLE' }); };
@@ -96,6 +99,109 @@ afterEach(async () => {
 });
 
 describe('admitted app Actions and daemon-to-app continuations', () => {
+  it('keeps Find, picker and composer edits on the client viewing the invoking Session', async () => {
+    const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
+    const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
+    const { setFocusedSessionId } = await import('@/sync/domains/session/sessionSurfaceVisibility');
+    const { createFileViewerFindModel } = await import('@/components/workspaces/files/details/useFileViewerFind');
+    const { registerSessionComposerPresentationTarget } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
+    const { ComposerSnapshotV1Schema } = await import('@happier-dev/protocol/plugins/ui/composer');
+    const { selectRpcTarget } = await import('../../../../../server/sources/app/api/socket/rpc/rpcTargetSelection');
+    const sessionId = 'viewed-session';
+    navigation.segments = ['session', '[id]'];
+    navigation.sessionId = sessionId;
+    const machine = createMachineFixture({ id: 'viewed-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    storage.setState(state => ({ profile: { ...state.profile!, id: 'relay-account' }, machines: { [machine.id]: machine },
+      sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId }) }, machineListByServerId: {} }));
+    setFocusedSessionId(sessionId, serverId);
+    releases.push(() => setFocusedSessionId(null));
+    const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
+    if (!socket) throw new Error('Account reverse receiver absent');
+    const registered = new Set<string>();
+    const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
+      const payload: unknown = args[0];
+      if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
+        if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
+        if (event === SOCKET_RPC_EVENTS.UNREGISTER) registered.delete(payload.method);
+      }
+      return socket;
+    });
+    releases.push(() => emit.mockRestore());
+    const find = createFindSurfaceRegistry();
+    const model = createFileViewerFindModel(() => ({ path: 'notes.md', mode: 'file', text: 'needle\nneedle' }));
+    releases.push(registerFindActionRuntime(find));
+    releases.push(find.register({ surfaceId: 'file:notes', controller: model, open: model.open,
+      containsFocus: () => true, isOpen: () => model.getSnapshot().open, isInputFocused: () => true }));
+    let draft = ComposerSnapshotV1Schema.parse({ revision: 1, ref: { kind: 'session', sessionId }, text: 'draft', references: [], attachments: [],
+      layout: 'wrap', capabilities: { text: true, references: false, attachments: false, submit: false },
+      state: { focused: true, editable: true, submittable: false, submitting: false, running: false } });
+    let pickerOpened = false;
+    releases.push(registerSessionComposerPresentationTarget({ serverId, sessionId }, {
+      readRevision: () => draft.revision, readSnapshot: () => draft, readScope: () => ({ serverId, accountId: 'relay-account' }),
+      replace: () => { throw new Error('Use the revision-bound transaction'); },
+      openPromptPicker: () => { pickerOpened = true; return true; },
+      commitDocument: ({ expectedRevision, mutation }) => {
+        if (expectedRevision !== draft.revision) return { status: 'conflict', currentRevision: draft.revision };
+        draft = ComposerSnapshotV1Schema.parse({ ...draft, ...mutation, revision: draft.revision + 1 });
+        return { status: 'applied', revision: draft.revision };
+      },
+    }));
+    let foreignEffects = 0;
+    let alsoViewing = false;
+    const foreign = { id: 'a-foreign-client', timeout: () => ({ emitWithAck: async () => {
+      foreignEffects++; return { v: 1, execution: { ok: true, result: { status: 'noMountedSurface' } } };
+    } }) };
+    const viewed = { id: 'z-viewed-client', timeout: () => ({ emitWithAck: async (_event: string, payload: unknown) => {
+      if (!payload || typeof payload !== 'object' || !('method' in payload) || !('params' in payload)) throw new Error('Malformed Socket request');
+      return await new Promise<unknown>(resolve => {
+        for (const receive of socket.listeners(SOCKET_RPC_EVENTS.REQUEST)) receive(payload, resolve);
+      });
+    } }) };
+    const reverse = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE || registered.has(`${machine.id}:${method}`),
+      callConnectedClientRpc: async (method, payload, options) => {
+        // Only Socket.IO is replaced. Use the real server selection owner over the
+        // two clients' actual method memberships, then the actual app receiver.
+        const targets = [...(method === RPC_METHODS.UI_ACTION_EXECUTE || alsoViewing ? [foreign] : []),
+          ...(registered.has(`${machine.id}:${method}`) ? [viewed] : [])];
+        const selection = selectRpcTarget({ targets, answeringClient: options.answeringClient });
+        if (selection.type === 'ambiguous') return { ok: false, errorCode: 'RPC_CLIENT_AMBIGUOUS' };
+        if (selection.type !== 'target') return { ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' };
+        options.onIssued();
+        return { ok: true, result: await selection.target.timeout(0).emitWithAck(SOCKET_RPC_EVENTS.REQUEST,
+          { method: `${machine.id}:${method}`, params: JSON.parse(JSON.stringify(payload)) }) };
+      },
+    }));
+    const caller = createActionExecutor({ clientActionExecute: reverse } as unknown as ActionExecutorDeps);
+    const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: sessionId } as const;
+    const runtime = await renderMountedCurrentUiContext(React.createElement(ClientActionReverseRuntime));
+    try {
+      expect(await caller.execute('ui.find', { op: 'set', query: 'needle' }, context))
+        .toMatchObject({ ok: true, result: { status: 'results', current: 1, total: 2 } });
+      expect(await caller.execute('ui.find', { op: 'read' }, context)).toMatchObject({ ok: true, result: { current: 1, total: 2 } });
+      expect(await caller.execute('ui.find', { op: 'step', direction: 1 }, context)).toMatchObject({ ok: true, result: { current: 2, total: 2 } });
+      expect(await caller.execute('ui.prompts.picker.open', {}, context)).toMatchObject({ ok: true, result: { status: 'opened' } });
+      expect(pickerOpened).toBe(true);
+      expect(draft.text).toBe('draft');
+      expect(await caller.execute('composer.transaction.apply', { scope: { serverId, accountId: 'relay-account' }, ref: draft.ref,
+        transaction: { expectedRevision: draft.revision, operations: [{ kind: 'text.insert', position: { offset: 0 }, text: 'needle ' }] } }, context))
+        .toEqual({ ok: true, result: { status: 'applied', revision: 2 } });
+      expect(draft.text).toBe('needle draft');
+      expect(foreignEffects).toBe(0);
+      alsoViewing = true;
+      expect(await caller.execute('ui.find', { op: 'step', direction: -1 }, context))
+        .toMatchObject({ ok: false, errorCode: 'client_ambiguous' });
+      expect(model.status).toMatchObject({ current: 2 });
+      expect(foreignEffects).toBe(0);
+      alsoViewing = false;
+      await act(async () => { setFocusedSessionId(null); });
+      expect(await caller.execute('ui.find', { op: 'read' }, context))
+        .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+      expect(foreignEffects).toBe(0);
+    } finally { await runtime.unmount(); }
+    expect(await caller.execute('ui.find', { op: 'read' }, context)).toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+    expect(foreignEffects).toBe(0);
+  });
   it('keeps reverse registrations stable across fresh current-UI snapshots and retires replaced commands', async () => {
     const insertionUpdates: Error[] = [];
     const originalConsoleError = console.error;
@@ -134,11 +240,13 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     });
     releases.push(() => emit.mockRestore());
     let readContext: CurrentUiContextReader['readCurrentUiContext'] | undefined;
+    let subscribeContext: CurrentUiContextReader['subscribe'] | undefined;
     let replaceCommand: (() => void) | undefined;
     let refreshDeclaration: (() => void) | undefined;
     function CurrentContextOwner(): React.ReactElement {
       const reader = useOptionalCurrentUiContextReader();
       readContext = reader?.readCurrentUiContext;
+      subscribeContext = reader?.subscribe;
       const [version, setVersion] = React.useState(0);
       const [revision, setRevision] = React.useState(0);
       replaceCommand = () => setVersion(value => value + 1);
@@ -150,6 +258,10 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       return React.createElement(ClientActionReverseRuntime);
     }
     const runtime = await renderMountedCurrentUiContext(React.createElement(CurrentContextOwner));
+    let retirementNotified = false;
+    const unsubscribe = subscribeContext?.(() => {
+      if (readContext?.() === null) retirementNotified = true;
+    });
     try {
       const snapshot = readContext?.();
       expect(snapshot?.commands).toHaveLength(1);
@@ -183,8 +295,10 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       expect(registered.has(method(replacement!.id))).toBe(true);
     } finally {
       await runtime.unmount();
+      unsubscribe?.();
     }
     expect(registered.size).toBe(0);
+    expect(retirementNotified).toBe(true);
     expect(insertionUpdates.map(error => error.stack)).toEqual([]);
   });
   it('routes current UI context through its mounted app instead of another generic app socket', async () => {
@@ -542,7 +656,8 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     // executors run, including the real credential/store/network testkit.
     const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
     const clientActionExecute = createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE
+        || method === `${RPC_METHODS.UI_ACTION_EXECUTE}.session.${encodeURIComponent(JSON.stringify('caller-session'))}`,
       callConnectedClientRpc: async (_method, payload, options) => {
         expect(UiActionDispatchRequestV1Schema.parse(payload).context).toMatchObject({ surface, authority: 'account_automation' });
         options.onIssued();

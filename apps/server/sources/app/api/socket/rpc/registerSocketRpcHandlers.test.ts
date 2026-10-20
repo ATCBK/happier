@@ -778,6 +778,7 @@ describe("registerSocketRpcHandlers", () => {
     it.each([
         uiBrowserAutomationDispatchMethod({ browserSessionId: 'visible-session', viewId: 'visible-view' }),
         RPC_METHODS.UI_ACTION_EXECUTE,
+        `${RPC_METHODS.UI_ACTION_EXECUTE}.session.${encodeURIComponent(JSON.stringify('viewed-session'))}`,
         RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE,
         RPC_METHODS.UI_BROWSER_RECORDING_CAPTURE_FRAME,
         mountedWorkReadClientRpcMethod('session.work.get', 'work-lead'),
