@@ -59,8 +59,9 @@ export function recordWebLatencyPhase(phase: string, elapsedMs: number, transact
 function emitWebLatencyPhase(phase: string, elapsedMs: number, transactionClass?: string,
     status?: 'completed' | 'failed', outcome?: Readonly<{ code?: string; sqlState?: string }>, current = context.getStore()): void {
     if (process.env.HAPPIER_WEB_LATENCY_TRACE !== '1') return;
-    // An explicit opt-in diagnostic must survive the stack's warn threshold (as the CLI's does).
-    try { log({ level: 'warn', module: 'web-latency', phase, elapsedMs,
+    // Per-query timings are diagnostics, including failed attempts. Respect the
+    // logger's severity threshold; the operation's owner reports real failures.
+    try { log({ level: 'debug', module: 'web-latency', phase, elapsedMs,
         ...(transactionClass ? { transactionClass } : {}),
         ...(status ? { status, ...outcome } : {}),
         ...(current ? { requestId: current.requestId, ...(current.sessionId ? { sessionId: current.sessionId } : {}),
