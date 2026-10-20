@@ -117,11 +117,13 @@ import { PluginWorkflowContributionV1Schema } from './workflows.js';
 import { PluginInputTypeContributionV1Schema } from './inputTypes.js';
 import { PluginAtmospherePictureContributionV1Schema } from './atmospherePictures.js';
 import { PluginRegistrySourceContributionV1Schema } from './registrySources.js';
+import { PluginLanguageServerContributionV1Schema } from './languageServers.js';
 import { PluginSkillContributionV1Schema } from './skills.js';
 export { PluginSkillContributionV1Schema, type PluginSkillContributionV1, projectPluginSkillDeclarationV1 } from './skills.js';
 export { PluginInputTypeContributionV1Schema, type PluginInputTypeContributionV1 } from './inputTypes.js';
 export { PluginAtmospherePictureContributionV1Schema, type PluginAtmospherePictureContributionV1 } from './atmospherePictures.js';
 export { PluginRegistrySourceContributionV1Schema, type PluginRegistrySourceContributionV1 } from './registrySources.js';
+export { PluginLanguageServerContributionV1Schema, type PluginLanguageServerContributionV1 } from './languageServers.js';
 import { PluginDragSourceContributionV1Schema, PluginDropTargetContributionV1Schema } from './entityDragDrop.js';
 export * from './entityDragDrop.js';
 import {
@@ -884,6 +886,7 @@ export const PLUGIN_CORE_CONTRIBUTION_FAMILIES_V2 = [
   definePluginContributionFamilyV2({ family: 'providers', schema: ProviderContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'machineProvisioners', schema: MachineProvisionerContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'actions', schema: PluginActionContributionV2Schema }),
+  definePluginContributionFamilyV2({ family: 'languageServers', schema: PluginLanguageServerContributionV1Schema }),
   definePluginContributionFamilyV2({ family: 'commands', schema: PluginCommandContributionV2Schema }),
   definePluginContributionFamilyV2({ family: 'tools', schema: PluginToolContributionV2Schema }),
   definePluginContributionFamilyV2({ family: 'resources', schema: PluginResourceContributionV2Schema }),
