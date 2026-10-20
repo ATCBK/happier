@@ -40,6 +40,14 @@ import { createDaemonPluginActionExecutor } from '@/session/actions/createDaemon
 import { createClientActionMachineRpcExecutor } from '@/plugins/runtime/invocation/actions/clientActionMachineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
+import { pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
+import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF, PLUGIN_MANIFEST as CHANNELS_MANIFEST } from '@happier-dev/plugins-channels/manifest';
+import { activate as activateTelegram, PLUGIN_MANIFEST as TELEGRAM_MANIFEST } from '@happier-dev/plugins-channel-telegram';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { channelsTargetedContributionServices } from '../../../../../../packages/plugins/channels/src/testkit/operationOnlyTargetedContributionsFixture';
 
 type SafeResolvedActionContribution = Omit<ResolvedActionContribution, 'definition'> & Readonly<{
   definition: Extract<ResolvedActionDefinition, Readonly<{ dangerLevel: 'safe' }>>;
@@ -616,6 +624,94 @@ describe('executeContributedAction', () => {
       expect(handler).toHaveBeenCalledOnce();
     } finally {
       resetActiveAccountSettingsSnapshotForTests();
+      if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+      else process.env.HAPPIER_ACTIONS_SETTINGS_V1 = previousSettings;
+    }
+  });
+
+  it.each(['agent', 'mcp', 'ui'] as const)('applies Off, Ask and Allowed to the real Channels setup remediation from %s', async (surface) => {
+    const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    const qualifiedId = 'happier.channels/actions/connection/setup-remediate-v1';
+    const publish = (settings: unknown, settingsVersion: number) => setActiveAccountSettingsSnapshot({
+      source: 'network', settings: accountSettingsParse({ actionsSettingsV1: settings }), settingsVersion,
+      loadedAtMs: settingsVersion, settingsSecretsReadKeys: [], scopeKey: 'account:channels-remediation-policy',
+    });
+    let repairs = 0;
+    const unavailable = createUnavailablePluginServices();
+    // Only Connected Account materialization and provider HTTP are substituted.
+    // The SDK host runs the real Channels registration and Telegram handler.
+    const telegram = await createPluginTestkit({ manifest: TELEGRAM_MANIFEST, module: { activate: activateTelegram }, services: {
+      connectedAccounts: { ...unavailable.connectedAccounts, materialize: async () => ({ kind: 'environment', env: { TELEGRAM_BOT_TOKEN: '123:fixture' } }) },
+      http: { ...unavailable.http, request: async ({ url }) => {
+        if (url.endsWith('/deleteWebhook')) repairs += 1;
+        return { status: 200, finalUrl: url, headers: { 'content-type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify({ ok: true,
+          result: url.endsWith('/deleteWebhook') ? true : url.endsWith('/getWebhookInfo') ? { url: repairs === 0 ? 'https://previous.example.test/hook' : '', pending_update_count: 0 }
+            : { id: 123, is_bot: true, first_name: 'Fixture bot', username: 'FixtureBot' },
+        })) };
+      } },
+    } });
+    const core = await createPluginTestkit({ manifest: CHANNELS_MANIFEST, module: CHANNELS_PLUGIN, targetedContributionContributors: [telegram] });
+    try {
+      const snapshot = core.readTargetedContributionFixture(CHANNELS_PROVIDER_POINT_REF);
+      const contributor = snapshot.contributions[0]?.contributor;
+      if (!contributor) throw new Error('Expected the current Telegram provider contribution.');
+      const selection = { target: { pluginId: 'happier.channels', sourceCustody: snapshot.sourceCustody },
+        point: { pointId: CHANNELS_PROVIDER_POINT_REF.id, protocol: CHANNELS_PROVIDER_POINT_REF.protocol },
+        contributor: { pluginId: contributor.pluginId, contributionId: contributor.contributionId, sourceCustody: contributor.sourceCustody } };
+      const credentialRef = { service: { pluginId: TELEGRAM_MANIFEST.id, localId: 'telegram-bot' }, accountId: 'fixture-account' };
+      const services = channelsTargetedContributionServices(core);
+      const setup = { providerSelection: selection, providerSetupInput: { credentialRef }, credentialRef };
+      expect(await core.invokeAction('connection/prepare-v1', setup, { services, surface })).toEqual({ kind: 'requiresRemediation' });
+      const loaded = loadCurrentBundledPluginLocatorResult();
+      const projected = projectLoadedPluginContributes({ loadResult: {
+        loadedPlugins: loaded.loadedPlugins.filter(plugin => plugin.pluginId === CHANNELS_MANIFEST.id)
+          .map(plugin => ({ ...plugin, manifest: normalizePluginManifestV2(CHANNELS_MANIFEST) })), diagnosticsByPluginId: {},
+      }, provenance: 'first_party' });
+      const action = projected.actions?.find(entry => entry.definition.id === 'connection/setup-remediate-v1');
+      const prepareAction = projected.actions?.find(entry => entry.definition.id === 'connection/prepare-v1');
+      if (!action || !prepareAction) throw new Error('Expected the current Channels setup repair and prepare Action declarations.');
+      const providerRepair = TELEGRAM_MANIFEST.contributes.actions.find(entry => entry.id === 'telegram/remove-webhook');
+      if (!providerRepair) throw new Error('Expected the current provider repair Action declaration.');
+      // The nested provider role is a trusted-plugin invocation: its default
+      // does not add a second Ask, but explicit per-Action policy still wins.
+      expect(pluginActionRequiresPresentUserIntent(providerRepair, 'plugin')).toBe(false);
+      expect(pluginActionRequiresPresentUserIntent({ ...providerRepair, approvalRequiredByActionSettings: true }, 'plugin')).toBe(true);
+      expect(pluginActionRequiresPresentUserIntent({ ...providerRepair, approvalRequiredByActionSettings: false }, 'plugin')).toBe(false);
+      const targetActionInvocations = createTargetActionInvocationRegistry({ actions: [action, prepareAction].map(entry => {
+        const registration = createTargetActionRegistration({ action: entry, handler: async input => await core.invokeAction(entry.definition.id, input, { services, surface }) });
+        return { ...registration, definition: { ...registration.definition, dangerLevel: entry.definition.dangerLevel,
+          ...('confirmation' in entry.definition ? { confirmation: entry.definition.confirmation } : {}) } };
+      }) });
+      const runtimeRegistry = { ...await createExecutableRegistry({ action, targetActionInvocations,
+        activateContributionsOnDemand: async () => [],
+        resolveCurrentPluginApprovalReplayPlacement: async () => ({ serverId: 'channels-policy-home', machineId: 'channels-policy-machine' }),
+      }), contributes: createResolvedContributionRegistry({ actions: [action, prepareAction] }) };
+      const requestCurrentIntent = vi.fn(async (request: TargetActionCurrentIntentRequest) => {
+        expect(repairs).toBe(0);
+        return { status: 'approved' as const, fingerprint: request.fingerprint };
+      });
+      const invoke = () => executeContributedAction({ runtimeRegistry, actionId: action.definition.id,
+        input: { providerSelection: selection, providerRemediationInput: { credentialRef }, credentialRef }, requestCurrentIntent,
+        context: { surface },
+      });
+      const prepare = () => executeContributedAction({ runtimeRegistry, actionId: prepareAction.definition.id, input: setup, requestCurrentIntent, context: { surface } });
+      publish({ v: 1, actions: { [qualifiedId]: { disabledSurfaces: [surface] } } }, 1);
+      expect(await invoke()).toMatchObject({ result: { ok: false, errorCode: 'plugin_action_unavailable', actionHandlerInvocation: 'notStarted' } });
+      expect(repairs).toBe(0);
+      expect(requestCurrentIntent).not.toHaveBeenCalled();
+      expect(await prepare()).toMatchObject({ result: { ok: true, result: { kind: 'requiresRemediation' } } });
+      publish({ v: 1, actions: { [qualifiedId]: { approvalRequiredSurfaces: [surface] } } }, 2);
+      expect(await invoke()).toMatchObject({ result: { ok: true, result: { kind: 'remediated' } } });
+      expect(repairs).toBe(1);
+      expect(requestCurrentIntent).toHaveBeenCalledOnce();
+      publish({ v: 1, actions: {}, approvalWaivedSurfaces: { [qualifiedId]: [surface] } }, 3);
+      expect(await invoke()).toMatchObject({ result: { ok: true, result: { kind: 'remediated' } } });
+      expect(repairs).toBe(2);
+      expect(requestCurrentIntent).toHaveBeenCalledOnce();
+      expect(await prepare()).toMatchObject({ result: { ok: true, result: { kind: 'ready' } } });
+    } finally {
+      await core.dispose(); await telegram.dispose(); resetActiveAccountSettingsSnapshotForTests();
       if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
       else process.env.HAPPIER_ACTIONS_SETTINGS_V1 = previousSettings;
     }

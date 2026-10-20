@@ -244,7 +244,7 @@ describe('admitted targeted-operation execution', () => {
                 sourceCustody: { kind: 'managed', immutableGenerationId: 'provider-occurrenceId-a', installSource: 'archive' },
             },
             role,
-            action: { pluginId: 'acme.provider', localId: `connection/${role}` },
+            action: { pluginId: 'acme.provider', localId: role === 'setup' ? 'connection/setup' : 'connection/remediate' },
         } as const;
         const selectedActionInputCarrier = {
             operation,
