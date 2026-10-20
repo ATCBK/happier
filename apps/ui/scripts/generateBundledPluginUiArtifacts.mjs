@@ -243,8 +243,10 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
     const uiDeclaration = declaration.success ? {
       pluginId, pluginVersion: packageVersion, packageName,
       displayName: typeof declaration.data.displayName === 'string' ? declaration.data.displayName : declaration.data.displayName.fallback,
+      normalizedManifest: { ...declaration.data, version: packageVersion },
+      artifactGraphs: parsedManifest.data.entries,
       declaredExecution: {
-        daemonActions: declaration.data.contributes.actions?.some(action => action.execution?.target !== 'client') === true,
+        daemonActions: declaration.data.contributes.actions?.some(action => !action.execution || action.execution.target === 'daemon') === true,
         contributionPoints: (declaration.data.contributes.pluginContributionPoints?.length ?? 0) > 0,
       },
       entriesById: projectPluginPortableUiDeclarationsV1({ ...declaration.data, version: packageVersion }, parsedManifest.data.entries),

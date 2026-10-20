@@ -149,6 +149,9 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     const declaration = JSON.parse(output.match(/const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 = (.+);/)[1]);
     assert.equal(declaration.pluginId, 'happier.fixture');
     assert.equal(declaration.packageName, '@happier-dev/plugins-fixture');
+    assert.equal(declaration.normalizedManifest.id, manifest.id);
+    assert.deepEqual(declaration.normalizedManifest.contributes.actions, manifest.contributes.actions);
+    assert.deepEqual(declaration.artifactGraphs, JSON.parse(await readFile(join(fixture.artifactRoot, 'ui-artifacts.json'), 'utf8')).entries);
     assert.deepEqual(declaration.declaredExecution, { daemonActions: true, contributionPoints: true });
     const { normalizePluginAccountCollectionContractV1 } = await import('@happier-dev/protocol/plugins/data/collectionsV1');
     const compiled = normalizePluginAccountCollectionContractV1({ pluginId: manifest.id, contribution: collection });
