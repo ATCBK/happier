@@ -30,6 +30,19 @@ describe('resolveSessionSkillPlanV1', () => {
   it('never selects an item that P2 did not select', () => {
     expect(resolve({ items: [item('off'), item('absent')], selected: [selected('off', false)] }).items.map(value => value.state)).toEqual(['off', 'off']);
   });
+  it('resolves source-folder collisions by newest update then skill id without changing declared names', () => {
+    const items = [
+      { ...item('older', 'declared-a', 1), sourceFolderName: 'Shared' },
+      { ...item('a', 'declared-b', 2), sourceFolderName: 'shared' },
+      item('z', 'shared', 2),
+    ];
+    for (const ordered of [items, [...items].reverse()]) {
+      const plan = resolve({ items: ordered, selected: items.map(value => selected(value.skillId)) });
+      expect(plan.items.filter(value => value.state === 'delivered').map(value => value.skillId)).toEqual(['z']);
+      expect(plan.items.filter(value => value.skillId !== 'z').every(value => value.state === 'name_conflict')).toBe(true);
+    }
+    expect(resolve({ items, selected: items.map(value => selected(value.skillId)), agentSkills: null }).items.every(value => value.state === 'delivered')).toBe(true);
+  });
   it('preserves known masking while withholding all other selected items on a failed scan', () => {
     const plan = resolve({ items: [item('masked'), item('unknown', 'other')], selected: [selected('masked'), selected('unknown')],
       nativeSkills: { status: 'failed', roots: ['/unreadable'], names: [{ name: 'sample', path: '/native/sample/SKILL.md', root: '/native' }] } });

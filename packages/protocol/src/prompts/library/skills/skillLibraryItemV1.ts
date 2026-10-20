@@ -22,6 +22,7 @@ export function isPluginSkillIdV1(skillId: string): boolean {
 
 export type SkillLibraryItemV1 = Readonly<{
   skillId: string; name: string; digest: string; description: string;
+  sourceFolderName?: string;
   disableModelInvocation: boolean; userInvocable: boolean; updatedAt?: number;
 }>;
 
@@ -62,7 +63,11 @@ export type ReadOnlySkillProvenanceV1 = Extract<SkillProvenanceV1, { kind: 'firs
 export function isReadOnlySkillProvenanceV1(provenance: SkillProvenanceV1): provenance is ReadOnlySkillProvenanceV1 {
   return provenance.kind === 'first_party' || provenance.kind === 'plugin';
 }
+/** One source-directory segment, never a relative or absolute destination path. */
+export const SkillSourceFolderNameV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1),
+  z.refine(value => value !== '.' && value !== '..' && !/[\\/\0]/u.test(value))));
 export const SkillLockV1Schema = lazyZodSchema(() => z.strictObject({ provenance: SkillProvenanceV1Schema,
+  sourceFolderName: z.optional(SkillSourceFolderNameV1Schema),
   importedDigest: z.optional(z.string().check(z.minLength(1))), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: z.optional(RegistryUpstreamV1Schema) }));
 export type SkillLockV1 = z.infer<typeof SkillLockV1Schema>;
 const SkillLockStoredV1Schema = createStoredReadSchema(SkillLockV1Schema);

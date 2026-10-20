@@ -2,7 +2,7 @@ import { readSkillBundleContentV1,
   type PromptBundleBodyV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { FIRST_PARTY_SKILLS_V1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
-import type { SkillLibraryItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { readSkillLockV1, type SkillLibraryItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { createCredentialedAccountArtifactStore, type AccountArtifact, type AccountArtifactHeader } from '@/api/artifacts/accountArtifactStore';
 import type { StoredCredentials } from '@/persistence';
 import { readCompleteSkillLibraryInventoryV1 } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
@@ -19,7 +19,11 @@ export function readSkillArtifactContent(artifact: Pick<AccountArtifact, 'artifa
   const content = readSkillBundleContentV1(artifact);
   if (!content) return null;
   const { frontmatter } = content;
+  let sourceFolderName: string | undefined;
+  try { sourceFolderName = readSkillLockV1(artifact.header).sourceFolderName; }
+  catch { return null; }
   return { item: { ...frontmatter, name: frontmatter.name, description: frontmatter.description ?? '',
+    ...(sourceFolderName ? { sourceFolderName } : {}),
     skillId: artifact.artifactId, digest: content.digest, updatedAt: artifact.updatedAt }, body: content.body };
 }
 

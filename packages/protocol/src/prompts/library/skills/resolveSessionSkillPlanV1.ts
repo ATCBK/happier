@@ -52,11 +52,14 @@ export function resolveSessionSkillPlanV1(input: {
   const activeNative = new Map(input.nativeSkills.names.filter(item => !disableSupported || !disabled.has(item.name))
     .map(item => [item.name, item]));
   const newest = new Map<string, SkillLibraryItemV1>();
+  const newestFolder = new Map<string, SkillLibraryItemV1>();
   for (const item of input.items) {
     if (!selection.get(item.skillId)?.selected) continue;
-    const previous = newest.get(item.name);
-    if (!previous || (item.updatedAt ?? 0) > (previous.updatedAt ?? 0)
-      || (item.updatedAt ?? 0) === (previous.updatedAt ?? 0) && item.skillId.localeCompare(previous.skillId) > 0) newest.set(item.name, item);
+    for (const [map, key] of [[newest, item.name], [newestFolder, (item.sourceFolderName ?? item.name).toLowerCase()]] as const) {
+      const previous = map.get(key);
+      if (!previous || (item.updatedAt ?? 0) > (previous.updatedAt ?? 0)
+        || (item.updatedAt ?? 0) === (previous.updatedAt ?? 0) && item.skillId.localeCompare(previous.skillId) > 0) map.set(key, item);
+    }
   }
   const items: SessionSkillPlanV1['items'] = input.items.map(item => {
     const selected = selection.get(item.skillId);
@@ -66,7 +69,9 @@ export function resolveSessionSkillPlanV1(input: {
     const native = activeNative.get(item.name);
     if (native) return { ...identity, state: 'masked_by_native', reason: 'native_same_name', maskedBy: { path: native.path } };
     if (input.nativeSkills.status === 'failed') return { ...identity, state: 'unavailable', reason: 'native_scan_failed' };
-    if (newest.get(item.name)?.skillId !== item.skillId) return { ...identity, state: 'name_conflict', reason: 'duplicate_name' };
+    if (newest.get(item.name)?.skillId !== item.skillId
+      || plan === 'session_dir' && newestFolder.get((item.sourceFolderName ?? item.name).toLowerCase())?.skillId !== item.skillId)
+      return { ...identity, state: 'name_conflict', reason: 'duplicate_name' };
     return { ...identity, state: 'delivered', reason: selected.reason };
   });
   return { plan, items, nativeDisables, diagnostics: input.nativeSkills.status === 'failed'

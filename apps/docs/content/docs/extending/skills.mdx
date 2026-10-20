@@ -89,7 +89,9 @@ happier skills found --machine <machine-id>
 happier skills machine-install code-review --machine <machine-id>
 ```
 
-`happier skills install` adds the same referenced skills; `--dry-run` lists them and `--path` limits what is added. Delivered skills keep their own folder names in an Agent's skill folder, so a relative reference between sibling skills resolves.
+`happier skills install` adds the same referenced skills; `--dry-run` lists them and `--path` limits what is added. In 0.3 development, skills imported from a repository or a multi-skill upload keep their source folder names in the private Session folder, even if the declared skill name differs or you rename it later. This lets relative references between selected siblings resolve. Written skills, single-skill uploads and existing library items without a recorded source folder use their declared names.
+
+When selected skills share a declared name or delivery folder, Happier delivers the most recently updated item; equal update times are settled by skill id. Folder comparisons ignore case so the choice is consistent across platforms. Other colliding items report a name conflict; Happier does not rename their folders.
 
 Use `happier skills --help` and each subcommand's `--help` for current arguments. The generated [host Action catalog](/plugins/api/host-actions) owns the complete command and schema reference, including editing, rules, adoption, ZIP export and update choices.
 
