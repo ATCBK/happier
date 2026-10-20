@@ -6,7 +6,7 @@ import { ProviderAccountUsageRecordIdSchema } from '../connect/providerAccountUs
 import { ProviderAccountUsagePaceWindowV1Schema } from '../connect/deriveProviderAccountUsagePace.js';
 import { UsageQuotaNotificationKindV1Schema } from '../account/settings/usagePacingPreferencesV1.js';
 import { MachineVitalsDiskThresholdV1Schema } from '../machines/vitals/machineVitalsAlertsV1.js';
-import { SessionGuardStateV1Schema } from '../machines/guard/sessionGuardStateV1.js';
+import { SessionGuardStateV1Schema, SessionGuardMemoryObservationV1Schema } from '../machines/guard/sessionGuardStateV1.js';
 import { TerminalGuardStateV1Schema } from '../machines/guard/terminalGuardStateV1.js';
 import { PUSH_NOTIFICATION_CATEGORY_IDS } from '../push/pushNotificationActions.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
@@ -123,6 +123,7 @@ export type GuardStopWarningNotificationV1 = z.infer<typeof GuardStopWarningNoti
 export const GuardAttentionNotificationV1Schema = lazyZodSchema(() => z.strictObject({
   topic: z.literal('guard_attention'), machineId: z.string().check(z.minLength(1)), sessionId: z.string().check(z.minLength(1)),
   kind: z.enum(['ceiling_near', 'ceiling_reached']),
+  memory: z.optional(SessionGuardMemoryObservationV1Schema),
 }));
 export type GuardAttentionNotificationV1 = z.infer<typeof GuardAttentionNotificationV1Schema>;
 

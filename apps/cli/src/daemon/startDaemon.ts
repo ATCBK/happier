@@ -2536,9 +2536,9 @@ export async function startDaemon(
           })),
           notice: sendGuardSessionNotice,
           clearNotice: tracked => sendGuardSessionNotice(tracked, { kind: 'clear' }, homeTransportCancellation.signal),
-          notify: async ({ kind, sessionId }) => {
+          notify: async ({ kind, sessionId, memory }) => {
             const tracked = [...pidToTrackedSession.values()].find(item => item.happySessionId === sessionId);
-            if (!tracked || !await sendGuardSessionNotice(tracked, { kind: 'notify_ceiling', notice: kind }, homeTransportCancellation.signal))
+            if (!tracked || !await sendGuardSessionNotice(tracked, { kind: 'notify_ceiling', notice: kind, ...(memory ? { memory } : {}) }, homeTransportCancellation.signal))
               throw new Error('guard_notification_session_unavailable');
           },
         });

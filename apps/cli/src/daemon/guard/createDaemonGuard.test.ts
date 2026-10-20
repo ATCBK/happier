@@ -77,8 +77,10 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
         let guard: DaemonGuard | undefined;
         let pressure: 'critical' | 'calm' = projectService ? 'calm' : 'critical';
         let available = 100;
+        let missingVitals = false;
         let present = true;
         let nativeReads = 0;
+        let factsReads = 0;
         let stops = 0;
         let working = projectService;
         let connections = 0;
@@ -127,6 +129,7 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
             // OS counter boundary; all minute aggregation and execution logic beneath it are real.
             readers: { read: async input => {
                 intervals.push(input.intervalMs);
+                if (missingVitals) return { state: 'unavailable', reason: 'reader_failed' };
                 return { state: 'reporting', host: { logicalCores: 1, memoryTotalBytes: 1000, bootedAt: epoch - 60000 },
                     sample: { v: 1, sampledAt: input.sampledAt, intervalMs: input.intervalMs,
                         cpu: { reported: false, reason: 'unavailable' }, memory: { reported: true, totalBytes: 1000,
@@ -214,6 +217,7 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
                         processStartTimeMs: row.start.startTimeMs, censusRow: row, command: 'vite', processOwnership: 'self' as const }])) });
             } });
         const readFacts = async (owners: GuardFacts['ownership'], readSignal?: AbortSignal): Promise<GuardFacts> => {
+            factsReads++;
             await factsReadBoundary?.();
             return projectService || idleSession
             ? projectFacts({ ownership: owners, inventory: await inventory.read(), signal: readSignal }) : ({ ownership: owners,
@@ -251,8 +255,58 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
             working: (value: boolean) => { working = value; sessionProducer.notifyChanged(); },
             connections: (value: number) => { connections = value; guard!.refreshOnTick(); },
             gone: () => { present = false; sessionProducer.notifyChanged(); }, pressure: (level: typeof pressure) => { pressure = level; },
-            available: (bytes: number) => { available = bytes; }, get stops() { return stops; }, get nativeReads() { return nativeReads; } };
+            available: (bytes: number) => { available = bytes; }, missingVitals: (value: boolean) => { missingVitals = value; },
+            get stops() { return stops; }, get nativeReads() { return nativeReads; }, get factsReads() { return factsReads; } };
     }
+
+    it('keeps automatic auxiliary and memory observations on minutes while Overview is live, including failed-reader retries', async () => {
+        const native = createGuardLeftBehindFixture();
+        native.advance(20000); vi.setSystemTime(native.now());
+        const readPolicy = () => MachineGuardPolicyV1Schema.parse({
+            memoryGuard: { enabled: true, sustainMs: 60000 }, leftBehind: { mode: 'automatic', graceMs: 600000 },
+        });
+        let plans = 0;
+        const f = await setup(undefined, true, true, { readPolicy, ownership: native.ownership,
+            createPolicyWork(activity) {
+                const actuator = createLeftBehindActuator({ activity, nowMs: native.now,
+                    readPolicy: () => readPolicy().leftBehind, confirmed: native.tracker.confirmed,
+                    readRestoration: () => null,
+                    executeAction: async () => { throw new Error('No cleanup is due during this observation'); },
+                });
+                const listeners = new Set<() => void>();
+                return { enabled: policy => policy.leftBehind.mode !== 'off',
+                    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+                    async readPlan() {
+                        plans++; await native.observe();
+                        const plan = actuator.plan();
+                        return { nextAt: plan.nextAt };
+                    },
+                    refreshOnTick() { actuator.invalidateFailures(); for (const listener of listeners) listener(); },
+                    stop() { listeners.clear(); },
+                };
+            },
+        });
+        f.pressure('calm');
+        const release = f.sampler.demandOverview(); cleanup.push(release);
+        await vi.advanceTimersByTimeAsync(0); await f.drain();
+        const initialPlans = plans;
+        const initialFactsReads = f.factsReads;
+        await vi.advanceTimersByTimeAsync(58000); await f.drain();
+        expect(f.sampler.latest()?.intervalMs).toBe(2000);
+        expect(plans).toBe(initialPlans);
+        expect(f.factsReads).toBe(initialFactsReads);
+        const ownerPlans = plans;
+        native.advance(60000); await vi.advanceTimersByTimeAsync(2000); await f.drain();
+        expect(plans).toBeGreaterThan(ownerPlans);
+        f.missingVitals(true);
+        await vi.advanceTimersByTimeAsync(2000); await f.drain();
+        const failedPlans = plans;
+        await vi.advanceTimersByTimeAsync(56000); await f.drain();
+        expect(plans).toBe(failedPlans);
+        native.advance(60000); await vi.advanceTimersByTimeAsync(2000); await f.drain();
+        expect(plans).toBeGreaterThan(failedPlans);
+        expect(f.stops).toBe(0);
+    });
 
     it('warns after a fresh composed read even when the inventory publishes its settled observation during that read', async () => {
         const f = await setup(undefined, true, false, undefined, true);
@@ -373,7 +427,7 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
         // the existing tracker, and cleaned only after its separate grace expires.
         native.rows.set(302, { ...taggedRow, pid: 302, pgid: 302,
             start: { startTimeMs: 302, native: 'darwin-proc:302:0:302' }, memory: { kind: 'rss', bytes: 3020 } });
-        f.guard.refreshOnTick(); await f.drain();
+        native.advance(60000); await vi.advanceTimersByTimeAsync(60000); await f.drain();
         native.advance(60000); await vi.advanceTimersByTimeAsync(60000); await f.drain();
         expect(signals).toEqual([300, 301]);
         native.advance(60000); await vi.advanceTimersByTimeAsync(60000); await f.drain();

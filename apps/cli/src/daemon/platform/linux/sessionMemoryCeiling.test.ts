@@ -17,6 +17,8 @@ import { buildCgroupProcessLaunchSpec } from './buildCgroupSelfMigratingHappyCli
 import { createHappierLinuxScopeName } from './systemdUserResourceGovernor';
 import { createSessionMemoryCeiling, type SessionMemoryCeilingTarget } from './sessionMemoryCeiling';
 import { createProcessOwnershipRuntime } from '../../processes/ownership/processOwnershipRuntime';
+import { buildActivityNotificationContent } from '@/notifications/activity/buildActivityNotificationContent';
+import { GuardAttentionNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
 import { createLeftBehindPass } from '../../processes/leftBehind/leftBehindPass';
 import { createMachineProcessesView } from '../../processes/view/createMachineProcessesView';
 import { MachineProcessesAnswerV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
@@ -177,6 +179,21 @@ async function fixture() {
 }
 
 describe('per-Session soft memory ceiling owner', () => {
+  it('preserves the observed usage and applied ceiling through a retried notice and its receipt', async () => {
+    const f = await fixture(); await f.run();
+    f.usage(950); f.owner.refreshOnTick(); f.notifyFails(true);
+    await expect(f.run()).rejects.toThrow('Runner RPC unavailable');
+    // A later observation must not rewrite the occurrence whose receipt was already committed.
+    f.usage(970); f.owner.refreshOnTick(); f.notifyFails(false); await f.run();
+    const notice = GuardAttentionNotificationV1Schema.parse({ topic: 'guard_attention', machineId: 'machine',
+      ...f.notifications[0] as object });
+    expect(notice).toMatchObject({ memory: { usedBytes: 950, limitBytes: 1000 } });
+    expect((await f.log.list({ range: 'today' })).entries.find(entry => entry.kind === 'ceiling_near'))
+      .toMatchObject({ memory: { usedBytes: 950, limitBytes: 1000 } });
+    const content = buildActivityNotificationContent(notice, { readyIncludeMessageText: false });
+    expect(content.data).toMatchObject({ memory: { usedBytes: 950, limitBytes: 1000 } });
+    expect(content.body).toContain('950 B'); expect(content.body).toContain('1,000 B');
+  });
   it('withdraws unreadable current usage while preserving the applied limit and recovers on the next native observation', async () => {
     const f = await fixture(); const root = f.readTarget().root;
     await f.run(); f.usage(300); f.owner.refreshOnTick(); await f.run();
@@ -338,7 +355,7 @@ describe('per-Session soft memory ceiling owner', () => {
     if (kind === 'systemd') expect(f.properties).toEqual([{ unit: physicalUnit, bytes: 1000 }]);
     else expect(f.writes).toContainEqual({ path: `/sys/fs/cgroup${prefix}/memory.high`, value: '1000\n' });
     f.usage(950); f.owner.refreshOnTick(); await f.run();
-    expect(f.notifications).toContainEqual({ kind: 'ceiling_near', sessionId: tracked.happySessionId });
+    expect(f.notifications).toContainEqual(expect.objectContaining({ kind: 'ceiling_near', sessionId: tracked.happySessionId }));
     f.edge(1); await f.run();
     expect(f.stops).toEqual([tracked]);
     expect((await f.log.list({ range: 'today' })).entries).toContainEqual(expect.objectContaining({ kind: 'stopped_session', rule: 'ceiling', outcome: 'done' }));

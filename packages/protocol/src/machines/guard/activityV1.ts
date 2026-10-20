@@ -5,6 +5,7 @@ import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { RequesterWorkAttributionV1Schema } from '../requesterWorkAttributionV1.js';
 import { SpawnFailureV1Schema } from '../processes/spawnFailureV1.js';
+import { SessionGuardMemoryObservationV1Schema } from './sessionGuardStateV1.js';
 
 export const MACHINE_GUARD_ACTIVITY_KINDS_V1 = ['stopped_session', 'closed_browser', 'stopped_service',
   'stopped_left_behind', 'out_of_steps', 'stop_failed', 'kept_running', 'ceiling_near', 'ceiling_reached',
@@ -37,6 +38,7 @@ export const MachineGuardActivityEntryV1Schema = lazyZodSchema(() => z.strictObj
     inUseBytes: z.optional(bytes()), swapBytes: z.optional(bytes()) })),
   step: z.optional(z.union([z.literal(1), z.literal(2), z.literal(3)])), episodeId: z.optional(id()),
   freedBytes: z.optional(bytes()), inTrashBytes: z.optional(bytes()),
+  memory: z.optional(SessionGuardMemoryObservationV1Schema),
   outcome: z.enum(['done', 'failed', 'did_not_help']), note: z.optional(z.string()),
   wayBack: z.optional(z.array(MachineGuardActivityWayBackV1Schema).check(z.minLength(1))), ref: z.optional(id()),
   attribution: z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })]),

@@ -26,7 +26,7 @@ export type GuardTerminalPreview = Readonly<{
 export type GuardViewRequester = Readonly<{ serverId: string; accountId: string; isCustodian: boolean; machineId?: string; installationId?: string }>;
 export type GuardWatchInput = Readonly<{
   policy: Pick<MachineResourcesPolicyRuntime, 'read' | 'subscribe'>;
-  sampler: Pick<MachineVitalsSampler, 'latest' | 'demand' | 'subscribe'>;
+  sampler: Pick<MachineVitalsSampler, 'latest' | 'demand' | 'subscribe' | 'samplesSince'>;
   ownership: Pick<ReturnType<typeof createProcessOwnershipRuntime>, 'readOwners'>;
   readFacts(ownership: GuardOwnership, signal?: AbortSignal): Promise<GuardFacts>;
   readState(): MachineGuardStateV1;
@@ -195,7 +195,7 @@ export function createGuardWatch(input: GuardWatchInput) {
           if (signal.aborted) continue;
           for (const watcher of watchers) {
             const view = { ...project(next, watcher.requester), otherMemoryGuards: watcher.view.otherMemoryGuards };
-            if (comparison(view) !== comparison(watcher.view)) {
+            if (next.since > watcher.since) {
               watcher.view = view; watcher.since = next.since; watcher.notify();
             }
           }
@@ -207,14 +207,23 @@ export function createGuardWatch(input: GuardWatchInput) {
       } while (refreshAgain && watchers.size && !stopped);
     })().finally(() => { refreshing = null; });
   };
+  // A committed journal change can alter a longer Activity query while Today stays identical.
+  // Keep only this invalidation across parked-watch gaps; it never starts work without a viewer.
+  const releaseActivity = input.activityLog.subscribe(() => { fingerprint = undefined; refresh(); });
   const park = createParkWatch({ onWatcherCountChanged(count) {
     if (!count) { releaseObservation(); return; }
     if (releases.length) return;
     observation = new AbortController();
+    let sampleCursor = input.sampler.latest()?.sampledAt ?? 0;
     // Subscribe before the gap-closing read so owner changes cannot be missed.
     // Viewed previews share the sampler's summary clock and the canonical census.
-    releases = [input.sampler.demand('summary'), input.sampler.subscribe(refresh),
-      input.policy.subscribe(refresh), input.subscribe(refresh), input.activityLog.subscribe(refresh)];
+    releases = [input.sampler.demand('summary'), input.sampler.subscribe(() => {
+      const sample = input.sampler.samplesSince(sampleCursor, 'summary').at(-1);
+      if (!sample) return;
+      sampleCursor = sample.sampledAt;
+      refresh();
+    }),
+      input.policy.subscribe(refresh), input.subscribe(refresh)];
     refresh();
   } });
   return {
@@ -245,6 +254,6 @@ export function createGuardWatch(input: GuardWatchInput) {
       });
       return result.changed ? { changed: true, ...result.snapshot } : result;
     },
-    dispose() { if (stopped) return; stopped = true; lifetime.abort(); releaseObservation(); },
+    dispose() { if (stopped) return; stopped = true; lifetime.abort(); releaseObservation(); releaseActivity(); },
   };
 }

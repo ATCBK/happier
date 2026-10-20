@@ -7,6 +7,7 @@ import { GuardStopWarningNotificationV1Schema, GuardAttentionNotificationV1Schem
 import { MachineGuardActivityNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
 import { MachineVitalsNotificationV1Schema, MachineVitalsPushRoutingDataV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
 import { resolveMachineVitalsNextStepsV1 } from '@happier-dev/protocol/machines/vitals/resolveMachineVitalsNextStepsV1';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation/formatBytes';
 
 import type { ActivityNotificationEvent } from './activityNotificationEvent';
 
@@ -199,8 +200,11 @@ export function buildActivityNotificationContent(
   }
   if (event.topic === 'guard_attention') {
     const notice = GuardAttentionNotificationV1Schema.parse(event);
+    const measurement = notice.memory
+      ? `${formatHappierDataBytes(notice.memory.usedBytes, { kind: 'memory', locale: 'en-US' })} of a ${formatHappierDataBytes(notice.memory.limitBytes, { kind: 'memory', locale: 'en-US' })} limit. ` : '';
     return { title: notice.kind === 'ceiling_near' ? 'Session is near its memory ceiling' : 'Session reached its memory ceiling',
-      body: includePreview ? 'Review the session or change its memory ceiling.' : '', data: notice };
+      body: includePreview ? `${measurement}Review the session or change its memory ceiling.` : '',
+      data: includePreview ? notice : (({ memory: _memory, ...routing }) => routing)(notice) };
   }
   if (event.topic === 'connected_service_usage') {
     const descriptions = {

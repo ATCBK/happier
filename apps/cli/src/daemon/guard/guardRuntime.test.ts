@@ -142,8 +142,8 @@ describe('memory guard episode on the incumbent minute sampler', () => {
       for (let i = 0; i < 4; i++) { await activity.list({ range: 'today' }); for (let turn = 0; turn < 20; turn++) await Promise.resolve(); }
     };
     await drain();
-    return { runtime, activity, sampled, notices, stoppedIds, drain, changed, get stops() { return stops; }, get notifications() { return notifications; }, get reads() { return reads; },
-      setPresent: (value: boolean) => { present = value; changed(); }, setFailed: (value: boolean) => { failed = value; },
+    return { runtime, sampler, activity, sampled, notices, stoppedIds, drain, changed, get stops() { return stops; }, get notifications() { return notifications; }, get reads() { return reads; },
+      setPresent: (value: boolean, notify = true) => { present = value; if (notify) changed(); }, setFailed: (value: boolean) => { failed = value; },
       setLevel: (value: typeof level) => { level = value; }, setAvailable: (value: number) => { available = value; },
       setLowMemorySignal: (value: typeof lowMemorySignal) => { lowMemorySignal = value; },
       setDraft: (value: SessionDraftPresence) => { draft = value; changed(); },
@@ -169,6 +169,31 @@ describe('memory guard episode on the incumbent minute sampler', () => {
       close: async () => { signal.abort(); await running; await sampler.stop(); inventory.dispose(); summary.stop(); expect(errors).toEqual([]); } };
   }
 
+  it('keeps automatic observations on minutes and owner changes while Overview samples every two seconds', async () => {
+    const fixture = await setup('service');
+    const release = fixture.sampler.demandOverview();
+    try {
+      fixture.setLevel('calm');
+      await vi.advanceTimersByTimeAsync(0); await fixture.drain();
+      const reads = fixture.reads;
+      await vi.advanceTimersByTimeAsync(58_000); await fixture.drain();
+      expect(fixture.sampler.latest()?.intervalMs).toBe(2_000);
+      expect(fixture.reads).toBe(reads);
+      fixture.setConnections(1); await fixture.drain();
+      expect(fixture.reads).toBeGreaterThan(reads);
+      const afterOwnerChange = fixture.reads;
+      fixture.setConnections(0); await fixture.drain();
+      expect(fixture.reads).toBeGreaterThan(afterOwnerChange);
+      const beforeMinute = fixture.reads;
+      await vi.advanceTimersByTimeAsync(2_000); await fixture.drain();
+      expect(fixture.reads).toBeGreaterThan(beforeMinute);
+      expect(fixture.runtime.readPreview()?.excluded).toEqual(expect.arrayContaining([
+        expect.objectContaining({ reason: 'connections_unknown' }),
+      ]));
+      expect(fixture.stops).toBe(0);
+    } finally { release(); await fixture.close(); }
+  });
+
   it('stays quiet with both stop rules off, then independently warns and stops an idle session without pressure or RSS', async () => {
     const fixture = await setup('session', false);
     try {
@@ -189,6 +214,88 @@ describe('memory guard episode on the incumbent minute sampler', () => {
         expect.objectContaining({ kind: 'stopped_session', rule: 'idle_sessions', outcome: 'done' })]));
       expect(fixture.notifications).toBe(0);
     } finally { await fixture.close(); }
+  });
+  it.each(['idle', 'memory'] as const)('publishes the %s Session warning before delivery and withdraws a failed acknowledgment without stopping', async rule => {
+    const fixture = await setup('session', rule === 'memory');
+    let release!: () => void;
+    const delivery = new Promise<void>(resolve => { release = resolve; });
+    let duringDelivery: Readonly<{ stopAt: number }> | undefined;
+    try {
+      fixture.onNotice(async state => {
+        if (state.kind !== 'stopping') return;
+        duringDelivery = fixture.runtime.readSessionWarning('s');
+        await delivery;
+      });
+      if (rule === 'idle') { fixture.setIdlePolicy({ enabled: true, afterMs: 600000 }); await fixture.drain(); }
+      await vi.advanceTimersByTimeAsync(rule === 'idle' ? 300000 : 60000); await fixture.drain();
+      expect(duringDelivery).toEqual({ stopAt: rule === 'idle' ? 600000 : 360000 });
+      await vi.advanceTimersByTimeAsync(600000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      fixture.setNoticeAvailable(false); release(); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      expect(fixture.stops).toBe(0);
+    } finally { release(); await fixture.close(); }
+  });
+  it.each(['idle', 'memory'] as const)('keeps the %s Session warning cleared when Keep running wins before delivery acknowledges', async rule => {
+    const fixture = await setup('session', rule === 'memory');
+    let release!: () => void;
+    const delivery = new Promise<void>(resolve => { release = resolve; });
+    let delivering = false;
+    try {
+      fixture.onNotice(async state => { if (state.kind === 'stopping') { delivering = true; await delivery; } });
+      if (rule === 'idle') { fixture.setIdlePolicy({ enabled: true, afterMs: 600000 }); await fixture.drain(); }
+      await vi.advanceTimersByTimeAsync(rule === 'idle' ? 300000 : 60000); await fixture.drain();
+      expect(delivering).toBe(true);
+      expect(await fixture.runtime.keepRunning('s')).toBe('kept');
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      // Exclude an independent next warning under continuing pressure: only the held ACK may publish now.
+      if (rule === 'idle') fixture.setIdlePolicy({ enabled: false });
+      else fixture.setPolicy({ enabled: false });
+      const publications: (Readonly<{ stopAt: number }> | undefined)[] = [];
+      const stopObserving = fixture.runtime.subscribe(() => { publications.push(fixture.runtime.readSessionWarning('s')); });
+      try {
+        release(); await fixture.drain();
+        expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+        expect(publications.every(value => value === undefined)).toBe(true);
+        expect(fixture.stops).toBe(0);
+      } finally { stopObserving(); }
+    } finally { release(); await fixture.close(); }
+  });
+  it('honors a Keep-running idle deadline between minute samples', async () => {
+    const fixture = await setup('session', false);
+    try {
+      fixture.setIdlePolicy({ enabled: true, afterMs: 600000 }); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(301000); await fixture.drain();
+      expect(await fixture.runtime.keepRunning('s')).toBe('kept'); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toEqual({ stopAt: 901000 });
+      await vi.advanceTimersByTimeAsync(299999); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      await vi.advanceTimersByTimeAsync(1); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      expect(fixture.sampler.latest()?.sampledAt).toBeLessThan(901000);
+    } finally { await fixture.close(); }
+  });
+  it('observes an unannounced stop on the next live sample and verifies after its existing cooldown', async () => {
+    const fixture = await setup();
+    let release: (() => void) | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      release = fixture.sampler.demandOverview();
+      await vi.advanceTimersByTimeAsync(0); await fixture.drain();
+      fixture.setPresent(false, false); fixture.setAvailable(180);
+      await vi.advanceTimersByTimeAsync(2000); await fixture.drain();
+      const readsAfterAbsence = fixture.reads;
+      await vi.advanceTimersByTimeAsync(56000); await fixture.drain();
+      expect(fixture.reads).toBe(readsAfterAbsence);
+      await vi.advanceTimersByTimeAsync(3999); await fixture.drain();
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1); await fixture.drain();
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'closed_browser', at: 122000, freedBytes: 80, outcome: 'done' }),
+      ]));
+    } finally { release?.(); await fixture.close(); }
   });
   it.each(['shutdown', 'policy_off'] as const)('retires a whole auxiliary native-read observer on %s without cancelling the shared census or acting later', async cancellation => {
     const native = createGuardLeftBehindFixture();

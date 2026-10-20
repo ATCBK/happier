@@ -294,6 +294,39 @@ describe('Guard requester view and parked watch', () => {
     expect(h.sampler.latest()?.intervalMs).toBe(60_000);
   });
 
+  it('keeps a parked ladder on the summary cadence when Overview demands live samples', async () => {
+    const h = await setup();
+    const first = await h.view.watch({ machineId: 'machine' }, requester);
+    if (!first.changed) throw new Error('Expected initial view');
+    const release = h.sampler.demandOverview();
+    const controller = new AbortController();
+    let settled = false;
+    const pending = h.view.watch({ machineId: 'machine', since: first.since }, requester, controller.signal)
+      .then(result => { settled = true; return result; });
+    const drain = async () => {
+      await h.sampler.start();
+      for (let read = 0; read < 4; read++) {
+        await h.activityLog.list({ range: 'today' });
+        for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+      }
+    };
+    try {
+      await h.parked();
+      await vi.advanceTimersByTimeAsync(0); await drain();
+      const reads = h.nativeReads();
+      h.setMemory(2);
+      for (let sample = 0; sample < 7; sample++) { await vi.advanceTimersByTimeAsync(2_000); await drain(); }
+      expect(h.sampler.latest()?.intervalMs).toBe(2_000);
+      expect(h.nativeReads()).toBe(reads);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000); await drain();
+      const changed = await pending;
+      expect(changed.changed).toBe(true);
+      if (!changed.changed) throw new Error('Expected summary preview');
+      expect(changed.view.ladder.summary.candidatesBytes).toBeGreaterThan(first.view.ladder.summary.candidatesBytes);
+    } finally { controller.abort(); release(); await pending; }
+  });
+
   it.each(['request', 'dispose'] as const)('releases initial readers on %s cancellation without cancelling the shared native producer', async mode => {
     const h = await setup();
     const native = h.holdNativeRead();
@@ -413,6 +446,38 @@ describe('Guard requester view and parked watch', () => {
     if (!changed.changed) throw new Error('Expected Activity view');
     expect(changed.view.recentActivity.map(row => row.id)).toContain('new');
     expect(h.listeners()).toBe(0);
+  });
+
+  it('wakes parked Activity readers when undoing yesterday leaves Today unchanged', async () => {
+    const h = await setup();
+    await h.activityLog.append({ v: 1, id: 'yesterday', at: epoch - 60_000, kind: 'stopped_session',
+      rule: 'idle_sessions', outcome: 'done', attribution,
+      wayBack: [{ label: 'resume', actionId: 'session.open', input: { sessionId: 'yesterday' } }] });
+    const first = await h.view.watch({ machineId: 'machine' }, requester);
+    if (!first.changed) throw new Error('Expected initial view');
+    const controller = new AbortController();
+    let answer: Awaited<ReturnType<typeof h.view.watch>> | undefined;
+    const pending = h.view.watch({ machineId: 'machine', since: first.since }, requester, controller.signal)
+      .then(value => { answer = value; });
+    try {
+      await h.parked();
+      await h.activityLog.markUndone({ id: 'undo-yesterday', ref: 'yesterday', at: epoch, attribution });
+      expect((await h.activityLog.list({ range: '7d' })).entries.find(row => row.id === 'yesterday'))
+        .toMatchObject({ undoneAt: epoch });
+      await vi.waitFor(() => expect(answer?.changed).toBe(true));
+      if (!answer?.changed) throw new Error('Expected Activity invalidation');
+      expect(answer.since).toBeGreaterThan(first.since);
+      expect(answer.view.recentActivity).toEqual(first.view.recentActivity);
+      const reads = h.nativeReads();
+      await h.activityLog.append({ v: 1, id: 'earlier-day-append', at: epoch - 120_000, kind: 'housekeeping',
+        rule: 'housekeeping', outcome: 'done', attribution });
+      expect(h.nativeReads()).toBe(reads);
+      const next = await h.view.watch({ machineId: 'machine', since: answer.since }, requester);
+      expect(next.changed).toBe(true);
+      if (!next.changed) throw new Error('Expected journal change between watches');
+      expect(next.since).toBeGreaterThan(answer.since);
+      expect(next.view.recentActivity).toEqual(first.view.recentActivity);
+    } finally { controller.abort(); await pending; }
   });
 
   it('projects the actual acting episode onto its current rung without selecting another candidate', async () => {

@@ -56,6 +56,9 @@ export async function createDaemonGuard(input: DaemonGuardInput): Promise<Daemon
     const activityLog = await createActivityLog({ activeServerDir: input.activeServerDir,
         resourceSummary: input.summary, nowMs: input.nowMs });
     const policyWork = input.createPolicyWork?.(activityLog);
+    const nowMs = input.nowMs ?? Date.now;
+    let policyMinute = Math.floor(nowMs() / 60000);
+    let samplerState = JSON.stringify(input.sampler.state());
     const lifetime = new AbortController();
     const subscriptions = new Set<() => void>();
     const track = (releases: readonly (() => void)[]) => {
@@ -140,7 +143,16 @@ export async function createDaemonGuard(input: DaemonGuardInput): Promise<Daemon
         refreshOnTick() {
             if (lifetime.signal.aborted) return;
             state.refresh();
-            policyWork?.refreshOnTick?.();
+            // The sampler's completion clock includes failures. Retry auxiliary
+            // owners at minute frontiers or reporting transitions, independently
+            // of another viewer's cadence and without requiring a valid sample.
+            const minute = Math.floor(nowMs() / 60000);
+            const currentState = JSON.stringify(input.sampler.state());
+            if (minute !== policyMinute || currentState !== samplerState) {
+                policyMinute = minute;
+                samplerState = currentState;
+                policyWork?.refreshOnTick?.();
+            }
         },
     };
 }

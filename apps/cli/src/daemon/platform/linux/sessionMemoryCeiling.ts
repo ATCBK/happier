@@ -4,6 +4,7 @@ import type { MachineGuardActivityEntryV1 } from '@happier-dev/protocol/machines
 import type { OwnerRowV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { readSessionMemoryCeilingOverride } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
 import type { TrackedSession } from '../../types';
+import type { SessionGuardMemoryObservationV1 } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
 import type { HappierProcessRoot } from '../../processes/ownership/types';
 import type { SessionEligibility } from '../../guard/sessionEligibility';
 import type { ActivityLog } from '../../guard/activityLog';
@@ -34,7 +35,7 @@ export type SessionMemoryCeilingInput = Readonly<{
   notice(tracked: TrackedSession, state: Readonly<{ kind: 'stopped'; at: number; rule: 'ceiling'; ceilingBytes: number } | { kind: 'clear' }>, signal: AbortSignal): Promise<boolean>;
   /** Original requester transport lifetime; policy cancellation must not cancel withdrawing its own intent. */
   clearNotice?: (tracked: TrackedSession) => Promise<boolean>;
-  notify(input: Readonly<{ kind: 'ceiling_near' | 'ceiling_reached'; sessionId: string }>): Promise<void>;
+  notify(input: Readonly<{ kind: 'ceiling_near' | 'ceiling_reached'; sessionId: string; memory?: SessionGuardMemoryObservationV1 }>): Promise<void>;
   activityLog: ActivityLog;
   nowMs?: () => number;
   native?: Readonly<{
@@ -55,7 +56,7 @@ const SESSION_OOM_EXPLANATION = 'This Session ran out of memory.';
 
 type Scope = Readonly<{ path: string; unit: string; systemd: boolean }>;
 type Edge = 'high' | 'near' | 'oom';
-type PendingEdge = { kind: Edge; bytes: number | null; entry?: MachineGuardActivityEntryV1; recorded?: boolean; notified?: boolean; stopRecorded?: boolean; clearTracked?: TrackedSession };
+type PendingEdge = { kind: Edge; bytes: number | null; memory?: SessionGuardMemoryObservationV1; entry?: MachineGuardActivityEntryV1; recorded?: boolean; notified?: boolean; stopRecorded?: boolean; clearTracked?: TrackedSession };
 type Runner = {
   target: SessionMemoryCeilingTarget; scope: Scope; watcher: Readonly<{ close(): void }>;
   high: number; oom: number; dirty: boolean; highHandled: boolean;
@@ -194,7 +195,8 @@ export function createSessionMemoryCeiling(input: SessionMemoryCeilingInput) {
         if (edge === 'oom') oomRecorded.add(runner.target.tracked);
       }
       if (pending.entry.kind === 'stopped_session' && !pending.stopRecorded) { await input.onSessionStopRecorded?.(runner.target.tracked); pending.stopRecorded = true; }
-      if (edge !== 'oom' && !pending.notified) { await input.notify({ kind: edge === 'near' ? 'ceiling_near' : 'ceiling_reached', sessionId: runner.target.tracked.happySessionId! }); pending.notified = true; }
+      if (edge !== 'oom' && !pending.notified) { await input.notify({ kind: edge === 'near' ? 'ceiling_near' : 'ceiling_reached', sessionId: runner.target.tracked.happySessionId!,
+        ...(pending.memory ? { memory: pending.memory } : {}) }); pending.notified = true; }
       if (edge === 'near' && pending.bytes !== null) runner.notified.add(pending.bytes);
       return;
     }
@@ -205,7 +207,7 @@ export function createSessionMemoryCeiling(input: SessionMemoryCeilingInput) {
     if (override !== undefined && override !== pending.bytes) return;
     const sessionId = target.tracked.happySessionId!;
     if (edge === 'near') {
-      pending.entry = record(runner, 'ceiling_near', 'ceiling', 'done');
+      pending.entry = { ...record(runner, 'ceiling_near', 'ceiling', 'done'), ...(pending.memory ? { memory: pending.memory } : {}) };
       return runEdge(runner, pending, signal);
     }
     let eligibility = await input.readEligibility(target.tracked, signal);
@@ -384,7 +386,8 @@ export function createSessionMemoryCeiling(input: SessionMemoryCeilingInput) {
           if (!Number.isSafeInteger(used) || used < 0) throw new Error('Session memory usage unavailable');
           runner.usage = { usedBytes: used, observedAtMs: now() };
           if (!runner.notified.has(runner.ceilingBytes) && used / runner.ceilingBytes * 100 >= policy.sessionMemoryCeiling.warnAtPercent) {
-            if (!runner.pending.some(edge => edge.kind === 'near' && edge.bytes === runner.ceilingBytes)) runner.pending.push({ kind: 'near', bytes: runner.ceilingBytes });
+            if (!runner.pending.some(edge => edge.kind === 'near' && edge.bytes === runner.ceilingBytes)) runner.pending.push({ kind: 'near', bytes: runner.ceilingBytes,
+              memory: { usedBytes: used, limitBytes: runner.appliedBytes! } });
           }
         }
         tick = false;
