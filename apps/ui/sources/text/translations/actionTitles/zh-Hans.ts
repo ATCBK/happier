@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const zhHans = {
+    code_definition_get: "按名称查找定义",
+    code_references_list: "查找文本引用",
     file_editor_save: '保存已打开文件的编辑',
     file_editor_resolve: '解决已打开文件的冲突',
     workspace_tabs_close: "关闭工作区标签页",

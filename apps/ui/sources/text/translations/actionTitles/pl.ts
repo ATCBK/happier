@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const pl = {
+    code_definition_get: "Znajdź definicję według nazwy",
+    code_references_list: "Znajdź odwołania tekstowe",
     file_editor_save: 'Zapisz zmiany otwartego pliku',
     file_editor_resolve: 'Rozwiąż konflikt otwartego pliku',
     workspace_tabs_close: "Zamknij kartę obszaru roboczego",

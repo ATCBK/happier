@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ja = {
+    code_definition_get: "名前で定義を検索",
+    code_references_list: "テキストの参照を検索",
     file_editor_save: '開いているファイルの編集を保存',
     file_editor_resolve: '開いているファイルの競合を解決',
     workspace_tabs_close: "ワークスペースのタブを閉じる",

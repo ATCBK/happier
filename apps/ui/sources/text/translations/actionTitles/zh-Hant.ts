@@ -1,6 +1,8 @@
 import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const zhHant = {
+    code_definition_get: "依名稱尋找定義",
+    code_references_list: "尋找文字參照",
     file_editor_save: '儲存已開啟檔案的編輯',
     file_editor_resolve: '解決已開啟檔案的衝突',
     workspace_tabs_close: "關閉工作區分頁",
