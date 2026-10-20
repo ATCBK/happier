@@ -57,6 +57,14 @@ export function BrowserToolbar(props: Readonly<{
     const shortcutLabels = props.shortcutLabels;
     const loading = props.model.isLoading;
     const testIDPrefix = props.testID ?? 'browser-toolbar';
+    // AMD-8: a page that keeps its history to itself shows these controls unavailable, with the reason
+    // on hover, focus and press (IconButton's disabled reason), rather than hiding them.
+    const historyReason = props.model.historyUnavailableReason === 'page_history_uncontrollable'
+        ? t('browserShell.toolbar.historyUncontrollable')
+        : undefined;
+    const stopReason = props.model.historyUnavailableReason === 'page_history_uncontrollable'
+        ? t('browserShell.toolbar.stopUncontrollable')
+        : undefined;
     // A control the active engine can NEVER fulfil is hidden, not shipped permanently disabled:
     // the capability layer (`selectBrowserToolbarModel`) owns that per-engine decision. `disabled`
     // still expresses the transient case — history exists but there is nowhere to go back to yet.
@@ -75,6 +83,7 @@ export function BrowserToolbar(props: Readonly<{
                         minimumInteractiveTargetSize={touchTargetFloorPx}
                         interactiveTargetGapPx={2}
                         disabled={!props.model.canGoBack}
+                        disabledReason={historyReason}
                         onPress={props.onBack}
                     />
                     <IconButton
@@ -88,6 +97,7 @@ export function BrowserToolbar(props: Readonly<{
                         minimumInteractiveTargetSize={touchTargetFloorPx}
                         interactiveTargetGapPx={2}
                         disabled={!props.model.canGoForward}
+                        disabledReason={historyReason}
                         onPress={props.onForward}
                     />
                 </>
@@ -106,6 +116,7 @@ export function BrowserToolbar(props: Readonly<{
                     minimumInteractiveTargetSize={touchTargetFloorPx}
                     interactiveTargetGapPx={2}
                     disabled={loading ? !props.model.canStop : !props.model.canReload}
+                    disabledReason={loading ? stopReason : undefined}
                     onPress={loading ? props.onStop : props.onReload}
                 />
             ) : null}

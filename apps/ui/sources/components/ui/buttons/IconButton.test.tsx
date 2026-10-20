@@ -324,6 +324,33 @@ describe('IconButton', () => {
         expect(screen.findByTestId('icon-btn')?.props.accessibilityHint).toBe('Preview registration is unavailable.');
     });
 
+    it('keeps a disabled control that explains itself reachable: focusable, and a press shows the reason instead of acting', async () => {
+        const onPress = vi.fn();
+        const screen = await renderScreen(
+            <IconButton
+                testID="icon-btn"
+                iconName="caret-left"
+                accessibilityLabel="Back"
+                disabled
+                disabledReason="This site doesn't let Happier control its history."
+                onPress={onPress}
+            />,
+        );
+        const pressable = screen.findByTestId('icon-btn');
+        expect(pressable?.props.accessibilityState?.disabled).toBe(true);
+        expect(pressable?.props['aria-disabled']).toBe(true);
+        expect(pressable?.props.tabIndex).not.toBe(-1);
+        expect(screen.findByTestId('icon-btn-tooltip')).toBeNull();
+
+        await act(async () => {
+            screen.findByTestId('icon-btn')?.props.onPress?.();
+        });
+
+        expect(onPress).not.toHaveBeenCalled();
+        expect(screen.findByTestId('icon-btn-tooltip')).toBeTruthy();
+        expect(screen.getTextContent()).toContain("This site doesn't let Happier control its history.");
+    });
+
     it('shows tooltip content on hover and hides it on hover out', async () => {
         const screen = await renderScreen(
             <IconButton

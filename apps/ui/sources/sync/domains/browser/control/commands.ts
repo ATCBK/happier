@@ -7,6 +7,11 @@ import type {
 import type { DesktopWebViewNativeAvailability } from '../adapters/desktopWebView';
 import type { BrowserAutomationControlService } from '../automation/controlService';
 import { selectBrowserTargetAdapter, type BrowserAdapterSelection } from '../adapters/selection';
+import {
+    resolveBrowserNavigationVerbAvailability,
+    type BrowserNavigationUnavailableReasonCode,
+    type BrowserNavigationVerbAvailability,
+} from '../adapters/capabilities';
 import { LOCAL_BROWSER_PROFILE_ID } from '../profiles/localBrowserProfile';
 import { isClientRenderedBrowserEngine } from './lifecycle';
 import { applyBrowserControlEvent } from './reducer';
@@ -48,7 +53,7 @@ export type BrowserControlCommandEffect =
     | Readonly<{
         kind: 'commandRejected';
         command: BrowserCommandV1;
-        reasonCode: 'adapter_unavailable' | 'view_not_found' | 'automation_busy';
+        reasonCode: BrowserNavigationUnavailableReasonCode | 'view_not_found' | 'automation_busy';
       }>;
 
 export type BrowserControlCommandDispatchResult = Readonly<{
@@ -77,23 +82,11 @@ function isDaemonAuthoritativeView(state: BrowserControlState, viewId: string): 
     return isDaemonAuthoritativeBrowserView(state.viewsById[viewId]);
 }
 
-function supportsNavigationCommand(
+function resolveNavigationCommandAvailability(
     state: BrowserControlState,
     command: BrowserNavigationCommand,
-): boolean {
-    const navigation = state.viewsById[command.viewId]?.adapterCapabilities.navigation;
-    switch (command.kind) {
-        case 'navigate':
-            return navigation?.canNavigate === true;
-        case 'goBack':
-            return navigation?.canGoBack === true;
-        case 'goForward':
-            return navigation?.canGoForward === true;
-        case 'reload':
-            return navigation?.canReload === true;
-        case 'stop':
-            return navigation?.canStop === true;
-    }
+): BrowserNavigationVerbAvailability {
+    return resolveBrowserNavigationVerbAvailability(state.viewsById[command.viewId]?.adapterCapabilities, command.kind);
 }
 
 function applyLocalNavigationIntent(
@@ -373,10 +366,11 @@ export function dispatchBrowserControlCommand(
         return { state, effects: [{ kind: 'daemonCommand', command }] };
     }
 
-    if (!supportsNavigationCommand(state, command)) {
+    const navigationAvailability = resolveNavigationCommandAvailability(state, command);
+    if (!navigationAvailability.available) {
         return {
             state,
-            effects: [{ kind: 'commandRejected', command, reasonCode: 'adapter_unavailable' }],
+            effects: [{ kind: 'commandRejected', command, reasonCode: navigationAvailability.reasonCode }],
         };
     }
 

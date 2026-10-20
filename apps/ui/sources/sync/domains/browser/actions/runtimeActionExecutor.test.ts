@@ -436,6 +436,36 @@ describe('browser runtime action executor', () => {
         expect(committed.state.viewsById.view_1?.pendingUrl).toBe('https://preview.happier.test/dashboard');
     });
 
+    it('AMD-8: answers Back, Forward and Stop on a third-party web iframe page with the typed history reason, and still reloads', async () => {
+        const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const state = openViewState({
+            adapterKind: 'externalUrl',
+            engineKind: 'webIframe',
+            target: externalTarget,
+            capabilities: buildBrowserAdapterCapabilities({
+                adapterKind: 'externalUrl', supportedTargetKinds: ['externalUrl'], supportedRenderEngines: ['webIframe'],
+            }),
+            currentUrl: 'https://browser.example.test/start',
+        });
+        const commits: BrowserControlCommandDispatchResult[] = [];
+        const execute = createBrowserRuntimeActionExecutor({
+            control: { readState: () => state, applyDispatchResult: (result) => { commits.push(result); } },
+        });
+        const view = { browserSessionId: 'browser_session_1', viewId: 'view_1' } as const;
+
+        for (const [actionId, kind] of [['browser.goBack', 'goBack'], ['browser.goForward', 'goForward'], ['browser.stop', 'stop']] as const) {
+            await expect(execute(runtimeArgs({ actionId, input: { kind, commandId: `command_${kind}`, ...view } }))).resolves.toEqual({
+                ok: false,
+                errorCode: 'runtime_action_disabled',
+                error: 'runtime_action_disabled:browser:browser_page_history_uncontrollable',
+            });
+        }
+        expect(commits).toEqual([]);
+
+        await expect(execute(runtimeArgs({ actionId: 'browser.reload', input: { kind: 'reload', commandId: 'command_reload', ...view } })))
+            .resolves.toMatchObject({ status: 'dispatched', commandId: 'command_reload' });
+    });
+
     it('fails closed before local dispatch when a browser Action id carries another command kind', async () => {
         const mod = await loadRuntimeActionExecutor();
 

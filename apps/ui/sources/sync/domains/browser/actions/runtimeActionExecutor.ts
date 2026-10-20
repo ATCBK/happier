@@ -51,7 +51,9 @@ export type BrowserRuntimeActionDisabledReason =
     | 'browser_diagnostics_unavailable'
     | 'browser_recording_unavailable'
     | 'browser_view_unavailable'
-    | 'browser_adapter_unavailable';
+    | 'browser_adapter_unavailable'
+    /** AMD-8: a third-party page in the web iframe engine keeps its history and loading to itself. */
+    | 'browser_page_history_uncontrollable';
 
 type BrowserRuntimeActionFailure = Extract<ActionExecuteResult, Readonly<{ ok: false }>>;
 
@@ -181,6 +183,8 @@ function mapControlRejectedReason(
     switch (reasonCode) {
         case 'adapter_unavailable':
             return 'browser_adapter_unavailable';
+        case 'page_history_uncontrollable':
+            return 'browser_page_history_uncontrollable';
         case 'automation_busy':
             return 'browser_control_unavailable';
         case 'view_not_found':

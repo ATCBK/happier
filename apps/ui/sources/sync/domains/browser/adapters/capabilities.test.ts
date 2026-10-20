@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildBrowserAdapterCapabilities } from './capabilities';
+import { buildBrowserAdapterCapabilities, resolveBrowserNavigationVerbAvailability } from './capabilities';
 import type { DesktopWebViewSupport } from './desktopWebView';
 import { INJECTED_PAGE_AUTOMATION_ACTIONS } from '@happier-dev/peer-mediation/browser/collector/actions';
 
@@ -172,4 +172,41 @@ describe('buildBrowserAdapterCapabilities', () => {
             expect(caps.automationActions?.navigate.disabledReasons).toContain(reasonCode);
         },
     );
+});
+
+describe('resolveBrowserNavigationVerbAvailability (AMD-8)', () => {
+    it('gives a third-party page in the web iframe Reload, and a typed history reason for Back, Forward and Stop', () => {
+        const caps = buildBrowserAdapterCapabilities({
+            adapterKind: 'externalUrl', supportedTargetKinds: ['externalUrl'], supportedRenderEngines: ['webIframe'],
+        });
+
+        expect(resolveBrowserNavigationVerbAvailability(caps, 'reload')).toEqual({ available: true });
+        expect(resolveBrowserNavigationVerbAvailability(caps, 'navigate')).toEqual({ available: true });
+        for (const verb of ['goBack', 'goForward', 'stop'] as const) {
+            expect(resolveBrowserNavigationVerbAvailability(caps, verb))
+                .toEqual({ available: false, reasonCode: 'page_history_uncontrollable' });
+        }
+    });
+
+    it.each([
+        { adapterKind: 'localPreview', targetKind: 'localServicePreview', engine: 'webIframe' },
+        { adapterKind: 'externalUrl', targetKind: 'externalUrl', engine: 'nativeWebView' },
+    ] as const)('keeps every verb for a page Happier controls: $adapterKind on $engine', ({ adapterKind, targetKind, engine }) => {
+        const caps = buildBrowserAdapterCapabilities({
+            adapterKind, supportedTargetKinds: [targetKind], supportedRenderEngines: [engine],
+        });
+
+        for (const verb of ['navigate', 'goBack', 'goForward', 'reload', 'stop'] as const) {
+            expect(resolveBrowserNavigationVerbAvailability(caps, verb)).toEqual({ available: true });
+        }
+    });
+
+    it('reports a framed plugin page without history as plainly unavailable, not as a third-party page', () => {
+        const caps = buildBrowserAdapterCapabilities({
+            adapterKind: 'hostedPlugin', supportedTargetKinds: ['hostedPluginWeb'], supportedRenderEngines: ['webIframe'],
+        });
+
+        expect(resolveBrowserNavigationVerbAvailability(caps, 'goBack'))
+            .toEqual({ available: false, reasonCode: 'adapter_unavailable' });
+    });
 });
