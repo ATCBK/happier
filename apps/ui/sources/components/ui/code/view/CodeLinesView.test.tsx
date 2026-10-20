@@ -52,6 +52,18 @@ async function waitForCodeLinesViewScrollFallback(): Promise<void> {
 }
 
 describe('CodeLinesView', () => {
+    it('uses the file-wide digit count for every number column while keeping the review inset stable', async () => {
+        const { CodeLinesView } = await import('./CodeLinesView');
+        const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
+        const lines = buildCodeLinesFromFile({ text: 'one\ntwo' });
+        const screen = await renderScreen(<CodeLinesView virtualized={false}
+            lines={[lines[0]!, { ...lines[1]!, newLine: 10000 }]}
+            onPressAddComment={() => {}} showInactiveCommentAffordance={false}
+            isCommentActive={line => line.newLine === 10000} />);
+        const sizingText = screen.findAll(node => node.type === 'Text' && node.props.accessible === false && node.props['aria-hidden'] === true);
+        expect(sizingText.map(node => node.children.join(''))).toEqual(['00000', '00000']);
+        expect(screen.findAll(node => node.props.testID === 'review-comment-line-affordance-lane' && node.type === 'View')).toHaveLength(2);
+    });
     it('does not render FlatList when virtualized=false', async () => {
         const { CodeLinesView } = await import('./CodeLinesView');
 
