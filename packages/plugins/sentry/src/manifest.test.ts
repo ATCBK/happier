@@ -262,7 +262,7 @@ describe('Sentry plugin manifest', () => {
     }
   });
 
-  it('declares the exact mounted-only placement for its six UI-capable reads', () => {
+  it('declares the exact mounted-only placement for its UI-capable reads', () => {
     const actions = new Map(PLUGIN_MANIFEST.contributes.actions.map((action) => [
       action.id,
       action,
@@ -296,7 +296,7 @@ describe('Sentry plugin manifest', () => {
     expect(actions.get(SENTRY_ACTION_IDS.scan)?.surfaces)
       .toEqual(sources.operations.scan.declaration.surfaces);
     expect(actions.get(SENTRY_ACTION_IDS.scan)?.placementBindings).toBeUndefined();
-    // And the mounted-only list is exact: these six and nothing else.
+    // The mounted-only list includes the safe project directory, never an app placement.
     expect(
       PLUGIN_MANIFEST.contributes.actions
         .filter((action) => action.placementBindings !== undefined
@@ -305,6 +305,7 @@ describe('Sentry plugin manifest', () => {
         .sort(),
     ).toEqual([
       SENTRY_ACTION_IDS.listInstances,
+      SENTRY_ACTION_IDS.listScopeUnits,
       SENTRY_ACTION_IDS.get,
       SENTRY_ACTION_IDS.readIssue,
       SENTRY_ACTION_IDS.listIssueEvents,

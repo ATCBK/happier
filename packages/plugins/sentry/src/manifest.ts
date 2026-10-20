@@ -62,6 +62,7 @@ import {
 } from './composer/reference.js';
 import { SentryIssueAssignInputV1Schema, SentryIssueWriteInputV1Schema } from './source/writeContracts.js';
 import { archiveSentryIssue, assignSentryIssue, resolveSentryIssue } from './source/writeOperations.js';
+import { listSentryScopeUnits } from './source/scopeUnits.js';
 
 /** The detail surface's declared renderer and the UI artifact it mounts. */
 export const SENTRY_DETAIL_RENDERER_ID = 'sentry-detail';
@@ -159,6 +160,7 @@ const SENTRY_SOURCE_DESCRIPTOR = {
   // qualifies it with the contributor identity the host already admitted.
   settingsPageId: SENTRY_TRIAGE_SETTINGS_PAGE_ID,
   displayName: SENTRY_SOURCE_DISPLAY_NAME,
+  scopeUnit: { singularLabel: 'Project', pluralLabel: 'Projects' },
   kinds: [{
     id: SENTRY_ENTRY_KIND_ID,
     workflowSubject: 'errorIssue' as const,
@@ -389,6 +391,18 @@ export const SENTRY_PLUGIN = definePlugin({
       hostAccess: READ_HOST_ACCESS,
       run: listSentryInstances,
     },
+    [SENTRY_ACTION_IDS.listScopeUnits]: {
+      title: 'List Sentry projects',
+      description: 'Lists searchable projects in this organization, or reads its saved project selection.',
+      surfaces: sources.operations.listScopeUnits.declaration.surfaces,
+      placementBindings: [],
+      dangerLevel: sources.operations.listScopeUnits.declaration.dangerLevel,
+      inputSchema: TriageSourceConnectedAccountInputsV1.listScopeUnits.jsonSchema,
+      resultSchema: sources.operations.listScopeUnits.declaration.resultSchema.jsonSchema,
+      hostAccess: READ_HOST_ACCESS,
+      connectedAccountPurposeBindings: [{ path: 'draft.binding.account', purpose: SENTRY_CONNECTED_ACCOUNT_PURPOSE }],
+      run: listSentryScopeUnits,
+    },
     [SENTRY_ACTION_IDS.scan]: {
       title: 'Scan Sentry issues',
       description: 'Reads one page of the configured Sentry organization issue walk.',
@@ -519,6 +533,7 @@ export const SENTRY_PLUGIN = definePlugin({
           descriptor: SENTRY_SOURCE_DESCRIPTOR,
           operations: {
             listInstances: sources.operations.listInstances.bind(SENTRY_ACTION_IDS.listInstances),
+            listScopeUnits: sources.operations.listScopeUnits.bind(SENTRY_ACTION_IDS.listScopeUnits),
             scan: sources.operations.scan.bind(SENTRY_ACTION_IDS.scan),
             get: sources.operations.get.bind(SENTRY_ACTION_IDS.get),
           },

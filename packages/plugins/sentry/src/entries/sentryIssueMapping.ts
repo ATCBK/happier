@@ -28,6 +28,7 @@ import type { SentryFailureV1 } from '../sentryContracts.js';
 
 import {
   resolveSentryInvokedScope,
+  isSentryNumericId,
   type SentryInvokedInstanceV1,
 } from '../instances/sentryCollisionScope.js';
 import { buildSentryLocator } from '../instances/sentryLocator.js';
@@ -248,6 +249,7 @@ export function mapSentryIssueForInvokedInstance(
   truncated ||= title.truncated;
 
   const project = isRecord(raw.project) ? raw.project : null;
+  const projectId = project === null ? null : readString(project.id);
   const projectSlug = project === null ? null : readString(project.slug);
   const projectName = project === null ? null : readString(project.name);
 
@@ -374,6 +376,9 @@ export function mapSentryIssueForInvokedInstance(
       }),
       title: title.value.length === 0 ? entryId : title.value,
       scopeLabel: scopeLabel.value.length === 0 ? input.configured.organizationId : scopeLabel.value,
+      ...(projectId !== null && isSentryNumericId(projectId)
+        && encoder.encode(projectId).byteLength <= MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1
+        ? { projectId } : {}),
       ...(designation === null || designation.value.length === 0 ? {} : { designation: designation.value }),
       state: mapSentryIssueState(raw.status, raw.substatus),
       locator,
