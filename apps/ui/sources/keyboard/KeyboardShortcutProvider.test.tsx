@@ -450,7 +450,7 @@ describe('KeyboardShortcutProvider', () => {
                 context.dispatch({ type: 'openRight', scopeId: 'session:s1', tabId: 'git' });
                 context.dispatch({ type: 'openDetailsTab', scopeId: 'session:s1', tab: { key: 'scmReview:working', kind: 'scmReview', title: 'Review', resource: {} }, openAs: 'pinned' });
                 context.dispatch({ type: 'setDetailsTabState', scopeId: 'session:s1', tabKey: 'scmReview:working', nextState: { scrollTop: 120 } });
-                context.dispatch({ type: 'enterFocusMode', scopeId: 'session:s1' });
+                context.dispatch({ type: 'setMainHidden', scopeId: 'session:s1', hidden: false });
             }, [context.dispatch]);
             return <Child />;
         }
@@ -468,7 +468,7 @@ describe('KeyboardShortcutProvider', () => {
             await act(async () => { handoff(); });
             expect(surface).toBe('chat');
             const state = paneState as ReturnType<typeof useAppPaneContext>['state'] | null;
-            expect(state?.focusMode.scopeId).toBeNull();
+            expect(state?.scopes['session:s1']?.mainHidden).toBe(false);
             expect(state?.scopes['session:s1']?.details.isOpen).toBe(false);
             expect(state?.scopes['session:s1']?.right.isOpen).toBe(false);
             const details = state?.scopes['session:s1']?.details;
