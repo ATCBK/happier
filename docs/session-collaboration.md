@@ -724,6 +724,15 @@ Actions; the latter detaches without archiving. Owned provenance and historical
 messages remain available to reconcile a lost removal response. Discussion
 administration does not grant control of another Account's Session. Readiness
 and start uncertainty are separate from authorization and must remain visible.
+After ordinary Unarchive, an explicit existing-Session invitation can readmit a
+removed child under the current input, disclosure and key-readiness checks.
+Unarchive alone restores neither membership nor delivery. Readmission preserves
+the original model slot, launch, creator and Session ownership; it does not turn
+later owned removal into detach-only or allocate another Session. The new
+invitation uses its requested answer policy, or the ordinary when-addressed
+default, and the existing Follow owner starts at the current message sequence.
+Withdrawn older asks stay withdrawn. A blind replay of a removed model-selection
+request is still refused while that slot remains removed.
 The existing stop owner also confirms an already-stopped Session when the exact
 daemon finds no runtime and a fresh authorized Home read reports it inactive.
 The UI producer preserves that canonical `already_stopped` result alongside its
@@ -810,6 +819,15 @@ Artifact, outside the public Discussion message history.
 Its immutable `discussionDraftReview: true` presentation fact distinguishes an
 open deliberate draft from ordinary Action confirmation in the private Inbox;
 it grants no decision or publication authority.
+
+The native explicit post/reply policy check reads participants as a companion of
+the original signed Account Action, not a newly signed `discussion.participants.list`
+effect. Home accepts only its canonical GET roster route with absent body/query and
+matching route operands; original root, current installation, signature and resource
+access remain independently required. The daemon can normalize deliberate draft
+identity before signing. A downstream signed recheck cannot rewrite that identity:
+if policy has changed to draft review, it refuses and requires preparation there.
+Already-bound draft context skips that recheck through its existing return binding.
 
 Explicit addressed drafts and final-result fallback retain the original
 question/participant/turn identity. Rejoining that approval must preserve its
