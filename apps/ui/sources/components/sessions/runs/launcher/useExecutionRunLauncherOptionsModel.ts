@@ -29,7 +29,7 @@ import { doesExecutionRunProfileMatchSelectedBackends, resolveExecutionRunLaunch
 import { resolveExecutionRunPermissionAgentId } from './resolveExecutionRunPermissionAgentId';
 
 export function useExecutionRunLauncherOptionsModel(params: Readonly<{
-    sessionId: string;
+    sessionId: string | null;
     intent: ExecutionRunIntent;
     actionInput: Record<string, unknown>;
     setActionInput: React.Dispatch<React.SetStateAction<Record<string, unknown>>>;

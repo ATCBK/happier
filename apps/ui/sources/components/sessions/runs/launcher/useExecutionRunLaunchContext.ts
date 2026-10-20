@@ -134,13 +134,14 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
         }) : [];
         await admitExactTarget({ secretReferenceOverlay: input.secretReferenceOverlay !== undefined,
             teamCredentialModel: input.teamCredentialModel !== undefined, roleBinding: input.roleId !== undefined }, readinessOperationId, runBackendTargets);
-        return executor.execute(actionId, { ...input, ...(sessionId !== null ? { sessionId } : {}) },
+        return executor.execute(actionId, { ...input, sessionId, ...(sessionId === null && workspace ? { cwd: workspace.cwd } : {}) },
             { ...(sessionId ? { defaultSessionId: sessionId } : {}),
                 ...(machineId ? { executionRunTargetMachineId: machineId } : {}),
                 ...(launchOrigin ? { executionRunLaunchOrigin: launchOrigin } : {}),
                 ...(!sessionId && workspace ? { externalActionTarget: { kind: 'machine' as const, machineId: workspace.machineId } } : {}) });
     }, [admitExactTarget, executor.execute, machineId, sessionId, workspace?.machineId, workspace?.cwd]);
     return { session, accountBinding, accountLifetime, exactSettings, settings, profileCatalogReady, acpCatalogReady, acpCatalogSnapshot, enabledAgentIds, defaultBackend,
-        backendTarget, inheritedModelSelection, resolveInheritedModelLabel, inheritedConnectedServicesSelection, inheritedRoutePresentation, machineTarget, machineId, admitExactTarget, startAction,
+        backendTarget, inheritedModelSelection, resolveInheritedModelLabel, inheritedConnectedServicesSelection, inheritedRoutePresentation, machineTarget, machineId, machineReachable, admitExactTarget, startAction,
+        executeAction: executor.execute,
         isStartCurrent: executor.isCurrent, cancelStart: executor.cancel };
 }
