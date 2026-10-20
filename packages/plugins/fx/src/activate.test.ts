@@ -20,6 +20,7 @@ describe('activate', () => {
     const activation = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
     try {
       const registration = activation.registration('agents', 'fx');
+      expect(registration?.externalSessions).toBeDefined();
       expect(registration).not.toHaveProperty('factory');
       expect(registration).not.toHaveProperty('sessionRunnerFactory');
       expect(registration).not.toHaveProperty('cliSessionCommand');

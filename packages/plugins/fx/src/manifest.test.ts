@@ -63,22 +63,15 @@ describe('FX plugin manifest', () => {
     expect(agent.capabilities).not.toHaveProperty('executionRuns');
   });
 
-  it('declares a resume-only external-session source the host produces itself', () => {
-    // `fx acp` answers `session/list`, so the host's declarative ACP runtime
-    // registry synthesizes the one generic session-listing producer for this
-    // declaration. The source must stay ALL resume-only and the Agent must stay
-    // ACP/Session-primary with `resume` open, or the protocol contract rejects
-    // the declaration and the host would advertise candidates nothing can load.
-    // The plugin deliberately contributes no External Sessions runtime: a
-    // second one would be a competing owner of the same surface.
+  it('declares one native source with ACP-compatible session identities', () => {
     const [agent] = PLUGIN_MANIFEST.contributes.agents;
     expect(agent.capabilities.surfaces).toContain('externalSessions');
     expect(agent.surfaces?.externalSession).toEqual({
       sources: [{
-        sourceKind: 'fxAcpSessionList',
-        resumeOnly: true,
-        schema: { fields: [{ kind: 'literal', name: 'kind', value: 'fxAcpSessionList' }] },
-        key: { segments: [{ kind: 'literal', value: 'fxAcpSessionList' }] },
+        sourceKind: 'fxHome',
+        contentSearch: true,
+        schema: { fields: [{ kind: 'literal', name: 'kind', value: 'fxHome' }] },
+        key: { segments: [{ kind: 'literal', value: 'fxHome' }] },
         instances: [{ kind: 'default', constants: {} }],
       }],
     });
@@ -87,17 +80,13 @@ describe('FX plugin manifest', () => {
     expect(agent.capabilities.sessions?.open).toContain('resume');
   });
 
-  it('owes no plugin-authored External Sessions runtime registration', () => {
-    // The activation rights the host enforces are derived from this manifest.
-    // A host-synthesized resume-only declaration must not demand a plugin
-    // contribution; demanding one is what previously forced the source to be
-    // deleted instead of activated.
+  it('requires the native External Sessions reader through the public activation ABI', () => {
     expect(derivePluginDaemonContributionRegistrationRights(
       PLUGIN_MANIFEST.contributes as unknown as Readonly<Record<string, unknown>>,
     )).toContainEqual(expect.objectContaining({
       family: 'agents',
       localId: 'fx',
-      requiredFields: ['terminal'],
+      requiredFields: expect.arrayContaining(['terminal', 'externalSessions']),
     }));
   });
 });
