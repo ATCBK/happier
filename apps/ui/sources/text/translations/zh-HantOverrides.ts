@@ -7997,7 +7997,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
         },
         desc: {
-            terminalCmd: ({ cmd }: { cmd: string }) => `終端機（命令：${cmd}）`,
+            terminalCmd: ({ cmd }: { cmd: string }) => `執行 ${cmd}`,
             searchPattern: ({ pattern }: { pattern: string }) => `搜尋（模式：${pattern}）`,
             searchPath: ({ basename }: { basename: string }) => `搜尋（路徑：${basename}）`,
             fetchUrlHost: ({ host }: { host: string }) => `取得 URL（主機：${host}）`,

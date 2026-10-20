@@ -9085,7 +9085,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
         },
         desc: {
-            terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
+            terminalCmd: ({ cmd }: { cmd: string }) => `Executa ${cmd}`,
             searchPattern: ({ pattern }: { pattern: string }) => `Cerca(patró: ${pattern})`,
             searchPath: ({ basename }: { basename: string }) => `Cerca(camí: ${basename})`,
             fetchUrlHost: ({ host }: { host: string }) => `Obté URL(url: ${host})`,

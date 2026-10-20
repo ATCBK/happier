@@ -11675,7 +11675,7 @@ const enTools = {
       'I do not approve this plan. Please revise it or ask me what changes I would like.',
   },
   desc: {
-    terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
+    terminalCmd: ({ cmd }: { cmd: string }) => `Run ${cmd}`,
     searchPattern: ({ pattern }: { pattern: string }) =>
       `Search(pattern: ${pattern})`,
     searchPath: ({ basename }: { basename: string }) =>

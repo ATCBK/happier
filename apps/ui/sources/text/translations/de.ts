@@ -9823,7 +9823,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             rejectionMessage: 'Ich gebe diesen Plan nicht frei. Bitte überarbeite ihn oder frag mich, welche Änderungen ich möchte.',
         },
         desc: {
-            terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
+            terminalCmd: ({ cmd }: { cmd: string }) => `${cmd} ausführen`,
             searchPattern: ({ pattern }: { pattern: string }) => `Suche(pattern: ${pattern})`,
             searchPath: ({ basename }: { basename: string }) => `Suche(path: ${basename})`,
             fetchUrlHost: ({ host }: { host: string }) => `URL abrufen(url: ${host})`,

@@ -9857,7 +9857,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
     },
     desc: {
-      terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
+      terminalCmd: ({ cmd }: { cmd: string }) => `Ejecutar ${cmd}`,
       searchPattern: ({ pattern }: { pattern: string }) =>
         `Buscar(patrón: ${pattern})`,
       searchPath: ({ basename }: { basename: string }) =>

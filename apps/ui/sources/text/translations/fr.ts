@@ -9693,7 +9693,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
     },
     desc: {
-      terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
+      terminalCmd: ({ cmd }: { cmd: string }) => `Exécuter ${cmd}`,
       searchPattern: ({ pattern }: { pattern: string }) =>
         `Search(pattern: ${pattern})`,
       searchPath: ({ basename }: { basename: string }) =>

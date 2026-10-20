@@ -9977,7 +9977,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
     },
     desc: {
-      terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
+      terminalCmd: ({ cmd }: { cmd: string }) => `Executar ${cmd}`,
       searchPattern: ({ pattern }: { pattern: string }) =>
         `Buscar(padrão: ${pattern})`,
       searchPath: ({ basename }: { basename: string }) =>

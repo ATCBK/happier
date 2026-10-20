@@ -10123,7 +10123,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
     },
     desc: {
-      terminalCmd: ({ cmd }: { cmd: string }) => `Terminale(cmd: ${cmd})`,
+      terminalCmd: ({ cmd }: { cmd: string }) => `Esegui ${cmd}`,
       searchPattern: ({ pattern }: { pattern: string }) =>
         `Cerca(pattern: ${pattern})`,
       searchPath: ({ basename }: { basename: string }) =>

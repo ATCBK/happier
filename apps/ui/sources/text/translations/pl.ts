@@ -9690,7 +9690,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
     },
     desc: {
-      terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
+      terminalCmd: ({ cmd }: { cmd: string }) => `Uruchom ${cmd}`,
       searchPattern: ({ pattern }: { pattern: string }) =>
         `Wyszukaj(wzorzec: ${pattern})`,
       searchPath: ({ basename }: { basename: string }) =>

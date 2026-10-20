@@ -9710,7 +9710,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
     },
     desc: {
-      terminalCmd: ({ cmd }: { cmd: string }) => `Терминал(команда: ${cmd})`,
+      terminalCmd: ({ cmd }: { cmd: string }) => `Выполнить ${cmd}`,
       searchPattern: ({ pattern }: { pattern: string }) =>
         `Поиск(шаблон: ${pattern})`,
       searchPath: ({ basename }: { basename: string }) =>

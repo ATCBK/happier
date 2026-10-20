@@ -9511,7 +9511,7 @@ const zhHansValues = {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
     },
     desc: {
-      terminalCmd: ({ cmd }: { cmd: string }) => `终端(命令: ${cmd})`,
+      terminalCmd: ({ cmd }: { cmd: string }) => `运行 ${cmd}`,
       searchPattern: ({ pattern }: { pattern: string }) =>
         `搜索(模式: ${pattern})`,
       searchPath: ({ basename }: { basename: string }) =>

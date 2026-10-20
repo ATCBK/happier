@@ -10202,7 +10202,7 @@ localTailscale: {
       cwd: ({ cwd }: { cwd: string }) => `📁 ${cwd}`,
     },
     desc: {
-      terminalCmd: ({ cmd }: { cmd: string }) => `ターミナル(cmd: ${cmd})`,
+      terminalCmd: ({ cmd }: { cmd: string }) => `${cmd} を実行`,
       searchPattern: ({ pattern }: { pattern: string }) =>
         `検索(pattern: ${pattern})`,
       searchPath: ({ basename }: { basename: string }) =>
