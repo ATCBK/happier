@@ -4,6 +4,9 @@ import {
     applyCloseDetailsTab,
     applyMoveDetailsTabToGroup,
     applyOpenDetailsTab,
+    applyPinDetailsTab,
+    applyUnpinDetailsTab,
+    applySetDetailsTabState,
     applySetActiveDetailsTab,
     applySetDetailsSplitRatio,
     applySplitDetailsGroup,
@@ -19,6 +22,20 @@ function openFile(state: ReturnType<typeof createEmptyPaneDetailsState>, name: s
 }
 
 describe('Details tab group transitions', () => {
+    it('keeps a dirty file pinned when unpin is followed by opening another preview', () => {
+        const draft = { accountId: 'alice', isEditingFile: true, editorOriginalHash: 'base', editorText: 'unsaved' };
+        let state = applyOpenDetailsTab(createEmptyPaneDetailsState(), {
+            tab: { key: 'file:a', kind: 'file', title: 'a', resource: { path: 'a' } }, openAs: 'preview',
+        });
+        state = applySetDetailsTabState(state, 'file:a', draft);
+        state = applyPinDetailsTab(state, 'file:a');
+        state = applyUnpinDetailsTab(state, 'file:a');
+        state = applyOpenDetailsTab(state, {
+            tab: { key: 'file:b', kind: 'file', title: 'b', resource: { path: 'b' } }, openAs: 'preview',
+        });
+        expect(state.tabsByKey['file:a']).toMatchObject({ isPinned: true, isPreview: false });
+        expect(state.tabState['file:a']).toEqual(draft);
+    });
     it('returns to the most recently active surviving tab when the active tab closes', () => {
         let state = createEmptyPaneDetailsState();
         state = openFile(state, 'a');

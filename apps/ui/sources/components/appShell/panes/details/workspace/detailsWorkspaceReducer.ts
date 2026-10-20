@@ -27,6 +27,7 @@ import {
     mapDetailsWorkspaceAxisToSplitCanvasAxis,
 } from './detailsWorkspaceSplitCanvas';
 import { arePaneStateJsonValuesEqual } from '../../model/paneStateStructuralEquality';
+import { readWorkspaceFileEditorDraft } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft';
 import {
     activateGroupTab,
     closeGroupTab,
@@ -440,6 +441,17 @@ export function applyUnpinDetailsTab(detailsState: PaneDetailsState, tabKey: str
         ? getOwnDetailsWorkspaceRecordEntry(detailsState.groupsById, groupId)
         : undefined;
     if (!groupId || !tab || !group) return detailsState;
+
+    if (tab.kind === 'file') {
+        const draftState = getOwnDetailsWorkspaceRecordEntry(detailsState.tabState, tabKey);
+        const accountId = draftState && typeof draftState === 'object'
+            ? (draftState as Readonly<{ accountId?: unknown }>).accountId
+            : null;
+        // This only preserves membership; reading private bytes still requires the active Account.
+        if (readWorkspaceFileEditorDraft(draftState, typeof accountId === 'string' ? accountId : null)?.isEditingFile) {
+            return detailsState;
+        }
+    }
 
     let details = removePreviewTabsFromGroup(detailsState, groupId, tabKey);
     const retainedGroup = getOwnDetailsWorkspaceRecordEntry(details.groupsById, groupId) ?? group;

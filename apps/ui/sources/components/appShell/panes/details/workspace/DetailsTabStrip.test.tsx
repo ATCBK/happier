@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import type { DetailsTabState, DetailsWorkspaceGroupView } from './detailsWorkspaceTypes';
+import { registerMountedTabUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -81,6 +82,26 @@ const testIds = {
 };
 
 describe('DetailsTabStrip chrome absorption for browser-view tabs', () => {
+    it.each(['keepEditing', 'save', 'discard'] as const)('guards a dirty close and handles %s through the shared guard', async (decision) => {
+        const { DetailsTabStrip } = await import('./DetailsTabStrip');
+        const pane = createPane();
+        const tab = browserViewTab();
+        const requestDecision = vi.fn(async () => decision);
+        const onDiscard = vi.fn();
+        const remove = registerMountedTabUnsavedChangesGuard(tab.key, {
+            isDirtyRef: { current: true }, tag: 'test-editor', requestDecision,
+            onSave: async () => false, onDiscard,
+        });
+        try {
+            const screen = await renderScreen(<DetailsTabStrip pane={pane} group={group(tab)} testIds={testIds} />);
+            await act(async () => {
+                screen.findByTestId('tab-close-browser-view_bs_bv')?.props.onPress({});
+            });
+            expect(requestDecision).toHaveBeenCalledTimes(1);
+            expect(pane.closeDetailsTab).toHaveBeenCalledTimes(decision === 'discard' ? 1 : 0);
+            expect(onDiscard).toHaveBeenCalledTimes(decision === 'discard' ? 1 : 0);
+        } finally { remove(); }
+    });
     it('renders a favicon for a browser-view tab via the generic presentation hook', async () => {
         const { DetailsTabStrip } = await import('./DetailsTabStrip');
         const tab = browserViewTab();

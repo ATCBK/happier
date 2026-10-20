@@ -1,8 +1,6 @@
 import { createSessionDetailsTerminalTab } from '@/components/sessions/terminal/embeddedTerminalDocking';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { t } from '@/text';
-import type { FileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
-import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import { SCM_COMPARISON_VIEWS, type ScmComparisonView } from '@happier-dev/protocol/scm';
 
 export const SESSION_DETAILS_SCM_REVIEW_TAB_KEY = 'scmReview:working';
@@ -60,15 +58,7 @@ export function createSessionBoardDetailsTab(focusTarget?: SessionBoardDetailsFo
     };
 }
 
-export function createSessionFileDetailsTab(fullPath: string, anchor?: FileTargetAnchor, anchorSource?: ReviewCommentSource) {
-    const fileName = fullPath.split('/').pop() ?? fullPath;
-    return {
-        key: `file:${fullPath}`,
-        kind: 'file' as const,
-        title: fileName,
-        resource: { kind: 'file' as const, path: fullPath, ...(anchor ? { anchor } : {}), ...(anchorSource ? { anchorSource } : {}) },
-    };
-}
+export { createWorkspaceFileDetailsTab as createSessionFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 
 export function createSessionCommitDetailsTab(sha: string) {
     const safeSha = sha.trim().split(/\s+/)[0] ?? '';
