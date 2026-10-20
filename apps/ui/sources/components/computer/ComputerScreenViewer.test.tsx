@@ -85,7 +85,7 @@ describe('ComputerScreenViewer', () => {
     expect(screen.findByTestId('v-recovery')).toBeTruthy();
     expect(screen.findByTestId('v-recovery-action')).toBeNull();
   });
-  it.each(['driver_unavailable', 'driver_result_invalid'] as const)(
+  it.each(['driver_unavailable', 'driver_result_invalid', 'driver_version_mismatch', 'driver_protocol_error'] as const)(
     'offers the native installation repair for %s before selection is available',
     async (failure) => {
       const onRepairDriver = vi.fn();
