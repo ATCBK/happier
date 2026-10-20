@@ -194,6 +194,18 @@ const { SourceControlSettingsView } = await import('./SourceControlSettingsView'
 const { Item } = await import('@/components/ui/lists/Item');
 
 describe('SourceControlSettingsView', () => {
+    it('keeps the Files editor reachable without exposing SCM-write controls when SCM writes are disabled', async () => {
+        vi.stubEnv('EXPO_PUBLIC_HAPPIER_BUILD_FEATURES_DENY', 'scm.writeOperations');
+        try {
+            const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
+            expect(screen.findRowByTitle('settingsSourceControl.editorAutoSave')).not.toBeNull();
+            expect(screen.findRowByTitle('settingsSourceControl.page.commitStrategy.title')).toBeNull();
+            expect(screen.findRowByTitle('settingsAppearance.showLineNumbersInDiffs')).toBeNull();
+            expect(screen.findRowByTitle('settingsSourceControl.remoteConfirmation.confirmBeforePushing.title')).toBeNull();
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
     it('writes explicit explain preferences but does not offer prefetch without an eligible selected model', async () => {
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         screen.pressRowByTitle('walkthroughSettings.enabled');

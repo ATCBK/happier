@@ -402,7 +402,13 @@ export function defineSettingsPage<const Sections extends Record<string, Setting
             ? portableLabelsByAnchor.get(section.settings[firstSettingId]?.anchor ?? `${anchorPrefix}.${firstSettingId}`)
             : undefined;
         const sectionTitleKey = sharedSection ? sharedSection.sectionTitleKey : section.titleKey;
-        const featureId = sharedSection ? sharedSection.featureId : section.featureId;
+        // A mixed section (Files and SCM preferences) has row gates, not a gate inherited
+        // from whichever row happens to come first.
+        const sectionFeatures = new Set(Object.entries(section.settings).map(([id, declaration]) =>
+            portableLabelsByAnchor.get(declaration.anchor ?? `${anchorPrefix}.${id}`)?.featureId));
+        const featureId = sharedSection
+            ? sectionFeatures.size === 1 ? sharedSection.featureId : undefined
+            : section.featureId;
         sections[sectionKey] = { ...section, titleKey: sectionTitleKey, featureId };
         const settingAnchors: string[] = [];
         for (const [settingId, declaration] of Object.entries(section.settings)) {
@@ -425,7 +431,7 @@ export function defineSettingsPage<const Sections extends Record<string, Setting
                 sectionId,
                 sectionTitleKey,
                 ...(!sharedSection && section.title ? { sectionTitle: section.title } : {}),
-                ...(featureId ? { featureId } : {}),
+                ...((portable?.featureId ?? featureId) ? { featureId: portable?.featureId ?? featureId } : {}),
                 ...(combinedHost ? { host: combinedHost } : {}),
             };
         }
@@ -445,12 +451,15 @@ export function settingRendersOnHost(ref: Pick<SettingRef, 'host'>, host: Settin
     return ref.host ? ref.host(host) : true;
 }
 
-/** Every feature a declared section is gated on: the catalog evaluates exactly these. */
+/** Every feature a declared section or row is gated on: the catalog evaluates exactly these. */
 export function collectDeclaredFeatureIds(declarations: readonly SettingsPageDeclaration[]): FeatureId[] {
     const ids = new Set<FeatureId>();
     for (const declaration of declarations) {
         for (const section of Object.values(declaration.sections)) {
             if (section.featureId) ids.add(section.featureId);
+        }
+        for (const ref of Object.values(declaration.settings)) {
+            if (ref.featureId) ids.add(ref.featureId);
         }
     }
     return [...ids];

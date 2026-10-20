@@ -432,7 +432,6 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                         titleKey: 'settings.filesSourceControl',
                         subtitleKey: 'settings.filesSourceControlSubtitle',
                         route: SETTINGS_ROUTES.sourceControl,
-                        gate: { featureId: 'scm.writeOperations' },
                         keywordsKey: 'settingsSearchKeywords.sourceControl',
                         icon: ({ theme }) => <Icon name="git-branch" size={16} color={theme.colors.text.secondary} />,
                     },

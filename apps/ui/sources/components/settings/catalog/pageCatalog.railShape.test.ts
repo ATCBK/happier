@@ -58,6 +58,11 @@ describe('settings catalog rail shape', () => {
         expect(mcp?.route).toBe('/settings/mcp');
         expect(readSettingsPageGate('mcp')).toBeUndefined();
     });
+    it('keeps Files preferences reachable when SCM writes are disabled', () => {
+        const files = walk(catalog).find(({ node }) => node.id === 'sourceControl')?.node;
+        expect(files?.route).toBe('/settings/source-control');
+        expect(readSettingsPageGate('sourceControl')).toBeUndefined();
+    });
     it('gates conversations independently while keeping Dictation reachable when conversations are disabled', () => {
         const voice = walk(catalog).find(({ node }) => node.id === 'voice')?.node;
         expect(readSettingsPageGate('voice')).toBeUndefined();

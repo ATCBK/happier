@@ -485,6 +485,27 @@ describe('useResolvedSettingsPageCatalog', () => {
         await disabledHook.unmount();
     });
 
+    it('keeps Files navigation and preferences searchable independently of SCM writes', async () => {
+        featureGateState.enabled = (featureId: string) => featureId !== 'scm.writeOperations';
+        const { useResolvedSettingsPageCatalog } = await import('./useResolvedSettingsPageCatalog');
+        const hook = await renderHook(() => useResolvedSettingsPageCatalog());
+        try {
+            expect(flattenIds(hook.getCurrent().tree)).toContain('sourceControl');
+            for (const [query, anchor] of [
+                ['settingsSourceControl.trackAgentEdits', 'files.trackAgentEdits'],
+                ['settingsAppearance.themeProfiles.groups.background', 'files.imageBackground'],
+            ]) {
+                expect(hook.getCurrent().search(query)).toContainEqual(expect.objectContaining({
+                    id: 'sourceControl', setting: expect.objectContaining({ anchor }),
+                }));
+            }
+            expect(hook.getCurrent().search('settingsAppearance.showLineNumbersInDiffs')
+                .some(result => result.setting?.anchor === 'sourceControl.showLineNumbersInDiffs')).toBe(false);
+        } finally {
+            await hook.unmount();
+        }
+    });
+
     it('uses the canonical external-sessions feature decision for navigation and search', async () => {
         const { useResolvedSettingsPageCatalog } = await import('./useResolvedSettingsPageCatalog');
 
