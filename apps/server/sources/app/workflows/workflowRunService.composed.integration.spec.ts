@@ -307,8 +307,16 @@ describe("workflowRunService (integration)", () => {
             await expect(waitWorkflowRun({ accountId: stranger.accountId, runId, timeoutSeconds: 0 }))
                 .rejects.toMatchObject({ code: "run_not_found" });
             await db.automationRun.update({ where: { id: runId }, data: { state: "failed", workflowCustodyState: "settled" } });
-            const terminal = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
+            const attention = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
                 headers, payload: { operation: "wait", runId } });
+            expect(attention.statusCode, attention.body).toBe(200);
+            expect(WorkflowRunWaitResultV1Schema.parse(attention.json()).observation).toBe("needs_attention");
+            expect(attention.json()).toMatchObject({ observation: "needs_attention", matchedCondition: "attention",
+                run: { id: runId, state: "failed", attentionRequired: true } });
+            expect(attention.json()).not.toHaveProperty("resultEnvelope");
+            expect(attention.json()).not.toHaveProperty("keyCensus");
+            const terminal = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
+                headers, payload: { operation: "wait", runId, conditions: ["terminal"] } });
             expect(terminal.statusCode, terminal.body).toBe(200);
             expect(WorkflowRunWaitResultV1Schema.parse(terminal.json()).observation).toBe("terminal");
             expect(terminal.json()).toMatchObject({ observation: "terminal", matchedCondition: "terminal",

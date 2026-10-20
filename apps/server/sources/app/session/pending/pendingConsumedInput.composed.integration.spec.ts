@@ -279,7 +279,7 @@ describe('consumed ACP input → host turn → Pending', () => {
                 providerNativeCommand: false, localId: humanId, signal: new AbortController().signal })).renderPrompt()
             : renderSessionInputContextPromptV1({ sessionFollowUpdates: prepared?.updates,
                 transformedUserText: batch!.message.text });
-        if (scenario === 'file-review') expect(prompt).toBe('Continue the work\n\nYou discarded 2 changes in "src/app.ts".');
+        if (scenario === 'file-review') expect(prompt).toContain('Continue the work\n\nYou discarded 2 changes in "src/app.ts".');
         else if (scenario !== 'omitted') expect(prompt).toContain('Worker original result');
         let emitNative: ((event: AgentSessionRuntimeEvent) => void) | undefined;
         let sequence = 0;

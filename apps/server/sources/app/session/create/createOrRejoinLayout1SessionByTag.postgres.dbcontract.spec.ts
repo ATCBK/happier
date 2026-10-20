@@ -206,8 +206,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("t
                         const result = await Reflect.apply(operation, model, values);
                         if (!deletion) {
                             deletion = resource === "folder"
-                                ? deleteSessionOrganizationFolder({ accountId: account.id, request: { folderId: folder.id } })
-                                : deleteSessionOrganizationTag({ accountId: account.id, request: { tagId: tag.id } });
+                                ? deleteSessionOrganizationFolder({ accountId: account.id, request: { folderId: folder.id, assignmentBehavior: "moveAssignmentsToParent" } })
+                                : deleteSessionOrganizationTag({ accountId: account.id, request: { tagId: tag.id, assignmentBehavior: "removeAssignments" } });
                             void deletion.then(() => { deletionSettled = true; }, () => { deletionSettled = true; });
                             while (!deletionSettled) {
                                 const [{ blocked }] = await db.$queryRawUnsafe<Array<{ blocked: boolean }>>(
