@@ -52,7 +52,7 @@ import { createProductionWorkflowSessionStepExecutor } from './sessionStepExecut
 describe('Workflow Session step execution', () => {
   it.each([
     { outcome: { kind: 'pass' as const }, expected: { kind: 'completed', result: '' } },
-    { outcome: { kind: 'terminal_no_result' as const }, expected: { kind: 'completed', result: '' } },
+    { outcome: { kind: 'terminal_no_result' as const }, expected: { kind: 'needs_attention', code: 'session_input_result_unavailable' } },
     { outcome: { kind: 'cancelled' as const }, expected: { kind: 'cancelled' } },
     { outcome: { kind: 'failed' as const }, expected: { kind: 'failed', code: 'session_input_failed' } },
   ])('classifies the original Workflow reply $outcome.kind without waiting for another final', ({ outcome, expected }) => {

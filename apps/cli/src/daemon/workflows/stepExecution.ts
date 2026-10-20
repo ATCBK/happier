@@ -41,7 +41,8 @@ export function classifyWorkflowSessionInputResult(
       const outcome = result.outcome;
       switch (outcome.kind) {
         case 'pass':
-        case 'terminal_no_result': return { kind: 'completed', result: '', ...reply };
+          return { kind: 'completed', result: '', ...reply };
+        case 'terminal_no_result': return { kind: 'needs_attention', code: 'session_input_result_unavailable', ...reply };
         case 'cancelled': return { kind: 'cancelled', ...reply };
         case 'failed': return { kind: 'failed', code: 'session_input_failed', message: 'The requested session failed.', ...reply };
         case 'declined': return { kind: 'failed', code: 'session_input_declined', message: 'The requested session declined.', ...reply };
@@ -55,7 +56,7 @@ export function classifyWorkflowSessionInputResult(
       ...(result.usage ? { usage: result.usage } : {}),
     };
     case 'terminal_no_result': return {
-      kind: 'completed', result: '',
+      kind: 'needs_attention', code: 'session_input_result_unavailable',
       ...reply,
       ...(result.usage ? { usage: result.usage } : {}),
     };
