@@ -7,6 +7,7 @@ import {
   MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS,
   ConversationConnectionTestInputV1Schema, ConversationDeliveryInputV1Schema,
   ConversationAttachmentFetchInputV1Schema,
+  createConversationAttachmentIdV1, readConversationAttachmentIdV1, encodeConversationAttachmentBytesV1,
   ConversationDeliveryReconcileInputV1Schema, ConversationEndpointResolveInputV1Schema,
   ConversationPollInputV1Schema,
   ConversationIngressObservedEntryV1Schema,
@@ -277,11 +278,19 @@ export async function fetchEmailAttachment(input: unknown, context: PluginInvoca
   if (mail.messageId !== request.messageId || !trust.trusted || actor.kind !== 'human' || actor.isIntegrationSelf) {
     return { kind: 'notReady', reason: 'permissionMissing', diagnostic: 'The referenced email does not authenticate a human sender.' };
   }
-  const attachments = request.attachmentIds.map(id => mail.attachments.find(file => file.attachmentId === id));
+  const attachments = request.attachmentIds.map(id => {
+    // Retained 0.3 inputs from parse.ts before the shared-codec extraction
+    // (5033889b2db) carry slash-joined MIME part refs. Translate only at this
+    // read seam; remove when those pre-extraction pending inputs are drained.
+    const parts = id.split('/');
+    const canonicalId = readConversationAttachmentIdV1(id, 'email') !== null ? id
+      : parts.every(part => /^mime:[0-9]+(?:\.[0-9]+)*$/.test(part)) ? createConversationAttachmentIdV1('email', parts) : null;
+    return mail.attachments.find(file => file.attachmentId === canonicalId);
+  });
   if (attachments.some(file => file === undefined)) return { kind: 'notReady', reason: 'unsupported', diagnostic: 'The referenced attachment is unavailable.' };
   context.signal.throwIfAborted();
-  return { kind: 'fetched', attachments: attachments.map(file => {
+  return { kind: 'fetched', attachments: attachments.map((file, index) => {
     if (!file) throw new Error('Validated attachment is missing');
-    return { attachmentId: file.attachmentId, base64: Buffer.from(file.bytes).toString('base64') };
+    return { attachmentId: request.attachmentIds[index]!, base64: encodeConversationAttachmentBytesV1(file.bytes) };
   }) };
 }

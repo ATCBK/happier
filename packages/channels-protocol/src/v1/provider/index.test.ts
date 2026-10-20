@@ -83,8 +83,11 @@ describe('Channels V1 provider barrel', () => {
             'assertConversationChannelsCoreCallerV1',
             'classifyConversationProviderMaterializationFailureV1',
             'compareCanonicalConversationResolutionCandidatesV1',
+            'createConversationAttachmentIdV1',
+            'encodeConversationAttachmentBytesV1',
             'hasCanonicalConversationResolutionCandidateOrderV1',
             'hasCurrentConversationProviderConnectionV1',
+            'readConversationAttachmentIdV1',
             'rethrowConversationProviderLifecycleFailureV1',
         ]);
         expect(Object.keys(provider).some((key) => key.endsWith('ProtocolSchema'))).toBe(false);

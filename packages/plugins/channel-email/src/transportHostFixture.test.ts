@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 import { simpleParser } from 'mailparser';
 import { assertEmailTransportContributionV1 } from '@happier-dev/email-transports-protocol/testing/v1';
 import { definePlugin, type JsonValue, type PluginInvocationContext, type PluginServices, type TargetedContributionPointRef, type TargetedContributionSnapshot } from '@happier-dev/plugin-sdk';
@@ -296,7 +297,7 @@ describe('email core with an external contributed raw transport', () => {
     } finally { await f.dispose(); }
   });
 
-  it('fetches stable nested attachment ids after signature image filtering without trusting embedded authentication headers', async () => {
+  it('fetches stable nested and retained MIME attachment ids without trusting embedded authentication headers', async () => {
     const f = await fixture();
     const auth = 'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com';
     const inner = ['From: client@outside.com', 'Message-ID: <inner@outside.com>', auth, 'Subject: Lead',
@@ -331,13 +332,19 @@ describe('email core with an external contributed raw transport', () => {
       expect(attachments.map(file => file.name)).not.toContain('forwarder-logo.png');
       expect(attachments.map(file => file.name)).toContain('logo.png');
       const attachment = attachments.find(file => file.name.endsWith('lead.txt'))!;
-      expect(attachment.attachmentId).toContain('/');
+      expect(readConversationAttachmentIdV1(attachment.attachmentId, 'email')).toHaveLength(2);
       const fetched = ConversationAttachmentFetchResultV1Schema.parse(await f.invoke(ids.attachmentFetch, {
         ...connection, messageId: '<forward@example.com>', attachmentIds: [attachment.attachmentId],
       }));
       expect(fetched.kind).toBe('fetched');
       if (fetched.kind !== 'fetched') throw new Error('Expected an attachment batch');
       expect(Buffer.from(fetched.attachments[0]!.base64, 'base64').toString()).toBe('nested lead file');
+      // The pre-extraction writer (5033889b2db, email/parse.ts) joined these
+      // native MIME part references with '/'. Retained Session inputs keep it.
+      const retainedId = readConversationAttachmentIdV1(attachment.attachmentId, 'email')!.join('/');
+      await expect(f.invoke(ids.attachmentFetch, {
+        ...connection, messageId: '<forward@example.com>', attachmentIds: [retainedId],
+      })).resolves.toEqual({ kind: 'fetched', attachments: [{ attachmentId: retainedId, base64: fetched.attachments[0]!.base64 }] });
       f.replaceFetched(outer);
       await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<different@example.com>', attachmentIds: [attachment.attachmentId] }))
         .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
