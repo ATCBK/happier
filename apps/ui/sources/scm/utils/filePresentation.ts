@@ -1,68 +1,66 @@
-const KNOWN_BINARY_EXTENSIONS = new Set([
-    'png',
-    'jpg',
-    'jpeg',
-    'gif',
-    'webp',
-    'bmp',
-    'ico',
-    'mp4',
-    'm4v',
-    'avi',
-    'mov',
-    'wmv',
-    'flv',
-    'webm',
-    'mp3',
-    'wav',
-    'flac',
-    'aac',
-    'ogg',
-    'pdf',
-    'doc',
-    'docx',
-    'xls',
-    'xlsx',
-    'ppt',
-    'pptx',
-    'zip',
-    'tar',
-    'gz',
-    'rar',
-    '7z',
-    'exe',
-    'dmg',
-    'deb',
-    'rpm',
-    'woff',
-    'woff2',
-    'ttf',
-    'otf',
-    'db',
-    'sqlite',
-    'sqlite3',
-    'lockb',
-]);
+/**
+ * Built-in file presentation policy. Syntax highlighting remains in fileLanguage.
+ * Session-media wire admission, favicons/logos, LLM ingestion and the isolated
+ * public-share viewer have distinct trust/transport contracts and keep theirs.
+ */
+export type FileViewerKind = 'code' | 'markdown' | 'image' | 'svg' | 'pdf' | 'video' | 'audio' | 'binary';
+export type FileViewerClass = Readonly<{
+    kind: FileViewerKind;
+    mimeType: string;
+    previewable: boolean;
+    alphaCapable: boolean;
+    labelKey: string;
+}>;
 
-const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    bmp: 'image/bmp',
-    ico: 'image/x-icon',
-    svg: 'image/svg+xml',
-};
-
-const VIDEO_MIME_BY_EXTENSION: Record<string, string> = {
-    mp4: 'video/mp4',
-    m4v: 'video/x-m4v',
-    mov: 'video/quicktime',
-    webm: 'video/webm',
-};
-
-const SUPPORTED_VIDEO_MIMES = new Set(Object.values(VIDEO_MIME_BY_EXTENSION));
+type FileKindRow = Readonly<{ extensions: readonly string[]; mimeType: string; kind: FileViewerKind; labelKey?: string; alphaCapable?: boolean }>;
+const FILE_KINDS: readonly FileKindRow[] = [
+    { extensions: ['png'], mimeType: 'image/png', kind: 'image', labelKey: 'files.kind.png', alphaCapable: true },
+    { extensions: ['jpg', 'jpeg'], mimeType: 'image/jpeg', kind: 'image', labelKey: 'files.kind.jpeg' },
+    { extensions: ['gif'], mimeType: 'image/gif', kind: 'image', labelKey: 'files.kind.gif', alphaCapable: true },
+    { extensions: ['webp'], mimeType: 'image/webp', kind: 'image', labelKey: 'files.kind.webp', alphaCapable: true },
+    { extensions: ['bmp'], mimeType: 'image/bmp', kind: 'image', labelKey: 'files.kind.bmp' },
+    { extensions: ['ico'], mimeType: 'image/x-icon', kind: 'image', labelKey: 'files.kind.ico', alphaCapable: true },
+    { extensions: ['avif'], mimeType: 'image/avif', kind: 'image', labelKey: 'files.kind.avif', alphaCapable: true },
+    { extensions: ['svg'], mimeType: 'image/svg+xml', kind: 'svg', alphaCapable: true },
+    { extensions: ['md', 'markdown', 'mdx'], mimeType: 'text/markdown', kind: 'markdown' },
+    { extensions: ['pdf'], mimeType: 'application/pdf', kind: 'pdf' },
+    { extensions: ['mp4'], mimeType: 'video/mp4', kind: 'video' },
+    { extensions: ['m4v'], mimeType: 'video/x-m4v', kind: 'video' },
+    { extensions: ['mov'], mimeType: 'video/quicktime', kind: 'video' },
+    { extensions: ['webm'], mimeType: 'video/webm', kind: 'video' },
+    { extensions: ['avi'], mimeType: 'video/x-msvideo', kind: 'video' },
+    { extensions: ['wmv'], mimeType: 'video/x-ms-wmv', kind: 'video' },
+    { extensions: ['flv'], mimeType: 'video/x-flv', kind: 'video' },
+    { extensions: ['mp3'], mimeType: 'audio/mpeg', kind: 'audio' },
+    { extensions: ['wav'], mimeType: 'audio/wav', kind: 'audio' },
+    { extensions: ['flac'], mimeType: 'audio/flac', kind: 'audio' },
+    { extensions: ['aac'], mimeType: 'audio/aac', kind: 'audio' },
+    { extensions: ['ogg', 'oga'], mimeType: 'audio/ogg', kind: 'audio' },
+    { extensions: ['m4a'], mimeType: 'audio/mp4', kind: 'audio' },
+    { extensions: ['zip'], mimeType: 'application/zip', kind: 'binary', labelKey: 'files.kind.zip' },
+    { extensions: ['tar'], mimeType: 'application/x-tar', kind: 'binary', labelKey: 'files.kind.tar' },
+    { extensions: ['gz'], mimeType: 'application/gzip', kind: 'binary', labelKey: 'files.kind.gzip' },
+    { extensions: ['rar'], mimeType: 'application/vnd.rar', kind: 'binary', labelKey: 'files.kind.rar' },
+    { extensions: ['7z'], mimeType: 'application/x-7z-compressed', kind: 'binary', labelKey: 'files.kind.sevenZip' },
+    { extensions: ['db', 'sqlite', 'sqlite3'], mimeType: 'application/vnd.sqlite3', kind: 'binary', labelKey: 'files.kind.sqlite' },
+    { extensions: ['exe', 'dll'], mimeType: 'application/vnd.microsoft.portable-executable', kind: 'binary', labelKey: 'files.kind.pe' },
+    { extensions: ['elf', 'so'], mimeType: 'application/x-elf', kind: 'binary', labelKey: 'files.kind.elf' },
+    { extensions: ['dylib', 'macho'], mimeType: 'application/x-mach-binary', kind: 'binary', labelKey: 'files.kind.machO' },
+    { extensions: ['doc'], mimeType: 'application/msword', kind: 'binary', labelKey: 'files.kind.office' },
+    { extensions: ['docx'], mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', kind: 'binary', labelKey: 'files.kind.office' },
+    { extensions: ['xls'], mimeType: 'application/vnd.ms-excel', kind: 'binary', labelKey: 'files.kind.office' },
+    { extensions: ['xlsx'], mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', kind: 'binary', labelKey: 'files.kind.office' },
+    { extensions: ['ppt'], mimeType: 'application/vnd.ms-powerpoint', kind: 'binary', labelKey: 'files.kind.office' },
+    { extensions: ['pptx'], mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', kind: 'binary', labelKey: 'files.kind.office' },
+    { extensions: ['woff'], mimeType: 'font/woff', kind: 'binary', labelKey: 'files.kind.font' },
+    { extensions: ['woff2'], mimeType: 'font/woff2', kind: 'binary', labelKey: 'files.kind.font' },
+    { extensions: ['ttf'], mimeType: 'font/ttf', kind: 'binary', labelKey: 'files.kind.font' },
+    { extensions: ['otf'], mimeType: 'font/otf', kind: 'binary', labelKey: 'files.kind.font' },
+    { extensions: ['dmg'], mimeType: 'application/x-apple-diskimage', kind: 'binary' },
+    { extensions: ['deb'], mimeType: 'application/vnd.debian.binary-package', kind: 'binary' },
+    { extensions: ['rpm'], mimeType: 'application/x-rpm', kind: 'binary' },
+    { extensions: ['lockb'], mimeType: 'application/octet-stream', kind: 'binary' },
+];
 
 function getPathExtension(path: string): string | null {
     const basename = path.split(/[\\/]/).pop() ?? path;
@@ -71,28 +69,60 @@ function getPathExtension(path: string): string | null {
     return basename.slice(lastDotIndex + 1).toLowerCase();
 }
 
-export function isKnownBinaryPath(path: string): boolean {
-    const extension = getPathExtension(path);
-    return extension ? KNOWN_BINARY_EXTENSIONS.has(extension) : false;
+function magicMimeType(head: Uint8Array): string | null {
+    const matches = (bytes: readonly number[], offset = 0) => bytes.every((byte, index) => head[offset + index] === byte);
+    if (matches([137, 80, 78, 71, 13, 10, 26, 10])) return 'image/png';
+    if (matches([255, 216, 255])) return 'image/jpeg';
+    if (matches([71, 73, 70, 56]) && (head[4] === 55 || head[4] === 57) && head[5] === 97) return 'image/gif';
+    if (matches([82, 73, 70, 70]) && matches([87, 69, 66, 80], 8)) return 'image/webp';
+    for (let offset = 0; offset + 5 <= Math.min(head.length, 1024); offset++) {
+        if (matches([37, 80, 68, 70, 45], offset)) return 'application/pdf';
+    }
+    if (matches([80, 75]) && (matches([3, 4], 2) || matches([5, 6], 2) || matches([7, 8], 2))) return 'application/zip';
+    if (matches([83, 81, 76, 105, 116, 101, 32, 102, 111, 114, 109, 97, 116, 32, 51, 0])) return 'application/vnd.sqlite3';
+    if (matches([35, 33])) return 'text/plain';
+    return null;
 }
 
-export function getImageMimeTypeFromPath(path: string): string | null {
-    const extension = getPathExtension(path);
-    if (!extension) return null;
-    return IMAGE_MIME_BY_EXTENSION[extension] ?? null;
-}
-
-export function isKnownImagePath(path: string): boolean {
-    return getImageMimeTypeFromPath(path) != null;
-}
-
-export function getVideoMimeTypeFromPath(path: string): string | null {
-    const extension = getPathExtension(path);
-    return extension ? VIDEO_MIME_BY_EXTENSION[extension] ?? null : null;
-}
-
-export function isSupportedVideoMimeType(mimeType: string): boolean {
-    return SUPPORTED_VIDEO_MIMES.has(mimeType.trim().toLowerCase());
+export function resolveFileViewerKind(input: Readonly<{
+    path: string;
+    mimeType?: string | null;
+    isBinaryContent?: boolean;
+    head?: Uint8Array;
+}>): FileViewerClass {
+    const mime = input.mimeType?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+    const specificMime = mime !== '' && mime !== 'application/octet-stream' && mime !== 'binary/octet-stream';
+    const extension = getPathExtension(input.path);
+    let row = specificMime ? FILE_KINDS.find((entry) => entry.mimeType === mime) : undefined;
+    if (!specificMime) row = FILE_KINDS.find((entry) => entry.extensions.includes(extension ?? ''));
+    if (input.head && (!extension || !specificMime)) {
+        const magic = magicMimeType(input.head);
+        if (magic) row = FILE_KINDS.find((entry) => entry.mimeType === magic)
+            ?? { extensions: [], mimeType: magic, kind: 'code' };
+    }
+    let kind: FileViewerKind = row?.kind ?? (specificMime
+        ? mime.startsWith('image/') ? 'image'
+            : mime.startsWith('video/') ? 'video'
+                : mime.startsWith('audio/') ? 'audio'
+                    : mime.startsWith('text/') ? 'code' : 'binary'
+        : 'code');
+    let mimeType = row?.mimeType ?? (specificMime && kind !== 'code' ? mime : 'text/plain');
+    if (kind === 'pdf' && input.head && magicMimeType(input.head) !== 'application/pdf') {
+        kind = 'binary';
+        mimeType = 'application/octet-stream';
+        row = undefined;
+    }
+    if (input.isBinaryContent === true) {
+        kind = 'binary';
+        if (!row && !specificMime) mimeType = 'application/octet-stream';
+    }
+    return {
+        kind,
+        mimeType,
+        previewable: kind === 'image' || kind === 'svg' || kind === 'pdf' || kind === 'video' || kind === 'audio',
+        alphaCapable: (kind === 'image' || kind === 'svg') && row?.alphaCapable === true,
+        labelKey: row?.labelKey ?? `files.kind.${kind}`,
+    };
 }
 
 export function isBinaryContent(content: string): boolean {

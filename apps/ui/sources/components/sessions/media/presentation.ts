@@ -1,4 +1,4 @@
-import { getImageMimeTypeFromPath } from '@/scm/utils/filePresentation';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 
 export type SessionMediaInlineRenderableImageMimeType =
     | 'image/png'
@@ -25,9 +25,11 @@ export function resolveSessionMediaInlineRenderableImageMimeType(input: Readonly
     const explicitMimeType = typeof input.mimeType === 'string' && input.mimeType.trim().length > 0
         ? input.mimeType.trim().toLowerCase()
         : null;
+    const pathViewer = resolveFileViewerKind({ path: input.path });
+    const pathMimeType = pathViewer.kind === 'image' || pathViewer.kind === 'svg' ? pathViewer.mimeType : null;
     const resolvedMimeType =
         explicitMimeType
-        ?? getImageMimeTypeFromPath(input.path)
-        ?? (input.name ? getImageMimeTypeFromPath(input.name) : null);
+        ?? pathMimeType
+        ?? (input.name ? resolveFileViewerKind({ path: input.name }).mimeType : null);
     return isSessionMediaInlineRenderableImageMimeType(resolvedMimeType) ? resolvedMimeType : null;
 }

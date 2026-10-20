@@ -6,7 +6,7 @@ import type { AgentInputAttachment } from '@/components/sessions/agentInput/agen
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { randomUUID } from '@/platform/randomUUID';
-import { getImageMimeTypeFromPath } from '@/scm/utils/filePresentation';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import type { AttachmentDraft } from './attachmentDraftModel';
 
 function resolveSourceSizeBytes(source: AttachmentsUploadFileSource): number | null {
@@ -21,12 +21,10 @@ function resolveSourceName(source: AttachmentsUploadFileSource): string {
 }
 
 function isImageSource(source: AttachmentsUploadFileSource): boolean {
-    if (source.kind === 'web') {
-        if (source.file.type && source.file.type.startsWith('image/')) return true;
-        return Boolean(getImageMimeTypeFromPath(source.file.name));
-    }
-    if (source.mimeType && String(source.mimeType).startsWith('image/')) return true;
-    return Boolean(getImageMimeTypeFromPath(source.name));
+    const viewer = resolveFileViewerKind(source.kind === 'web'
+        ? { path: source.file.name, mimeType: source.file.type }
+        : { path: source.name, mimeType: source.mimeType, ...(source.kind === 'memory' ? { head: source.bytes } : {}) });
+    return viewer.kind === 'image' || viewer.kind === 'svg';
 }
 
 export function useAttachmentDraftManager(params: Readonly<{

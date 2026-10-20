@@ -20,7 +20,7 @@ import type {
 
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { randomUUID } from '@/platform/randomUUID';
-import { getImageMimeTypeFromPath, isBinaryContent, isKnownBinaryPath } from '@/scm/utils/filePresentation';
+import { isBinaryContent, resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import {
     workspaceReadFile,
     workspaceStatFile,
@@ -120,36 +120,21 @@ type OpenableContentKind = Readonly<{
 const CONTENT_CLASSIFICATION_PROBE_MAX_BYTES = DEFAULT_OPENABLE_CONTENT_MAX_BYTES_V1;
 
 /**
- * A filename cannot decide whether bytes are text. The extension tables answer
- * only for the images and archives they list, and every unlisted extension —
- * including every extension nobody has thought of — currently lands on `text`.
- * `decidedByPath` marks that difference so only the undecided case pays for a
- * content probe.
+ * The canonical classifier supplies kind and MIME. Text candidates still need
+ * the bounded UTF-8 probe before a plugin is promised text bytes.
  */
-function deriveContentKind(filePath: string): Readonly<{
-    kind: OpenableContentKind;
-    decidedByPath: boolean;
-}> {
+function deriveContentKind(filePath: string, head?: Uint8Array, binaryContent?: boolean): OpenableContentKind {
     const normalizedPath = filePath.replaceAll('\\', '/');
-    const imageMime = getImageMimeTypeFromPath(normalizedPath);
+    const viewer = resolveFileViewerKind({ path: normalizedPath, head, isBinaryContent: binaryContent });
     const extension = privateWorkspaceFileExtension(normalizedPath);
     const withExtension = extension ? { extension } : {};
-    if (imageMime) {
-        return {
-            kind: { contentClass: 'image', mimeType: imageMime, ...withExtension },
-            decidedByPath: true,
-        };
+    if (viewer.kind === 'image' || viewer.kind === 'svg') {
+        return { contentClass: 'image', mimeType: viewer.mimeType, ...withExtension };
     }
-    if (isKnownBinaryPath(normalizedPath)) {
-        return {
-            kind: { contentClass: 'binary', mimeType: 'application/octet-stream', ...withExtension },
-            decidedByPath: true,
-        };
+    if (viewer.kind !== 'code' && viewer.kind !== 'markdown') {
+        return { contentClass: 'binary', mimeType: viewer.mimeType, ...withExtension };
     }
-    return {
-        kind: { contentClass: 'text', mimeType: 'text/plain', ...withExtension },
-        decidedByPath: false,
-    };
+    return { contentClass: 'text', mimeType: viewer.mimeType, ...withExtension };
 }
 
 function decodeStrictUtf8(bytes: Uint8Array): string | null {
@@ -265,7 +250,7 @@ async function classifyWorkspaceOpenableContent(input: Readonly<{
 }>): Promise<OpenableContentKind | null> {
     const derived = deriveContentKind(input.filePath);
     // An empty file is valid UTF-8, so it needs no probe to be called text.
-    if (derived.decidedByPath || input.sizeBytes === 0) return derived.kind;
+    if (derived.contentClass !== 'text' || input.sizeBytes === 0) return derived;
     const memo = input.memo.current;
     if (memo && memo.revision === input.revision) return memo.kind;
     if (input.sizeBytes > CONTENT_CLASSIFICATION_PROBE_MAX_BYTES) return null;
@@ -279,20 +264,17 @@ async function classifyWorkspaceOpenableContent(input: Readonly<{
     );
     // A failed, cancelled or raced probe is deliberately not memoized: the
     // filename answer stands for this call and the next stat probes again.
-    if (probe === CANCELLED || !probe.success) return derived.kind;
+    if (probe === CANCELLED || !probe.success) return derived;
     const bytes = decodeBase64(probe.content, 'base64');
-    if (bytes.byteLength !== input.sizeBytes) return derived.kind;
+    if (bytes.byteLength !== input.sizeBytes) return derived;
     // The stat digest and probe bytes must describe one exact snapshot. A
     // same-size ABA during this classification is not safe to memoize.
     if (revisionFromBytes(bytes) !== input.revision) return null;
 
-    const kind: OpenableContentKind = classifyOpenableContentBytes(bytes) === 'binary'
-        ? {
-            contentClass: 'binary',
-            mimeType: 'application/octet-stream',
-            ...(derived.kind.extension ? { extension: derived.kind.extension } : {}),
-        }
-        : derived.kind;
+    const sniffed = deriveContentKind(input.filePath, bytes);
+    const kind = sniffed.contentClass === 'text' && classifyOpenableContentBytes(bytes) === 'binary'
+        ? deriveContentKind(input.filePath, bytes, true)
+        : sniffed;
     input.memo.current = Object.freeze({ revision: input.revision, kind });
     return kind;
 }
@@ -425,8 +407,8 @@ export function createWorkspaceFileOpenableContentBinding(input: Readonly<{
             // not decide is therefore delivered as the text or binary it
             // actually is, instead of being refused as `unsupported` because a
             // filename promised text.
-            const derived = deriveContentKind(filePath);
-            const text = derived.decidedByPath ? null : decodeStrictUtf8(bytes);
+            const derived = deriveContentKind(filePath, bytes);
+            const text = derived.contentClass === 'text' ? decodeStrictUtf8(bytes) : null;
             const content: OpenableContentBodyV1 = text !== null && !isBinaryContent(text)
                 ? { kind: 'utf8', text }
                 : { kind: 'base64', base64: encodeBase64(bytes, 'base64') };
