@@ -19,7 +19,7 @@ describe('Grok plugin manifest', () => {
       id: 'grok', runtime: { kind: 'custom' }, primary: 'sessions',
       capabilities: {
         skills: {
-          delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
           nativeRoots: {
             user: [['.grok', 'skills'], ['.claude', 'skills'], ['.cursor', 'skills']],
             project: [['.grok', 'skills'], ['.agents', 'skills'], ['.claude', 'skills'], ['.cursor', 'skills']],

@@ -50,7 +50,7 @@ function recordOpen(request: AgentSessionOpenRequest | AgentExecutionRunOpenRequ
 
 // The ACP host service is outside the plugin leaf. No plugin logic is replaced.
 const sessionBoundary: AgentSessionRuntime = {
-  skillsDelivered: false,
+  skillsDelivered: true,
   async send() { return { status: 'admitted' }; },
   watch() { return { dispose() {} }; },
   async dispose() {},
@@ -87,13 +87,13 @@ if (!agent) throw new Error('Grok Agent contribution is missing.');
 runAgentSkillDeliveryContract({
   agent, openSession, observeLaunch: () => observer.observeLaunch(),
   variants: [
-    { id: 'create', open: openSession, expect: 'unsupported' },
-    { id: 'resume', open: request => openSession({ ...request, kind: 'resume', providerSessionId: 'grok-checkpoint' }), expect: 'unsupported' },
+    { id: 'create', open: openSession, expect: 'delivers' },
+    { id: 'resume', open: request => openSession({ ...request, kind: 'resume', providerSessionId: 'grok-checkpoint' }), expect: 'delivers' },
   ],
 });
 
 describe('Grok detached Run skills declaration', () => {
-  it('K10 keeps the actual registered Run leaf on the index path', async () => {
+  it('K10 delivers skills through the actual registered Run leaf', async () => {
     const openRun = agentRuntime.sessions?.executionRunContextV1?.open;
     if (!openRun) throw new Error('Grok detached Run facet is missing.');
     const request: AgentExecutionRunOpenRequest = {
@@ -106,7 +106,7 @@ describe('Grok detached Run skills declaration', () => {
     const runtime = await openRun(request, context as unknown as AgentExecutionRunRuntimeContextV1);
     try {
       expect(observedRequest).toBe(request);
-      expect(observer.observeLaunch().argv).toEqual(['--no-auto-update', 'agent', 'stdio']);
+      expect(observer.observeLaunch().argv).toEqual(['--no-auto-update', 'agent', '--plugin-dir', request.skills!.pluginRoot, 'stdio']);
       expect(observer.observeLaunch().filesWritten).toEqual([]);
     } finally { await runtime.dispose(); }
   });
