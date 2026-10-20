@@ -21,32 +21,32 @@ const SelectionSchema = z.strictObject({
     actionInput: z.record(z.string(), z.unknown()),
 });
 
-/** The launcher reads and writes the incumbent Session draft; no separate persistence lifetime. */
+/** Session launchers reuse their Session draft; detached launchers retain only mounted state. */
 export function useExecutionRunLauncherDraft(input: Readonly<{
     lifetime: ServerAccountScopeLifetime | null;
-    sessionId: string;
+    sessionId: string | null;
     draftKey: string;
     correlationId?: string;
     createDefaultInput: () => Record<string, unknown>;
 }>) {
     const { lifetime, sessionId, draftKey } = input;
-    const address = { kind: 'session' as const, sessionId };
+    const address = sessionId === null ? null : { kind: 'session' as const, sessionId };
     const key = JSON.stringify([lifetime?.scope.serverId ?? null, lifetime?.scope.accountId ?? null, sessionId, draftKey]);
     const selectionPath = executionRunLauncherDraftFieldPath(draftKey, 'selection');
     const selectionFieldId = `extensions.happier.${selectionPath.fieldId}`;
-    const readSelectionMutationId = React.useCallback(() => lifetime
+    const readSelectionMutationId = React.useCallback(() => lifetime && sessionId !== null
         ? getSessionDraftDocumentField(
             getSessionDraftSnapshot(lifetime.scope, { kind: 'session', sessionId })?.document ?? null,
             executionRunLauncherDraftFieldPath(draftKey, 'selection'),
         )?.mutationId ?? null
         : null, [draftKey, lifetime, sessionId]);
-    const subscribeSelection = React.useCallback((listener: () => void) => lifetime
+    const subscribeSelection = React.useCallback((listener: () => void) => lifetime && sessionId !== null
         ? subscribeSessionDraft(lifetime.scope, { kind: 'session', sessionId }, listener)
         : () => undefined, [lifetime, sessionId]);
     // Observe only the selection token: typing remains subscribed in the composer leaf.
     const selectionMutationId = React.useSyncExternalStore(subscribeSelection, readSelectionMutationId, readSelectionMutationId);
     const createState = () => {
-        const document = lifetime ? getSessionDraftSnapshot(lifetime.scope, address)?.document : null;
+        const document = lifetime && address ? getSessionDraftSnapshot(lifetime.scope, address)?.document : null;
         const saved = SelectionSchema.safeParse(getSessionDraftDocumentField(document ?? null, selectionPath)?.value);
         return { key, selectionMutationId, identity: saved.success ? saved.data.identity : {
             correlationId: input.correlationId ?? randomUUID(), inputLocalId: randomUUID(),
@@ -59,7 +59,7 @@ export function useExecutionRunLauncherDraft(input: Readonly<{
     const currentRef = React.useRef(current);
     currentRef.current = current;
     const persistSelection = React.useCallback(() => {
-        if (!lifetime?.isCurrent() || currentRef.current.key !== key) return;
+        if (!lifetime?.isCurrent() || sessionId === null || currentRef.current.key !== key) return;
         const { identity, actionInput } = currentRef.current;
         writeExistingSessionDraft({ scope: lifetime.scope, sessionId,
             patch: { executionRunLauncher: { key: draftKey, patch: {
@@ -89,10 +89,10 @@ export function useExecutionRunLauncherDraft(input: Readonly<{
             setStored(currentRef.current);
             persistSelection();
         },
-        captureSelection: (): SessionDraftCurrentness | null => lifetime?.isCurrent()
+        captureSelection: (): SessionDraftCurrentness | null => lifetime?.isCurrent() && address
             ? captureSessionDraftCurrentness({ scope: lifetime.scope, address, fieldIds: [selectionFieldId] }) : null,
         clearAcceptedSelection: (capture: SessionDraftCurrentness | null, residual: ParticipantComposerDocument) => {
-            if (!capture || !lifetime?.isCurrent() || residual.text || residual.mentions.length || residual.attachments.length) return;
+            if (!capture || !address || !lifetime?.isCurrent() || residual.text || residual.mentions.length || residual.attachments.length) return;
             clearSessionDraftCurrentnessLocal({ scope: lifetime.scope, address, currentness: capture, fieldIds: [selectionFieldId] });
         },
     };
