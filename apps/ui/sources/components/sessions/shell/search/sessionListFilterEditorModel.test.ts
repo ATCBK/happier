@@ -21,6 +21,8 @@ const labels = {
     sharedWith: 'Shared with', outsideTeams: 'Personal & direct', tags: 'Tags', source: 'Source',
     allSources: 'All', persistedSource: 'Saved in Happier', directSource: 'External', noOptions: 'No options',
     onlyCoordinators: 'Only coordinators', onlyCoordinatorsDescription: 'Sessions that manage others or follow by a rule',
+    status: 'Status', statusWorking: 'Working', statusNeedsYou: 'Needs you', statusFailed: 'Failed',
+    statusIdle: 'Idle', statusOffline: 'Offline', project: 'Project', projectIs: 'Is', projectIsNot: "Isn't",
 } as const;
 
 describe('sessionListFilterEditorModel', () => {
@@ -354,6 +356,79 @@ describe('sessionListFilterEditorModel', () => {
         expect(section.options[2]?.openStep?.sections[0]).toMatchObject({
             kind: 'static',
             options: [{ id: 'audience:["home-b","team","team-a"]', label: 'Acme · Home B' }],
+        });
+    });
+
+    describe('Project and status facets', () => {
+        const scopesAvailable = { my_work: true, assigned_to_me: true, following: true, involving_me: true, all_accessible: true };
+        const payments = { serverId: 'home-a', projectKey: 'payments' };
+        const build = (filters: ReturnType<typeof createSessionListViewFilterDefaults>) => buildSessionListFilterEditorModel({
+            filters, includeInactive: false, labels, scopesAvailable,
+            homes: [{ serverId: 'home-a', label: 'Home A' }], audiences: [], tags: [], sourceAvailable: false,
+            projects: [
+                { ...payments, label: 'payments' },
+                { serverId: 'home-a', projectKey: 'happier', label: 'happier' },
+                { serverId: 'home-b', projectKey: 'elsewhere', label: 'elsewhere' },
+            ],
+        });
+        const section = (model: ReturnType<typeof build>, id: string) => model.rootStep.sections.find((candidate) => candidate.id === id);
+
+        it('builds "failing sessions in payments" from Project and Work-status choices', () => {
+            const defaults = createSessionListViewFilterDefaults({ homeServerIds: ['home-a'] });
+            const model = build(defaults);
+            expect(section(model, 'status')?.kind === 'static' && section(model, 'status')?.options.map((option) => option.label))
+                .toEqual(['Working', 'Needs you', 'Failed', 'Idle', 'Offline']);
+            // Only the selected Homes' projects are choices.
+            expect(section(model, 'projects')?.kind === 'static' && section(model, 'projects')?.options.map((option) => option.label))
+                .toEqual(['payments', 'happier']);
+
+            const projectOption = section(model, 'projects')?.kind === 'static' ? section(model, 'projects')!.options[0]!.id : '';
+            const withProject = reduceSessionListFilterEditorSelection(defaults, projectOption);
+            const failing = reduceSessionListFilterEditorSelection(withProject, 'status:failed');
+            expect(failing.projects).toEqual({ include: [payments], exclude: [] });
+            expect(failing.statuses).toEqual(['failed']);
+            expect(build(failing).selection.selectedIds.has('status:failed')).toBe(true);
+            expect(build(failing).selection.selectedIds.has(projectOption)).toBe(true);
+            expect(build(failing).selection.selectedIds.has('project-mode:include')).toBe(true);
+
+            // Toggling the same choices off leaves no empty facet behind.
+            const cleared = reduceSessionListFilterEditorSelection(
+                reduceSessionListFilterEditorSelection(failing, 'status:failed'), projectOption);
+            expect(cleared.statuses).toBeUndefined();
+            expect(cleared.projects).toBeUndefined();
+        });
+
+        it('selects every presentation state of a Work status, so Needs you excludes Failed', () => {
+            const defaults = createSessionListViewFilterDefaults({ homeServerIds: ['home-a'] });
+            const needsYou = reduceSessionListFilterEditorSelection(defaults, 'status:needs_you');
+            expect([...(needsYou.statuses ?? [])].sort()).toEqual(['action_required', 'permission_required']);
+            const offline = reduceSessionListFilterEditorSelection(defaults, 'status:offline');
+            expect([...(offline.statuses ?? [])].sort()).toEqual(['disconnected', 'recoverable_unservable']);
+        });
+
+        it('switches the chosen projects between Is and Isn\'t, and keeps an unknown retained project removable', () => {
+            const defaults = createSessionListViewFilterDefaults({
+                homeServerIds: ['home-a'],
+                projects: { include: [payments, { serverId: 'home-a', projectKey: 'forgotten' }], exclude: [] },
+            });
+            const model = build(defaults);
+            const options = section(model, 'projects')?.kind === 'static' ? section(model, 'projects')!.options : [];
+            // A retained project that this Home no longer lists stays a selected, removable choice.
+            const forgotten = options.find((option) => option.label === 'forgotten');
+            expect(forgotten && model.selection.selectedIds.has(forgotten.id)).toBe(true);
+
+            const excluded = reduceSessionListFilterEditorSelection(defaults, 'project-mode:exclude');
+            expect(excluded.projects?.include).toEqual([]);
+            expect(excluded.projects?.exclude.map((project) => project.projectKey)).toEqual(['payments', 'forgotten']);
+            expect(build(excluded).selection.selectedIds.has('project-mode:exclude')).toBe(true);
+            const removed = reduceSessionListFilterEditorSelection(excluded, forgotten!.id);
+            expect(removed.projects?.exclude.map((project) => project.projectKey)).toEqual(['payments']);
+        });
+
+        it('offers neither facet for Runs, which carry no Session status or project', () => {
+            const model = build(createSessionListViewFilterDefaults({ homeServerIds: ['home-a'], show: 'runs' }));
+            expect(section(model, 'status')).toBeUndefined();
+            expect(section(model, 'projects')).toBeUndefined();
         });
     });
 });

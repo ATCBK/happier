@@ -15,11 +15,12 @@ export type SessionAwarenessPresentationFactsV1 = Readonly<{
 }>;
 
 /** Serializable facet vocabulary for the canonical presentation projection below. */
-export const SessionAwarenessPresentationStateV1Schema = lazyZodSchema(() => z.enum([
+export const SESSION_AWARENESS_PRESENTATION_STATES_V1 = [
   'preparing', 'repair_needed', 'locked', 'access_pending', 'setup_required', 'content_unavailable', 'unknown',
   'failed', 'permission_required', 'action_required', 'ready', 'pending_input',
   'archived', 'recoverable_unservable', 'resuming', 'disconnected', 'stale', 'background_active', 'waiting', 'thinking',
-]));
+] as const;
+export const SessionAwarenessPresentationStateV1Schema = lazyZodSchema(() => z.enum(SESSION_AWARENESS_PRESENTATION_STATES_V1));
 export type SessionAwarenessPresentationStateV1 = z.infer<typeof SessionAwarenessPresentationStateV1Schema>;
 
 /** One precedence for localized Session words, Work buckets and tones. No lifecycle is changed. */
@@ -48,13 +49,36 @@ export function readSessionAwarenessWorkStatusV1(input: Readonly<{
   bucket: 'needs_you' | 'working' | 'finished' | 'idle' | 'offline';
   tone: 'neutral' | 'attention' | 'danger';
 }> {
-  const state = readSessionAwarenessPresentationV1(input.awareness);
+  return readSessionPresentationStateWorkStatusV1(readSessionAwarenessPresentationV1(input.awareness), input.settled);
+}
+
+function readSessionPresentationStateWorkStatusV1(
+  state: SessionAwarenessPresentationStateV1,
+  settled?: boolean,
+): ReturnType<typeof readSessionAwarenessWorkStatusV1> {
   if (state === 'failed') return { bucket: 'needs_you', tone: 'danger' };
   if (state === 'permission_required' || state === 'action_required') return { bucket: 'needs_you', tone: 'attention' };
   // A settlement the runtime can no longer stand behind reads offline.
   if (state === 'disconnected' || state === 'recoverable_unservable') return { bucket: 'offline', tone: 'neutral' };
-  if (input.settled === true && (state === 'ready' || state === 'waiting')) return { bucket: 'finished', tone: 'neutral' };
+  if (settled === true && (state === 'ready' || state === 'waiting')) return { bucket: 'finished', tone: 'neutral' };
   return { bucket: state === 'thinking' ? 'working' : 'idle', tone: 'neutral' };
+}
+
+/**
+ * Status filter choices in the Work vocabulary. Each selects every presentation state with that Work status,
+ * so a filtered list, a rule and a Work row never disagree. Failed is told apart from waiting-for-you by its
+ * tone; Finished needs a settlement fact a stored state cannot carry, so a filter reads it with Idle.
+ */
+export const SESSION_WORK_STATUS_FILTERS_V1 = ['working', 'needs_you', 'failed', 'idle', 'offline'] as const;
+export type SessionWorkStatusFilterV1 = typeof SESSION_WORK_STATUS_FILTERS_V1[number];
+
+export function listSessionPresentationStatesForWorkStatusFilterV1(
+  choice: SessionWorkStatusFilterV1,
+): readonly SessionAwarenessPresentationStateV1[] {
+  return SESSION_AWARENESS_PRESENTATION_STATES_V1.filter((state) => {
+    const status = readSessionPresentationStateWorkStatusV1(state);
+    return (status.tone === 'danger' ? 'failed' : status.bucket) === choice;
+  });
 }
 
 /** Work groups keep idle, finished and offline rows together under Recent. */

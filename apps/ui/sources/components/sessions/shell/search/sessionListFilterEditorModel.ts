@@ -1,4 +1,10 @@
 import type { SessionListScopeV1 } from '@happier-dev/protocol';
+import {
+    listSessionPresentationStatesForWorkStatusFilterV1,
+    SESSION_WORK_STATUS_FILTERS_V1,
+    type SessionWorkStatusFilterV1,
+} from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type {
     SelectionListOption,
     SelectionListSelection,
@@ -48,7 +54,54 @@ export type SessionListFilterEditorLabels = Readonly<{
     noOptions: string;
     onlyCoordinators: string;
     onlyCoordinatorsDescription: string;
+    status: string;
+    statusWorking: string;
+    statusNeedsYou: string;
+    statusFailed: string;
+    statusIdle: string;
+    statusOffline: string;
+    project: string;
+    projectIs: string;
+    projectIsNot: string;
 }>;
+
+export type SessionListFilterProjectOption = QualifiedProjectKeyV1 & Readonly<{
+    label: string;
+    disabled?: boolean;
+}>;
+
+export function readSessionListFilterStatusLabel(
+    choice: SessionWorkStatusFilterV1,
+    labels: Pick<SessionListFilterEditorLabels, 'statusWorking' | 'statusNeedsYou' | 'statusFailed' | 'statusIdle' | 'statusOffline'>,
+): string {
+    switch (choice) {
+        case 'working': return labels.statusWorking;
+        case 'needs_you': return labels.statusNeedsYou;
+        case 'failed': return labels.statusFailed;
+        case 'idle': return labels.statusIdle;
+        case 'offline': return labels.statusOffline;
+    }
+}
+
+/** The option id one qualified project is toggled by, in whichever of Is / Isn't the facet is set to. */
+export function buildSessionListFilterProjectOptionId(project: QualifiedProjectKeyV1): string {
+    return `project:${JSON.stringify([project.serverId.trim(), project.projectKey.trim()])}`;
+}
+
+function projectKey(project: QualifiedProjectKeyV1): string {
+    return buildSessionListFilterProjectOptionId(project);
+}
+
+/** A choice is selected when the filter holds every presentation state of its Work status. */
+function isStatusChoiceSelected(filters: SessionListViewFilters, choice: SessionWorkStatusFilterV1): boolean {
+    const selected = new Set(filters.statuses ?? []);
+    return listSessionPresentationStatesForWorkStatusFilterV1(choice).every((state) => selected.has(state));
+}
+
+/** Project and status describe Sessions; a Runs-only view has neither fact. */
+function offersSessionFacets(filters: SessionListViewFilters, fixedShow: SessionListViewFilters['show'] | undefined): boolean {
+    return (fixedShow ?? filters.show) !== 'runs';
+}
 
 export type SessionListFilterHomeOption = Readonly<{
     serverId: string;
@@ -172,6 +225,14 @@ function selectedIds(
     for (const tag of filters.tagIds) {
         selected.add(buildSessionListFilterTagOptionId(tag));
     }
+    for (const choice of SESSION_WORK_STATUS_FILTERS_V1) {
+        if (isStatusChoiceSelected(filters, choice)) selected.add(`status:${choice}`);
+    }
+    const excluding = (filters.projects?.include.length ?? 0) === 0 && (filters.projects?.exclude.length ?? 0) > 0;
+    if (filters.projects) selected.add(excluding ? 'project-mode:exclude' : 'project-mode:include');
+    for (const project of excluding ? filters.projects!.exclude : filters.projects?.include ?? []) {
+        selected.add(projectKey(project));
+    }
     return selected;
 }
 
@@ -194,6 +255,8 @@ export function buildSessionListFilterEditorModel(input: Readonly<{
     homes: readonly SessionListFilterHomeOption[];
     audiences: readonly SessionListFilterAudienceOption[];
     tags: readonly SessionListFilterTagOption[];
+    /** The Homes' projects; a retained project no Home lists any more stays a choice so it can be removed. */
+    projects?: readonly SessionListFilterProjectOption[];
     sourceAvailable: boolean;
     audiencePresentation?: SessionListFilterAudiencePresentation;
     fixedHomeServerIds?: ReadonlySet<string>;
@@ -256,6 +319,21 @@ export function buildSessionListFilterEditorModel(input: Readonly<{
             label: tag.label,
             disabled: tag.disabled,
         }));
+    const sessionFacets = offersSessionFacets(input.filters, input.fixedShow);
+    const statusOptions: SelectionListOption[] = SESSION_WORK_STATUS_FILTERS_V1.map((choice) => ({
+        id: `status:${choice}`,
+        label: readSessionListFilterStatusLabel(choice, input.labels),
+    }));
+    const excludingProjects = (input.filters.projects?.include.length ?? 0) === 0
+        && (input.filters.projects?.exclude.length ?? 0) > 0;
+    const chosenProjects = excludingProjects ? input.filters.projects!.exclude : input.filters.projects?.include ?? [];
+    const listedProjects = (input.projects ?? []).filter((project) => homeSet.has(project.serverId));
+    const listedProjectIds = new Set(listedProjects.map(projectKey));
+    const projectOptions: SelectionListOption[] = [
+        ...listedProjects.map((project) => ({ id: projectKey(project), label: project.label, disabled: project.disabled })),
+        ...chosenProjects.filter((project) => !listedProjectIds.has(projectKey(project)))
+            .map((project) => ({ id: projectKey(project), label: project.projectKey })),
+    ];
     const showOptionsAvailable = showOptions.some((option) => option.disabled !== true);
     const archivedOptions: SelectionListOption[] = input.archivedLabel
         ? [{ id: SESSION_LIST_FILTER_ARCHIVED_DESTINATION_OPTION_ID, label: input.archivedLabel }]
@@ -308,6 +386,26 @@ export function buildSessionListFilterEditorModel(input: Readonly<{
                     options: [
                         { id: 'coordinator:only', label: input.labels.onlyCoordinators, subtitle: input.labels.onlyCoordinatorsDescription },
                     ],
+                }] : []),
+                ...(sessionFacets ? [{
+                    kind: 'static' as const,
+                    id: 'status',
+                    title: input.labels.status,
+                    options: statusOptions,
+                }] : []),
+                ...(sessionFacets && projectOptions.length > 0 ? [{
+                    kind: 'static' as const,
+                    id: 'project-mode',
+                    title: input.labels.project,
+                    options: [
+                        { id: 'project-mode:include', label: input.labels.projectIs },
+                        { id: 'project-mode:exclude', label: input.labels.projectIsNot },
+                    ],
+                }, {
+                    kind: 'static' as const,
+                    id: 'projects',
+                    title: input.labels.project,
+                    options: projectOptions,
                 }] : []),
                 ...(input.inactiveVisibilityAvailable !== false ? [{
                     kind: 'static' as const,
@@ -453,6 +551,38 @@ export function reduceSessionListFilterEditorSelection(
     if (optionId === 'source:all') return { ...filters, source: 'all' };
     if (optionId === 'source:persisted') return { ...filters, source: 'persisted' };
     if (optionId === 'source:direct') return { ...filters, source: 'direct' };
+    if (optionId.startsWith('status:')) {
+        const choice = SESSION_WORK_STATUS_FILTERS_V1.find((candidate) => `status:${candidate}` === optionId);
+        if (!choice) return filters;
+        const states = listSessionPresentationStatesForWorkStatusFilterV1(choice);
+        const { statuses: current = [], ...rest } = filters;
+        const next = isStatusChoiceSelected(filters, choice)
+            ? current.filter((state) => !states.includes(state))
+            : [...new Set([...current, ...states])];
+        return next.length > 0 ? { ...rest, statuses: next } : rest;
+    }
+    if (optionId === 'project-mode:include' || optionId === 'project-mode:exclude') {
+        if (!filters.projects) return filters;
+        const chosen = [...filters.projects.include, ...filters.projects.exclude];
+        return {
+            ...filters,
+            projects: optionId === 'project-mode:exclude' ? { include: [], exclude: chosen } : { include: chosen, exclude: [] },
+        };
+    }
+    if (optionId.startsWith('project:')) {
+        const parts = parseQualifiedKey(optionId.slice('project:'.length));
+        if (!parts || parts.length !== 2 || !parts[0] || !parts[1]) return filters;
+        const project = { serverId: parts[0], projectKey: parts[1] };
+        const excluding = (filters.projects?.include.length ?? 0) === 0 && (filters.projects?.exclude.length ?? 0) > 0;
+        const key = projectKey(project);
+        const toggle = (list: readonly QualifiedProjectKeyV1[]) => list.some((candidate) => projectKey(candidate) === key)
+            ? list.filter((candidate) => projectKey(candidate) !== key)
+            : [...list, project];
+        const include = excluding ? filters.projects?.include ?? [] : toggle(filters.projects?.include ?? []);
+        const exclude = excluding ? toggle(filters.projects?.exclude ?? []) : filters.projects?.exclude ?? [];
+        const { projects: _projects, ...rest } = filters;
+        return include.length + exclude.length > 0 ? { ...rest, projects: { include, exclude } } : rest;
+    }
     if (optionId.startsWith('home:')) {
         const serverId = optionId.slice('home:'.length).trim();
         if (!serverId) return filters;
