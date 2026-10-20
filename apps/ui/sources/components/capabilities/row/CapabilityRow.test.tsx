@@ -110,4 +110,17 @@ describe('CapabilityRow', () => {
         expect(words).toMatch(/tokens/);
         expect(words.indexOf('Everywhere')).toBeLessThan(words.search(/tokens/));
     });
+    it('says a stopped server short in its pill and its reason whole on the next line', async () => {
+        const { CapabilityRow } = await import('./CapabilityRow');
+        const reason = "its sign-in couldn't be passed to this session";
+        const screen = await renderScreen(
+            <CapabilityRow title="linear" density="menu" status={{ kind: 'error', machineName: 'nl2', detail: reason }} testID="row" />,
+        );
+        const words = texts(screen);
+        expect(words).toContain(reason);
+        // The pill carries the short state only; the reason is not inside a one-line, truncating text.
+        const truncating = screen.findAll((node) => node.props?.numberOfLines === 1 && JSON.stringify(node.props.children ?? '').includes(reason));
+        expect(truncating).toHaveLength(0);
+        expect(screen.findAll((node) => node.props?.children === reason && node.props.numberOfLines === undefined).length).toBeGreaterThan(0);
+    });
 });
