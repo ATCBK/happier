@@ -33,6 +33,14 @@ describe('WorkflowExamplesPopover', () => {
         expect(popover?.props.portal.sizeToContent).toBeUndefined();
     });
 
+    it('keeps the picker clear of the window title strip above, so a tall list never covers the tabs', async () => {
+        const { WorkflowExamplesPopover } = await import('./WorkflowExamplesPopover');
+        const { APP_SHELL_TITLE_STRIP_HEIGHT_PX } = await import('@/components/navigation/shell/appRail/appRailMetrics');
+        const screen = await renderScreen(<WorkflowExamplesPopover anchorRef={{ current: null }} onRequestClose={() => {}} />);
+        const edge = screen.findHostByTestId('workflow-examples-popover-boundary')?.props.edgePadding;
+        expect(edge.top).toBeGreaterThanOrEqual(APP_SHELL_TITLE_STRIP_HEIGHT_PX);
+    });
+
     it('sizes a Session\'s example list to its content, so a description takes two lines, not five', async () => {
         const { WorkflowExamplesPopover } = await import('./WorkflowExamplesPopover');
         const screen = await renderScreen(<WorkflowExamplesPopover anchorRef={{ current: null }} onRequestClose={() => {}}

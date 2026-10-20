@@ -46,7 +46,6 @@ import { ActionListSection } from '@/components/ui/lists/ActionListSection';
 export type SessionTriggersSectionViewProps = Readonly<{
     groups: readonly SessionTriggerGroupModel[];
     status: 'loading' | 'ready' | 'failed';
-    pullRequestLinksUnavailable?: boolean;
     /**
      * The session's Machine is offline, which the Work view already says once at its top: a failed read
      * is then not said a second time here.
@@ -119,21 +118,12 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
                     action={{ label: t('workflows.triggers.popover.tryAgain'), onPress: props.onRetry }}
                 />
             ) : null}
-            {props.pullRequestLinksUnavailable ? (
-                <SurfaceFreshnessLine
-                    testID="session-work-trigger-links-unavailable"
-                    tone="warning"
-                    reason={t('workflows.triggers.pullRequest.loadFailed')}
-                    action={{ label: t('workflows.triggers.popover.tryAgain'), onPress: props.onRetry }}
-                />
-            ) : null}
             {empty && props.status === 'ready' ? (
                 <EmptyState
                     testID="session-work-triggers-empty"
                     layout="line"
                     title={t('workflows.triggers.section.emptyTitle')}
                     subtitle={t('workflows.triggers.section.emptyBody')}
-                    primaryAction={{ label: t('workflows.triggers.section.add'), onPress: () => props.onAdd(addAnchorRef) }}
                 />
             ) : props.groups.map((group) => (
                 <HappierPageSheetGroup
@@ -408,7 +398,6 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
             <SessionTriggersSectionView
                 groups={groups}
                 status={lastRuns.failed ? 'failed' : read.status}
-                pullRequestLinksUnavailable={!Array.isArray(read.pullRequestLinks) && read.pullRequestLinks.status === 'unavailable'}
                 machineOffline={!machineReachable}
                 pendingKeys={pendingKeys}
                 onToggle={toggle}

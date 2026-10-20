@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useWindowDimensions, View } from 'react-native';
 import type { WorkflowStarterExampleSelection, WorkflowStarterSessionTarget } from '@happier-dev/protocol/workflows/builtins/examples';
+import { APP_SHELL_TITLE_STRIP_HEIGHT_PX } from '@/components/navigation/shell/appRail/appRailMetrics';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
 import { POPOVER_PREFERRED_ROOM_PX } from '@/components/ui/popover/popoverPreferredRoom';
@@ -9,7 +10,8 @@ import { WorkflowExamplesSection } from './WorkflowExamplesSection';
 
 /** The list composition is a menu-sized picker; cards with their maps take the room the window gives. */
 const LIST_POPOVER_MAX_WIDTH_PX = 440;
-const EDGE_PADDING = { horizontal: 8, vertical: 8 } as const;
+// The picker is tall: it keeps a margin from every window edge, and clear of the window's title strip above.
+const EDGE_PADDING = { horizontal: 8, top: APP_SHELL_TITLE_STRIP_HEIGHT_PX + 8, bottom: 8 } as const;
 
 /**
  * S9: one anchored, scrollable picker, also used by the column's + menu and a Session's Triggers "+". On a

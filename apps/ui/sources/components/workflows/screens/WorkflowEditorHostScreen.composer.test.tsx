@@ -547,7 +547,7 @@ describe('editor workflow composer', () => {
         const prepareRequest = apiSocket.createRequestForPreparedTarget.bind(apiSocket);
         vi.spyOn(apiSocket, 'createRequestForPreparedTarget').mockImplementation(target => {
             const request = prepareRequest(target);
-            return async (path, init) => await memory.handle(new URL(path, target.endpoint), init) ?? request(path, init);
+            return async (path: string, init?: RequestInit) => await memory.handle(new URL(path, target.endpoint), init) ?? request(path, init);
         });
         // Restoration creates the real memory owner and captures its HTTP port.
         // Install that port before restoration, just as the application does.

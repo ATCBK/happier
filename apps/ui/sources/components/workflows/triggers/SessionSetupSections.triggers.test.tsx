@@ -243,7 +243,7 @@ async function seedSessionMachine(machineActive: boolean) {
 }
 
 describe('the Session Info page Triggers section', () => {
-  it('keeps ordinary rows usable and shows a separate PR-link retry state', async () => {
+  it('keeps ordinary rows usable while the PR-link read is unavailable, with no section-level band', async () => {
     // No Channels Data collection is installed for this Account, so the real
     // PR-link reader refuses independently of the readable Automation rows.
     answer([triggerSet([lifecycleTrigger('trig-1', true)])]);
@@ -258,7 +258,7 @@ describe('the Session Info page Triggers section', () => {
     expect(screen.findByTestId('session-work-triggers-failed')).toBeNull();
     expect(
       screen.findByTestId('session-work-trigger-links-unavailable'),
-    ).not.toBeNull();
+    ).toBeNull();
   });
   it('turns one trigger on or off through session.trigger.update, never by pausing its Automation', async () => {
     // trig-1 is off at trigger level inside an enabled set; trig-2 shares the set.

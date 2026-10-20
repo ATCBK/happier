@@ -75,6 +75,25 @@ describe('Scheduled Work rows', () => {
         expect(screen.findByTestId('workflows-column:group:scheduled')).not.toBeNull();
         expect(screen.findByTestId('scheduled-workflow-read')).not.toBeNull();
     });
+    it('caps the Account Scheduled group so it never crowds sessions out of the list, and reveals the rest on demand', async () => {
+        const set = (id: string, nextRunAt: number) => WorkflowTriggerSetV1Schema.parse({ automationId: id, revision: 1, enabled: true, health: 'available',
+            target: { kind: 'inline', definition: { version: 1, blocks: [{ kind: 'step', id: 'review',
+                document: { text: 'Review code', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
+            triggers: [{ id: 'timer', revision: 1, enabled: true, kind: 'schedule', nextRunAt,
+                createdAt: 1, updatedAt: 1, triggerDefinitionEnvelope: null,
+                schedule: { kind: 'interval', everyMs: 60_000, scheduleExpr: null, timezone: null } }] });
+        const rows = projectScheduledWorkflowRows(Array.from({ length: 6 }, (_, index) => set(`habit-${index}`, 1000 + index)));
+        const read = { available: true, rows, status: 'ready' as const, retry: vi.fn(), serverId: null };
+        const screen = await renderScreen(<ScheduledWorkflowGroup read={read} />);
+        // The header still counts every schedule; only the rows are capped.
+        expect(screen.findByTestId('workflows-column:group:scheduled-count')?.props.children).toBe(6);
+        const shown = () => rows.filter((row) => screen.findByTestId(`scheduled-workflow:${row.key}`) !== null).length;
+        expect(shown()).toBe(3);
+        expect(screen.getTextContent()).toContain('sessionWork.showMore(count=3)');
+        await act(async () => { screen.pressByTestId('workflows-column:group:scheduled-more'); });
+        expect(shown()).toBe(6);
+        expect(screen.findByTestId('workflows-column:group:scheduled-more')).toBeNull();
+    });
     it('opens the scheduled workflow separately from its Session destination, retaining authored step context', async () => {
         const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',
             target: { kind: 'inline', definition: { version: 1, inputs: [], blocks: [{ kind: 'step', id: 'review', name: 'Release review',

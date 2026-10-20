@@ -110,13 +110,26 @@ export const ScheduledWorkflowGroup = React.memo(function ScheduledWorkflowGroup
     read: ScheduledWorkflowRowsRead; density?: SessionListRowDensity;
 }>) {
     const { read } = props;
+    const [expanded, setExpanded] = React.useState(false);
+    // Upcoming work is a glance, not a list to live in: the next few lead and the rest are one press away,
+    // so a busy Account's schedules never push its sessions off the screen. The header still counts them all.
+    const hidden = expanded ? 0 : Math.max(0, read.rows.length - COLLAPSED_SCHEDULE_ROWS);
+    const shown = React.useMemo(
+        () => (hidden > 0 ? { ...read, rows: read.rows.slice(0, COLLAPSED_SCHEDULE_ROWS) } : read),
+        [hidden, read],
+    );
     if (!read.available || (read.rows.length === 0 && read.status !== 'failed')) return null;
     return <SessionListGroup testID="workflows-column:group:scheduled" countTestID="workflows-column:group:scheduled-count"
         title={t('sessionWork.scheduled.title')} count={read.rows.length}
         footer={<ScheduledWorkflowReadFailure read={read} />}>
-        {read.rows.length > 0 ? <ScheduledWorkflowRows read={read} density={props.density ?? 'default'} /> : null}
+        {read.rows.length > 0 ? <ScheduledWorkflowRows read={shown} density={props.density ?? 'default'} /> : null}
+        {hidden > 0 ? <Item testID="workflows-column:group:scheduled-more" title={t('sessionWork.showMore', { count: hidden })}
+            showChevron={false} onPress={() => setExpanded(true)} /> : null}
     </SessionListGroup>;
 });
+
+/** How many upcoming schedules the session list shows before "Show N more". */
+const COLLAPSED_SCHEDULE_ROWS = 3;
 
 export const ScheduledWorkflowSectionView = React.memo(function ScheduledWorkflowSectionView(props: Readonly<{
     rows: readonly ScheduledWorkflowRow[]; onOpen: (row: ScheduledWorkflowRow) => void;
