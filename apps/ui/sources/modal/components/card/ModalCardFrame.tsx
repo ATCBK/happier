@@ -11,6 +11,7 @@ import { RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { ContainedPageScopeProvider } from '@/components/ui/lists/listPresentation';
 import { ModalCardBody } from './ModalCardBody';
+import { PopoverScrollSourceProvider, usePopoverScrollSourceRef } from '@/components/ui/popover/PopoverScrollSource';
 import { ModalCardHeader } from './ModalCardHeader';
 import { SheetGrabber, useSheetDismiss, useSheetDrag } from './sheetDragDismiss';
 import { useModalCardDimensions, type ModalCardDimensionOptions, type ModalCardSizePreset } from './useModalCardDimensions';
@@ -130,6 +131,9 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
     const bounded = framed && scrollHost === 'bounded' && !fullscreen;
     const fixedHeight = framed && (scrollHost === 'body' || fullscreen);
     const reducedMotion = useReducedMotionPreference();
+    // A card that scrolls its own body is the scroll source of the lists inside it; otherwise they keep the modal's.
+    const bodyScrollRef = React.useRef<ScrollView | null>(null);
+    const inheritedScrollSource = usePopoverScrollSourceRef();
     const dimensions = useModalCardDimensions({
         ...props.dimensions,
         size: props.size ?? props.dimensions?.size,
@@ -211,6 +215,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 <ContainedPageScopeProvider contained={framed && !fullscreen}>
                     {/* One body parent: chrome and scroll changes must not retire pending input custody. */}
                     <ScrollView
+                        ref={bodyScrollRef}
                         testID={bodyScroll === 'auto' ? 'modal-card-body-scroll' : undefined}
                         style={bodyScroll === 'auto' ? styles.bodyScrollView
                             // A fixed-height card whose content owns its scrolling (a catalog list beside its
@@ -222,9 +227,11 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                         keyboardShouldPersistTaps="handled"
                         nestedScrollEnabled={bodyScroll === 'auto'}
                     >
-                        <ModalCardBody fill={framed && bodyScroll !== 'auto'} style={props.bodyStyle}>
-                            {props.children}
-                        </ModalCardBody>
+                        <PopoverScrollSourceProvider scrollSourceRef={bodyScroll === 'auto' ? bodyScrollRef : inheritedScrollSource}>
+                            <ModalCardBody fill={framed && bodyScroll !== 'auto'} style={props.bodyStyle}>
+                                {props.children}
+                            </ModalCardBody>
+                        </PopoverScrollSourceProvider>
                     </ScrollView>
                 </ContainedPageScopeProvider>
 
