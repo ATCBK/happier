@@ -16,6 +16,7 @@ import {
   loadLocalVoiceEngineWithCompatState,
   localVoicePendingEnqueue,
   localVoiceSpeechTranscription,
+  localVoiceSpeechOutputBoundary,
   registerLocalVoiceEngineHarnessHooks,
   speechRecStart,
   speechRecStop,
@@ -156,6 +157,51 @@ describe('local voice engine stop', () => {
     await stopAndTranscribe;
 
     expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('retires recorded capture when native Unmute fails without publishing unmuted input', async () => {
+    const { toggleLocalVoiceTurn, setLocalVoiceMuted, getLocalVoiceState } = await loadLocalVoiceEngineWithCompatState();
+    const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+    await toggleLocalVoiceTurn('recorded-unmute');
+    expect(getLocalVoiceState().status).toBe('recording');
+    await setLocalVoiceMuted('recorded-unmute', true);
+    expect(getVoiceConversationRuntimeSnapshot().micMuted).toBe(true);
+    localVoiceSpeechOutputBoundary.fileRecording.setMuted.mockRejectedValueOnce(new Error('file_recording_resume_failed'));
+    await expect(setLocalVoiceMuted('recorded-unmute', false)).rejects.toThrow('file_recording_resume_failed');
+    expect(getLocalVoiceState().status).toBe('idle');
+    expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({ state: 'disconnected', micMuted: true });
+    expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+    expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
+  });
+
+  it.each(['acknowledges', 'rejects'] as const)('ignores a retired native Unmute that %s after the same target starts again', async outcome => {
+    const { toggleLocalVoiceTurn, setLocalVoiceMuted, stopLocalVoiceSession, getLocalVoiceState } = await loadLocalVoiceEngineWithCompatState();
+    const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+    await toggleLocalVoiceTurn('recorded-retry');
+    await setLocalVoiceMuted('recorded-retry', true);
+    let resolveResume!: () => void;
+    let rejectResume!: (error: Error) => void;
+    const resume = new Promise<void>((resolve, reject) => { resolveResume = resolve; rejectResume = reject; });
+    localVoiceSpeechOutputBoundary.fileRecording.setMuted.mockImplementationOnce(async () => { await resume; });
+    const unmuting = setLocalVoiceMuted('recorded-retry', false).catch(error => error);
+    await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.setMuted).toHaveBeenLastCalledWith({
+      recordingId: 'local-engine-recording', muted: false,
+    }));
+    try {
+      await stopLocalVoiceSession();
+      await toggleLocalVoiceTurn('recorded-retry');
+      await setLocalVoiceMuted('recorded-retry', true);
+      expect(getLocalVoiceState().status).toBe('recording');
+      expect(localVoiceSpeechOutputBoundary.fileRecording.setMuted).toHaveBeenLastCalledWith({
+        recordingId: 'local-engine-recording', muted: true,
+      });
+    } finally {
+      if (outcome === 'rejects') rejectResume(new Error('file_recording_resume_failed'));
+      else resolveResume();
+    }
+    await unmuting;
+    expect(getLocalVoiceState().status).toBe('recording');
+    expect(getVoiceConversationRuntimeSnapshot().micMuted).toBe(true);
   });
 
   it('still releases Local Agent execution and effect custody when finalized-recording cleanup fails during End Voice', async () => {

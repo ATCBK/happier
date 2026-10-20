@@ -103,10 +103,11 @@ export type LocalVoiceCaptureOwner = Readonly<{
         provider: Extract<LocalVoiceCaptureProvider, 'device' | 'local_neural'>;
         sessionId: string;
     }>) => Promise<ReturnType<RuntimeTurnPolicyController['resolveStoppedCaptureAction']>>;
+    /** False when capture retires before the platform acknowledges this request. */
     setMuted: (args: Readonly<{
         muted: boolean;
         sessionId: string;
-    }>) => Promise<void>;
+    }>) => Promise<boolean>;
     clearHandsFree: (args: Readonly<{
         sessionId?: string;
         provider: Extract<LocalVoiceCaptureProvider, 'device' | 'local_neural'>;
@@ -240,8 +241,14 @@ export function createLocalVoiceCaptureOwner(
     const teardownMicSessionOnce = async (session: MicSession | RecordingMicSession): Promise<void> => {
         if (retiredMicSessions.has(session)) return;
         retiredMicSessions.add(session);
-        session.setMuted(false);
         await session.teardown().catch(() => {});
+        // Reset the retired facade only after releasing physical capture.
+        // Native recording mute is asynchronous and must not reopen End's mic.
+        try {
+            await session.setMuted(false);
+        } catch {
+            // Retirement remains best-effort.
+        }
     };
     const waitUntilTerminalBound = async (
         work: Promise<unknown> | null,
@@ -647,19 +654,17 @@ export function createLocalVoiceCaptureOwner(
         });
     };
 
-    const syncMutedStateForSession = (sessionId: string): void => {
+    const syncMutedStateForSession = async (sessionId: string, requestedMuted?: boolean): Promise<void> => {
         const normalizedSessionId = normalizeSessionId(sessionId);
-        const nextMuted = normalizedSessionId !== null && mutedSessionId === normalizedSessionId && muted;
+        const nextMuted = requestedMuted ?? (normalizedSessionId !== null && mutedSessionId === normalizedSessionId && muted);
         if (activeCaptureProvider === 'recorded_audio' && recordingMicSession) {
-            recordingMicSession.setMuted(nextMuted);
+            await recordingMicSession.setMuted(nextMuted);
             return;
         }
-        const wasMuted = liveMicSession?.isMuted() ?? false;
-        liveMicSession?.setMuted(nextMuted);
-        // Muted capture deliberately drops PCM. Measure source health only
-        // while input is live, with a fresh existing window on real unmute.
+        await liveMicSession?.setMuted(nextMuted);
+        // Muted capture deliberately drops PCM. The mute operation rearms
+        // source health after committing an acknowledged Unmute below.
         if (nextMuted) clearMicPlateauWatchdog();
-        else if (wasMuted) armActiveMicPlateauWatchdog?.();
     };
 
     const stopEndpointDrivenCapture = async (args: Readonly<{
@@ -768,7 +773,7 @@ export function createLocalVoiceCaptureOwner(
                 switch (provider) {
                 case 'device': {
                     const micSession = getLiveMicSession();
-                    syncMutedStateForSession(normalizedSessionId);
+                    await syncMutedStateForSession(normalizedSessionId);
                     const {
                         armMicPlateauWatchdog,
                         sink,
@@ -807,7 +812,7 @@ export function createLocalVoiceCaptureOwner(
                 case 'local_neural': {
                     activeLocalNeuralExecution = localNeuralExecution ?? 'device';
                     const micSession = getLiveMicSession();
-                    syncMutedStateForSession(normalizedSessionId);
+                    await syncMutedStateForSession(normalizedSessionId);
                     const {
                         armMicPlateauWatchdog,
                         sink,
@@ -881,7 +886,7 @@ export function createLocalVoiceCaptureOwner(
                 }
                 default: {
                     const micSession = getRecordingMicSession();
-                    syncMutedStateForSession(normalizedSessionId);
+                    await syncMutedStateForSession(normalizedSessionId);
                     await micSession.beginRecording(externalSignal);
                     if (
                         captureGeneration !== captureLifecycleGeneration
@@ -985,37 +990,42 @@ export function createLocalVoiceCaptureOwner(
         setMuted: async ({ muted: nextMuted, sessionId }) => {
             const normalizedSessionId = normalizeSessionId(sessionId);
             if (!normalizedSessionId) {
-                return;
+                return false;
             }
-            const previousMutedSessionId = mutedSessionId;
-            const previousMuted = muted;
             const generation = captureLifecycleGeneration;
             const provider = activeCaptureProvider;
             const controller = deviceSttController;
-            mutedSessionId = normalizedSessionId;
-            muted = nextMuted;
+            const wasMuted = mutedSessionId === normalizedSessionId && muted;
             if (activeCaptureSessionId === normalizedSessionId) {
-                syncMutedStateForSession(normalizedSessionId);
-                if (provider === 'device' && controller) {
-                    try {
+                const isCurrent = (): boolean => (
+                    captureLifecycleGeneration === generation
+                    && activeCaptureSessionId === normalizedSessionId
+                    && activeCaptureProvider === provider
+                    && (provider !== 'device' || deviceSttController === controller)
+                );
+                try {
+                    await syncMutedStateForSession(normalizedSessionId, nextMuted);
+                    if (!isCurrent()) return false;
+                    if (provider === 'device' && controller) {
                         await controller.setMuted(nextMuted);
-                    } catch (error) {
-                        if (
-                            captureLifecycleGeneration === generation
-                            && activeCaptureSessionId === normalizedSessionId
-                            && activeCaptureProvider === provider
-                            && deviceSttController === controller
-                        ) {
-                            mutedSessionId = previousMutedSessionId;
-                            muted = previousMuted;
-                            syncMutedStateForSession(normalizedSessionId);
-                        }
-                        throw error;
+                    } else if (provider === 'local_neural' && activeLocalNeuralExecution === 'daemon') {
+                        await daemonStreamingSttController?.setMuted(nextMuted);
                     }
-                } else if (provider === 'local_neural' && activeLocalNeuralExecution === 'daemon') {
-                    await daemonStreamingSttController?.setMuted(nextMuted);
+                    if (!isCurrent()) return false;
+                } catch (error) {
+                    if (!isCurrent()) return false;
+                    await syncMutedStateForSession(normalizedSessionId).catch(() => undefined);
+                    throw error;
                 }
             }
+            // Keep the acknowledged preference while native input is changing;
+            // a restart must not inherit an unfinished request from a retired mic.
+            mutedSessionId = normalizedSessionId;
+            muted = nextMuted;
+            if (wasMuted && !nextMuted && provider !== 'recorded_audio') {
+                armActiveMicPlateauWatchdog?.();
+            }
+            return true;
         },
         clearHandsFree: ({ sessionId, provider }) => {
             runtimeTurnPolicyController.clearHandsFreeCaptureSession({ provider, sessionId });
