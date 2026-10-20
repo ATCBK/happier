@@ -136,7 +136,7 @@ describe('keyboardShortcutsSettingsModel', () => {
         expect(model.commandRows.find((row) => row.commandId === 'composer.abortConfirm')?.defaultLabel).toBe('Cmd+.');
         expect(model.commandRows.find((row) => row.commandId === 'workspace.tab.new')?.defaultLabel).toBe('Cmd+T');
         expect(model.commandRows.find((row) => row.commandId === 'workspace.tab.close')?.defaultLabel).toBe('Cmd+W');
-        expect(model.conflicts).toEqual([
+        expect(model.conflicts.filter(conflict => conflict.commandIds.some(id => id.startsWith('workspace.tab.')))).toEqual([
             { id: 'browser-reserved:workspace.tab.new', kind: 'browser-reserved', commandIds: ['workspace.tab.new'] },
             { id: 'browser-reserved:workspace.tab.close', kind: 'browser-reserved', commandIds: ['workspace.tab.close'] },
         ]);

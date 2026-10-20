@@ -3,7 +3,7 @@ import { buildKeyboardShortcutSettingsModel } from '@/components/settings/keyboa
 import { defaultKeyboardCommands } from './commands';
 import { BUILT_IN_SETTINGS_METADATA_V1 } from '@happier-dev/protocol/actions/settings/builtInSettingsMetadata';
 
-const isProgramCommand = (id: string) => /^(panes\.|shell\.column\.toggle$|media\.|search\.(files|symbols)$|files\.editor\.|review\.|editor\.selection\.ask$|files\.track\.toggle$|code\.)/.test(id);
+const isProgramCommand = (id: string) => /^(panes\.|shell\.column\.toggle$|media\.|search\.|files\.editor\.|review\.|editor\.selection\.ask$|files\.track\.toggle$|code\.)/.test(id);
 
 describe('Files and Editor program bindings', () => {
   for (const platform of ['macos', 'windows', 'linux', 'ios', 'android'] as const) {
@@ -20,8 +20,8 @@ describe('Files and Editor program bindings', () => {
   it('includes pane commands in the audited catalog', () => {
     expect(defaultKeyboardCommands.filter(command => isProgramCommand(command.id)).map(command => command.id)).toContain('panes.main.toggle');
   });
-  it('gives every program command one canonical Settings anchor before the page projects its rows', () => {
-    expect(defaultKeyboardCommands.filter(command => isProgramCommand(command.id))
+  it('gives every keyboard command one canonical Settings anchor before the page projects its rows', () => {
+    expect(defaultKeyboardCommands
       .filter(command => BUILT_IN_SETTINGS_METADATA_V1.filter(setting => setting.anchor === `keyboard.${command.id}`).length !== 1)
       .map(command => command.id)).toEqual([]);
   });

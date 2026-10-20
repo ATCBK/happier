@@ -11,6 +11,19 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         settingsTitleKey: 'actionPresentation.titles.code_references_list',
         defaultBinding: { binding: 'Shift+F12', allowInEditable: true, nativeConsumable: true },
     },
+    { id: 'code.showInfo', settingsTitleKey: 'actionPresentation.titles.code_hover_get' },
+    {
+        id: 'code.problem.next',
+        settingsTitleKey: 'settingsKeyboard.commands.codeProblemNext',
+        defaultBinding: { binding: 'F8', allowInEditable: true, nativeConsumable: true },
+    },
+    {
+        id: 'code.problem.previous',
+        settingsTitleKey: 'settingsKeyboard.commands.codeProblemPrevious',
+        defaultBinding: { binding: 'Shift+F8', allowInEditable: true, nativeConsumable: true },
+    },
+    { id: 'code.showProblems', settingsTitleKey: 'actionPresentation.titles.code_diagnostics_list' },
+    { id: 'code.restart', settingsTitleKey: 'actionPresentation.titles.code_restart' },
     ...([
         ['media.previous', 'mediaPrevious', 'ArrowLeft'],
         ['media.next', 'mediaNext', 'ArrowRight'],
@@ -203,6 +216,22 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         id: 'search.textInFiles',
         settingsTitleKey: 'settingsKeyboard.commands.searchTextInFiles',
         defaultBinding: { binding: 'Mod+Shift+F', allowInEditable: true, nativeConsumable: true },
+    },
+    {
+        // Text in files with the Replace field shown. Browsers keep ⌘⇧H / Ctrl+Shift+H (home, history).
+        id: 'search.replaceInFiles',
+        settingsTitleKey: 'settingsKeyboard.commands.searchReplaceInFiles',
+        defaultBindings: [
+            { binding: 'Mod+Shift+H', platforms: ['web'], webHost: 'desktop', allowInEditable: true, nativeConsumable: true },
+            { binding: 'Alt+Shift+H', platforms: ['web'], webHost: 'browser', allowInEditable: true },
+            { binding: 'Mod+Shift+H', blockedSurfaces: ['web'], allowInEditable: true, nativeConsumable: true },
+        ],
+    },
+    {
+        // Replace in N files while the Text in files list is the review (its handler is mounted only then).
+        id: 'search.replace.apply',
+        settingsTitleKey: 'settingsKeyboard.commands.searchReplaceApply',
+        defaultBinding: { binding: 'Mod+Alt+Enter', allowInEditable: true, nativeConsumable: true },
     },
     {
         id: 'search.files',
