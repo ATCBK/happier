@@ -3,7 +3,7 @@ import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { inTx } from "@/storage/inTx";
-import { requireCurrentManagedMachineInTx, readMachineDevcontainerChildInTx } from "./managedRows";
+import { requireCurrentManagedMachineInTx, readMachineDevcontainerChildInTx, readMachineDevcontainerChildrenInTx } from "./managedRows";
 import { qualifyManagedAcquisitionPolicy } from "./managedAcquire";
 import { admitManagedAcquire } from "./managedAcquire";
 import { buildManagedConfigurationFactsV1, ManagedConfigurationFactsV1Schema } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
@@ -897,6 +897,10 @@ describe("managed acquisition durable authority", () => {
         expect(publishedChild).toEqual({ relation: { managedMachineId: moveAcquire.machine.id,
             managedMachineKind: 'devcontainer', parentMachineId: controller.machineId }, observation: devcontainerObservation });
         expect(await inTx(tx => readMachineDevcontainerChildInTx(tx, controller.machineId))).toBeNull();
+        const fleetChildren = await inTx(tx => readMachineDevcontainerChildrenInTx(tx, [moveGuest.machineId, controller.machineId, 'absent-machine']));
+        expect(fleetChildren.get(moveGuest.machineId)).toEqual(publishedChild);
+        expect(fleetChildren.get(controller.machineId) ?? null).toBeNull();
+        expect(fleetChildren.get('absent-machine') ?? null).toBeNull();
         const readChildPublications = (accountId?: string) => childPublications.flatMap(value => {
             if (accountId && ![value.room].flat().includes(`user-scoped:${accountId}`)) return [];
             const parsed = UpdateContainerSchema.safeParse(value.payload);

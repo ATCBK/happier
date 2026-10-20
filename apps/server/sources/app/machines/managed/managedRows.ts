@@ -237,16 +237,34 @@ export async function inManagedMachinePublicationTx<T>(
 
 /** The existing unique enrollment association is the ordinary Machine fact owner. */
 export async function readMachineDevcontainerChildInTx(tx: Tx, machineId: string): Promise<DevcontainerChildProjectionV1 | null> {
-    const row = await readCurrentMachineManagedEnrollmentInTx(tx, machineId);
-    return row ? readStoredManagedDevcontainerChild(row) : null;
+    return (await readMachineDevcontainerChildrenInTx(tx, [machineId])).get(machineId) ?? null;
+}
+
+/** Fleet projections use the same current-enrollment authority as point reads. */
+export async function readMachineDevcontainerChildrenInTx(tx: Tx, machineIds: readonly string[]): Promise<ReadonlyMap<string, DevcontainerChildProjectionV1 | null>> {
+    const rows = await readCurrentMachineManagedEnrollmentsInTx(tx, machineIds);
+    return new Map([...rows].map(([machineId, row]) => [machineId, readStoredManagedDevcontainerChild(row)]));
 }
 
 async function readCurrentMachineManagedEnrollmentInTx(tx: Tx, machineId: string): Promise<StoredManagedMachine | null> {
-    const row = await tx.managedMachine.findUnique({ where: { enrolledMachineId: machineId } });
-    if (!row || row.homeId !== await readCurrentServerIdentityId(process.env, tx)) return null;
-    const machine = await tx.machine.findUnique({ where: { id: machineId } });
-    if (!machine || machine.accountId !== row.custodianAccountId || classifyMachineAvailabilityState(machine) !== 'available') return null;
-    return row;
+    return (await readCurrentMachineManagedEnrollmentsInTx(tx, [machineId])).get(machineId) ?? null;
+}
+
+async function readCurrentMachineManagedEnrollmentsInTx(tx: Tx, machineIds: readonly string[]): Promise<ReadonlyMap<string, StoredManagedMachine>> {
+    const result = new Map<string, StoredManagedMachine>();
+    if (machineIds.length === 0) return result;
+    const rows = await tx.managedMachine.findMany({ where: { enrolledMachineId: { in: [...machineIds] } } });
+    if (rows.length === 0) return result;
+    const homeId = await readCurrentServerIdentityId(process.env, tx);
+    const machines = await tx.machine.findMany({ where: { id: { in: rows.flatMap(row => row.enrolledMachineId ? [row.enrolledMachineId] : []) } },
+        select: { id: true, accountId: true, revokedAt: true, replacedByMachineId: true } });
+    const byId = new Map(machines.map(machine => [machine.id, machine]));
+    for (const row of rows) {
+        const machine = row.enrolledMachineId ? byId.get(row.enrolledMachineId) : null;
+        if (row.homeId === homeId && machine && machine.accountId === row.custodianAccountId
+            && classifyMachineAvailabilityState(machine) === 'available') result.set(machine.id, row);
+    }
+    return result;
 }
 
 /** A current workspace executes on its bind controller, or on the admitted Machine's own storage. */

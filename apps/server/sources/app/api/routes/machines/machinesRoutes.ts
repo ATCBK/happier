@@ -3,7 +3,8 @@ import { persistentMachineWhere } from '@/app/machines/machineSelection';
 import { z } from "zod/mini";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { log } from "@/utils/logging/log";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
+import type { Machine } from '@prisma/client';
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { timingSafeEqual } from "node:crypto";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
@@ -53,43 +54,42 @@ import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 import { ManagedEnrollmentCorrelationV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { registerManagedMachineRoutes } from "@/app/machines/managed/managedRoutes";
 import { requireManagedMachineRegistrationInTx, linkManagedEnrollmentInTx } from "@/app/machines/managed/managedMutations";
-import { ManagedMachineError, readMachineDevcontainerChildInTx } from "@/app/machines/managed/managedRows";
+import { ManagedMachineError, readMachineDevcontainerChildInTx, readMachineDevcontainerChildrenInTx } from "@/app/machines/managed/managedRows";
 import { MachineContentKeyTransitionInputV1Schema, MachineContentKeyTransitionResultV1Schema, MachinePublishedRowV1Schema } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
 import { transitionMachineContentKeyInTx, readMachineContentKeySnapshotInTx } from "@/app/machines/transitionMachineContentKeyInTx";
 import { readCurrentManagedGuestActivityInTx } from '@/app/auth/externalActionExecutionAuthorization';
 import { registerMachineAccessRoutes } from './machineAccessRoutes';
 import {
     listMachineCandidatesInTx,
-    readAccessibleMachineAccessInTx,
-    readMachineDataKeyForCallerInTx,
+    readAccessibleMachineOpeningsInTx,
 } from '@/app/machines/machineAccess';
 
 async function readAccessibleMachineProjectionInTx(
     tx: Tx,
     input: Readonly<{ actorAccountId: string; machineId: string; request: FastifyRequest }>,
 ) {
-    const access = await readAccessibleMachineAccessInTx(tx, input);
-    if (!access) return null;
-    const owned = access.custodian.accountId === input.actorAccountId;
     const machine = await tx.machine.findUnique({ where: { id: input.machineId } });
     if (!machine) return null;
-    const callerDataEncryptionKey = owned
-        ? machine.dataEncryptionKey
-        : await readMachineDataKeyForCallerInTx(tx, input);
-    return {
-        machine,
-        owned,
-        access,
-        callerDataEncryptionKey,
-        projection: serializeAccessibleMachineRow(machine, {
-            devcontainerChild: await readMachineDevcontainerChildInTx(tx, machine.id),
-            access,
-            owned,
-            callerDataEncryptionKey,
+    return (await readAccessibleMachineProjectionsInTx(tx, { ...input, machines: [machine] }))[0] ?? null;
+}
+
+async function readAccessibleMachineProjectionsInTx(
+    tx: Tx,
+    input: Readonly<{ actorAccountId: string; machines: readonly Machine[]; request: FastifyRequest }>,
+) {
+    const machineIds = input.machines.map(machine => machine.id);
+    const openings = await readAccessibleMachineOpeningsInTx(tx, { actorAccountId: input.actorAccountId, machineIds });
+    const children = await readMachineDevcontainerChildrenInTx(tx, [...openings.keys()]);
+    return input.machines.flatMap(machine => {
+        const opening = openings.get(machine.id);
+        if (!opening) return [];
+        return [{ machine, ...opening, projection: serializeAccessibleMachineRow(machine, {
+            ...opening,
+            devcontainerChild: children.get(machine.id) ?? null,
             recipientAccountStoredContentProtocolVersion:
                 readAccountStoredContentCompatibilityForHttpRequest(input.request).declaration?.protocolVersion,
-        }),
-    };
+        }) }];
+    });
 }
 
 function bytesEqual(a: Uint8Array | null, b: Uint8Array | null) {
@@ -656,8 +656,8 @@ export function machinesRoutes(app: Fastify) {
                     if (managedEnrollment) await linkManagedEnrollmentInTx(tx, managedEnrollment, userId, updatedMachine.id);
                     return updatedMachine;
                 }, {
-                    // Installation fill-if-empty and replacement/enrollment read predicates precede id-only writes.
-                    isolationLevel: "Serializable",
+                    // Exclusive Account admission protects installation and managed lifecycle predicates.
+                    isolationLevel: "ReadCommitted",
                 });
             } catch (error) {
                 if (error instanceof ManagedMachineError) return reply.code(409).send({ error: "invalid-params", reason: error.code });
@@ -747,8 +747,8 @@ export function machinesRoutes(app: Fastify) {
                     });
                     return registered;
                 }, {
-                    // Registration composes controller replacement and managed-enrollment admission.
-                    isolationLevel: "Serializable",
+                    // Registration's Account fence protects replacement and enrollment without stale snapshots.
+                    isolationLevel: "ReadCommitted",
                 });
                 newMachine = created.machine;
                 machineReplacement = created.machineReplacement;
@@ -800,8 +800,8 @@ export function machinesRoutes(app: Fastify) {
                                     }
                                     return winningMachine;
                                 }, {
-                                    // Rejoin fill-if-empty and managed replacement admission precede id-only writes.
-                                    isolationLevel: "Serializable",
+                                    // Rejoin uses the same exclusive registration admission as create/update.
+                                    isolationLevel: "ReadCommitted",
                                 });
                             } catch (error) {
                                 if (error instanceof ManagedMachineError) return reply.code(409).send({ error: "invalid-params", reason: error.code });
@@ -912,7 +912,7 @@ export function machinesRoutes(app: Fastify) {
         // Ordinary discovery stays persistent-only. Restricted Runner bootstrap
         // is still owner-only; persistent shared targets use current access.
         const isApiTokenCaller = request.authTokenKind === "api_token";
-        const accessible = await inTx(async (tx) => {
+        const accessible = await inReadSnapshot(async (tx) => {
             const ids = await listMachineCandidatesInTx(tx, userId, { includeRevokedOwned });
             const machines = await tx.machine.findMany({
                 where: {
@@ -922,17 +922,7 @@ export function machinesRoutes(app: Fastify) {
                 },
                 orderBy: { lastActiveAt: 'desc' },
             });
-            const projections = [];
-            for (const machine of machines) {
-                const result = await readAccessibleMachineProjectionInTx(tx, {
-                    actorAccountId: userId, machineId: machine.id, request,
-                });
-                if (result) projections.push(result);
-            }
-            return projections;
-        }, {
-            // Capture Machine access, content mode and caller envelopes from one snapshot.
-            isolationLevel: "Serializable",
+            return readAccessibleMachineProjectionsInTx(tx, { actorAccountId: userId, machines, request });
         });
         if (isApiTokenCaller) {
             // A Runner is also selectable by the exact Session it was activated
@@ -990,7 +980,7 @@ export function machinesRoutes(app: Fastify) {
         const userId = request.userId;
         const { id } = request.params;
 
-        const result = await inTx(async (tx) => {
+        const result = await inReadSnapshot(async (tx) => {
             let actorAccountId = userId;
             const guestProof = request.externalActionManagedGuestActivity;
             if (guestProof) {
@@ -1010,9 +1000,6 @@ export function machinesRoutes(app: Fastify) {
                 if (!current || current.installationId !== guestProof.installationId) return null;
             }
             return projection;
-        }, {
-            // Capture Machine access, content mode and caller envelopes from one snapshot.
-            isolationLevel: "Serializable",
         });
 
         if (!result) {

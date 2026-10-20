@@ -10,6 +10,8 @@ import tweetnacl from "tweetnacl";
 import {
     ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
     MACHINE_PLAIN_DATA_KEY_MARKER,
+    encodePlainMachineStoredContent,
+    sealEncryptedDataKeyEnvelopeV1,
     signRunnerClaimV1,
 } from "@happier-dev/protocol";
 import { encodeBase64 } from "@happier-dev/protocol/crypto/base64";
@@ -87,8 +89,8 @@ describe("machinesRoutes API-token admission (integration)", () => {
             data: {
                 id: "machine-1",
                 accountId: account.id,
-                metadata: '{"t":"plain","v":{"host":"workstation"}}',
-                daemonState: '{"t":"plain","v":{"status":"running"}}',
+                metadata: encodePlainMachineStoredContent({ host: 'workstation', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+                daemonState: encodePlainMachineStoredContent({ status: 'running' }),
                 dataEncryptionKey: new Uint8Array(
                     Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, "base64"),
                 ),
@@ -119,9 +121,16 @@ describe("machinesRoutes API-token admission (integration)", () => {
         await app.ready();
 
         try {
-            const response = await app.inject({
+            const ordinary = await app.inject({
                 method: "GET",
                 url: "/v1/machines",
+                headers: { authorization: `Bearer ${pat.token}` },
+            });
+            expect(ordinary.statusCode).toBe(200);
+            expect(ordinary.json()).toEqual([]);
+            const response = await app.inject({
+                method: "GET",
+                url: "/v1/machines?includeRevoked=true",
                 headers: { authorization: `Bearer ${pat.token}` },
             });
 
@@ -132,11 +141,11 @@ describe("machinesRoutes API-token admission (integration)", () => {
                 revokedAt: 1234,
                 replacedByMachineId: "machine-2",
                 kind: "persistent",
-                storageMode: "plain",
+                access: { custodian: { accountId: account.id, displayName: '' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
                 // Only the canonical key marker accompanies routing facts;
-                // Machine metadata, state and install details stay private.
+                // Machine metadata, state and installation public key stay private.
                 runnerClaim: null,
-                installationId: null,
+                installationId: "installation-1",
                 dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
                 runnerContentKeyBinding: null,
             }]);
@@ -157,7 +166,13 @@ describe("machinesRoutes API-token admission (integration)", () => {
             data: { publicKey: null, encryptionMode: "e2ee" },
             select: { id: true },
         });
-        const sealedEnvelope = new Uint8Array(96).fill(7);
+        const recipientPublicKey = tweetnacl.box.keyPair().publicKey;
+        const sealedEnvelope = new Uint8Array(sealEncryptedDataKeyEnvelopeV1({
+            dataKey: new Uint8Array(32).fill(7), recipientPublicKey, randomBytes: tweetnacl.randomBytes,
+        }));
+        const persistentEnvelope = new Uint8Array(sealEncryptedDataKeyEnvelopeV1({
+            dataKey: new Uint8Array(32).fill(3), recipientPublicKey, randomBytes: tweetnacl.randomBytes,
+        }));
         const binding = {
             v: 1,
             purpose: "happier.ephemeral-runner.machine-content-key",
@@ -175,7 +190,7 @@ describe("machinesRoutes API-token admission (integration)", () => {
                 id: "persistent-1",
                 accountId: account.id,
                 metadata: "encrypted",
-                dataEncryptionKey: new Uint8Array(96).fill(3),
+                dataEncryptionKey: persistentEnvelope,
                 installationId: "installation-persistent",
             },
             {
@@ -274,7 +289,7 @@ describe("machinesRoutes API-token admission (integration)", () => {
                 revokedAt: null,
                 replacedByMachineId: null,
                 kind: "ephemeral_session_runner",
-                storageMode: "e2ee",
+                access: { custodian: { accountId: account.id, displayName: '' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' },
                 runnerClaim: claim,
                 installationId: "installation-1",
                 dataEncryptionKey: Buffer.from(sealedEnvelope).toString("base64"),
@@ -283,9 +298,9 @@ describe("machinesRoutes API-token admission (integration)", () => {
             expect(rows.find((row) => row.id === "persistent-1")).toMatchObject({
                 kind: "persistent",
                 runnerClaim: null,
-                installationId: null,
-                storageMode: "e2ee",
-                dataEncryptionKey: Buffer.from(new Uint8Array(96).fill(3)).toString("base64"),
+                installationId: "installation-persistent",
+                access: { custodian: { accountId: account.id, displayName: '' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' },
+                dataEncryptionKey: Buffer.from(persistentEnvelope).toString("base64"),
                 runnerContentKeyBinding: null,
             });
         } finally {

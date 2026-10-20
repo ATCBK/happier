@@ -74,11 +74,11 @@ function contributions(row: MachineFacts): Contribution[] {
             })).map(({ teamMembership: member }) => member.accountId) })),
     ];
 }
-function effectiveRole(row: MachineFacts, actorAccountId: string, sources = contributions(row)): MachineAccessRoleV1 | null {
+function effectiveRole(row: MachineFacts, actorAccountId: string, sources?: readonly Contribution[]): MachineAccessRoleV1 | null {
     if (row.accountId === actorAccountId) return row.account.status === 'active' ? 'manage' : null;
     if (row.kind !== 'persistent') return null;
     let role: MachineAccessRoleV1 | null = null;
-    for (const source of sources) if (source.accountIds.includes(actorAccountId)) {
+    for (const source of sources ?? contributions(row)) if (source.accountIds.includes(actorAccountId)) {
         if (source.level === 'admin') return 'manage';
         role = 'use';
     }
@@ -140,7 +140,16 @@ function safePlainContent(row: MachineFacts): boolean {
             daemonState: row.daemonState === null ? null : decodePlainMachineStoredContent(row.daemonState) });
     } catch { return false; }
 }
-async function accessFromFactsInTx(tx: Tx, row: MachineFacts, actorAccountId: string): Promise<MachineAccessFacts | null> {
+async function readRecipientAccessMaterialInTx(tx: Tx, actorAccountId: string, machineIds: readonly string[]) {
+    const recipient = await tx.account.findUnique({ where: { id: actorAccountId }, select: RECIPIENT_READINESS_SELECT });
+    const readiness = recipient ? deriveAccountRecipientEnvelopeReadinessFromRow(recipient) : null;
+    const envelopes = readiness?.status === 'available'
+        ? await tx.machineKeyEnvelope.findMany({ where: { machineId: { in: [...machineIds] }, recipientAccountId: actorAccountId } }) : [];
+    return { readiness, envelopes: new Map(envelopes.map(envelope => [envelope.machineId, envelope])) };
+}
+
+async function accessFromFactsInTx(tx: Tx, row: MachineFacts, actorAccountId: string,
+    material?: Awaited<ReturnType<typeof readRecipientAccessMaterialInTx>>): Promise<MachineAccessFacts | null> {
     const role = effectiveRole(row, actorAccountId);
     if (!role) return null;
     const owned = row.accountId === actorAccountId;
@@ -154,15 +163,14 @@ async function accessFromFactsInTx(tx: Tx, row: MachineFacts, actorAccountId: st
         accessState = 'key_pending'; reason = 'encryption_material_unavailable';
     }
     if (accessState === 'ready' && !owned && encryptionMode === 'e2ee') {
-        const recipient = await tx.account.findUnique({ where: { id: actorAccountId }, select: RECIPIENT_READINESS_SELECT });
-        const readiness = recipient ? deriveAccountRecipientEnvelopeReadinessFromRow(recipient) : null;
+        const { readiness, envelopes } = material ?? await readRecipientAccessMaterialInTx(tx, actorAccountId, [row.id]);
         if (readiness?.status === 'unavailable' && readiness.reason === 'plain_account') {
             accessState = 'refused'; reason = 'recipient_encryption_incompatible';
         } else if (readiness?.status !== 'available') {
             accessState = 'key_pending'; reason = 'encryption_material_unavailable';
         }
         else {
-            const envelope = await tx.machineKeyEnvelope.findUnique({ where: { machineId_recipientAccountId: { machineId: row.id, recipientAccountId: actorAccountId } } });
+            const envelope = envelopes.get(row.id);
             accessState = row.dataEncryptionKey !== null && parseEncryptedDataKeyEnvelopeV1(row.dataEncryptionKey) !== null && envelope
                 && envelope.machineOwnerEnvelopeFingerprint === computeMachineOwnerEnvelopeFingerprintV1(row.dataEncryptionKey)
                 && envelope.recipientContentPublicKeyFingerprint === readiness.binding.contentPublicKeyFingerprint
@@ -185,20 +193,14 @@ export async function resolveMachineAccessInTx(tx: Tx, input: MachineActor): Pro
 }
 export async function resolveMachineAccess(input: MachineActor) { return inTx(tx => resolveMachineAccessInTx(tx, input)); }
 export async function readAccessibleMachineAccessInTx(tx: Tx, input: MachineActor): Promise<AccessibleMachineAccessV1 | null> {
-    const row = await readFactsInTx(tx, input.machineId);
-    const access = row && await accessFromFactsInTx(tx, row, input.actorAccountId);
-    return row && access ? { custodian: { accountId: row.accountId, displayName: resolveAccountDisplayLabelV1(row.account) ?? '' },
-        role: access.role, resourceMode: access.encryptionMode, accessState: access.accessState } : null;
+    const openings = await readAccessibleMachineOpeningsInTx(tx, { actorAccountId: input.actorAccountId, machineIds: [input.machineId] });
+    return openings.get(input.machineId)?.access ?? null;
 }
 /** Opening material is caller-specific; the separate C40 Machine write basis owns CAS identity. */
 export async function readMachineDataKeyForCallerInTx(tx: Tx, input: MachineActor): Promise<Uint8Array<ArrayBuffer> | null> {
-    const row = await readFactsInTx(tx, input.machineId);
-    const access = row && await accessFromFactsInTx(tx, row, input.actorAccountId);
-    if (!row || !access || access.accessState !== 'ready') return null;
-    if (access.owned) return row.dataEncryptionKey ? new Uint8Array(row.dataEncryptionKey) : null;
-    if (access.encryptionMode === 'plain' || access.accessState !== 'ready') return null;
-    const envelope = await tx.machineKeyEnvelope.findUnique({ where: { machineId_recipientAccountId: { machineId: row.id, recipientAccountId: input.actorAccountId } }, select: { encryptedDataKey: true } });
-    return envelope ? new Uint8Array(envelope.encryptedDataKey) : null;
+    const openings = await readAccessibleMachineOpeningsInTx(tx, { actorAccountId: input.actorAccountId, machineIds: [input.machineId] });
+    const opening = openings.get(input.machineId);
+    return opening?.access.accessState === 'ready' ? opening.callerDataEncryptionKey : null;
 }
 export interface MachineAdmissionInput extends MachineActor {
     requiredRole?: MachineAccessRoleV1;
@@ -207,12 +209,12 @@ export interface MachineAdmissionInput extends MachineActor {
     actionId?: string;
 }
 export async function resolveMachineAdmissionInTx(tx: Tx, input: MachineAdmissionInput): Promise<MachineAdmission> {
-    const rows = await readMachineAdmissionFactsInTx(tx, input.actorAccountId, [input.machineId]);
+    const rows = await readMachineFactsInTx(tx, input.actorAccountId, [input.machineId]);
     return resolveMachineAdmissionFromFactsInTx(tx, rows.get(input.machineId) ?? null, input);
 }
 
 /** Ownership decides the role without reading unrelated foreign grant graphs. */
-async function readMachineAdmissionFactsInTx(tx: Tx, actorAccountId: string, machineIds: readonly string[]): Promise<ReadonlyMap<string, MachineFacts>> {
+async function readMachineFactsInTx(tx: Tx, actorAccountId: string, machineIds: readonly string[]): Promise<ReadonlyMap<string, MachineFacts>> {
     const rows = await tx.machine.findMany({ where: { id: { in: [...machineIds] } }, select: MACHINE_RESOURCE_FACTS_SELECT });
     const result = new Map<string, MachineFacts>();
     for (const row of rows) if (row.accountId === actorAccountId) {
@@ -228,13 +230,44 @@ async function readMachineAdmissionFactsInTx(tx: Tx, actorAccountId: string, mac
     return result;
 }
 
+interface AccessibleMachineOpening {
+    access: AccessibleMachineAccessV1;
+    owned: boolean;
+    callerDataEncryptionKey: Uint8Array<ArrayBuffer> | null;
+}
+
+/** Fleet and point projections share policy and read each recipient's material once. */
+export async function readAccessibleMachineOpeningsInTx(tx: Tx, input: Readonly<{
+    actorAccountId: string; machineIds: readonly string[];
+}>): Promise<ReadonlyMap<string, AccessibleMachineOpening>> {
+    const result = new Map<string, AccessibleMachineOpening>();
+    if (input.machineIds.length === 0) return result;
+    const rows = await readMachineFactsInTx(tx, input.actorAccountId, input.machineIds);
+    const foreignEncryptedIds = [...rows.values()].filter(row => row.accountId !== input.actorAccountId && resourceMode(row) === 'e2ee').map(row => row.id);
+    const material = foreignEncryptedIds.length > 0
+        ? await readRecipientAccessMaterialInTx(tx, input.actorAccountId, foreignEncryptedIds) : undefined;
+    for (const row of rows.values()) {
+        const facts = await accessFromFactsInTx(tx, row, input.actorAccountId, material);
+        if (!facts) continue;
+        const key = facts.owned ? row.dataEncryptionKey
+            : facts.accessState === 'ready' && facts.encryptionMode === 'e2ee' ? material?.envelopes.get(row.id)?.encryptedDataKey : null;
+        result.set(row.id, {
+            access: { custodian: { accountId: row.accountId, displayName: resolveAccountDisplayLabelV1(row.account) ?? '' },
+                role: facts.role, resourceMode: facts.encryptionMode, accessState: facts.accessState },
+            owned: facts.owned,
+            callerDataEncryptionKey: key ? new Uint8Array(key) : null,
+        });
+    }
+    return result;
+}
+
 /** Set-oriented default-use admission; point and batch readers share every policy decision. */
 export async function resolveMachineAdmissionsInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; machineIds: readonly string[];
 }>): Promise<ReadonlyMap<string, MachineAdmission>> {
     const machineIds = [...new Set(input.machineIds)];
     if (machineIds.length === 0) return new Map();
-    const byId = await readMachineAdmissionFactsInTx(tx, input.actorAccountId, machineIds);
+    const byId = await readMachineFactsInTx(tx, input.actorAccountId, machineIds);
     const result = new Map<string, MachineAdmission>();
     for (const machineId of machineIds) result.set(machineId, await resolveMachineAdmissionFromFactsInTx(tx, byId.get(machineId) ?? null,
         { actorAccountId: input.actorAccountId, machineId }));

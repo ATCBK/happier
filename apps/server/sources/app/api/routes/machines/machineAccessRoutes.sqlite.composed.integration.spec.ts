@@ -44,7 +44,7 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
         harness = await createLightSqliteHarness({
             tempDirPrefix: 'happier-machine-access-http-',
             initAuth: true,
-            env: { HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', AUTH_REQUIRED_LOGIN_PROVIDERS: '', AUTH_LOGIN_ELIGIBILITY_CACHE_TTL_MS: '0' },
+            env: { HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', AUTH_REQUIRED_LOGIN_PROVIDERS: '', AUTH_LOGIN_ELIGIBILITY_CACHE_TTL_MS: '0', HAPPIER_WEB_LATENCY_TRACE: '1' },
         });
     }, 180_000);
     afterAll(async () => { if (harness) await harness.close(); });
@@ -66,6 +66,38 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
         } });
         return { owner, recipient, other, machine };
     }
+
+    it('reads an owned fleet without a database round trip for every Machine', async () => {
+        const { owner, machine } = await fixture();
+        // Observe real Prisma operations through the existing diagnostic sink;
+        // the HTTP handler, access policy and SQLite reads all remain real.
+        const phases: string[] = [];
+        const diagnostic = vi.spyOn(logger, 'debug').mockImplementation(record => {
+            if (typeof record === 'object' && record !== null && 'phase' in record
+                && typeof record.phase === 'string' && /^db\.[A-Z]/u.test(record.phase)) phases.push(record.phase);
+        });
+        try {
+            await withAuthenticatedTestApp(machinesRoutes, async app => {
+                const list = async () => {
+                    phases.length = 0;
+                    const response = await app.inject({ method: 'GET', url: '/v1/machines?includeRevoked=true', headers: headers(owner.id) });
+                    expect(response.statusCode, response.body).toBe(200);
+                    return { rows: response.json(), operations: [...phases] };
+                };
+                const single = await list();
+                expect(single.operations.length).toBeGreaterThan(0);
+                const extraIds = Array.from({ length: 7 }, () => `machine-${randomUUID()}`);
+                await db.machine.createMany({ data: extraIds.map(id => ({ ...machine, id })) });
+                const fleet = await list();
+                expect(fleet.rows.map((row: { id: string }) => row.id).sort()).toEqual([machine.id, ...extraIds].sort());
+                expect(fleet.rows).toEqual(expect.arrayContaining([expect.objectContaining({
+                    id: machine.id, metadata: machine.metadata,
+                    access: { custodian: { accountId: owner.id, displayName: 'Alice' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+                })]));
+                expect(fleet.operations.length, JSON.stringify({ single: single.operations, fleet: fleet.operations })).toBeLessThanOrEqual(single.operations.length);
+            });
+        } finally { diagnostic.mockRestore(); }
+    });
 
     it('omits revoked owned Machines from listing but preserves offline discovery and exact owner reads', async () => {
         const { owner, recipient, machine } = await fixture();
@@ -320,6 +352,9 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
             const pending = await app.inject({ method: 'GET', url: base, headers: headers(recipient.id) });
             expect(pending.statusCode, pending.body).toBe(200);
             expect(pending.json()).toMatchObject({ machine: { metadata: null, daemonState: null, dataEncryptionKey: null, access: { accessState: 'key_pending' } } });
+            const pendingList = await app.inject({ method: 'GET', url: '/v1/machines', headers: headers(recipient.id) });
+            expect(pendingList.statusCode, pendingList.body).toBe(200);
+            expect(pendingList.json()).toEqual([pending.json().machine]);
             expect(pending.json().machine.keyBasis).toEqual({ dataEncryptionKey: privacyKit.encodeBase64(envelope), metadataVersion: machine.metadataVersion, daemonStateVersion: machine.daemonStateVersion });
             const deniedCensus = await app.inject({ method: 'GET', url: `${base}/data-key-envelopes`, headers: headers(recipient.id) });
             expect(deniedCensus.json()).toEqual({ kind: 'refused', code: 'access_denied' });
@@ -346,6 +381,9 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
             } });
             expect(ready.json().machine.keyBasis).toEqual({ dataEncryptionKey: privacyKit.encodeBase64(envelope), metadataVersion: machine.metadataVersion, daemonStateVersion: machine.daemonStateVersion });
             expect(ready.json().machine.dataEncryptionKey).not.toBe(ready.json().machine.keyBasis.dataEncryptionKey);
+            const readyList = await app.inject({ method: 'GET', url: '/v1/machines', headers: headers(recipient.id) });
+            expect(readyList.statusCode, readyList.body).toBe(200);
+            expect(readyList.json()).toEqual([ready.json().machine]);
             const bootstrap = await app.inject({ method: 'GET', url: '/v1/machines', headers: { ...headers(recipient.id), 'x-test-auth-token-kind': 'api_token' } });
             expect(bootstrap.statusCode, bootstrap.body).toBe(200);
             expect(bootstrap.json()).toEqual([expect.objectContaining({
@@ -359,6 +397,9 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
             const stale = await app.inject({ method: 'GET', url: base, headers: headers(recipient.id) });
             expect(stale.statusCode, stale.body).toBe(200);
             expect(stale.json()).toMatchObject({ machine: { metadata: null, daemonState: null, dataEncryptionKey: null, access: { accessState: 'key_pending' } } });
+            const staleList = await app.inject({ method: 'GET', url: '/v1/machines', headers: headers(recipient.id) });
+            expect(staleList.statusCode, staleList.body).toBe(200);
+            expect(staleList.json()).toEqual([stale.json().machine]);
             expect(stale.json().machine.keyBasis).toEqual({ dataEncryptionKey: privacyKit.encodeBase64(envelope), metadataVersion: machine.metadataVersion, daemonStateVersion: machine.daemonStateVersion });
         });
     });
