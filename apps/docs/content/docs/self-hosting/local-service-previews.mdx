@@ -287,6 +287,15 @@ requirement off.
 Satisfying those prerequisites allows the configured development admission; it is not a
 release certification. The default stays off regardless.
 
+In unreleased 0.3 builds, a secret link can be opened by multiple recipients until it
+expires or is revoked. Opening it yourself and copying it again does not consume or
+replace it. Each viewer receives a scoped admission cookie; the sharing credential
+is removed from the address before the request reaches the service.
+
+Revocation and expiry close existing preview connections even when the audit sink is
+unavailable. The exposure status records the audit failure; new access still requires
+working audit storage.
+
 ## Stored-content public links in 0.3 development
 
 Public links for Sessions and documents publish stored content rather than a

@@ -33,7 +33,6 @@ type PublicAccessFailureReason =
     | "authentication_required"
     | "session_not_authorized"
     | "public_token_missing"
-    | "public_token_exchange_required"
     | "public_token_mismatch"
     | "audit_sink_unavailable"
     | "rate_limit_checker_unavailable";
@@ -150,7 +149,7 @@ type ExposureEntry = Readonly<{
     preview: LocalServicePreviewResourceV1;
     exposure: LocalServicePublicExposureV1;
     secretTokenHash: string | null;
-    secretTokenPurpose: "url_exchange" | "access" | null;
+    withdrawalAuditFailed?: boolean;
     actorId: string;
     connections: Set<Readonly<{ close: () => void; actorAccountId?: string }>>;
 }>;
@@ -299,6 +298,18 @@ export function createLocalServicePublicRuntime(
         return { ok: true, entry: updateExposureEntry(entry, result.exposure) };
     }
 
+    function retireExposure(
+        entry: ExposureEntry,
+        exposure: LocalServicePublicExposureV1,
+        event: Omit<LocalServicePublicAuditEventV1, "eventId" | "occurredAt">,
+    ): Readonly<{ ok: true; entry: ExposureEntry } | { ok: false; reasonCode: "audit_sink_unavailable" }> {
+        // Withdrawal closes disclosure before attempting the external audit boundary.
+        const retired = updateExposureEntry(entry, exposure);
+        const audit = appendAuditEvent(retired.exposure, event);
+        const updated = updateExposureEntry({ ...retired, withdrawalAuditFailed: !audit.ok }, audit.ok ? audit.exposure : retired.exposure);
+        return audit.ok ? { ok: true, entry: updated } : audit;
+    }
+
     function createExposure(createInput: Readonly<{
         preview: LocalServicePreviewResourceV1;
         requestedMode: LocalServicePublicExposureModeV1;
@@ -398,7 +409,6 @@ export function createLocalServicePublicRuntime(
             preview: createInput.preview,
             exposure,
             secretTokenHash: secretToken && tokenSecret ? hashToken(tokenSecret, secretToken) : null,
-            secretTokenPurpose: secretToken ? "url_exchange" : null,
             actorId: createInput.actorId,
             connections: new Set(),
         });
@@ -423,15 +433,13 @@ export function createLocalServicePublicRuntime(
         if (entry.exposure.state !== "active" || now < entry.exposure.expiresAt) {
             return { ok: true, entry };
         }
-        const auditResult = appendAuditEvent({
+        return retireExposure(entry, {
             ...entry.exposure,
             state: "expired",
         }, {
             exposureId: entry.exposure.exposureId,
             action: "expire",
         });
-        if (!auditResult.ok) return auditResult;
-        return { ok: true, entry: updateExposureEntry(entry, auditResult.exposure) };
     }
 
     function inaccessibleReason(
@@ -509,9 +517,6 @@ export function createLocalServicePublicRuntime(
             if (!validateInput.rawToken || !tokenSecret || !entry.secretTokenHash) {
                 return denyAccess(entry, "public_token_missing");
             }
-            if (entry.secretTokenPurpose !== "access") {
-                return denyAccess(entry, "public_token_exchange_required");
-            }
             if (!hashesMatch(entry.secretTokenHash, hashToken(tokenSecret, validateInput.rawToken))) {
                 return denyAccess(entry, "public_token_mismatch");
             }
@@ -585,9 +590,6 @@ export function createLocalServicePublicRuntime(
         if (!exchangeInput.rawToken || !tokenSecret || !entry.secretTokenHash) {
             return { ok: false, reasonCode: "public_token_missing" };
         }
-        if (entry.secretTokenPurpose !== "url_exchange") {
-            return { ok: false, reasonCode: "public_token_mismatch" };
-        }
         if (!hashesMatch(entry.secretTokenHash, hashToken(tokenSecret, exchangeInput.rawToken))) {
             return { ok: false, reasonCode: "public_token_mismatch" };
         }
@@ -597,16 +599,12 @@ export function createLocalServicePublicRuntime(
             return { ok: false, reasonCode: currentPreview.reasonCode };
         }
 
-        const rotatedToken = generateSecretToken();
-        entries.set(entry.exposure.exposureId, {
-            ...entry,
-            secretTokenHash: hashToken(tokenSecret, rotatedToken),
-            secretTokenPurpose: "access",
-        });
+        // The public URL is sharing authority until expiry/revocation. The HTTP ingress
+        // moves it into its isolated cookie and strips it from application requests.
         return {
             ok: true,
             exposureId: entry.exposure.exposureId,
-            rawToken: rotatedToken,
+            rawToken: exchangeInput.rawToken,
             expiresAt: entry.exposure.expiresAt,
         };
     }
@@ -619,7 +617,7 @@ export function createLocalServicePublicRuntime(
         if (!entry) {
             return { ok: false, reasonCode: "exposure_not_found" };
         }
-        const auditResult = appendAuditEvent({
+        const auditResult = retireExposure(entry, {
             ...entry.exposure,
             state: "revoked",
             revokedAt: nowMs(),
@@ -629,7 +627,6 @@ export function createLocalServicePublicRuntime(
             actorId: revokeInput.actorId,
         });
         if (!auditResult.ok) return auditResult;
-        updateExposureEntry(entry, auditResult.exposure);
         return { ok: true };
     }
 
@@ -650,11 +647,9 @@ export function createLocalServicePublicRuntime(
             if (!entry.preview.serviceTarget || entry.exposure.machineId !== machineId) continue;
             if (entry.actorId === accountId || entry.preview.owner.id === accountId) {
                 // Disclosure retirement cannot depend on the durable audit sink being available.
-                const retired = updateExposureEntry(entry, { ...entry.exposure, state: 'revoked', revokedAt: nowMs() });
-                const audit = appendAuditEvent(retired.exposure, {
-                    exposureId: retired.exposure.exposureId, action: 'revoke', actorId: accountId,
+                retireExposure(entry, { ...entry.exposure, state: 'revoked', revokedAt: nowMs() }, {
+                    exposureId: entry.exposure.exposureId, action: 'revoke', actorId: accountId,
                 });
-                if (audit.ok) updateExposureEntry(retired, audit.exposure);
                 continue;
             }
             for (const connection of entry.connections) if (connection.actorAccountId === accountId) {
@@ -686,10 +681,9 @@ export function createLocalServicePublicRuntime(
         for (const entry of entries.values()) {
             if (!entryMatchesStatusRequest(entry, request)) continue;
             const expiryResult = expireExposureIfNeeded(entry, generatedAt);
-            if (expiryResult.ok) {
-                exposures.push(expiryResult.entry.exposure);
-                continue;
-            }
+            const current = expiryResult.ok ? expiryResult.entry : entries.get(entry.exposure.exposureId)!;
+            exposures.push(current.exposure);
+            if (!current.withdrawalAuditFailed) continue;
             diagnostics.push({
                 v: 1,
                 code: "public_policy_denied",
@@ -699,10 +693,9 @@ export function createLocalServicePublicRuntime(
                 publicExposureId: entry.exposure.exposureId,
                 emittedAtMs: generatedAt,
                 details: {
-                    reasonCode: expiryResult.reasonCode,
+                    reasonCode: "audit_sink_unavailable",
                 },
             });
-            exposures.push(entry.exposure);
         }
 
         exposures.sort((left, right) => (

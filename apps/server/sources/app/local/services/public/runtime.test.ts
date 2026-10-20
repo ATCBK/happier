@@ -136,14 +136,6 @@ describe("local service public exposure runtime", () => {
                 rateLimitProfileId: "default",
             },
         });
-        expect(runtime.validateAccess({
-            exposureId: "public_preview_1",
-            rawToken: "secret_token_1",
-            authenticated: false,
-            sessionAuthorized: true,
-            clientKey: "client_a",
-        })).toEqual({ ok: false, reasonCode: "public_token_exchange_required" });
-
         expect(runtime.exchangeAccessToken({
             exposureId: "public_preview_1",
             rawToken: "secret_token_1",
@@ -500,7 +492,7 @@ describe("local service public exposure runtime", () => {
         }));
     });
 
-    it("fails closed without revoking when the durable audit sink rejects the revoke audit write", async () => {
+    it("revokes retained access and records failure when the durable audit sink rejects the revoke audit write", async () => {
         const mod = await loadPublicRuntimeModule();
         expect(mod?.createLocalServicePublicRuntime).toBeTypeOf("function");
         if (!mod?.createLocalServicePublicRuntime) return;
@@ -541,14 +533,20 @@ describe("local service public exposure runtime", () => {
             rateLimitProfileId: "default",
         }).ok).toBe(true);
 
+        let closed = false;
+        runtime.retainConnection("public_preview_1", () => { closed = true; });
         expect(runtime.revokeExposure("public_preview_1", { actorId: "user_1" })).toEqual({
             ok: false,
             reasonCode: "audit_sink_unavailable",
         });
         expect(runtime.resolveExposure("public_preview_1")).toEqual(expect.objectContaining({
-            state: "active",
+            state: "revoked",
             auditEventIds: ["audit_create_1"],
         }));
+        expect(closed).toBe(true);
+        expect(runtime.getSnapshot({ machineId: preview.machineId }).diagnostics).toEqual([
+            expect.objectContaining({ details: { reasonCode: "audit_sink_unavailable" } }),
+        ]);
     });
 
     it("fails closed on access when the configured rate-limit checker is unavailable", async () => {
@@ -688,12 +686,11 @@ describe("local service public exposure runtime", () => {
         ]);
     });
 
-    it("exchanges a secret-link URL token once and rejects the consumed original token", async () => {
+    it("admits repeated share-link visits without consuming or rotating the shared credential", async () => {
         const mod = await loadPublicRuntimeModule();
         expect(mod?.createLocalServicePublicRuntime).toBeTypeOf("function");
         if (!mod?.createLocalServicePublicRuntime) return;
 
-        const secretTokens = ["secret_token_1", "secret_token_2"];
         let rateLimitChecks = 0;
         const runtime = mod.createLocalServicePublicRuntime({
             publicBaseUrl: "https://preview.happier.test",
@@ -709,7 +706,7 @@ describe("local service public exposure runtime", () => {
             },
             nowMs: () => 1_000,
             generateExposureId: () => "public_preview_1",
-            generateSecretToken: () => secretTokens.shift() ?? "secret_token_extra",
+            generateSecretToken: () => "secret_token_1",
             generateAuditEventId: () => "audit_create_1",
             allowTestDevAuditSink: true,
             recordAuditEvent: () => undefined,
@@ -736,32 +733,31 @@ describe("local service public exposure runtime", () => {
         expect(exchange).toEqual({
             ok: true,
             exposureId: "public_preview_1",
-            rawToken: "secret_token_2",
+            rawToken: "secret_token_1",
             expiresAt: 61_000,
         });
-        // The exchange consumes/rotates the URL token without consulting the rate-limit checker.
+        expect(runtime.exchangeAccessToken({ exposureId: "public_preview_1", rawToken: "secret_token_1" })).toEqual(exchange);
+        // Exchanging only strips the credential into the scoped cookie. Proxy admission owns abuse control.
         expect(rateLimitChecks).toBe(0);
 
-        // The original URL token is consumed and no longer validates.
+        // Both recipients retain access after another viewer opens the same URL.
         expect(runtime.validateAccess({
             exposureId: "public_preview_1",
             rawToken: "secret_token_1",
             authenticated: false,
             sessionAuthorized: true,
             clientKey: "client_a",
-        })).toEqual({ ok: false, reasonCode: "public_token_mismatch" });
-        // Token validation precedes the rate-limit check (checker still not consulted on rejection).
-        expect(rateLimitChecks).toBe(0);
-
-        // The rotated follow-up token validates and only then is the rate-limit checker consulted.
-        expect(runtime.validateAccess({
-            exposureId: "public_preview_1",
-            rawToken: "secret_token_2",
-            authenticated: false,
-            sessionAuthorized: true,
-            clientKey: "client_a",
         })).toEqual({ ok: true, preview });
         expect(rateLimitChecks).toBe(1);
+
+        expect(runtime.validateAccess({
+            exposureId: "public_preview_1",
+            rawToken: "secret_token_1",
+            authenticated: false,
+            sessionAuthorized: true,
+            clientKey: "client_b",
+        })).toEqual({ ok: true, preview });
+        expect(rateLimitChecks).toBe(2);
     });
 
     it("rejects exchanging an unknown exposure or a mismatched token", async () => {
@@ -809,14 +805,14 @@ describe("local service public exposure runtime", () => {
             rawToken: "wrong_token",
         })).toEqual({ ok: false, reasonCode: "public_token_mismatch" });
 
-        // The original URL token still cannot be used as a proxy credential after a failed exchange.
+        // A failed exchange does not consume the valid shared credential.
         expect(runtime.validateAccess({
             exposureId: "public_preview_1",
             rawToken: "secret_token_1",
             authenticated: false,
             sessionAuthorized: true,
             clientKey: "client_a",
-        })).toEqual({ ok: false, reasonCode: "public_token_exchange_required" });
+        })).toEqual({ ok: true, preview });
     });
 
     it("enforces the configured maximum number of active exposures", async () => {
