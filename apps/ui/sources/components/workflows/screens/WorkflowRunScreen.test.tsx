@@ -8,7 +8,7 @@ import { WorkflowRunStartRequestV1Schema, WorkflowMaterializedLeafV1Schema, type
     WorkflowAcceptedSnapshotV1Schema, WorkflowProgressEnvelopeV1Schema, WorkflowInvocationDetailV1Schema, WorkflowFinalResultV1Schema, type WorkflowProgressEnvelopeV1,
     sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
     sealWorkflowFinalResultStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1,
-    SOCKET_RPC_EVENTS, PluginProjectionV2Schema,
+    SOCKET_RPC_EVENTS, PluginProjectionV2Schema, ActionExecuteFailureSchema,
 } from '@happier-dev/protocol';
 import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import { createWorkflowActionHttpTransport } from '@/dev/testkit/fixtures/workflowActionHttpTransport';
@@ -649,7 +649,11 @@ beforeEach(async () => {
     });
     const externalActions = await Promise.all((['workflow.run.start', 'workflow.run.resume', 'workflow.run.invocations.retry', 'workflow.run.invocations.get'] as const).map(actionId =>
         createExternalActionAccountHttpBoundary({ serverUrl: 'https://server-a', serverIdentityId, accountId: 'account-a',
-            machineId: 'machine-1', actionId, tokenEpoch: 0, execute: async (input, context) => {
+            machineId: 'machine-1', actionId, tokenEpoch: 0,
+            failure: value => {
+                const failure = ActionExecuteFailureSchema.safeParse(value);
+                return failure.success ? failure.data : null;
+            }, execute: async (input, context) => {
                 if (actionId === 'workflow.run.start') {
                     actionTransport(actionId, input, { externalActionTarget: context.target });
                     return startResponse(input);
@@ -751,6 +755,26 @@ afterEach(async () => {
 });
 
 describe('WorkflowRunScreen', () => {
+    it('settles an addressed Run read silently when navigation retires its Home binding', async () => {
+        routeState.serverId = servedHomeId;
+        let readSignal: AbortSignal | undefined;
+        const pending = createDeferred<void>();
+        const screen = await renderRunScreen({ wrap: element => {
+            detailActions.getRun.mockImplementation(async (_runId: string, signal?: AbortSignal) => {
+                readSignal = signal;
+                pending.resolve();
+                return await new Promise((_, reject) => {
+                    if (signal?.aborted) reject(signal.reason);
+                    else signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+                });
+            });
+            return element;
+        } });
+        await pending.promise;
+        await screen.unmount();
+        expect(readSignal?.aborted).toBe(true);
+    });
+
     it('reads and pauses a retained lead Home Run while another Home is active, including pane reactivation', async () => {
         const home = servedHomeId;
         const runId = routeState.runId;
@@ -1466,6 +1490,26 @@ describe('WorkflowRunScreen', () => {
         expect(request.runId).not.toBe('11111111-1111-4111-8111-111111111111');
         expect(request.source).toMatchObject({ kind: 'inline',
             replay: { runId: '11111111-1111-4111-8111-111111111111', intent: 'another_round' } });
+    });
+
+    it('shows a typed Another round target refusal on the Run page without replacing the accepted target', async () => {
+        startResponse.mockResolvedValue({ ok: false, errorCode: 'target_unavailable', error: 'Target is unavailable' });
+        const rounds = { ...DEFINITION, inputs: [{ name: 'previousRoundContext', valueType: 'json' as const, required: false, default: null }] };
+        const screen = await renderRunScreen({ definition: rounds, acceptedContext: { ...ACCEPTED_CONTEXT, inputs: { previousRoundContext: null } } });
+        await screen.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(screen.findHostByTestId('workflow-run-again-refused')).not.toBeNull());
+        expect(screen.getTextContent()).toContain('workflows.problem.targetUnavailable');
+        expect(routerSpy.push).not.toHaveBeenCalled();
+        expect(screen.findByTestId('workflow-run-inputs-run')).toBeNull();
+        expect(runStartCalls()).toHaveLength(1);
+        const request = WorkflowRunStartRequestV1Schema.parse(runStartCalls()[0]?.[1]);
+        expect(request.source).toMatchObject({ kind: 'inline',
+            replay: { runId: '11111111-1111-4111-8111-111111111111', intent: 'another_round' } });
+        expect(runStartCalls()[0]?.[2]).toMatchObject({ externalActionTarget: {
+            kind: 'machine', machineId: ACCEPTED_CONTEXT.machineId,
+            project: { machineId: ACCEPTED_CONTEXT.machineId, directory: '/Users/me/project' },
+        } });
+        expect(request.executionTarget).toEqual(ACCEPTED_CONTEXT.executionTarget);
     });
 
     it('does not let a late Run-again completion navigate after this mounted screen changes Runs', async () => {
