@@ -174,9 +174,11 @@ consumer available until ordinary Stop. Later originals receive the terminal
 pre-effect refusal; no native prompt, Ready event or successful startup hook runs.
 Plugins that apply configuration during native open publish their observed mode
 inventory first. During open, the host checks that publication through its
-canonical mode assertion, so an unavailable selection becomes a host-proven
-refusal before plugin configuration applies. A public error code without bound
-inventory retains ordinary cleanup.
+canonical mode assertion without interrupting construction. A completed open
+uses the final inventory and accepted current mode; a mode-specific failed open
+uses the latest observed availability evidence from that attempt, retained across
+producer cleanup. Later valid current-mode facts clear earlier refusal evidence.
+A public error code without matching evidence retains ordinary cleanup.
 The existing retained-settlement owner reoffers a failed terminal-block write on
 its normal connection/materialization wakes, without redelivering input. Generic
 plugin errors, generation retirement and native-resume failures retain their
