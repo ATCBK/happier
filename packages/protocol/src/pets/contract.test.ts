@@ -78,7 +78,7 @@ describe('pet protocol contract', () => {
       'review',
     ]);
     expect(pets.PET_ANIMATION_ROWS_V1[0].durationsMs).toEqual([280, 110, 110, 140, 140, 320]);
-    expect(pets.BUILT_IN_PET_IDS_V1).toEqual(['blink']);
+    expect(pets.BUILT_IN_PET_IDS_V1).toEqual(['blink', 'fury', 'milo', 'oli', 'titi']);
     expect(pets.PET_SYNC_SUPPORTED_MEDIA_TYPES_V1).toEqual(['image/webp', 'image/png']);
     expect(pets.PET_DAEMON_RPC_DEBOUNCE_LIMITS_V1).toMatchObject({
       discoverPackagesMinIntervalMs: expect.any(Number),

@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { SessionIdSchema } from '../sessions/idsV1.js';
+import { PetChooseInputV1Schema, PetChooseResultV1Schema } from '../pets/selection.js';
 import { RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
 import { ActionSessionTargetDeclarationV1Schema, SessionTargetV1Schema, SessionTargetPreviewV1Schema, withSessionTargetFanoutResultV1, type SessionTargetV1 } from './sessionTargetV1.js';
 import { SessionCoordinatorEnableInputV1Schema, SessionCoordinatorEnableResultV1Schema } from '../sessions/follow/sessionCoordinatorActionsV1.js';
@@ -11621,27 +11622,31 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     inputSchema: EmptyObjectSchema,
   },
   {
-    id: 'ui.pet.choose', approval: {result: 'none'},
+    id: 'ui.pet.choose', approval: { result: 'optional', flow: 'deferred' },
     title: 'Choose pet',
-    description: 'Open pet settings so the user can choose or manage their companion.',
+    description: 'Choose an Account pet and inherit it on this device, set a device pet override, or open pet settings with empty input.',
     safety: 'safe',
+    sideEffectClass: 'write',
+    executionPlacement: 'client',
+    requiredAuthority: 'account_automation',
+    bindings: { mcpToolName: 'ui_pet_choose' },
     placements: ['slash_command'],
     slash: { tokens: ['/pet', '/h.pet'] },
     inputHints: {
       title: 'Choose pet',
-      description: 'Open pet settings.',
+      description: 'Provide petRef for the Account default or deviceOverride for this answering device. Empty input opens pet settings.',
       fields: [],
     },
     surfaces: {
       ui: true,
       voice: false,
-      agent: false,
-      mcp: false,
+      agent: true,
+      mcp: true,
       cli: false,
       rpc: false,
     },
-    outputSchema: StrictJsonValueSchema,
-    inputSchema: EmptyObjectSchema,
+    outputSchema: PetChooseResultV1Schema,
+    inputSchema: PetChooseInputV1Schema,
   },
   {
     id: 'ui.voice_agent.teleport', approval: {result: 'optional',flow: 'deferred'},

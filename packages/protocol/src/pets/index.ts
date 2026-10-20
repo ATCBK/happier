@@ -1,4 +1,14 @@
 export {
+  PetAccountReferenceV1Schema,
+  PetDeviceOverrideV1Schema,
+  PetChooseInputV1Schema,
+  PetChooseResultV1Schema,
+  type PetAccountReferenceV1,
+  type PetDeviceOverrideV1,
+  type PetChooseInputV1,
+  type PetChooseResultV1,
+} from './selection.js';
+export {
   PET_ANIMATION_ROWS_V1,
   PET_ANIMATION_STATES_V1,
   PET_ATLAS_V1,

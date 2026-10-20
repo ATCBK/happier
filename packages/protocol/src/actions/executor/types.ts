@@ -1,4 +1,5 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { PetChooseInputV1 } from '../../pets/selection.js';
 import type { QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
 import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '../../connect/connectedAccountPurposeBindings.js';
 import type { SessionMessageSendAuthoredInput } from '../actionSpecs.js';
@@ -1328,6 +1329,11 @@ export type ActionExecutorDeps = Readonly<{
   uiCommandPaletteAction?: (args: Readonly<{
     actionId: 'ui.command_palette.list' | 'ui.command_palette.invoke';
     input: unknown;
+    context: ActionExecutorContext;
+  }>) => Promise<ActionExecuteResult>;
+  /** The answering client's pet catalog and Account/device selection owner. */
+  uiPetChooseAction?: (args: Readonly<{
+    input: PetChooseInputV1;
     context: ActionExecutorContext;
   }>) => Promise<ActionExecuteResult>;
   /** Answering client's ordinary draft owner; never starts or sends a Session. */

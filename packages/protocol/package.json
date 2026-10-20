@@ -2095,6 +2095,11 @@
       "types": "./dist/pets/source.d.ts",
       "default": "./dist/pets/source.js"
     },
+    "./pets/selection": {
+      "happier-source": "./src/pets/selection.ts",
+      "types": "./dist/pets/selection.d.ts",
+      "default": "./dist/pets/selection.js"
+    },
     "./plugins/contributions/agentUiGrammar": {
       "happier-source": "./src/plugins/contributions/agentUiGrammar.ts",
       "types": "./dist/plugins/contributions/agentUiGrammar.d.ts",

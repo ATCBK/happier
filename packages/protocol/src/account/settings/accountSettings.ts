@@ -13,6 +13,7 @@ import { UsagePacingTargetsV1Schema, UsageQuotaNotificationsV1Schema, DEFAULT_US
 import { UsageCoachPreferencesV1Schema, DEFAULT_USAGE_COACH_PREFERENCES_V1 } from './usageCoachPreferencesV1.js';
 import { UsageModelPriceOverridesV1Schema } from '../../usage/usageModelPriceSchemas.js';
 import { UsageNightHoursV1Schema } from '../../usage/usageWorkIntervals.js';
+import { PetAccountReferenceV1Schema } from '../../pets/selection.js';
 
 import {
   DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
@@ -1177,10 +1178,7 @@ const ACCOUNT_SESSION_AUTHORING_CATALOG_DEFINITIONS = {
     keyboardShortcutOverridesV1: accountPreference(KeyboardShortcutOverridesSchema, {}, 'keyboard shortcuts', 64 * 1024),
     keyboardShortcutDisabledCommandIdsV1: accountPreference(KeyboardShortcutDisabledCommandIdsSchema, [], 'keyboard shortcuts', 32 * 1024),
     petsEnabled: accountPreference(z.boolean(), false, 'pet preferences'),
-    petsSelectedPetRef: accountPreference(z.discriminatedUnion('kind', [
-        z.strictObject({ kind: z.literal('builtIn'), petId: z.string().check(z.minLength(1), z.maxLength(256)) }),
-        z.strictObject({ kind: z.literal('accountPet'), accountPetId: z.string().check(z.minLength(1), z.maxLength(256)) }),
-    ]), { kind: 'builtIn', petId: 'blink' }, 'pet preferences'),
+    petsSelectedPetRef: accountPreference(PetAccountReferenceV1Schema, { kind: 'builtIn', petId: 'blink' }, 'pet preferences'),
     petsDesktopOverlayDefaultEnabled: accountPreference(z.boolean(), true, 'pet preferences'),
     petsDesktopOverlayDefaultVisibilityMode: accountPreference(z.enum(['attentionOrActive', 'alwaysWhenEnabled', 'attentionOnly']), 'alwaysWhenEnabled', 'pet preferences'),
 } as const;

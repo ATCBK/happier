@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ActionInvokeInputSchema } from './actionInvokeInput.js';
+import { PetChooseInputV1Schema } from '../pets/selection.js';
 import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
 import { QualifiedConnectedAccountPurposeTeamResourceSelectionV1Schema } from '../connect/connectedAccountPurposeBindings.js';
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
@@ -5883,6 +5884,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         }
         return await deps.uiCommandPaletteAction({ actionId, input: parsed.data, context: ctx });
+      }
+      if (actionId === 'ui.pet.choose') {
+        return deps.uiPetChooseAction
+          ? await deps.uiPetChooseAction({ input: PetChooseInputV1Schema.parse(parsed.data), context: ctx })
+          : clientActionUnavailable(actionId);
       }
       if (actionId === 'account.home_continuation.invoke') {
         return deps.accountHomeContinuationAction
