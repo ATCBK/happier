@@ -1,7 +1,11 @@
-import type { FileDisplayMode } from './FileActionToolbar';
 import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveVisibleAccountActorPresentation } from '@/sync/domains/account/accountActorPresentation';
+import type { WorkspaceFileEditorHeaderModel } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorHeaderModel';
+
+/** The page body's internal view enum; the segment labels (`FilePageMode`) are a view over it. */
+export type FileDisplayMode = 'file' | 'diff' | 'markdown';
+export type FileDiffMode = 'included' | 'pending' | 'both';
 
 export type FilePageMode = 'view' | 'preview' | 'source' | 'changes';
 export type FilePageModeOption = Readonly<{ id: FilePageMode; displayMode: FileDisplayMode }>;
@@ -42,4 +46,35 @@ export function resolveFilePageHeaderModel(input: Readonly<{
         : !input.writeSupported || input.deleted ? 'unsupported'
         : input.editorAvailable === false ? 'unavailable' : null;
     return { modes, findAvailable: input.hasText && !input.pluginViewerSelected, editUnavailableReason };
+}
+
+/** Edit → Done while clean → Save once dirty (lab delta 7); Save is the one primary only while it can save. */
+export type FilePageEditControl = Readonly<{
+    kind: 'edit' | 'done' | 'save';
+    onPress: () => void;
+    primary?: boolean;
+    busy?: boolean;
+    disabled?: boolean;
+}>;
+
+export function resolveFilePageEditControl(input: Readonly<{
+    fileEditorEnabled: boolean;
+    isEditingFile: boolean;
+    editor?: WorkspaceFileEditorHeaderModel;
+    onStart?: () => void;
+    onSave?: () => void;
+    onCancel?: () => void;
+}>): FilePageEditControl | null {
+    if (!input.fileEditorEnabled) return null;
+    if (!input.isEditingFile) return input.onStart ? { kind: 'edit', onPress: input.onStart } : null;
+    const status = input.editor?.status ?? 'clean';
+    // A standing conflict is resolved on its line (Compare · Use mine · Use {agent}'s); Save leaves the header.
+    if (status === 'conflict') return null;
+    if (status === 'clean') {
+        const done = input.editor?.onDone ?? input.onCancel;
+        return done ? { kind: 'done', onPress: done } : null;
+    }
+    const save = input.editor?.onSave ?? input.onSave;
+    if (!save) return null;
+    return { kind: 'save', onPress: save, busy: status === 'saving', primary: input.editor?.canSave !== false };
 }

@@ -1,4 +1,3 @@
-import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,7 +41,20 @@ vi.mock('expo-video', async () => {
         },
     };
 });
-import { FileBinaryState } from './FileScreenState';
+import { MediaPlayerBody } from './MediaPlayerBody';
+import { buildWorkspacePreviewIdentity } from '@/components/ui/media/buildWorkspacePreviewIdentity';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+
+/** The File page's video source: the workspace file at its stat revision, transfer-owned admission. */
+function videoSource(scope: WorkspaceScopeBase, revision: string | null | undefined) {
+    return {
+        source: { kind: 'workspace' as const, scope, filePath: 'clip.mp4' },
+        enabled: true,
+        mimeType: 'video/mp4',
+        maxBytes: null,
+        ...buildWorkspacePreviewIdentity(scope, 'clip.mp4', null, JSON.stringify([revision ?? null])),
+    };
+}
 import { Text } from 'react-native';
 import { useWorkspaceFileDetailsLoading } from '../details/workspaceFileDetails/useWorkspaceFileDetailsLoading';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
@@ -51,11 +63,9 @@ let currentScreen: Awaited<ReturnType<typeof renderScreen>> | null = null;
 async function waitForPlayer(screen: Awaited<ReturnType<typeof renderScreen>>) {
     await vi.waitFor(async () => { await flushHookEffects(); expect(screen.root.findAllByType('VideoView'), screen.getTextContent()).toHaveLength(1); });
 }
-const theme = createThemeFixture({ colors: { surface: { base: '#000', inset: '#000' }, border: { default: '#333' }, text: { secondary: '#ccc' } } });
 function file(revision = '[12,123]', focused = true, isActive = true) {
-    const props = { theme, filePath: 'clip.mp4', workspaceScope: harness.scope, videoMimeType: 'video/mp4', binaryPreviewRevision: revision, isActive };
     return <DestinationInstanceHost tabId="video" ref={{ kind: 'newTab', params: {} }} pathname="/" focused={focused} visible>
-        <FileBinaryState {...props} />
+        <MediaPlayerBody kind="video" title="clip.mp4" source={videoSource(harness.scope, revision)} isActive={isActive} />
     </DestinationInstanceHost>;
 }
 // Keep retained-details publication, workspace stat routing and encrypted prepared transfer real.
@@ -67,8 +77,8 @@ function RefreshedVideo({ snapshotSignature }: Readonly<{ snapshotSignature: str
     });
     return <DestinationInstanceHost tabId="video" ref={{ kind: 'newTab', params: {} }} pathname="/" focused visible>
         {state.error ? <Text testID="video-metadata-error">{state.error}</Text> : null}
-        {state.fileContent ? <FileBinaryState theme={theme} filePath="clip.mp4" workspaceScope={harness.scope}
-            videoMimeType="video/mp4" binaryPreviewRevision={state.fileContent.binaryPreviewRevision} isActive /> : null}
+        {state.fileContent ? <MediaPlayerBody kind="video" title="clip.mp4"
+            source={videoSource(harness.scope, state.fileContent.binaryPreviewRevision)} isActive /> : null}
     </DestinationInstanceHost>;
 }
 beforeEach(async () => { harness = await createWorkspaceFileDownloadHarness({ name: 'clip.mp4', bytes: new Uint8Array([1, 2, 3]) }); });

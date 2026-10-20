@@ -37,7 +37,7 @@ export function useSaveWorkspaceFileAsArtifact(input: Readonly<{
     }
     React.useEffect(() => () => { submission.current = null; }, []);
     const mounted = useMountedActionExecution(dialog.isOpen && dialog.identity === identity ? scope : null,
-        { openOnRequest: true, retainInvocation: true });
+        { openOnRequest: true });
     const client = React.useMemo(() => scope ? createArtifactActionsClient(scope, (actionId, actionInput, context) => mounted.execute(actionId, actionInput, {
         ...(context?.defaultSessionId ? { defaultSessionId: context.defaultSessionId } : {}),
         ...(context?.presentUserConfirmation ? { presentUserConfirmation: context.presentUserConfirmation } : {}),

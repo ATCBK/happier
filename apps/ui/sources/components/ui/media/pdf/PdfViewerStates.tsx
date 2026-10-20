@@ -1,0 +1,204 @@
+import * as React from 'react';
+import { View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+
+import { GlassPanel } from '@/components/ui/glass/GlassPanel';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import type { UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { t } from '@/text';
+
+import type { PdfViewPosition } from './pdfViewPosition';
+import type { PdfZoom } from './pdfZoom';
+
+/** How long the page pill stays after the reader stops scrolling (lab files FV5). */
+export const PDF_PAGE_PILL_IDLE_MS = 1200;
+/** The stage's reading column for a PDF item (lab files MS1f: page width = min(viewport − 64, 680)). */
+export const PDF_STAGE_COLUMN_MAX = 680;
+
+export type PdfPageInfo = Readonly<{ page: number; total: number }>;
+
+export type PdfViewerProps = Readonly<{
+  title: string;
+  source: UseFilePreviewSourceInput;
+  isActive: boolean;
+  /** The shared Find registration id (one per mounted viewer). */
+  findSurfaceId: string;
+  /** Controlled zoom; the page header's zoom menu and the per-file tab state own it. */
+  zoom: PdfZoom;
+  onZoomChange: (zoom: PdfZoom) => void;
+  /** Restored on open, persisted on leave (details-tab state). */
+  position?: PdfViewPosition | null;
+  onPositionChange?: (position: PdfViewPosition) => void;
+  onPageInfo?: (info: PdfPageInfo) => void;
+  /** The floating page pill; phones show the page in their bottom toolbar instead. */
+  showPagePill?: boolean;
+  /** `stage`: pages stand on the Media stage's own backdrop in a reading column (lab MS1f). */
+  presentation?: 'page' | 'stage';
+  onOpenInDefaultApp?: () => void;
+  testID?: string;
+}>;
+
+export type PdfViewerFailure = 'protected' | 'invalid' | 'failed';
+
+/** Protected and damaged PDFs share one calm page that hands off; failures keep the frame and retry. */
+export function PdfViewerFailureState(
+  props: Readonly<{
+    failure: PdfViewerFailure;
+    title: string;
+    diagnosticCode?: string | null;
+    onRetry: () => void;
+    onOpenInDefaultApp?: () => void;
+  }>,
+) {
+  const handoff = props.onOpenInDefaultApp
+    ? {
+        action: {
+          label: t('files.viewer.openInDefaultApp'),
+          onPress: props.onOpenInDefaultApp,
+        },
+      }
+    : {};
+  if (props.failure === 'protected' || props.failure === 'invalid') {
+    return (
+      <SurfaceStateCard
+        testID={`pdf-viewer-${props.failure}`}
+        kind="unavailable"
+        size="pane"
+        {...(props.failure === 'protected' ? { iconName: 'lock' as const } : {})}
+        title={
+          props.failure === 'protected'
+            ? t('files.viewer.pdfProtectedTitle')
+            : t('files.viewer.pdfDamagedTitle')
+        }
+        reason={
+          props.failure === 'protected'
+            ? t('files.viewer.pdfProtectedBody')
+            : t('files.viewer.pdfDamagedBody')
+        }
+        {...handoff}
+      />
+    );
+  }
+  return (
+    <SurfaceStateCard
+      testID="pdf-viewer-failed"
+      kind="error"
+      size="pane"
+      title={t('files.viewer.pdfFailed')}
+      diagnosticCode={props.diagnosticCode ?? null}
+      action={{ label: t('common.retry'), onPress: props.onRetry }}
+    />
+  );
+}
+
+export function PdfViewerLoadingState() {
+  return (
+    <SurfaceStateCard
+      testID="pdf-viewer-loading"
+      kind="loading"
+      size="pane"
+      title={t('files.viewer.pdfLoading')}
+    />
+  );
+}
+
+/** "3 / 14" while the reader moves; it settles away after a pause and never takes input. */
+export function PdfPagePill(
+  props: Readonly<{
+    info: PdfPageInfo | null;
+    zoomPercent: number | null;
+    tick: number;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const opacity = useSharedValue(0);
+  React.useEffect(() => {
+    if (!props.info || props.tick === 0) return;
+    opacity.value = withTiming(1, { duration: motionTokens.durationMs.fast });
+    const timer = setTimeout(() => {
+      opacity.value = withTiming(0, { duration: motionTokens.durationMs.base });
+    }, PDF_PAGE_PILL_IDLE_MS);
+    return () => clearTimeout(timer);
+  }, [opacity, props.info, props.tick]);
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  if (!props.info) return null;
+  const label = t('files.viewer.pdfPage', {
+    page: props.info.page,
+    total: props.info.total,
+  });
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[styles.pillDock, { bottom: theme.space.s16 }, style]}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <GlassPanel shadowLevel={2} innerShadow={false} style={styles.pill}>
+        <Text
+          variant="meta"
+          emphasis="semiBold"
+          style={[{ color: theme.colors.text.primary }, Typography.tabular()]}
+        >
+          {label}
+        </Text>
+        {props.zoomPercent !== null ? (
+          <Text
+            variant="meta"
+            style={[
+              { color: theme.colors.text.secondary },
+              Typography.tabular(),
+            ]}
+          >
+            {` · ${t('files.viewer.zoomPercent', { percent: props.zoomPercent })}`}
+          </Text>
+        ) : null}
+      </GlassPanel>
+    </Animated.View>
+  );
+}
+
+export function PdfViewerFrame(
+  props: Readonly<{ children: React.ReactNode; testID?: string; presentation?: 'page' | 'stage' }>,
+) {
+  return (
+    <View testID={props.testID} style={[styles.frame, props.presentation === 'stage' ? styles.stageFrame : null]}>
+      {props.children}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  stageFrame: {
+    backgroundColor: 'transparent',
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: PDF_STAGE_COLUMN_MAX + theme.space.s16 * 2,
+  },
+  frame: {
+    flex: 1,
+    alignSelf: 'stretch',
+    minHeight: 0,
+    backgroundColor: theme.colors.surface.inset,
+    justifyContent: 'center',
+  },
+  pillDock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: theme.space.s12,
+    paddingVertical: theme.space.s4,
+  },
+}));

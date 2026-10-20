@@ -8,6 +8,7 @@ import { usePluginSurfaceEnvironment } from './pluginSurfaceContext';
 import { resolvePluginUiFrameworkTranslations } from './pluginUiFrameworkTranslations';
 import { createPluginUiPrivatePresentationHost } from './pluginUiPrivatePresentationHost';
 import { projectPluginUiHostPalette } from './pluginUiThemeProjection';
+import { usePluginUiMediaStage } from './usePluginUiMediaStage';
 
 /** Core uses the same public presenters and real platform bindings as an installed plugin, without plugin state. */
 export function CorePluginUiPresentationScope(props: Readonly<{
@@ -21,13 +22,15 @@ export function CorePluginUiPresentationScope(props: Readonly<{
     [surface],
   );
   const { renderPageScroller } = props;
+  const mediaStage = usePluginUiMediaStage();
   const presentationHost = React.useMemo((): PluginUiPresentationHost => ({
     ...createPluginUiPrivatePresentationHost(undefined, {
       direction: surface.direction,
       palette: projectPluginUiHostPalette(theme),
+      mediaStage,
     }),
     ...(renderPageScroller === undefined ? {} : { renderPageScroller }),
-  }) as unknown as PluginUiPresentationHost, [renderPageScroller, surface.direction, theme]);
+  }) as unknown as PluginUiPresentationHost, [mediaStage, renderPageScroller, surface.direction, theme]);
   return <PluginUiHostPresentationScope environment={environment} presentationHost={presentationHost}>
     {props.children}
   </PluginUiHostPresentationScope>;

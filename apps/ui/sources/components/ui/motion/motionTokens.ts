@@ -80,6 +80,13 @@ export const motionTokens = {
      * grows over `frameMs`, the tiles it covers fade in `coveredFadeMs`, and its content arrives
      * `contentDelayMs` in. Reduced motion swaps at once with a `reducedCrossFadeMs` cross-fade.
      */
+    /**
+     * The Media stage (lab files MS1k): the picture flies on `useRectFlip`, the backdrop rides the same
+     * progress, and the floating chrome fades in at `durationMs.fast` once the flight is `chromeDelayMs` in.
+     */
+    mediaStage: {
+        chromeDelayMs: 80,
+    },
     inPlaceMorph: {
         frameMs: 240,
         coveredFadeMs: 120,

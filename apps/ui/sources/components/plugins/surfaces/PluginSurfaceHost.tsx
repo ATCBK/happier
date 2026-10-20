@@ -71,6 +71,7 @@ import type {
     SurfaceContext,
 } from '@happier-dev/plugin-sdk/ui';
 import { projectHappierUiEnvironment } from '@happier-dev/plugin-ui/environment';
+import { usePluginUiMediaStage } from './usePluginUiMediaStage';
 import { PluginHostApiProvider } from '@happier-dev/plugin-ui/advanced';
 import type { PluginUiDataClient } from '@happier-dev/plugin-ui/data';
 
@@ -1651,6 +1652,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
     const hostStateSize = useSurfaceStateSize();
     const destinationRowRenderer = usePluginDestinationRowRenderer();
     const findRegistrationHost = useFindSurfaceRegistrationHost();
+    const mediaStage = usePluginUiMediaStage();
     const renderDestinationRow = React.useCallback((input: PluginDestinationRowInput) => destinationRowRenderer({
         ...input,
         destination: qualifyPluginContributionReferenceV1(input.destination, canonicalRenderIdentity.pluginId),
@@ -1661,6 +1663,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
             {
                 pluginId: canonicalRenderIdentity.pluginId,
                 direction: environment.direction,
+                mediaStage,
                 renderLiveStream: (input) => <PluginLiveStreamViewer {...input} hostApi={props.hostApi}
                     surface={props.requestSurface} mountLifetime={props.mountLifetime} readViewing={props.readLiveStreamViewing}
                     machineId={props.liveStreamMachineId} serverId={props.liveStreamServerId} />,
@@ -1711,6 +1714,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
             renderDestinationRow,
             props.renderWidgetArea,
             findRegistrationHost,
+            mediaStage,
             props.entityDragBinding,
             hostStateSize,
             detailsPaneBinding,

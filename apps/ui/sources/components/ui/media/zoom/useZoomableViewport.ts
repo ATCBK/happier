@@ -295,5 +295,5 @@ export function useZoomableViewport(input: ZoomableViewportInput) {
         },
     }), [dpr, image, publishSettled, scale, stopMotion, translationX, translationY, viewport]);
 
-    return { gesture, scale, translationX, translationY, pageTranslation, contentStyle, dismissStyle, backdropStyle, pageStyle, wheelHandlers, fit, actual, zoomIn, zoomOut, zoomAt };
+    return { gesture, scale, translationX, translationY, dismissX, dismissY, pageTranslation, contentStyle, dismissStyle, backdropStyle, pageStyle, wheelHandlers, fit, actual, zoomIn, zoomOut, zoomAt };
 }

@@ -24,6 +24,9 @@ export type FileMenuContext = Readonly<{
     copyContents?: FileMenuRun;
     selectLines?: FileMenuRun;
     revealInFiles?: FileMenuRun;
+    openChanges?: FileMenuRun;
+    /** P4: leave editing and drop the unsaved draft (the editor's own owner decides what that means). */
+    discardEdits?: FileMenuRun;
     toggleBlame?: FileMenuRun;
     commands?: Partial<Readonly<Record<'code.goToDefinition' | 'code.showInfo' | 'code.restart', FileMenuRun>>>;
     changes?: Readonly<{ discardAll?: FileMenuRun; restoreBeforeTurn?: FileMenuRun; restoreBeforeTurnTitle?: string }>;
@@ -93,7 +96,9 @@ export const FILE_MENU_ITEMS: readonly FileMenuItem[] = [
     item({ id: 'copyContents', group: 'view', titleKey: 'files.pane.menu.copyContents', callback: c => c.copyContents, surfaces: pageSurfaces, requiresContent: true }),
     item({ id: 'selectLines', group: 'view', titleKey: 'files.fileActions.selectLines', callback: c => c.selectLines,
         surfaces: pageSurfaces, visible: c => !c.partial && !c.isDirectory }),
+    item({ id: 'discardEdits', group: 'view', titleKey: 'files.pane.page.discardEdits', callback: c => c.discardEdits, surfaces: pageSurfaces }),
     item({ id: 'revealInFiles', group: 'view', titleKey: 'files.pane.menu.revealInFiles', callback: c => c.revealInFiles, surfaces: pageSurfaces }),
+    item({ id: 'openChanges', group: 'view', titleKey: 'files.openChanges', callback: c => c.openChanges, surfaces: pageSurfaces }),
     item({ id: 'blame', group: 'code', titleKey: 'files.pane.menu.showBlame', callback: c => c.toggleBlame,
         surfaces: pageSurfaces, visible: c => c.readBlame === true && !c.isDirectory }),
     ...(['code.goToDefinition', 'code.showInfo', 'code.restart'] as const).map(id => item({

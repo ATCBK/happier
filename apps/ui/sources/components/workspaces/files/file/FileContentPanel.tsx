@@ -2,9 +2,15 @@ import * as React from 'react';
 import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
-import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
+import { CodeLinesView, type CodeLinesViewProps } from '@/components/ui/code/view/CodeLinesView';
+import { cancelAnimation, useSharedValue, withTiming } from 'react-native-reanimated';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
+import type { WorkspaceFileLiveMoment } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileLiveMoment';
 import { CODE_GUTTER_METRICS, resolveCodeEditorLineNumberDigits } from '@/components/ui/code/editor/codeEditorFontMetrics';
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
+import type { DiffViewerHunks } from '@/components/ui/code/diff/diffViewerTypes';
+import type { ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences';
 import { MarkdownView, type MarkdownSourceRange, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
 import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
@@ -30,7 +36,7 @@ import { ReviewCommentSavedDrafts } from '@/components/ui/code/reviewComments/Re
 import { isWorkspaceFileReferenceAnchorForFile } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
 import { useMarkdownReadingAnchor } from './useMarkdownReadingAnchor';
 import { useFileContentScrollTarget } from './useFileContentScrollTarget';
-import type { FileDisplayMode } from './FileActionToolbar';
+import type { FileDisplayMode } from './filePageModel';
 import type { FileViewerFindSnapshot } from '@/components/workspaces/files/details/useFileViewerFind';
 
 const MARKDOWN_PREVIEW_WIDE_VIEWPORT_WIDTH = 768;
@@ -50,6 +56,10 @@ type FileContentPanelProps = {
     sessionId: string;
     filePath: string;
     diffContent: string | null;
+    /** Changes mode: per-change rows and the current change from the File page review owner. */
+    hunks?: DiffViewerHunks;
+    reviewUnits?: readonly ReviewUnit[];
+    reviewScrollToLineId?: string;
     fileContent: string | null;
     language: string | null;
     syntaxHighlighting?: CodeLinesSyntaxHighlightingConfig;
@@ -68,6 +78,13 @@ type FileContentPanelProps = {
     rangeSelectionActive?: boolean;
     jumpToAnchor?: ReviewCommentAnchor | null;
     find?: FileViewerFindSnapshot;
+    /** A lane before the line numbers (the Blame region's run column), in View and Changes. */
+    renderLeadingLane?: CodeLinesViewProps['renderLeadingLane'];
+    /**
+     * An agent's write landed while you read (P3-R8): its new lines take the add tint once and fade over
+     * `liveEdit.flashMs`; a later batch redirects the running fade from where it is, never back to full.
+     */
+    liveMoment?: WorkspaceFileLiveMoment | null;
     scrollTestID?: string;
     onLayout?: (e: any) => void;
     onContentSizeChange?: (width: number, height: number) => void;
@@ -168,6 +185,9 @@ function FileContentPanelInner({
     sessionId: _sessionId,
     filePath,
     diffContent,
+    hunks,
+    reviewUnits,
+    reviewScrollToLineId,
     fileContent,
     language,
     syntaxHighlighting,
@@ -186,6 +206,8 @@ function FileContentPanelInner({
     rangeSelectionActive,
     jumpToAnchor,
     find,
+    renderLeadingLane,
+    liveMoment,
     scrollTestID,
     onLayout,
     onContentSizeChange,
@@ -311,7 +333,7 @@ function FileContentPanelInner({
         return null;
     }, [displayMode, jumpToAnchor]);
 
-    const scrollToLineId = useFileContentScrollTarget(jumpHighlight?.scrollToLineId, find);
+    const scrollToLineId = useFileContentScrollTarget(jumpHighlight?.scrollToLineId ?? reviewScrollToLineId, find);
 
     React.useEffect(() => {
         if (displayMode === 'markdown' && find?.open && find.markdownLineTarget !== null) {
@@ -478,6 +500,7 @@ function FileContentPanelInner({
         return false;
     }, [byteThreshold, diffContent, displayMode, fileContent, lineThreshold, reviewCommentControlsEnabled]);
 
+    const liveTint = useFileLiveEditTint(liveMoment ?? null, lines);
     const fileCodeView = fileContent && displayMode === 'file'
         ? (
             <CodeLinesView
@@ -491,6 +514,8 @@ function FileContentPanelInner({
                 onPressAddComment={reviewCommentLineActionsEnabled ? reviewCommentControls?.onPressAddComment : undefined}
                 isCommentActive={reviewCommentControls?.isCommentActive}
                 renderAfterLine={reviewCommentControls?.renderAfterLine}
+                renderLeadingLane={renderLeadingLane}
+                liveTint={liveTint}
                 contentPaddingHorizontal={16}
                 contentPaddingVertical={16}
                 externalScrollView={!virtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
@@ -520,6 +545,8 @@ function FileContentPanelInner({
                 mode="unified"
                 filePath={filePath}
                 unifiedDiff={diffContent}
+                hunks={hunks}
+                reviewUnits={reviewUnits}
                 selectedLineIds={selectedLineIds}
                 interactionMode={codeLineInteractionMode}
                 rangeSelectionActive={rangeSelectionActive}
@@ -529,6 +556,7 @@ function FileContentPanelInner({
                 onPressAddComment={reviewCommentLineActionsEnabled ? reviewCommentControls?.onPressAddComment : undefined}
                 isCommentActive={reviewCommentControls?.isCommentActive}
                 renderAfterLine={reviewCommentControls?.renderAfterLine}
+                renderLeadingLane={renderLeadingLane}
                 contentPaddingHorizontal={16}
                 contentPaddingVertical={16}
                 externalScrollView={!effectiveDiffVirtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
@@ -671,6 +699,24 @@ function FileContentPanelInner({
             )}
         </View>
     );
+}
+
+/** One shared clock for a live-edit batch: full tint at once, then fade; a newer batch fades on from the current value. */
+function useFileLiveEditTint(moment: WorkspaceFileLiveMoment | null, lines: readonly CodeLine[]) {
+    const opacity = useSharedValue(0);
+    const changed = moment?.changedLines;
+    const lineIds = React.useMemo(() => {
+        if (!changed || changed.length === 0) return null;
+        const wanted = new Set(changed);
+        return new Set(lines.filter((line) => line.newLine !== null && wanted.has(line.newLine)).map((line) => line.id));
+    }, [changed, lines]);
+    React.useEffect(() => {
+        if (!lineIds || lineIds.size === 0) return;
+        cancelAnimation(opacity);
+        if (opacity.value <= 0) opacity.value = 1;
+        opacity.value = withTiming(0, { duration: motionTokens.liveEdit.flashMs, easing: reanimatedMotionTokens.easing.standard });
+    }, [lineIds, opacity]);
+    return React.useMemo(() => lineIds && lineIds.size > 0 ? { lineIds, opacity } : undefined, [lineIds, opacity]);
 }
 
 export const FileContentPanel = React.memo(FileContentPanelInner, areFileContentPanelPropsEqual);

@@ -169,6 +169,11 @@ const lightThemeBase = {
             scrim: 'rgba(0, 0, 0, 0.45)',
             scrimStrong: 'rgba(255, 255, 255, 0.68)',
             scrimWizard: 'rgba(255, 255, 255, 0.52)',
+            // The Media stage's immersive backdrop: near-black in every theme, so a picture reads as on a
+            // darkened screen whatever the page colour (lab files MS1i).
+            stageImmersive: '#0C0B0B',
+            // Always-white paper: PDF pages and the Light media background, the same in every theme.
+            mediaPaper: '#FFFFFF',
             foreground: '#FFFFFF',
             secondaryForeground: 'rgba(255, 255, 255, 0.9)',
         },
@@ -519,6 +524,9 @@ const darkThemeBase = {
             scrim: 'rgba(19,17,17,0.72)',
             scrimStrong: 'rgba(19,17,17,0.86)',
             scrimWizard: 'rgba(19,17,17,0.78)',
+            stageImmersive: '#0C0B0B',
+            // Always-white paper: PDF pages and the Light media background, the same in every theme.
+            mediaPaper: '#FFFFFF',
             foreground: '#EFEFEF',
             secondaryForeground: '#8A817C',
         },

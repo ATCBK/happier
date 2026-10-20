@@ -1,17 +1,6 @@
-import { Image, View } from 'react-native';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
-import { Modal } from '@/modal';
 
-import { Text } from '@/components/ui/text/Text';
-import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { FileVideoPreview } from './FileVideoPreview';
-import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-
-type FileStateProps = {
-    theme: any;
-};
 
 function getBasename(path: string): string {
     const parts = path.split(/[\\/]/);
@@ -40,106 +29,5 @@ export function FileErrorState({ filePath, error, onRetry }: { filePath: string;
             detail={filePath}
             action={{ label: t('surfaceState.tryAgain'), onPress: onRetry }}
         />
-    );
-}
-
-export function FileBinaryState({
-    theme,
-    filePath,
-    imagePreviewUri,
-    workspaceScope,
-    videoMimeType,
-    binaryPreviewRevision,
-    isActive = true,
-}: FileStateProps & {
-    filePath: string;
-    imagePreviewUri?: string | null;
-    workspaceScope?: WorkspaceScopeBase | null;
-    videoMimeType?: string | null;
-    binaryPreviewRevision?: string | null;
-    isActive?: boolean;
-}) {
-    if (workspaceScope && videoMimeType) {
-        return <View style={{ padding: theme.space.s20, alignItems: 'center' }}>
-            <FileVideoPreview workspaceScope={workspaceScope} filePath={filePath} mimeType={videoMimeType}
-                revision={binaryPreviewRevision} isActive={isActive} />
-        </View>;
-    }
-    return (
-        <View
-            style={{
-                flex: 1,
-                backgroundColor: theme.colors.surface.base,
-                justifyContent: 'center',
-                alignItems: 'center',
-                padding: theme.space.s20,
-            }}
-        >
-            {typeof imagePreviewUri === 'string' && imagePreviewUri.trim().length > 0 ? (
-                <HappierPressable
-                    testID="file-image-preview"
-                    accessibilityRole="button"
-                    accessibilityLabel={`${t('common.open')}: ${filePath}`}
-                    disabled={!workspaceScope}
-                    onPress={async () => {
-                        if (!workspaceScope) return;
-                        const { AttachmentImagePreviewModal } = await import('@/components/sessions/attachments/preview/AttachmentImagePreviewModal');
-                        Modal.show({
-                            component: AttachmentImagePreviewModal,
-                            props: { images: [{ kind: 'direct', uri: imagePreviewUri, title: getBasename(filePath) }] },
-                        });
-                    }}
-                    style={{
-                        width: '100%',
-                        maxWidth: 720,
-                        height: 320,
-                        borderRadius: 12,
-                        overflow: 'hidden',
-                        borderWidth: 1,
-                        borderColor: theme.colors.border.default,
-                        backgroundColor: theme.colors.surface.inset ?? theme.colors.surface.base,
-                        marginBottom: 14,
-                    }}
-                >
-                    <Image
-                        source={{ uri: imagePreviewUri }}
-                        resizeMode="contain"
-                        style={{ width: '100%', height: '100%' }}
-                        accessibilityLabel={t('files.binaryFile')}
-                    />
-                </HappierPressable>
-            ) : null}
-            <Text
-                style={{
-                    fontSize: 18,
-                    color: theme.colors.text.secondary,
-                    marginBottom: theme.space.s8,
-                    ...Typography.default('semiBold'),
-                }}
-            >
-                {t('files.binaryFile')}
-            </Text>
-            <Text
-                style={{
-                    fontSize: 16,
-                    color: theme.colors.text.secondary,
-                    textAlign: 'center',
-                    ...Typography.default(),
-                }}
-            >
-                {t('files.cannotDisplayBinary')}
-            </Text>
-            <Text
-                style={{
-                    fontSize: 14,
-                    color: theme.colors.text.secondary,
-                    textAlign: 'center',
-                    marginTop: theme.space.s8,
-                    ...Typography.default(),
-                }}
-            >
-                {filePath}
-            </Text>
-        </View>
     );
 }
