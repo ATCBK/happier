@@ -8,7 +8,7 @@ import { useSessionListRuntimeNowMs, useSessionListRuntimeWake } from '@/hooks/s
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { storage } from '@/sync/domains/state/storageStore';
-import { presentSessionAwarenessV1, readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
+import { presentSessionAwarenessV1, readSessionStatusLifecycleState, readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
 
 /** Tab chrome consumes the same Home-scoped summary and awareness answer as Session rows. */
 export function useDestinationInstanceTabPresentations(entries: readonly DestinationInstanceTitleEntry[]): ReadonlyMap<string, DocumentTabPresentation> {
@@ -26,7 +26,9 @@ export function useDestinationInstanceTabPresentations(entries: readonly Destina
         if (!row) return;
         const refreshAtMs = readSessionStatusNextRefreshAtMs(row, nowMs);
         if (refreshAtMs !== null) nextWakeAtMs = nextWakeAtMs === null ? refreshAtMs : Math.min(nextWakeAtMs, refreshAtMs);
-        const presentation = presentSessionAwarenessV1(projectUiSessionAwareness(row, nowMs));
+        const presentation = presentSessionAwarenessV1(projectUiSessionAwareness(row, nowMs), {
+            lifecycleState: readSessionStatusLifecycleState(row), disconnectedTextMode: 'offline',
+        });
         let tone: NonNullable<DocumentTabPresentation['status']>['tone'];
         switch (presentation.state) {
             case 'thinking':
