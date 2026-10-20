@@ -135,8 +135,10 @@ Monitor runs through the discovered action contract: use start-and-wait or `exec
   reports or long board threads.
 - **UI routing:** Sonnet high for specified fix lists and after-pair checks first; Opus medium (`ui-build-opus`) for
   composition/recomposition; Opus high only for final whole-page acceptance. Pin effort in every agent definition (agents
-  without one inherit the session's effort). Claude limits are per account (Sonnet and Opus stop together): about 3
-  concurrent Claude UI lanes across all programs.
+  without one inherit the session's effort). There is no cap on concurrent Claude lanes (owner, 2026-10-20): Happier
+  rotates connected Claude accounts on usage limits. Keep the Claude/Codex routing and lean briefs above; parallelism
+  is limited only by real prerequisites (a live render path, one composition owner per surface, one lifecycle owner per
+  QA stack).
 - **Fewer wakes:** watchers cap at 45–60 min and fire on finished/blocked lines; batch decisions per wake. Orchestrator
   sessions run at medium effort while monitoring and raise effort only for synthesis or rulings.
 - **Board replies ≤ 15 lines** with pointers to lane reports.
@@ -174,9 +176,10 @@ Monitor runs through the discovered action contract: use start-and-wait or `exec
   them. A lane-specific net-negative LOC gate is allowed when measured god-file contraction is the
   explicit outcome; it is not a universal architecture or review rule.
 - **Coordinate real collisions, not dirty files.** Uncommitted and concurrently edited files are
-  normal shared state and do not reserve a file. Inspect current bytes and layer compatible changes;
-  coordinate only overlapping hunks, incompatible decisions for one live seam, generated outputs
-  with one producer, destructive moves/rewrites, or exclusive mutable runtime resources.
+  normal shared state and do not reserve a file. Lanes may edit the same files and hunks at once
+  (owner, 2026-10-18 and 2026-10-20): re-read current bytes and merge. Coordinate only incompatible
+  decisions for one live seam, generated outputs with one producer, destructive moves/rewrites, or
+  exclusive mutable runtime resources; never make a lane wait for another lane's files.
 - **Never ask a lane to prove an attribution negative.** A brief demanding "include pre-existing
   failures you did NOT cause" makes the lane establish a clean basis, and the standard procedure for
   that is stashing or checking out — which sweeps the shared checkout. Ask instead for failures
