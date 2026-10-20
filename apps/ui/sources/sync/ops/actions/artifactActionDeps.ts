@@ -156,8 +156,9 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
                 }
                 case 'artifact.get': {
                     const args = ArtifactActionInputSchemasV1[actionId].parse(input);
-                    const artifact = await account.fetchArtifact(args.artifactId, { signal,
-                        ...('readOnly' in invocation && invocation.readOnly ? { prepareRecipientKeys: false } : {}) });
+                    const readOnly = 'readOnly' in invocation && invocation.readOnly === true;
+                    const artifact = await (readOnly ? account.readArtifact : account.fetchArtifact)(args.artifactId, { signal,
+                        ...(readOnly ? { prepareRecipientKeys: false } : {}) });
                     if (!artifact) return { artifact: null };
                     if (!artifact.isDecrypted || !artifact.rawHeader || artifact.bodyVersion === undefined) throw Object.assign(new Error('content_unavailable'), { code: 'content_unavailable' });
                     return { artifact: ArtifactDocumentV1Schema.parse({ artifactId: artifact.id, header: artifact.rawHeader, body: artifact.body,

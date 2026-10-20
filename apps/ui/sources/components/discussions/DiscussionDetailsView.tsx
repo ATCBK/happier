@@ -37,7 +37,7 @@ import { Text, TextInput } from '@/components/ui/text/Text';
 import { ReplyQuote } from '@/components/ui/text/ReplyQuote';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import { ArtifactPassageQuote } from '@/components/artifacts/ArtifactPassageQuote';
-import { ArtifactEditProposal } from '@/components/artifacts/ArtifactEditProposal';
+import { ArtifactEditProposal, type AdmittedDocRead } from '@/components/artifacts/ArtifactEditProposal';
 import { createArtifactActionsClient, type ArtifactActionsClient } from '@/components/artifacts/artifactActionsClient';
 import { buildDiscussionRouteHref } from './discussionRoutes';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
@@ -45,7 +45,10 @@ import { Avatar } from '@/components/ui/avatar/Avatar';
 import { AvatarStack } from '@/components/ui/avatar/AvatarStack';
 import { DetailsTabHeader, type DetailsTabHeaderMetaFact } from '@/components/appShell/panes/details/header/DetailsTabHeader';
 import { artifactViewRoute } from '@/components/artifacts/artifactBrowserModel';
-import { useArtifact, useDiscussionRequesterApprovals } from '@/sync/domains/state/storage';
+import { getStorage, useArtifact, useDiscussionRequesterApprovals } from '@/sync/domains/state/storage';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { ApprovalRequesterThreadCard } from '@/components/approvals/ApprovalRequesterThreadCard';
 import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
@@ -486,6 +489,49 @@ type DiscussionSource = Readonly<{
 }>;
 const NO_SOURCE_SUBAGENTS: ReturnType<typeof useSessionAgentActivityRoster>['subagents'] = Object.freeze([]);
 const readNoSourceExecutionRunEntry: ReturnType<typeof useSessionAgentActivityRoster>['readExecutionRunEntry'] = () => null;
+const LOADING_PROPOSAL_DOC: AdmittedDocRead = Object.freeze({ status: 'loading' });
+type ProposalDocObservation = Readonly<{ client: ArtifactActionsClient; read: AdmittedDocRead }>;
+type ReportProposalDocRead = (artifactId: string, client: ArtifactActionsClient, read: AdmittedDocRead | null) => void;
+
+/** One admitted current Doc basis for the shown cards that refer to it, in this Discussion's Home. */
+function DiscussionProposalDocRead(props: Readonly<{
+    artifactId: string;
+    client: ArtifactActionsClient;
+    accountLifetime: ServerCredentialAccountScopeBinding;
+    onRead: ReportProposalDocRead;
+}>) {
+    const { artifactId, client, accountLifetime, onRead } = props;
+    const revisionKey = getStorage()(state => {
+        if (!areServerAccountScopesEqual(state.profileScope, client.scope)) return '';
+        const artifact = state.artifacts[artifactId];
+        return artifact ? JSON.stringify([artifact.headerVersion, artifact.bodyVersion, artifact.seq,
+            artifact.access, artifact.ownerAccountId, artifact.publicAudience]) : '';
+    });
+    const [wake, setWake] = React.useState<object | null>(null);
+    React.useEffect(() => subscribeHomeAccountChange(event => {
+        if (!areServerProfileIdentifiersEquivalent(event.serverId, client.scope.serverId)
+            || (event.changeKinds && !event.changeKinds.includes('artifact'))
+            || (event.entityIds && !event.entityIds.includes(artifactId))) return;
+        setWake(event);
+    }), [artifactId, client]);
+    React.useEffect(() => {
+        let current = true;
+        onRead(artifactId, client, LOADING_PROPOSAL_DOC);
+        const retirement = accountLifetime.onRetire(() => {
+            current = false;
+            onRead(artifactId, client, { status: 'unavailable' });
+        });
+        if (accountLifetime.isCurrent()) {
+            void client.readDoc({ ref: { kind: 'doc', artifactId } }).then(outcome => {
+                if (!current || !accountLifetime.isCurrent()) return;
+                onRead(artifactId, client, outcome.ok ? { status: 'ready', value: outcome.value } : { status: 'unavailable' });
+            });
+        } else onRead(artifactId, client, { status: 'unavailable' });
+        return () => { current = false; retirement.dispose(); };
+    }, [accountLifetime, artifactId, client, onRead, revisionKey, wake]);
+    React.useEffect(() => () => onRead(artifactId, client, null), [artifactId, client, onRead]);
+    return null;
+}
 
 /**
  * Source-only subscriptions mount only when the resource actually has a Session anchor. A memoized leaf: it
@@ -948,6 +994,36 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
             token.isViewable !== false && token.item?.kind === 'human_message' ? [token.item.message.id] : []
         ))));
     }, []);
+    const shownProposalDocs = React.useMemo(() => props.active && hostViewed && (props.standaloneSurface || surfaceVisible)
+        ? [...new Set(messages.flatMap(message => visibleMessageIds.has(message.id)
+            && message.content && isDiscussionDocEditProposalContentV1(message.content)
+            && (!message.docEditProposalDispositionV1 || message.docEditProposalDispositionV1.state === 'open')
+                ? [message.content.proposal.target.ref.artifactId] : []))]
+        : [], [hostViewed, messages, props.active, props.standaloneSurface, surfaceVisible, visibleMessageIds]);
+    const [proposalDocReads, setProposalDocReads] = React.useState<Readonly<Record<string, ProposalDocObservation>>>({});
+    const reportProposalDocRead = React.useCallback<ReportProposalDocRead>((artifactId, client, read) => {
+        setProposalDocReads(previous => {
+            if (read === null) {
+                if (previous[artifactId]?.client !== client) return previous;
+                const next = { ...previous };
+                delete next[artifactId];
+                return next;
+            }
+            if (previous[artifactId]?.client === client && previous[artifactId]?.read === read) return previous;
+            return { ...previous, [artifactId]: { client, read } };
+        });
+    }, []);
+    const readProposalDoc = (artifactId: string): AdmittedDocRead => {
+        const entry = proposalDocReads[artifactId];
+        return shownProposalDocs.includes(artifactId) && entry?.client === proposalClient ? entry.read : LOADING_PROPOSAL_DOC;
+    };
+    // Legend retains its renderItem through refs; currentness/refusal must reach its mounted cells.
+    const rowsVersion = JSON.stringify([requesterApprovalsVersion, shownProposalDocs.map(artifactId => {
+        const read = readProposalDoc(artifactId);
+        return read.status === 'ready'
+            ? [artifactId, read.status, read.value.artifact.revision, read.value.artifact.seq, read.value.artifact.access]
+            : [artifactId, read.status];
+    })]);
     const readableVisibleSeqs = React.useMemo(
         () => resolveReadableVisibleDiscussionSeqs({ messages, visibleMessageIds, lastReadSeq: discussion?.lastReadSeq ?? null }),
         [discussion?.lastReadSeq, messages, visibleMessageIds],
@@ -1070,6 +1146,8 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         </View>}
     /> : null;
     return <TranscriptMessageSelectionBoundary sessionId={dataKey} eligibleMessageIdsInOrder={selectableMessages.map((message) => message.id)}>
+        {shownProposalDocs.map(artifactId => <DiscussionProposalDocRead key={artifactId} artifactId={artifactId}
+            client={proposalClient} accountLifetime={props.accountLifetime} onRead={reportProposalDocRead} />)}
         <View style={styles.root} testID="session-discussion-details">
             {phoneHeader ?? <DetailsTabHeader
                 testID="session-discussion-header"
@@ -1123,7 +1201,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     key={dataKey}
                     dataKey={dataKey}
                     data={items}
-                    extraData={requesterApprovalsVersion}
+                    extraData={rowsVersion}
                     frame={frame}
                     webDomObservation={observation}
                     keyExtractor={(item) => item.kind === 'human_message' ? `message:${item.message.localId ?? item.message.id}` : item.kind === 'workflow_run' ? `workflow:${item.run.id}` : `run:${item.entry.runId ?? item.subagent.id}`}
@@ -1165,6 +1243,8 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             resolveAccountLabel={resolveAccountLabel}
                             resolveSessionLabel={resolveSessionLabel}
                             proposalClient={proposalClient}
+                            proposalDocRead={item.message.content && isDiscussionDocEditProposalContentV1(item.message.content)
+                                ? readProposalDoc(item.message.content.proposal.target.ref.artifactId) : LOADING_PROPOSAL_DOC}
                             viewerAccountId={props.scope.accountId}
                             attributionLine={resolveDiscussionReplyAttributionLine(item.message, props.scope,
                                 item.message.producerV1 ? resolveSessionLabel(item.message.producerV1.sessionId) : null)}
@@ -1274,6 +1354,7 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
     /** The Session that answered, named through this Home's title projection; null when not readable here. */
     agentLabel: string | null;
     proposalClient: ArtifactActionsClient;
+    proposalDocRead: AdmittedDocRead;
     viewerAccountId: string;
     /** "Asked by … · answered by …" from the reply's stamped cause; null when no person asked. */
     attributionLine: string | null;
@@ -1364,6 +1445,7 @@ const DiscussionMessageRow = React.memo((props: Readonly<{
                                     reason: t('session.collaboration.discussion.quote.unavailable') }} /> : null}
             {message.content && isDiscussionDocEditProposalContentV1(message.content)
                 ? <ArtifactEditProposal testID={`discussion-proposal-${message.id}`} client={props.proposalClient}
+                    docRead={props.proposalDocRead}
                     proposalRef={message.messageRef ?? null} proposal={message.content.proposal}
                     disposition={message.docEditProposalDispositionV1} viewerAccountId={props.viewerAccountId}
                     resolveAccountLabel={props.resolveAccountLabel}

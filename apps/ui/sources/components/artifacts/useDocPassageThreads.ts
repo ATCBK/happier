@@ -8,10 +8,8 @@ import { useSessionCollaborationAvailability } from '@/hooks/session/useSessionC
 import { createDiscussionClient } from '@/sync/api/discussions/discussionActions';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
-import type {
-  DiscussionRepository,
-  DiscussionRepositorySnapshot,
-} from '@/sync/ops/discussions/discussionRepository';
+import type { DiscussionRepository } from '@/sync/ops/discussions/discussionRepository';
+import { useDiscussionDocSnapshot } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
 
 export type DocPassageThreadsRead = Readonly<{
   status: 'loading' | 'ready' | 'unavailable';
@@ -30,8 +28,6 @@ const UNAVAILABLE: DocPassageThreadsRead = Object.freeze({
   mountThread: () => () => {},
   threads: Object.freeze([]),
 });
-const emptySubscribe = () => () => {};
-const emptySnapshot = () => null;
 
 /**
  * The passage threads of one Doc in its Home: C3's Doc-scoped list (`discussion.list` with
@@ -69,12 +65,7 @@ export function useDocPassageThreads(
         : null,
     [binding, client],
   );
-  const snapshot: DiscussionRepositorySnapshot | null =
-    React.useSyncExternalStore(
-      repository?.subscribe ?? emptySubscribe,
-      repository?.getSnapshot ?? emptySnapshot,
-      repository?.getSnapshot ?? emptySnapshot,
-    );
+  const snapshot = useDiscussionDocSnapshot(repository, input.artifactId);
   React.useEffect(() => {
     if (!repository) return;
     const controller = new AbortController();
@@ -92,7 +83,7 @@ export function useDocPassageThreads(
 
   return React.useMemo(() => {
     if (!usable) return UNAVAILABLE;
-    const query = repository?.getDocListSnapshot(input.artifactId);
+    const query = snapshot?.query;
     if (!query || query.status === 'idle' || query.status === 'loading')
       return { status: 'loading', threads: [], membership: null, mountThread };
     if (query.status !== 'ready' || query.incomplete || query.nextCursor !== null) return UNAVAILABLE;
@@ -100,7 +91,7 @@ export function useDocPassageThreads(
     for (const summary of query.items) {
       const discussionId = summary.id;
       const thread = snapshot?.threads[discussionId];
-      if (!thread?.summary || thread.status === 'revoked'
+      if (!thread?.summary || thread.revoked
         || !thread.messages.find(message => message.seq === 1)?.content) return UNAVAILABLE;
       if (thread.summary.archivedAt !== null) continue;
       threads.push({ discussionId, summary: thread.summary, messages: thread.messages });

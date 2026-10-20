@@ -753,12 +753,17 @@ describe('scoped Account workflow Artifact operations', () => {
         const account = await captureLazyActionAccountContext(home.id);
         try {
             expect(storage.getState().artifacts[artifactId]).toBeUndefined();
-            await account.fetchArtifact(artifactId);
+            const artifactAction = createUiArtifactAction(account);
+            const invocation = { actionId: 'artifact.get' as const, input: { artifactId }, context: { surface: 'ui' as const } };
+            const quiet = await artifactAction({ ...invocation, readOnly: true });
+            expect(quiet).toMatchObject({ artifact: { artifactId, body: 'readable', revision: { headerVersion: 1, bodyVersion: 1 } } });
+            expect(storage.getState().artifacts[artifactId]).toBeUndefined();
+            expect(await artifactAction(invocation)).toEqual(quiet);
             const published = storage.getState().artifacts[artifactId];
             // One admitted read is not the list: the Library must keep loading, not show its first-visit state.
             expect(storage.getState().artifactsLoaded).toBe(false);
             expect(published).toMatchObject({ access: 'view', ownerAccountId: 'owner', isDecrypted: true, body: 'readable' });
-            await account.fetchArtifact(artifactId);
+            await artifactAction(invocation);
             expect(storage.getState().artifacts[artifactId]).toBe(published);
             await account.artifactAccessGrants.remove({ artifactId, principal: { kind: 'account', accountId: 'artifact-account' } });
             expect(storage.getState().artifacts[artifactId]).toBeUndefined();
