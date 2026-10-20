@@ -3864,9 +3864,11 @@ the canonical file classifier, then materialized as a local Blob URL on web or
 a private cache file on native. That owner releases temporary URIs, including a
 load retired before it completes. Artifact previews also obey the existing web
 whole-file buffering budget (50 MB); Download remains available when a preview
-cannot fit. PDFs render through the host's pdf.js implementation rather than a
-browser PDF frame. SVG is rendered as an image, with the native validator
-rejecting active content. This authenticated-app path does not change the
+cannot fit. The shared pdf.js and validated native SVG bodies are still under
+integration. The current Artifact PDF mount retains the legacy browser frame;
+it must migrate before the no-PDF-frame contract can be claimed. The replacement
+bodies render PDF through host-owned pdf.js and SVG as an image, with native
+validation rejecting active content. This authenticated-app path does not change the
 isolated-origin or main-origin public-share policy described above.
 
 The existing owner-only publication access log is also exposed through

@@ -1353,6 +1353,37 @@ access or make paths outside the workspace openable. `workspace.files.link.get`
 returns the same canonical link without opening a tab. The `href` arm remains
 available for other destinations; no plugin-specific file opener is added.
 
+File viewers use the existing `contributes.openableContentViewers` family. The
+host's `resolveFileViewerKind` supplies both built-in body selection and plugin
+openable-content metadata: SVG is `image/svg+xml` with image content class; PDF,
+audio and video keep their specific MIME with binary content class. Markdown is
+`text/markdown`; code remains `text/plain`. A Markdown viewer that previously
+matched `text/plain` should match `text/markdown` or a Markdown extension instead.
+The existing plugin read budgets are unchanged, and the built-in viewer remains
+available in the chooser.
+
+Public `StoredImage` supports the host's shared Media stage through an optional
+private presentation-host `mediaStage` port. When supplied, pressing a loaded
+image forwards its URI to that port. `expandable={false}` keeps the
+author-supplied `onPress` behavior; hosts without the port retain that behavior
+as well. Image admission and reads still belong to the existing Session-image
+owner. The plugin API's loaded data URI is forwarded directly, without another
+transfer or a new URI custodian. Hosted-web realms receive no stage port. The
+viewport, gesture runtime and PDF implementation are host-owned and are not
+exported to plugin bundles. The canonical stage surface and its physical mount
+binding are still under integration; the optional port alone does not establish
+mounted availability.
+
+Markdown's optional `images` resolver follows the same presentation binding.
+Absent a resolver, images retain the existing alt-text-only policy. Workspace
+image paths resolve through the host's workspace-reference owner, while remote
+image loading requires the person's explicit document-level consent; plugin
+Actions cannot grant that privacy choice.
+
+These are unreleased development-source contracts. Generated declarations and
+API reports must be refreshed by their owning integration lane before package
+publication; source availability does not attest a loaded-platform pass.
+
 For collection-based plugin pages, the public Plugin UI `Collection` composes one headless model, item anatomy and detail renderer across presentations and containers. `Step`, controlled `Tabs` (including host-rendered strips) and `HappierDisclosure` belong to that public UI/presentation boundary, rather than feature-local replacements. See [Collection presentation](collection-presentation.md) and the [public author composition](../apps/docs/content/docs/plugins/ui/react-native.mdx).
 
 In 0.3 development source, `CollectionToolbar.refine` supplies a wide `render()`
@@ -3224,37 +3255,6 @@ environment selection already applied by native command semantics, including
 its configuration path; executable names are not activation evidence. These
 are development-source contracts, not released availability or proof of a
 completed final-launch journey.
-
-### File viewers and media (0.3 development)
-
-File viewers use the existing `contributes.openableContentViewers` family. The
-host's `resolveFileViewerKind` supplies both built-in body selection and plugin
-openable-content metadata: SVG is `image/svg+xml` with image content class; PDF,
-audio and video keep their specific MIME with binary content class. Markdown is
-`text/markdown`; code remains `text/plain`. A Markdown viewer that previously
-matched `text/plain` should match `text/markdown` or a Markdown extension instead.
-The existing plugin read budgets are unchanged, and the built-in viewer remains
-available in the chooser.
-
-Same-realm plugin surfaces use the host's Media stage through public
-`StoredImage`. When the private presentation host supplies its optional
-`mediaStage` port, pressing a loaded image opens that URI in the same stage used
-by the app. `expandable={false}` keeps the author-supplied `onPress` behavior;
-hosts without the port retain that behavior as well. Image admission and reads
-still belong to the existing Session-image owner. The plugin API's loaded data
-URI is forwarded directly, without another transfer or a new URI custodian.
-Hosted-web realms receive no stage port. The viewport, gesture runtime and PDF
-implementation are host-owned and are not exported to plugin bundles.
-
-Markdown's optional `images` resolver follows the same presentation binding.
-Absent a resolver, images retain the existing alt-text-only policy. Workspace
-image paths resolve through the host's workspace-reference owner, while remote
-image loading requires the person's explicit document-level consent; plugin
-Actions cannot grant that privacy choice.
-
-These are unreleased development-source contracts. Generated declarations and
-API reports must be refreshed by their owning integration lane before package
-publication; source availability does not attest a loaded-platform pass.
 
 ### Capture viewing and Session images (0.3 development)
 

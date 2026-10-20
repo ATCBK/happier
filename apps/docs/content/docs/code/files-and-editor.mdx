@@ -327,8 +327,13 @@ Happier now treats image previews as a first-class workflow:
 - SVG files can also be previewed instead of being treated as opaque binaries
 - true binary files stay safe and do not try to render through the text diff pipeline
 
-In unreleased 0.3 development source, image and SVG previews use a shared Media
-stage. It keeps the gallery from the surface you opened, supports zoom and pan,
+<Callout type="info">
+  The shared Media stage, PDF/audio bodies and Markdown image rendering described
+  below are under integration for unreleased 0.3. They are not yet mounted in the
+  current file views; this describes the intended development behavior.
+</Callout>
+
+The shared Media stage keeps the gallery from the surface you opened, supports zoom and pan,
 and returns to the thumbnail when dismissed. Use the arrow keys to move between
 items, `0` to fit, `1` for actual size and Esc to close. Background selection is
 manual: Checkerboard, Light or Dark, remembered on this device for the file kind.
