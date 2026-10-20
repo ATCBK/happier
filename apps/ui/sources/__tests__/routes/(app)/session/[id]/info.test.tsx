@@ -2078,7 +2078,7 @@ describe('/session/[id]/info', () => {
         expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
 
         expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b', signal: expect.any(AbortSignal) });
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
     });
 

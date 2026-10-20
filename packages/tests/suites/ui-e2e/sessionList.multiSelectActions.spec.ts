@@ -385,16 +385,17 @@ test.describe('ui e2e: session list multi-select actions', () => {
       await expect(progress).toBeVisible({ timeout: 60_000 });
       expect(delayedFirstArchive).toBe(true);
       expect(pendingSessionId).not.toBeNull();
-      const pendingStatus = page.getByTestId(`session-list-status-subtitle-text-${pendingSessionId}-working`);
+      // Minimal rows put status on the accessible trailing indicator instead of a subtitle.
+      const pendingStatus = page.getByTestId(testIds.row(pendingSessionId!))
+        .getByRole('img', { name: /archiving/i });
       await expect(pendingStatus).toBeVisible({ timeout: 60_000 });
-      await expect(pendingStatus).toContainText(/archiving/i);
 
       archiveGate.resolve();
 
       await expectBulkResult({ page, succeeded: rangeIds.length });
     } finally {
       archiveGate.resolve();
-      await page.unroute(archiveUrl).catch(() => {});
+      await page.unrouteAll({ behavior: 'wait' });
     }
 
     for (const sessionId of rangeIds) {
