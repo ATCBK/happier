@@ -53,6 +53,8 @@ function useSelectorPreview(target: SessionTargetSelectorV1 | null, context: Rea
     const stableTarget = React.useMemo(() => JSON.parse(targetKey) as SessionTargetSelectorV1 | null, [targetKey]);
     const key = JSON.stringify([scopeKey, targetKey]);
     const [state, setState] = React.useState<{ key: string; preview: PreviewState }>({ key: '', preview: UNAVAILABLE });
+    const refreshRef = React.useRef<() => void>(() => {});
+    const previousRevision = React.useRef(revision);
     React.useEffect(() => {
         if (!enabled || !binding?.isCurrent() || !stableTarget) return;
         const abort = new AbortController();
@@ -61,8 +63,6 @@ function useSelectorPreview(target: SessionTargetSelectorV1 | null, context: Rea
             abort.abort();
             setState({ key, preview: UNAVAILABLE });
         });
-        setState(current => ({ key, preview: { ...(current.key === key ? current.preview : UNAVAILABLE),
-            loading: true, error: null } }));
         const publish = (result: UiSessionTargetPreview) => {
             if (!isCurrent()) return;
             setState(current => {
@@ -73,11 +73,42 @@ function useSelectorPreview(target: SessionTargetSelectorV1 | null, context: Rea
                         loading: false, error: result.error } };
             });
         };
-        void createDefaultActionExecutor().previewSessionTargets(stableTarget, { surface: 'ui', serverId: binding.serverId,
-            defaultSessionId: sessionId, expectedAccountId: binding.accountId, signal: abort.signal })
-            .then(publish).catch(() => publish({ coverage: 'unavailable', addresses: [], error: 'session_target_unavailable' }));
-        return () => { abort.abort(); retirement.dispose(); };
-    }, [enabled, binding, key, stableTarget, sessionId, revision]);
+        // Like Follow's list reader, finish useful work and fold overlapping
+        // Account wakes into one trailing read. A wake is not scope retirement:
+        // aborting here can starve previews while the Home keeps changing.
+        let running = false;
+        let dirty = false;
+        const read = () => {
+            if (!isCurrent()) return;
+            if (running) { dirty = true; return; }
+            running = true;
+            void (async () => {
+                try {
+                    do {
+                        dirty = false;
+                        setState(current => ({ key, preview: { ...(current.key === key ? current.preview : UNAVAILABLE),
+                            loading: true, error: null } }));
+                        try {
+                            publish(await createDefaultActionExecutor().previewSessionTargets(stableTarget, {
+                                surface: 'ui', serverId: binding.serverId, defaultSessionId: sessionId,
+                                expectedAccountId: binding.accountId, signal: abort.signal,
+                            }));
+                        } catch {
+                            publish({ coverage: 'unavailable', addresses: [], error: 'session_target_unavailable' });
+                        }
+                    } while (dirty && isCurrent());
+                } finally { running = false; }
+            })();
+        };
+        refreshRef.current = read;
+        read();
+        return () => { abort.abort(); retirement.dispose(); refreshRef.current = () => {}; };
+    }, [enabled, binding, key, stableTarget, sessionId]);
+    React.useEffect(() => {
+        if (previousRevision.current === revision) return;
+        previousRevision.current = revision;
+        refreshRef.current();
+    }, [revision]);
     return enabled && binding?.isCurrent() && state.key === key ? state.preview : { ...UNAVAILABLE,
         loading: enabled && Boolean(stableTarget) && (resolving || Boolean(binding?.isCurrent())),
         error: !stableTarget ? 'selection_required'
