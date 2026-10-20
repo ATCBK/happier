@@ -223,7 +223,7 @@ export function useResizableSize(input: ResizableSizeInput): ResizableSizeResult
                 publishDrag(resolveClampedSizeState(attempted, minSizePxRef.current, maxSizePxRef.current, inputRef.current.collapse));
             },
             onPanResponderRelease: () => {
-                const next = clampLatest(dragLatestSizeRef.current ?? effectiveSizeRef.current);
+                const next = clampLatest(dragLatestAttemptedSizeRef.current ?? effectiveSizeRef.current);
                 const commitMeta = createCommitMeta(dragLatestAttemptedSizeRef.current, next);
                 resetDragTracking();
                 if (commitMeta.collapseArmed) inputRef.current.onCollapse?.();
@@ -297,7 +297,7 @@ export function useResizableSize(input: ResizableSizeInput): ResizableSizeResult
 
         const onUp = () => {
             cleanup();
-            const next = clampLatest(dragLatestSizeRef.current ?? effectiveSizeRef.current);
+            const next = clampLatest(dragLatestAttemptedSizeRef.current ?? effectiveSizeRef.current);
             const commitMeta = createCommitMeta(dragLatestAttemptedSizeRef.current, next);
             resetDragTracking();
             if (commitMeta.collapseArmed) inputRef.current.onCollapse?.();
