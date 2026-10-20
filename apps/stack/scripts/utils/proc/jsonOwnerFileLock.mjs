@@ -124,7 +124,7 @@ function reclaimJsonOwnerLockSnapshot(lockPath, expectedRaw) {
   }
 
   try {
-    writeFileSync(lockPath, movedRaw, { encoding: 'utf8', flag: 'wx' });
+    publishOwnerRecord(lockPath, movedRaw, { create: true });
     unlinkSync(reclaimPath);
   } catch {
     // Another owner already has the lock path. Keep the quarantined file for diagnostics.
