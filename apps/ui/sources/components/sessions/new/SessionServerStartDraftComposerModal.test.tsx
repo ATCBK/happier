@@ -396,7 +396,8 @@ describe('mounted Session server-start recipe composer', () => {
                     expect(dialog.findAllByType(SessionAuthoringControls)).toHaveLength(2);
                     if (chrome.current?.kind !== 'card') throw new Error('Missing recipe footer');
                 });
-                const footer = await renderScreen(<>{chrome.current?.footer}</>);
+                if (chrome.current?.kind !== 'card') throw new Error('Missing recipe footer');
+                const footer = await renderScreen(<>{chrome.current.footer}</>);
                 try {
                     const submit = footer.findAllByType(RoundButton).find(node => node.props.title === 'newSession.recipeComposerSubmit')!;
                     expect(submit.props.disabled).toBe(false);

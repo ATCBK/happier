@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
+import type { CustomModalConfig } from '@/modal/types';
 
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -43,7 +44,8 @@ describe('phone session gestures under a modal', () => {
             </InjectedAuthProvider>);
             const gestures = () => screen!.findByType('GestureDetector').props.gesture.gestures as { __config: { enabled: boolean } }[];
             expect(gestures().every(gesture => gesture.__config.enabled)).toBe(true);
-            await act(async () => { modal.showModal({ type: 'custom', component: StageBody, chrome: { kind: 'stage' } }); });
+            const stageModal = { type: 'custom', component: StageBody, chrome: { kind: 'stage' } } satisfies Omit<CustomModalConfig, 'id'>;
+            await act(async () => { modal.showModal(stageModal); });
             expect(gestures().every(gesture => !gesture.__config.enabled)).toBe(true);
             await act(async () => { modal.hideAllModals(); });
             expect(gestures().every(gesture => gesture.__config.enabled)).toBe(true);

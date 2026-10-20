@@ -9,13 +9,18 @@ import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import type { CustomModalChromeCardConfig } from '@/modal';
+import type { CustomModalChromeConfig } from '@/modal';
 
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 import type { ApiTokenSettingsController, ApiTokenSettingsState } from './apiTokenSettingsController';
 
 const ACCESSIBILITY_ANNOUNCEMENT = 'Copy your token now — it is shown once.';
 let focusTarget: HTMLButtonElement | null = null;
+
+function requireCardChrome(chrome: CustomModalChromeConfig | null | undefined) {
+    if (chrome?.kind !== 'card') throw new Error('Expected card modal chrome');
+    return chrome;
+}
 
 const runtime = vi.hoisted(() => ({
     platform: 'web' as 'web' | 'ios' | 'android',
@@ -222,7 +227,7 @@ describe('ApiTokenCreateModal', () => {
             createError: 'outcome_unknown' as const,
             recoveryTokenId: requestedTokenId,
         };
-        const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const screen = await renderScreen(
             <ApiTokenCreateModal controller={createController(state)} onClose={vi.fn()} setChrome={setChrome} />,
         );
@@ -232,7 +237,7 @@ describe('ApiTokenCreateModal', () => {
         // No credential material exists for an unknown outcome, and a
         // replacement stays blocked until the list reconciles that exact row.
         expect(screen.findAllHostsByTestId('settings-api-tokens-reveal-copy')).toHaveLength(0);
-        const footer = setChrome.mock.calls.at(-1)?.[0]?.footer;
+        const footer = requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).footer;
         const footerScreen = await renderScreen(<>{footer}</>);
         expect(footerScreen.findByTestId('settings-api-tokens-create-submit')?.props.disabled).toBe(true);
     });
@@ -276,9 +281,9 @@ describe('ApiTokenCreateModal', () => {
             ...createState(null),
             createDraft: { label: 'Leads dashboard', expiryPreset: '30d', access: 'limited', grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [] } } },
         };
-        const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const screen = await renderScreen(<ApiTokenCreateModal controller={createController(state)} onClose={vi.fn()} setChrome={setChrome} />);
-        const footer = async () => await renderScreen(<>{setChrome.mock.calls.at(-1)?.[0]?.footer}</>);
+        const footer = async () => await renderScreen(<>{requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).footer}</>);
 
         expect((await footer()).findByTestId('settings-api-tokens-create-submit')).toBeNull();
         const continueButton = (await footer()).findByTestId('settings-api-tokens-create-continue');
@@ -295,9 +300,9 @@ describe('ApiTokenCreateModal', () => {
             ...createState(null),
             createDraft: { label: 'Leads dashboard', expiryPreset: '30d', access: 'limited', grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [] } } },
         };
-        const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const screen = await renderScreen(<ApiTokenCreateModal controller={createController(state)} onClose={vi.fn()} setChrome={setChrome} />);
-        const footer = async () => await renderScreen(<>{setChrome.mock.calls.at(-1)?.[0]?.footer}</>);
+        const footer = async () => await renderScreen(<>{requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).footer}</>);
         const continueButton = (await footer()).findByTestId('settings-api-tokens-create-continue');
         await act(async () => { continueButton?.props.onPress(); });
 
@@ -331,7 +336,7 @@ describe('ApiTokenCreateModal', () => {
             activeChildCount: 0,
             embedConfig: null,
         };
-        const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const screen = await renderScreen(
             <ApiTokenCreateModal
                 mode="editAccess"
@@ -344,7 +349,7 @@ describe('ApiTokenCreateModal', () => {
                 setChrome={setChrome}
             />,
         );
-        const footer = async () => await renderScreen(<>{setChrome.mock.calls.at(-1)?.[0]?.footer}</>);
+        const footer = async () => await renderScreen(<>{requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).footer}</>);
 
         await screen.pressByTestIdAsync('api-token-grant-actions');
         expect((await footer()).findByTestId('settings-api-tokens-edit-save')).toBeNull();
@@ -371,7 +376,7 @@ describe('ApiTokenCreateModal', () => {
             embedConfig: null,
         };
         const renderEdit = async (signsOutEmbeddedCredentials: boolean) => {
-            const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
+            const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
             await renderScreen(
                 <ApiTokenCreateModal
                     mode="editAccess"
@@ -384,7 +389,7 @@ describe('ApiTokenCreateModal', () => {
                     setChrome={setChrome}
                 />,
             );
-            return await renderScreen(<>{setChrome.mock.calls.at(-1)?.[0]?.footer}</>);
+            return await renderScreen(<>{requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).footer}</>);
         };
 
         const withChildren = await renderEdit(true);
@@ -436,7 +441,7 @@ describe('ApiTokenCreateModal', () => {
             acknowledged: false,
         }));
 
-        const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const screen = await renderScreen(
             <ApiTokenCreateModal controller={controller} onClose={vi.fn()} setChrome={setChrome} />,
         );
@@ -458,7 +463,7 @@ describe('ApiTokenCreateModal', () => {
 
     it('stages short semantic reveal chunks during normal motion', async () => {
         const { ApiTokenCreateModal } = await import('./ApiTokenCreateModal');
-        const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         const controller = createController(createState({
             token: 'hap_v1_11111111-1111-4111-8111-111111111111_abcdefghijklmnopqrstuvwxyz',
             apiToken: {
@@ -493,8 +498,8 @@ describe('ApiTokenCreateModal', () => {
             'settings-api-tokens-reveal-stage-warning',
         ]);
 
-        const chrome = setChrome.mock.calls.at(-1)?.[0];
-        expect(chrome?.kind).toBe('card');
+        const chrome = requireCardChrome(setChrome.mock.calls.at(-1)?.[0]);
+        expect(chrome.kind).toBe('card');
         // The body says "shown once" a single time; the title band does not repeat it.
         expect(chrome?.subtitle).toBeNull();
         const footerScreen = await renderScreen(<>{chrome?.footer}</>);
@@ -505,7 +510,7 @@ describe('ApiTokenCreateModal', () => {
         vi.useFakeTimers();
         runtime.completeAnimationCallbacks = false;
         const { ApiTokenCreateModal } = await import('./ApiTokenCreateModal');
-        const setChrome = vi.fn<(chrome: CustomModalChromeCardConfig | null) => void>();
+        const setChrome = vi.fn<(chrome: CustomModalChromeConfig | null) => void>();
         await renderScreen(
             <ApiTokenCreateModal
                 controller={createController(createState({
@@ -531,7 +536,7 @@ describe('ApiTokenCreateModal', () => {
             />,
         );
 
-        const footer = setChrome.mock.calls.at(-1)?.[0]?.footer;
+        const footer = requireCardChrome(setChrome.mock.calls.at(-1)?.[0]).footer;
         const footerScreen = await renderScreen(<>{footer}</>);
         expect(footerScreen.findByTestId('settings-api-tokens-reveal-done')?.props.disabled).toBe(true);
 
