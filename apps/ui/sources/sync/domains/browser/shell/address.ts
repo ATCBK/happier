@@ -152,6 +152,10 @@ export function formatBrowserDisplayUrl(
     const host = options?.displayHost ?? parsed.host.replace(/^www\./i, '');
     if (options?.hostOnly === true) return host;
     const path = parsed.pathname === '/' ? '' : parsed.pathname;
+    if (options?.displayHost !== undefined) {
+        // A relay preview's access URL carries its admission token; the name shown for it never does.
+        parsed.searchParams.delete('previewToken');
+    }
     return `${host}${path}${parsed.search}${parsed.hash}`;
 }
 
