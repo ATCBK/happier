@@ -12,7 +12,7 @@ import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAu
 import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 import { t } from '@/text';
 
-import { previewRef } from './SkillPreviewRows';
+import { previewRef, previewSource, previewSourceFacts } from './SkillPreviewRows';
 import { previewSkillInstall, type SkillInstallSource } from './skillInstall';
 import { SkillFoundAdd } from './SkillFoundAdd';
 
@@ -113,7 +113,8 @@ export function SkillLinkInput(
           </Text>
         </View>
       }
-      factsSource={(item) => ({ kind: 'git', label: item.path || '/', ...(previewRef(item) ? { ref: previewRef(item)! } : {}) })}
+      factsSource={previewSource}
+      factsExtra={previewSourceFacts}
       note={
         pin ? (
           <>

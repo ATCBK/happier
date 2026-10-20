@@ -2,7 +2,7 @@ import { z } from 'zod/mini';
 import { isMap, parseDocument } from 'yaml';
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
-import { RegistryContentRefV1Schema, RegistryProvenanceV1Schema } from '../../../registries/registryItemsV1.js';
+import { RegistryContentRefV1Schema, RegistryProvenanceV1Schema, WellKnownSkillRefV1Schema } from '../../../registries/registryItemsV1.js';
 import { RegistryUpstreamV1Schema } from '../../../registries/registryUpstreamV1.js';
 import { SkillRuleV1Schema } from '../../../reach/reachRuleV1.js';
 import { ArtifactRevisionV1Schema } from '../../../artifacts/artifactRevisionV1.js';
@@ -32,6 +32,7 @@ export const PluginSkillProvenanceV1Schema = lazyZodSchema(() => z.strictObject(
 export const SkillProvenanceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('registry'), registry: RegistryProvenanceV1Schema }),
   z.strictObject({ kind: z.literal('link'), url: z.string().check(z.minLength(1)), ref: RegistryContentRefV1Schema }),
+  WellKnownSkillRefV1Schema,
   z.strictObject({ kind: z.literal('machine'), machineId: z.string().check(z.minLength(1)), agentIds: z.array(z.string()), path: z.string().check(z.minLength(1)), importedAt: z.number().check(z.int(), z.nonnegative()) }),
   z.strictObject({ kind: z.literal('upload'), importedAt: z.number().check(z.int(), z.nonnegative()) }),
   z.strictObject({ kind: z.literal('written') }),
@@ -50,6 +51,8 @@ export function findHeldSkillV1<T extends Readonly<{ skillId: string; provenance
   const registry = 'registry' in candidate ? candidate.registry : provenance?.kind === 'registry' ? provenance.registry : null;
   const ref = provenance?.kind === 'registry' ? provenance.registry.ref : provenance?.kind === 'link' ? provenance.ref : null;
   return items.find(item => {
+    if (provenance?.kind === 'wellKnown' && item.provenance.kind === 'wellKnown')
+      return provenance.indexUrl === item.provenance.indexUrl && provenance.name === item.provenance.name;
     if (registry && item.provenance.kind === 'registry'
       && item.provenance.registry.sourceId === registry.sourceId && item.provenance.registry.itemId === registry.itemId) return true;
     const heldRef = item.provenance.kind === 'registry' ? item.provenance.registry.ref : item.provenance.kind === 'link' ? item.provenance.ref : null;
@@ -79,7 +82,7 @@ export function readSkillLockV1(header: unknown): SkillLockV1 {
   return parsed.data;
 }
 export function isSkillModifiedV1(lock: SkillLockV1, currentDigest: string): boolean {
-  return (lock.provenance.kind === 'registry' || lock.provenance.kind === 'link')
+  return (lock.provenance.kind === 'registry' || lock.provenance.kind === 'link' || lock.provenance.kind === 'wellKnown')
     && lock.importedDigest !== currentDigest;
 }
 export const SkillRevisionV1Schema = lazyZodSchema(() => z.union([z.string().check(z.regex(/^sha256:[0-9a-f]{64}$/)), z.string().check(z.regex(/^\d+:\d+$/), z.refine(value => {

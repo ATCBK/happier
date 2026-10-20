@@ -245,7 +245,9 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
         ? provenance.url
         : provenance?.kind === 'registry'
           ? provenance.registry.sourceUrl
-          : null;
+          : provenance?.kind === 'wellKnown'
+            ? provenance.indexUrl
+            : null;
     if (link)
       items.push({
         id: 'copyLink',

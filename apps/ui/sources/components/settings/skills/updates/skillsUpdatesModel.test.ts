@@ -61,6 +61,13 @@ const file = (
 });
 
 describe('skills updates', () => {
+  it('offers source checks for digest-pinned index skills', () => {
+    expect(hasUpdatingSource([{ ...base, provenance: {
+      kind: 'wellKnown', indexUrl: 'https://skills.example.test/.well-known/skills/index.json',
+      name: 'pdf', digest: `sha256:${'a'.repeat(64)}`,
+    } }])).toBe(true);
+  });
+
   it('puts a not-modified update in Ready and a modified one in Needs your choice, nothing else', () => {
     const groups = groupSkillUpdates([
       base,

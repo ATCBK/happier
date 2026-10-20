@@ -76,6 +76,22 @@ describe('installSkills (Add to library)', () => {
 });
 
 describe('previewSkillInstall (From a link)', () => {
+    it('retains digest pins for index previews through the existing install source carrier', async () => {
+        const { SKILL_ACTION_INPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1');
+        const source = { kind: 'link' as const, url: 'https://skills.example.test/.well-known/skills/index.json' };
+        const provenance = { kind: 'wellKnown' as const, indexUrl: source.url, name: 'code-review',
+            digest: `sha256:${'a'.repeat(64)}`, publishedDigest: `sha256:${'b'.repeat(64)}` };
+        const item = { path: 'code-review', name: 'code-review', description: null, files: [], trust: 'text_only',
+            cost: { descriptionTokens: 0, bodyTokens: 1 }, provenance };
+        const { execute, calls } = home((_actionId, input) => (input as { dryRun?: boolean }).dryRun
+            ? { ok: true, result: { items: [item] } } : { ok: true, result: { skillIds: ['review'], includedInSessionId: null } });
+        const preview = await previewSkillInstall(execute, source);
+        if (!preview.ok) throw new Error(preview.error);
+        await installSkills(execute, { source: preview.source });
+        expect(SKILL_ACTION_INPUT_SCHEMAS_V1['skills.install'].parse(calls[1]!.input).source)
+            .toEqual({ ...source, refs: [provenance] });
+    });
+
     it('retains every reviewed repository pin from a multi-origin link through the install schema', async () => {
         const { SkillInstallPreviewV1Schema, SKILL_ACTION_INPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1');
         const source = { kind: 'link' as const, url: 'https://example.test/marketplace.json' };

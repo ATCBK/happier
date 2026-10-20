@@ -56,7 +56,10 @@ export function skillSource(
         kind: 'machine',
         machineName: machineName(provenance.machineId),
       };
+    case 'wellKnown':
+      return { kind: 'link', host: hostOf(provenance.indexUrl) };
     case 'registry':
+      if (provenance.registry.ref.kind === 'wellKnown') return skillSource({ provenance: provenance.registry.ref }, machineName);
       return {
         kind: 'git',
         label:
@@ -66,11 +69,23 @@ export function skillSource(
           hostOf(provenance.registry.sourceUrl),
       };
     case 'link': {
+      if (provenance.ref.kind === 'wellKnown') return skillSource({ provenance: provenance.ref }, machineName);
       const repository = repositoryLabel(provenance.url);
       if (repository) return { kind: 'git', label: repository };
       return { kind: 'link', host: hostOf(provenance.url) };
     }
   }
+}
+
+/** Publisher verification is distinct from the content pin Happier computes for every index item. */
+export function skillSourceVerification(item: Pick<SkillListItemV1, 'provenance'>): string | undefined {
+  const provenance = item.provenance;
+  const ref = provenance.kind === 'wellKnown' ? provenance
+    : provenance.kind === 'registry' ? provenance.registry.ref
+      : provenance.kind === 'link' ? provenance.ref : null;
+  return ref?.kind === 'wellKnown'
+    ? t(ref.publishedDigest ? 'capabilities.skillDetail.source.verifiedByDigest' : 'capabilities.skillDetail.source.noDigestPublished')
+    : undefined;
 }
 
 /** "owner/repo" for a GitHub URL; null for any other link. */

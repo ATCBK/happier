@@ -40,15 +40,17 @@ export function computeGitTreeShaV1(files: readonly RegistrySkillFileBytesV1[]):
   return hash(root);
 }
 export async function fetchRegistrySkillFilesV1(ctx: RegistryFetchContextV1, skill: RegistrySkillSourceV1): Promise<readonly RegistrySkillFileBytesV1[]> {
-  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)$/.exec(skill.ref.repo);
+  if (skill.ref.kind !== 'gitTree') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+  const ref = skill.ref;
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)$/.exec(ref.repo);
   if (!match) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
   const files = await Promise.all(skill.files.map(async file => {
-    const path = [skill.ref.path, file.path].filter(Boolean).join('/');
-    const response = await ctx.http.getBytes(`https://raw.githubusercontent.com/${match[1]}/${match[2]}/${encodeURIComponent(skill.ref.commit)}/${path.split('/').map(encodeURIComponent).join('/')}`);
+    const path = [ref.path, file.path].filter(Boolean).join('/');
+    const response = await ctx.http.getBytes(`https://raw.githubusercontent.com/${match[1]}/${match[2]}/${encodeURIComponent(ref.commit)}/${path.split('/').map(encodeURIComponent).join('/')}`);
     if (!response.ok) throw new RegistryFetchErrorV1(response.status);
     if (computeGitBlobShaV1(response.value) !== file.blobSha) throw new Error('registry_blob_sha_mismatch');
     return { path: file.path, unixMode: file.unixMode, bytes: response.value };
   }));
-  if (computeGitTreeShaV1(files) !== skill.ref.treeSha) throw new Error('registry_tree_sha_mismatch');
+  if (computeGitTreeShaV1(files) !== ref.treeSha) throw new Error('registry_tree_sha_mismatch');
   return files;
 }

@@ -26,6 +26,15 @@ export function createSkillsUpdateTracker(input: Readonly<{
       return items.flatMap(item => {
         if (item.provenance.kind === 'registry') return [{ key: item.skillId, provenance: item.provenance.registry,
           ...(item.upstream ? { upstream: item.upstream } : {}) }];
+        if (item.provenance.kind === 'wellKnown') {
+          const ref = item.provenance;
+          const source: RegistrySourceDescriptorV1 = { id: `link:${deriveRegistrySourceIdV1(ref.indexUrl)}`, title: item.name,
+            format: 'skills-sh', kinds: ['skill'], url: ref.indexUrl, enabled: true, addedAt: item.createdAt,
+            origin: { kind: 'user' }, removable: false };
+          const provenance: RegistryProvenanceV1 = { sourceId: source.id, format: source.format, sourceUrl: source.url,
+            itemId: ref.name, ref, importedAt: item.createdAt };
+          return [{ key: item.skillId, provenance, source, ...(item.upstream ? { upstream: item.upstream } : {}) }];
+        }
         if (item.provenance.kind !== 'link' || item.provenance.ref.kind !== 'gitTree') return [];
         const ref = item.provenance.ref;
         const linkedRepo = readGitHubRepositoryV1(item.provenance.url);

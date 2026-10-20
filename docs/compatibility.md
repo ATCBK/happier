@@ -203,6 +203,17 @@ materialization request, not a new plaintext Artifact field or an SDK change.
 The one-way upgrade does not support old 0.3 development daemons reading the new
 request; reload the runner and daemon together before replaying it.
 
+Well-known skill indexes and pack links add a `wellKnown` provenance arm in
+unreleased 0.3: `indexUrl`, item `name`, the materialized bundle `digest`, and an
+optional `publishedDigest` recorded only after publisher-artifact verification.
+Preview pins travel through the existing link `source.refs` carrier alongside
+Git tree refs; Add re-verifies selected content before writing any library items.
+Existing Git and upload locks stay readable without a migration. This closed
+union extension follows the one-way 0.3 development cut, with no old-development
+reader adapter. The inspected 0.2 predecessor at
+`cc0dbf9ab862f81f8aa94fc3fc1186fb53245963` has neither the current registry ref nor
+skill provenance schema paths, so this arm does not replace a predecessor format.
+
 ### Account trigger deletion receipts (0.3 development)
 
 The current Automation deletion transaction returns the removed definition's

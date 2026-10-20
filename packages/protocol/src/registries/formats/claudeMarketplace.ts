@@ -53,6 +53,7 @@ return {
     const source=plugin && pluginSource(catalog.source,plugin,catalog.repo);
     if(!plugin || !source) throw new RegistryFetchErrorV1({state:'invalid_source'});
     const item=await github.read(ctx,{source,kind:'skill',itemId:req.itemId.slice(slash+1),version:req.version});
+    if (item.payload.skill.ref.kind !== 'gitTree') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
     const repo=readGitHubRepositoryV1(source.url)!;
     const manifest=await ctx.http.getJson(`https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${item.payload.skill.ref.commit}/${source.path?source.path+'/':''}.claude-plugin/plugin.json`,{source});
     if(!manifest.ok&&manifest.status.state!=='invalid_source')throw new RegistryFetchErrorV1(manifest.status);

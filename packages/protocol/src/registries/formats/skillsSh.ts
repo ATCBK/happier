@@ -3,6 +3,7 @@ import { githubRegistryAdapterV1 } from './github.js';
 import type { RegistrySkillFormatAdapterV1 } from './registryFormatAdapterV1.js';
 import { RegistryFetchErrorV1 } from '../registryListV1.js';
 import type { RegistrySourceV1 } from '../registrySourcesV1.js';
+import { readWellKnownSkillUpdatesV1 } from './wellKnownSkills.js';
 const safeSegments=(value:string)=>value.split('/').every(segment=>segment!=='.'&&segment!=='..');
 const catalogRef = z.object({source:z.string().check(z.regex(/^[\w.-]+\/[\w.-]+$/), z.refine(safeSegments)),skillId:z.string().check(z.regex(/^[\w.-]+(?:\/[\w.-]+)*$/), z.refine(safeSegments)),
   name:z.optional(z.string()),installs:z.optional(z.number().check(z.nonnegative()))});
@@ -49,5 +50,11 @@ export const skillsShRegistryAdapterV1: RegistrySkillFormatAdapterV1 = {
     const item=await githubRegistryAdapterV1.read(ctx,{source,kind:'skill',itemId:path,version:req.version ?? list.items[0]?.version});
     return {...item,summary:{...item.summary,itemId:req.itemId}};
   },
-  latest(ctx,items,options) { return githubRegistryAdapterV1.latest(ctx,items.map(item=>({...item,sourceUrl:item.ref.kind === 'gitTree' ? item.ref.repo : item.sourceUrl})),options); },
+  async latest(ctx,items,options) {
+    const wellKnown = items.filter(item => item.ref.kind === 'wellKnown');
+    const git = items.filter(item => item.ref.kind !== 'wellKnown');
+    const current = await readWellKnownSkillUpdatesV1(ctx, wellKnown);
+    const other = git.length ? await githubRegistryAdapterV1.latest(ctx,git.map(item=>({...item,sourceUrl:item.ref.kind === 'gitTree' ? item.ref.repo : item.sourceUrl})),options) : [];
+    return new Map([...current, ...other]);
+  },
 };

@@ -95,14 +95,17 @@ export function createRegistryGitProtocolV1(input: Readonly<{ signal?: AbortSign
       await repository.run(['show', `${repository.commit}:${admitPath(path)}`], { maxOutputBytes: Math.max(1, size), stdoutConsumer: chunk => { chunks.push(new Uint8Array(chunk)); return 'continue'; } });
       const out = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0)); let offset = 0; for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length; } return out;
     }
-    const files = async (skill: RegistrySkillSourceV1, source: RegistrySourceV1) => withRepository(source, skill.ref.commit, async repository => {
+    const files = async (skill: RegistrySkillSourceV1, source: RegistrySourceV1) => {
+      if (skill.ref.kind !== 'gitTree') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+      const ref = skill.ref;
+      return withRepository(source, ref.commit, async repository => {
       const settled = await Promise.allSettled(skill.files.map(async file => {
-        const content = await bytes(repository, [skill.ref.path, file.path].filter(Boolean).join('/'), file.size);
+        const content = await bytes(repository, [ref.path, file.path].filter(Boolean).join('/'), file.size);
         if (computeGitBlobShaV1(content) !== file.blobSha) throw new Error('registry_blob_sha_mismatch'); return { path: file.path, unixMode: file.unixMode, bytes: content };
       }));
       const files: RegistrySkillFileBytesV1[] = settled.map(result => { if (result.status === 'rejected') throw result.reason; return result.value; });
-      if (computeGitTreeShaV1(files) !== skill.ref.treeSha) throw new Error('registry_tree_sha_mismatch'); return files;
-    });
+      if (computeGitTreeShaV1(files) !== ref.treeSha) throw new Error('registry_tree_sha_mismatch'); return files;
+    }); };
     const git: GitProtocol = {
       files,
       async list(_ctx, req) {

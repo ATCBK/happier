@@ -6,7 +6,7 @@ import {
   type SkillInstallPreviewV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { DEFAULT_CREATE_REACH_CHANGE_V1, type ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
-import type { RegistryContentRefV1 } from '@happier-dev/protocol/registries/registryItemsV1';
+import type { RegistrySkillContentRefV1 } from '@happier-dev/protocol/registries';
 
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import { readRegistryFailureStatus, type RegistryFailureStatus } from '@/registries/describeRegistrySourceStatus';
@@ -19,7 +19,7 @@ export type SkillInstallSource =
       itemId: string;
       version: string;
     }>
-  | Readonly<{ kind: 'link'; url: string; refs?: readonly Extract<RegistryContentRefV1, { kind: 'gitTree' }>[] }>
+  | Readonly<{ kind: 'link'; url: string; refs?: readonly RegistrySkillContentRefV1[] }>
   | Readonly<{ kind: 'upload'; files: readonly SkillFileInputV1[] }>;
 
 /** What one add produced: the created skills, and the ones whose rules were not written (IR-70 partial result). */
@@ -110,8 +110,9 @@ export async function previewSkillInstall(
   const items = parsed.data.items.map((item) => SkillInstallPreviewV1Schema.parse(item));
   const refs = items.map(item => {
     const provenance = item.provenance;
+    if (provenance.kind === 'wellKnown') return provenance;
     const ref = provenance.kind === 'link' ? provenance.ref : provenance.kind === 'registry' ? provenance.registry.ref : null;
-    return ref?.kind === 'gitTree' ? ref : null;
+    return ref?.kind === 'gitTree' || ref?.kind === 'wellKnown' ? ref : null;
   });
   if (source.kind === 'link' && refs.some(ref => ref === null)) return { ok: false, error: 'skill_preview_pin_missing' };
   return {

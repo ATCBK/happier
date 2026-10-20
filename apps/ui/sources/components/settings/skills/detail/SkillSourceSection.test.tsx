@@ -62,6 +62,29 @@ const common = {
 };
 
 describe('SkillSourceSection', () => {
+  it('keeps digest-pinned index skills on the existing update and outside-reference path', async () => {
+    const provenance = {
+      kind: 'wellKnown' as const,
+      indexUrl: 'https://skills.example.test/.well-known/skills/index.json',
+      name: 'code-review',
+      digest: `sha256:${'a'.repeat(64)}`,
+    };
+    const screen = await renderScreen(
+      <SkillSourceSection {...common} read={withReference(provenance)} updatePolicy="manual" />,
+    );
+    expect(screen.findByTestId('src:source')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('skills.example.test');
+    expect(screen.findByTestId('src:checkNow')).not.toBeNull();
+    expect(screen.findByTestId('src:auto')).not.toBeNull();
+    expect(screen.findByTestId('src:pin')).not.toBeNull();
+    expect(screen.findHostByTestId('src:outsideReferences')).not.toBeNull();
+    expect(skillSource({ provenance }, common.machineName)).toEqual({ kind: 'link', host: 'skills.example.test' });
+    expect(screen.getTextContent()).toContain(t('capabilities.skillDetail.source.noDigestPublished'));
+    await screen.update(<SkillSourceSection {...common} read={read({ ...provenance, publishedDigest: `sha256:${'b'.repeat(64)}` })} updatePolicy="manual" />);
+    expect(screen.getTextContent()).toContain(t('capabilities.skillDetail.source.verifiedByDigest'));
+    expect(screen.getTextContent()).not.toContain(t('capabilities.skillDetail.source.noDigestPublished'));
+  });
+
   it('names the supplying plugin and omits unknown source metadata without claiming personal ownership', async () => {
     const pluginId = 'com.acme.skills';
     const pluginRead = SkillReadResultV1Schema.parse({ ...read({

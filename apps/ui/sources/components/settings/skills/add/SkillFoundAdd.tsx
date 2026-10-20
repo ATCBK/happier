@@ -80,6 +80,7 @@ export function SkillFoundAdd(
     groupTitle: string;
     /** The facts' source for a found skill (its repository at the pin, or you). */
     factsSource: (item: Preview) => CapabilityFactsProps['source'];
+    factsExtra?: (item: Preview) => CapabilityFactsProps['extra'];
     /** The details' "where it comes from" line. */
     installsSource?: (item: Preview) => SkillAddDetailInstalls['source'];
     /** The list footer's quiet note while nothing failed. */
@@ -206,13 +207,9 @@ export function SkillFoundAdd(
             ...(factsSource ? { source: factsSource } : {}),
             trust: item.trust,
             cost: { tokensWhenUsed: item.cost.bodyTokens },
-            ...(alsoAdds.length > 0
-              ? {
-                  extra: alsoAdds.map((name) =>
-                    t('capabilities.skillAdd.alsoAdds', { name }),
-                  ),
-                }
-              : {}),
+            extra: [...(props.factsExtra?.(item) ?? []), ...alsoAdds.map((name) =>
+              t('capabilities.skillAdd.alsoAdds', { name }),
+            )],
           } satisfies CapabilityFactsProps;
         },
         accessibilityLabel: (item) => item.name,
@@ -256,6 +253,7 @@ export function SkillFoundAdd(
         item={item}
         items={items}
         factsSource={props.factsSource(item)}
+        factsExtra={props.factsExtra?.(item)}
         installsSource={props.installsSource?.(item)}
         onOpenHeld={props.onSelectAdded}
         onWhereChange={(where) => wheres.current.set(item.path, where)}
@@ -444,6 +442,7 @@ function SkillFoundDetail(
     item: Preview;
     items: readonly Preview[];
     factsSource: CapabilityFactsProps['source'];
+    factsExtra: CapabilityFactsProps['extra'];
     installsSource: SkillAddDetailInstalls['source'] | undefined;
     onOpenHeld: (skillId: string) => void;
     onWhereChange: (where: ReachRulesChangeV1 | undefined) => void;
@@ -485,6 +484,7 @@ function SkillFoundDetail(
       facts={{
         presentation: 'row',
         ...(props.factsSource ? { source: props.factsSource } : {}),
+        ...(props.factsExtra ? { extra: props.factsExtra } : {}),
         trust: item.trust,
         cost: { tokensWhenUsed: item.cost.bodyTokens },
       }}

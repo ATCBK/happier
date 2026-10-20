@@ -15,6 +15,7 @@ import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToH
 import type { CapabilitySource } from '@/components/capabilities/facts/CapabilityFacts';
 
 import { SkillOutsideReferencesItem } from '../outsideReferences';
+import { skillSource, skillSourceVerification } from '../skillsCollectionModel';
 import type { SkillChange, SkillChangeResult } from './useSkillDetail';
 
 function formatTime(ms: number): string {
@@ -78,8 +79,17 @@ function sourceRow(
         }),
         icon: 'desktop',
       };
+    case 'wellKnown': {
+      const source = skillSource(read, machineName);
+      return {
+        title: source?.kind === 'link' ? source.host : provenance.indexUrl,
+        subtitle: skillSourceVerification(read),
+        icon: 'link',
+      };
+    }
     case 'registry': {
       const ref = provenance.registry.ref;
+      if (ref.kind === 'wellKnown') return sourceRow({ ...read, provenance: ref }, machineName, homeDir);
       const at =
         ref.kind === 'gitTree'
           ? `${ref.path ? `${ref.path} ` : ''}@${ref.commit.slice(0, 7)}`
@@ -92,6 +102,7 @@ function sourceRow(
     }
     case 'link': {
       const ref = provenance.ref;
+      if (ref.kind === 'wellKnown') return sourceRow({ ...read, provenance: ref }, machineName, homeDir);
       return {
         title: provenance.url,
         subtitle:
@@ -126,7 +137,7 @@ export function SkillSourceSection(
   const { theme } = useUnistyles();
   const { read } = props;
   const tracked =
-    read.provenance.kind === 'registry' || read.provenance.kind === 'link';
+    read.provenance.kind === 'registry' || read.provenance.kind === 'link' || read.provenance.kind === 'wellKnown';
   const foundOn = read.provenance.kind === 'machine' ? read.provenance.machineId : null;
   // The folder is shown the way the machine's person writes it (~/...), from that machine's own home.
   const homeDir = useMachine(foundOn ?? '', foundOn !== null)?.metadata?.homeDir ?? undefined;
@@ -135,6 +146,7 @@ export function SkillSourceSection(
   const importedCopy =
     read.provenance.kind === 'registry' ||
     read.provenance.kind === 'link' ||
+    read.provenance.kind === 'wellKnown' ||
     read.provenance.kind === 'upload' ||
     read.provenance.kind === 'machine';
   const outsideReferences = React.useMemo(

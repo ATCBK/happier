@@ -32,6 +32,7 @@ import { useRegistryItems } from '@/registries/useRegistryItems';
 import { useRegistrySources } from '@/registries/useRegistrySources';
 import { useRegistrySourcesSlot } from '@/registries/useRegistrySourcesSlot';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
+import { skillSource, skillSourceVerification } from '../skillsCollectionModel';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 
@@ -650,7 +651,8 @@ function SkillAddDetail(
   // unless unticked, or held already).
   const { execute, onSelectionChange, onHeld } = props;
   const version = read.item?.summary.version;
-  const primaryPath = skill?.ref.path;
+  const primaryPath = skill?.ref.kind === 'gitTree' ? skill.ref.path
+    : skill?.ref.kind === 'wellKnown' ? skill.ref.name : undefined;
   const [offered, setOffered] = React.useState<Readonly<{ primary: SkillInstallPreviewV1; siblings: readonly SkillInstallPreviewV1[] }> | null>(null);
   React.useEffect(() => {
     setOffered(null);
@@ -692,12 +694,16 @@ function SkillAddDetail(
   React.useEffect(() => {
     onSelectionChange(key, siblingChoice.selectPaths);
   }, [key, onSelectionChange, siblingChoice.selectPaths]);
-  const ref = skill
+  const ref = skill?.ref.kind === 'gitTree'
     ? skill.ref.commit.slice(0, 7)
     : shortRef(read.item?.summary.version);
-  const repo = skill
+  const repo = skill?.ref.kind === 'gitTree'
     ? (repositoryLabel(skill.ref.repo) ?? skill.ref.repo)
     : repositoryLabel(props.row.links?.repository);
+  const indexSource = skill?.ref.kind === 'wellKnown' ? skillSource({ provenance: skill.ref }, (id) => id) : undefined;
+  const indexVerification = skill?.ref.kind === 'wellKnown'
+    ? skillSourceVerification({ provenance: skill.ref })
+    : undefined;
   const problem = read.item?.summary.problem ?? props.row.problem;
   const purpose = (read.item ? rowDescription(read.item.summary) : null) ?? rowDescription(props.row);
 
@@ -708,7 +714,8 @@ function SkillAddDetail(
       purpose={purpose}
       facts={{
         presentation: 'row',
-        ...(repo ? { source: { kind: 'git' as const, label: repo, ...(ref ? { ref } : {}) } } : {}),
+        ...(indexSource && indexVerification ? { source: indexSource, extra: [indexVerification] }
+          : repo ? { source: { kind: 'git' as const, label: repo, ...(ref ? { ref } : {}) } } : {}),
         ...(trust ? { trust } : {}),
         ...(cost ? { cost: { tokensWhenUsed: cost.bodyTokens } } : {}),
       }}
@@ -742,7 +749,9 @@ function SkillAddDetail(
               scripts: skill.files.filter((file) => file.unixMode === 0o755).length,
               files: skill.files,
               cost,
-              ...(repo
+              ...(indexSource?.kind === 'link' && indexVerification
+                ? { source: { icon: 'link' as const, title: indexSource.host, subtitle: indexVerification } }
+                : repo
                 ? {
                     source: {
                       icon: 'github-logo' as const,

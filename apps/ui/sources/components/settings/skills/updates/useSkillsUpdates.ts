@@ -5,6 +5,7 @@ import {
   type SkillLibraryActionResultByIdV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import type { RegistryContentRefV1 } from '@happier-dev/protocol/registries';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { SkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
@@ -160,16 +161,13 @@ export function useSkillsUpdates(library: SkillsLibrary) {
 
 export type SkillsUpdatesController = ReturnType<typeof useSkillsUpdates>;
 
-type ContentRef =
-  | Readonly<{ kind: 'gitTree'; commit: string }>
-  | Readonly<{ kind: 'version'; version: string }>;
-
-/** A source revision as people read it: a short commit, or the published version. */
+/** A source revision as people read it: a short commit, digest, or published version. */
 export function contentRefLabel(
-  ref: ContentRef | undefined | null,
+  ref: RegistryContentRefV1 | undefined | null,
 ): string | null {
   if (!ref) return null;
-  return ref.kind === 'gitTree' ? ref.commit.slice(0, 7) : ref.version;
+  return ref.kind === 'gitTree' ? ref.commit.slice(0, 7)
+    : ref.kind === 'wellKnown' ? `${ref.digest.slice(0, 19)}…` : ref.version;
 }
 
 /** The revision a skill's library copy came from. */
@@ -179,5 +177,6 @@ export function provenanceRefLabel(
   if (provenance.kind === 'registry')
     return contentRefLabel(provenance.registry.ref);
   if (provenance.kind === 'link') return contentRefLabel(provenance.ref);
+  if (provenance.kind === 'wellKnown') return contentRefLabel(provenance);
   return null;
 }

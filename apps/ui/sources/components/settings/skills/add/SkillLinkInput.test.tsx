@@ -5,6 +5,8 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
+import type { CapabilityAddInputContext } from '@/components/capabilities/add/CapabilityAddModal';
+import { t } from '@/text';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -73,6 +75,7 @@ type Callbacks = Readonly<{ onAdded?: (id: string) => void; onSelectAdded?: (id:
  */
 async function renderLink(answer: MountedAuthoringActionExecute, callbacks: Callbacks = {}, link = 'https://github.com/acme/agent-skills') {
   const onClose = vi.fn();
+  const inputContext: { current?: CapabilityAddInputContext } = {};
   const config = {
     title: 'Add a skill',
     testID: 'skills.add',
@@ -84,16 +87,19 @@ async function renderLink(answer: MountedAuthoringActionExecute, callbacks: Call
         icon: 'link' as const,
         kind: 'input' as const,
         ownsTools: true,
-        renderBody: (ctx: never) => (
-          <SkillLinkInput
-            ctx={ctx}
-            execute={answer}
-            onAdded={callbacks.onAdded ?? (() => {})}
-            onSelectAdded={callbacks.onSelectAdded ?? (() => {})}
-            onDone={callbacks.onDone ?? (() => {})}
-            testID="link"
-          />
-        ),
+        renderBody: (ctx: CapabilityAddInputContext) => {
+          inputContext.current = ctx;
+          return (
+            <SkillLinkInput
+              ctx={ctx}
+              execute={answer}
+              onAdded={callbacks.onAdded ?? (() => {})}
+              onSelectAdded={callbacks.onSelectAdded ?? (() => {})}
+              onDone={callbacks.onDone ?? (() => {})}
+              testID="link"
+            />
+          );
+        },
       },
     ],
     catalog: { query: '', onQueryChange: () => {}, searchPlaceholder: '', items: [], itemKey: () => '', anatomy: {} , loading: false, empty: null },
@@ -132,7 +138,13 @@ async function renderLink(answer: MountedAuthoringActionExecute, callbacks: Call
     const anatomy = collection.props.anatomy;
     return renderScreen(<>{anatomy.leadingControl?.(item)}{anatomy.titleMeta?.(item)}{anatomy.byline?.(item)}</>);
   };
-  return { screen, open, pressPrimary, row, onClose };
+  // Native Collection layout is unmeasured here; use the input mode's public Back boundary.
+  const closeDetail = async () => {
+    const ctx = inputContext.current;
+    if (!ctx) throw new Error('input context not rendered');
+    await act(async () => ctx.openDetail(null));
+  };
+  return { screen, open, closeDetail, pressPrimary, row, onClose };
 }
 
 /** Finds a skill from a link, then tries to add it, so the footer carries a refusal beside Add. */
@@ -156,6 +168,35 @@ function footerDirection(screen: Awaited<ReturnType<typeof renderFailedAdd>>) {
 }
 
 describe('SkillLinkInput footer', () => {
+  it('shows each index item’s digest verification while keeping held identity, selection and the reviewed pins', async () => {
+    const indexUrl = 'https://skills.example.test/.well-known/skills/index.json';
+    const provenance = { kind: 'wellKnown' as const, indexUrl, name: 'grill-me', digest: `sha256:${'a'.repeat(64)}` };
+    const held = { ...PREVIEW, path: 'grill-me', provenance, inLibrary: 'held-review' };
+    const fresh = { ...PREVIEW, path: 'to-prd', name: 'to-prd', provenance: {
+      ...provenance, name: 'to-prd', digest: `sha256:${'b'.repeat(64)}`, publishedDigest: `sha256:${'c'.repeat(64)}`,
+    } };
+    const installs: unknown[] = [];
+    const answer: MountedAuthoringActionExecute = async (_actionId, input) => {
+      if ((input as { dryRun?: boolean }).dryRun) return { ok: true, result: { items: [held, fresh] } };
+      installs.push(input);
+      return { ok: true, result: { skillIds: ['new-prd'], includedInSessionId: null } };
+    };
+    const { screen, row, open, closeDetail } = await renderLink(answer, {}, indexUrl);
+    const heldRow = await row(held);
+    expect(heldRow.findByTestId('link.item.grill-me.inLibrary')).not.toBeNull();
+    expect(heldRow.getTextContent()).toContain('skills.example.test');
+    expect(heldRow.getTextContent()).toContain(t('capabilities.skillDetail.source.noDigestPublished'));
+    const freshRow = await row(fresh);
+    expect(freshRow.getTextContent()).toContain(t('capabilities.skillDetail.source.verifiedByDigest'));
+    await open('to-prd');
+    expect(screen.getTextContent()).toContain(t('capabilities.skillDetail.source.verifiedByDigest'));
+    expect(screen.getTextContent()).not.toContain(PREVIEW.provenance.ref.commit.slice(0, 7));
+    await closeDetail();
+    // The footer uses the same multi-skill selection owner: the held item is never selected again.
+    await screen.pressByTestIdAsync('link.add');
+    expect(installs).toEqual([{ source: { kind: 'link', url: indexUrl, refs: [held.provenance, fresh.provenance] }, selectPaths: ['to-prd'] }]);
+  });
+
   it('treats a pasted skills add command as link text for both preview and install', async () => {
     const calls: unknown[] = [];
     const answer: MountedAuthoringActionExecute = async (_actionId, input) => {

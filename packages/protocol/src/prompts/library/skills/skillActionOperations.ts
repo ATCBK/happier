@@ -9,7 +9,7 @@ import { readSkillBundleContentV1, readReadOnlySkillContentV1, validatePromptBun
 import { mutateSkillRulesV1, removeSkillRulesV1, type SkillRulesActionPortV1 } from '../skillRulesActionsV1.js';
 import { isMigratedReachRuleIdV1, reachRulesToDraftsV1, resolveCreateReachV1 } from '../../../reach/reachRulesChangeV1.js';
 import type { ReachRuleV1 } from '../../../reach/reachRuleV1.js';
-import type { RegistryItemPointerV1, RegistryItemV1, RegistryContentRefV1 } from '../../../registries/registryItemsV1.js';
+import type { RegistryItemPointerV1, RegistryItemV1, RegistrySkillContentRefV1 } from '../../../registries/registryItemsV1.js';
 import type { RegistrySourceDescriptorV1 } from '../../../registries/registrySourcesV1.js';
 import { RegistryUpstreamV1Schema, registryUpstreamEqualV1, type RegistryUpstreamV1 } from '../../../registries/registryUpstreamV1.js';
 import type { RegistryProvenanceV1 } from '../../../registries/registryItemsV1.js';
@@ -37,7 +37,7 @@ export type SkillActionPortV1 = Readonly<{
   readRegistrySource?(sourceId: string): Promise<RegistrySourceDescriptorV1>;
   fetchRegistrySkillFiles?(pointer: RegistryItemPointerV1): Promise<readonly Readonly<{ path: string; unixMode: 0o644 | 0o755; bytes: Uint8Array }>[] >;
   fetchLinkSkillFiles?(url: string, item: RegistryItemV1): Promise<readonly Readonly<{ path: string; unixMode: 0o644 | 0o755; bytes: Uint8Array }>[] >;
-  readLinkSkills?(url: string, ref?: Extract<RegistryContentRefV1, { kind: 'gitTree' }>): Promise<readonly RegistryItemV1[]>;
+  readLinkSkills?(url: string, ref?: RegistrySkillContentRefV1): Promise<readonly RegistryItemV1[]>;
   readFoundSkillBundle?(machineId: string, path: string, signal?: AbortSignal): Promise<FoundSkillBundleV1>;
   randomId(): string; nowMs?(): number;
 }>;
@@ -162,7 +162,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
       const opened = await Promise.all(headers.map(async header => {
         try {
           const { provenance } = readSkillLockV1(header.header);
-          if (provenance.kind !== 'registry' && (provenance.kind !== 'link' || provenance.ref.kind !== 'gitTree')) return null;
+          if (provenance.kind !== 'wellKnown' && provenance.kind !== 'registry' && (provenance.kind !== 'link' || provenance.ref.kind !== 'gitTree')) return null;
           // Preserve the library's unreadable-item exclusion; only tracked content needs opening.
           const current = await read(header.id, signal);
           return { skillId: current.skillId, name: current.content.frontmatter.name,
@@ -202,7 +202,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     validateFiles(files, nowMs());
     if (sourceFolderName !== undefined && !SkillSourceFolderNameV1Schema.safeParse(sourceFolderName).success) return fail('invalid_path');
     const name = readSkillFrontmatterV1(skillMarkdown(files)).name!;
-    const imported = provenance.kind === 'registry' || provenance.kind === 'link';
+    const imported = provenance.kind === 'registry' || provenance.kind === 'link' || provenance.kind === 'wellKnown';
     const lock: SkillLockV1 = { provenance, updatePolicy: 'manual', ...(sourceFolderName ? { sourceFolderName } : {}),
       ...(imported ? { importedDigest: computePromptBundleDigestV1({ v: 1, entries: [...files], createdAtMs: 0, updatedAtMs: 0 }) } : {}) };
     const store: PromptLibraryArtifactStore = { ...port.store, create: port.store.create ? input => port.store.create!({ ...input, header: { ...input.header, skillLock: lock } }) : undefined };
@@ -325,7 +325,8 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
       : await (port.fetchRegistrySkillFiles?.(source) ?? fail('unsupported_source'));
     const normalized = fetched.map(file => skillFileFromBytesV1(file.path, file.bytes, file.unixMode));
     validateFiles(normalized, nowMs()); const md = skillMarkdown(normalized), fm = readSkillFrontmatterV1(md);
-    return { path: item.payload.skill.ref.path, name: fm.name!, description: fm.description ?? null, files: normalized,
+    const ref = item.payload.skill.ref;
+    return { path: ref.kind === 'gitTree' ? ref.path : ref.name, name: fm.name!, description: fm.description ?? null, files: normalized,
       provenance, trust: deriveSkillTrustV1(normalized), cost: estimateSkillCostV1(md), ...outsideReferences(md, normalized) };
   }
   /**
@@ -347,7 +348,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
         .filter(path => !knownPaths.has(path) && (!wanted || wanted.includes(path)));
       const siblings = await Promise.all(candidates.map(async path => {
         try {
-          const item = (await readLinkSkills(ref.repo, { ...ref, path })).find(listed => listed.payload.kind === 'skill' && listed.payload.skill.ref.path === path);
+          const item = (await readLinkSkills(ref.repo, { ...ref, path })).find(listed => listed.payload.kind === 'skill' && listed.payload.skill.ref.kind === 'gitTree' && listed.payload.skill.ref.path === path);
           return item?.payload.kind === 'skill' ? await preview(item, { kind: 'link', url: ref.repo, ref: item.payload.skill.ref }, ref.repo) : null;
         } catch {
           // An unreadable sibling stays advisory; cancellation still belongs to the containing Action.
@@ -362,17 +363,25 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
   async function upstream(opened: Awaited<ReturnType<typeof current>>) {
     const provenance = opened.lock.provenance;
     const latest = opened.lock.upstream?.latest;
+    if (latest?.kind === 'wellKnown' && provenance.kind === 'wellKnown' && port.readLinkSkills) {
+      const item = (await port.readLinkSkills(provenance.indexUrl, latest)).find(item => item.payload.kind === 'skill'
+        && item.payload.skill.ref.kind === 'wellKnown' && item.payload.skill.ref.name === provenance.name) ?? fail('update_unavailable');
+      return diffPreview(opened, await preview(item, latest, provenance.indexUrl));
+    }
     if (!latest || latest.kind !== 'gitTree') return fail('update_unavailable');
     let item: RegistryItemV1;
     if (provenance.kind === 'registry' && port.readRegistryItem) item = await port.readRegistryItem({ sourceId: provenance.registry.sourceId, itemId: provenance.registry.itemId, version: latest.commit });
     else if (provenance.kind === 'link' && port.readLinkSkills) {
       const candidates = await port.readLinkSkills(provenance.url, latest);
-      item = candidates.find(candidate => candidate.payload.kind === 'skill' && candidate.payload.skill.ref.path === latest.path) ?? fail('update_unavailable');
+      item = candidates.find(candidate => candidate.payload.kind === 'skill' && candidate.payload.skill.ref.kind === 'gitTree' && candidate.payload.skill.ref.path === latest.path) ?? fail('update_unavailable');
     } else return fail('update_unavailable');
     const nextProvenance: SkillProvenanceV1 = provenance.kind === 'registry' ? { ...provenance, registry: { ...provenance.registry, ref: latest } } : { kind: 'link', url: provenance.kind === 'link' ? provenance.url : '', ref: latest };
     const next = await preview(item, nextProvenance, provenance.kind === 'registry'
       ? { sourceId: provenance.registry.sourceId, itemId: provenance.registry.itemId, version: latest.commit }
       : provenance.kind === 'link' ? provenance.url : fail('update_unavailable'));
+    return diffPreview(opened, next);
+  }
+  function diffPreview(opened: Awaited<ReturnType<typeof current>>, next: Awaited<ReturnType<typeof preview>>) {
     const mine = projectPromptBundleActionEntriesV1(opened.content.body.entries);
     const paths = [...new Set([...mine.map(file => file.path), ...next.files.map(file => file.path)])].sort();
     return { next, files: paths.map(path => { const left = mine.find(file => file.path === path) ?? null, right = next.files.find(file => file.path === path) ?? null;
@@ -489,7 +498,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
           else if (input.source.kind === 'registry') { if (!port.readRegistryItem || !port.readRegistrySource) return fail('unsupported_source'); const pointer = input.source;
             const item = await port.readRegistryItem({ sourceId: pointer.sourceId, itemId: pointer.itemId, version: pointer.version });
             if (item.payload.kind !== 'skill') return fail('unsupported_source');
-            if (item.payload.skill.ref.commit !== pointer.version) return fail('registry_version_mismatch');
+            if ((item.payload.skill.ref.kind === 'gitTree' ? item.payload.skill.ref.commit : item.payload.skill.ref.digest) !== pointer.version) return fail('registry_version_mismatch');
             const source = await port.readRegistrySource(pointer.sourceId);
             const primary = await preview(item, { kind: 'registry', registry: { sourceId: pointer.sourceId, itemId: pointer.itemId,
               sourceUrl: source.url, format: source.format, ref: item.payload.skill.ref, importedAt: nowMs() } },
@@ -498,18 +507,18 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
           else { if (!port.readLinkSkills) return fail('unsupported_source'); const url = input.source.url;
             const readLinkSkills = port.readLinkSkills;
             const items = input.source.refs ? await Promise.all(input.source.refs
-              .filter(ref => !input.selectPaths || input.selectPaths.includes(ref.path))
+              .filter(ref => !input.selectPaths || input.selectPaths.includes(ref.kind === 'gitTree' ? ref.path : ref.name))
               .map(async ref => {
                 const item = (await readLinkSkills(url, ref)).find(item => item.payload.kind === 'skill'
-                  && item.payload.skill.ref.path === ref.path);
-                if (!item || item.payload.kind !== 'skill' || item.payload.skill.ref.repo !== ref.repo
-                  || item.payload.skill.ref.commit !== ref.commit || item.payload.skill.ref.treeSha !== ref.treeSha)
+                  && (item.payload.skill.ref.kind === 'gitTree' ? item.payload.skill.ref.path : item.payload.skill.ref.name)
+                    === (ref.kind === 'gitTree' ? ref.path : ref.name));
+                if (!item || item.payload.kind !== 'skill' || !registryUpstreamEqualV1({ state: 'current', latest: item.payload.skill.ref }, { state: 'current', latest: ref }))
                   return fail('registry_version_mismatch');
                 return item;
               })) : await readLinkSkills(url);
             previews = await withSourceSiblingPreviews(await Promise.all(items.map(item => {
               if (item.payload.kind !== 'skill') return fail('unsupported_source');
-              return preview(item, { kind: 'link', url, ref: item.payload.skill.ref }, url);
+              return preview(item, item.payload.skill.ref.kind === 'wellKnown' ? item.payload.skill.ref : { kind: 'link', url, ref: item.payload.skill.ref }, url);
             })), input.selectPaths, signal); }
           const held = await heldSkills(input.source.kind === 'upload', signal);
           const selected = withSiblingSkills(previews.filter(item => !input.selectPaths || input.selectPaths.includes(item.path))).map(item => {
@@ -552,9 +561,9 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     signal?.throwIfAborted(); port.skillRules.assertCurrent();
     const opened = await current(skillId, signal);
     const provenance = opened.lock.provenance;
-    if (provenance.kind !== 'registry' && provenance.kind !== 'link') return null;
+    if (provenance.kind !== 'registry' && provenance.kind !== 'link' && provenance.kind !== 'wellKnown') return null;
     if (expectedProvenance) {
-      const ref = provenance.kind === 'registry' ? provenance.registry.ref : provenance.ref;
+      const ref = provenance.kind === 'wellKnown' ? provenance : provenance.kind === 'registry' ? provenance.registry.ref : provenance.ref;
       if (JSON.stringify(ref) !== JSON.stringify(expectedProvenance.ref)) return null;
     }
     const upstream = RegistryUpstreamV1Schema.parse(observation);

@@ -3,10 +3,11 @@ import { REGISTRY_ACTION_INPUT_SCHEMAS_V1,REGISTRY_ACTION_OUTPUT_SCHEMAS_V1,type
 import { REGISTRY_FORMAT_ADAPTERS_V1 } from './formats/index.js';
 import { githubRegistryAdapterV1,createGitHubRegistryOperationV1,readGitHubRepositoryV1,registryRelativePathV1 } from './formats/github.js';
 import { createClaudeMarketplaceRegistryAdapterV1 } from './formats/claudeMarketplace.js';
+import { couldReadWellKnownSkillsV1, readWellKnownSkillsV1 } from './formats/wellKnownSkills.js';
 import type { RegistryDetectedSourceV1,RegistryFetchContextV1,RegistryHttpV1,RegistryFormatAdapterV1 } from './formats/registryFormatAdapterV1.js';
 import { HAPPIER_PICKS_SOURCE_ID,deriveRegistrySourceIdV1,normalizeRegistrySourceUrlV1,resolveLegacyRegistrySourceRefV1,type RegistrySourceV1,type RegistrySourceDescriptorV1 } from './registrySourcesV1.js';
 import { RegistryFetchErrorV1 } from './registryListV1.js';
-import { RegistryItemV1Schema,type RegistryItemPointerV1,type RegistrySkillSourceV1,type RegistryItemV1,type RegistrySkillItemV1,type RegistryContentRefV1 } from './registryItemsV1.js';
+import { RegistryItemV1Schema,type RegistryItemPointerV1,type RegistrySkillSourceV1,type RegistryItemV1,type RegistrySkillItemV1,type RegistrySkillContentRefV1 } from './registryItemsV1.js';
 import { deriveMarketplaceSourceId, normalizeMarketplaceSourceUrlV1 } from '../marketplace/marketplaceSourceRegistryV1.js';
 import { resolveRegistryFetchPlanV1 } from './registryFetchPlanV1.js';
 import { fetchRegistrySkillFilesV1,type RegistrySkillFileBytesV1 } from './registryGitTreeV1.js';
@@ -130,6 +131,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     if(request.op==='read') return {op:'read',item};
     if(item.payload.kind!=='skill') throw new RegistryFetchErrorV1({state:'invalid_source'});
     if(item.summary.problem) throw new RegistryFetchErrorV1({state:'invalid_source'});
+    if (item.payload.skill.ref.kind !== 'gitTree') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
     if (source.format === 'happier-catalog' && !readGitHubRepositoryV1(item.payload.skill.ref.repo)) {
       const target: RegistrySourceDescriptorV1 = { ...source, format: 'git', kinds: ['skill'], url: item.payload.skill.ref.repo,
         path: item.payload.skill.ref.path, ref: item.payload.skill.ref.commit };
@@ -142,6 +144,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     return {op:'files',files:files.map(file=>({path:file.path,unixMode:file.unixMode,contentBase64:encodeBase64(file.bytes)}))};
   };
   const fetchFiles=async(skill:RegistrySkillSourceV1,source:RegistrySourceDescriptorV1, operationCtx = ctx):Promise<readonly RegistrySkillFileBytesV1[]>=>{
+    if (skill.ref.kind !== 'gitTree') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
     if(!readGitHubRepositoryV1(skill.ref.repo) && operationCtx.git) {
       return operationCtx.git.files(skill,source);
     }
@@ -237,7 +240,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     }
     const proposed: RegistrySourceDescriptorV1 = {
       id: deriveRegistrySourceIdV1(normalized), url: normalized, title: normalized,
-      format: new URL(normalized).hostname === 'skills.sh' ? 'skills-sh'
+      format: !couldReadWellKnownSkillsV1(normalized) && new URL(normalized).hostname === 'skills.sh' ? 'skills-sh'
         : normalized.endsWith('/marketplace.json') ? 'claude-marketplace' : 'git',
       kinds: ['skill'], enabled: true, addedAt: 0, origin: { kind: 'user' }, removable: true,
     };
@@ -246,6 +249,20 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
       op: request.op === 'linkFiles' ? 'files' : 'list',
     });
     if (proposedPlacements[0] === 'daemon') return viaDaemon(request);
+    if (request.ref?.kind === 'wellKnown' || !request.ref && couldReadWellKnownSkillsV1(normalized)) {
+      const pin = request.ref?.kind === 'wellKnown' ? request.ref : undefined;
+      if (pin && request.op === 'linkFiles' && (request.itemId !== pin.name || request.version !== pin.digest))
+        throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+      const materialized = await readWellKnownSkillsV1(operationCtx, normalized, pin);
+      if (materialized !== null) {
+        if (request.op === 'link') return RegistryFetchResponseV1Schema.parse({ op: 'link', items: materialized.map(entry => entry.item) });
+        const entry = materialized.find(entry => entry.item.summary.itemId === request.itemId);
+        if (!entry) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+        return RegistryFetchResponseV1Schema.parse({ op: 'files', files: entry.files.map(file => ({
+          path: file.path, unixMode: file.unixMode, contentBase64: encodeBase64(file.bytes),
+        })) });
+      }
+    }
     let detectedSource: RegistrySourceDescriptorV1;
     try {
       detectedSource = await linkSource(normalized);
@@ -253,7 +270,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
       if (error instanceof RegistryTransportFailureV1 && proposedPlacements.includes('daemon')) return viaDaemon(request);
       throw error;
     }
-    const source = request.ref ? {
+    const source = request.ref?.kind === 'gitTree' ? {
       ...detectedSource, format: 'git' as const, url: request.ref.repo, ref: request.ref.commit, path: request.ref.path,
     } : detectedSource;
     const github = createGitHubRegistryOperationV1();
@@ -279,9 +296,9 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
           })));
           return RegistryFetchResponseV1Schema.parse({ op: 'link', items });
         }
-        if (request.version !== request.ref.commit) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+        if (request.ref.kind !== 'gitTree' || request.version !== request.ref.commit) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
         const item = await adapter.read(operationCtx, { source, kind: 'skill', itemId: '', version: request.version });
-        if (item.payload.kind !== 'skill') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
+        if (item.payload.kind !== 'skill' || item.payload.skill.ref.kind !== 'gitTree') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
         if (item.payload.skill.ref.treeSha !== request.ref.treeSha) throw new Error('registry_tree_sha_mismatch');
         if (item.summary.problem) throw new RegistryFetchErrorV1({ state: 'invalid_source' });
         return {
@@ -298,7 +315,7 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
     }
     throw new RegistryFetchErrorV1({ state: 'unreachable' });
   };
-  const readLinkSkills = async (url: string, ref?: Extract<RegistryContentRefV1, { kind: 'gitTree' }>): Promise<readonly RegistrySkillItemV1[]> => {
+  const readLinkSkills = async (url: string, ref?: RegistrySkillContentRefV1): Promise<readonly RegistrySkillItemV1[]> => {
     const response = await fetchRequest({ op: 'link', url, ...(ref ? { ref } : {}) });
     if (response.op !== 'link') {
       throw new RegistryFetchErrorV1(response.op === 'error' && response.status.state !== 'ok'
@@ -312,6 +329,11 @@ export function createRegistryHostV1(deps:RegistryHostDepsV1) {
   const fetchLinkSkillFiles = async (url: string, item: RegistryItemV1): Promise<readonly RegistrySkillFileBytesV1[]> => {
     if (item.payload.kind !== 'skill') throw new RegistryFetchErrorV1({ state: 'invalid_source' });
     const skill = item.payload.skill;
+    if (skill.ref.kind === 'wellKnown') {
+      const response = await fetchRequest({ op: 'linkFiles', url, itemId: skill.ref.name, version: skill.ref.digest, ref: skill.ref });
+      if (response.op !== 'files') throw new RegistryFetchErrorV1(response.op === 'error' && response.status.state !== 'ok' ? response.status : { state: 'invalid_source' });
+      return response.files.map(file => ({ path: file.path, unixMode: file.unixMode, bytes: decodeBase64(file.contentBase64) }));
+    }
     const request = { op: 'linkFiles' as const, url, itemId: item.summary.itemId, version: skill.ref.commit, ref: skill.ref };
     if (readGitHubRepositoryV1(skill.ref.repo)) {
       if (item.summary.problem) throw new RegistryFetchErrorV1({ state: 'invalid_source' });

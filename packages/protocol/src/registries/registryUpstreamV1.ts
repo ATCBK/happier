@@ -41,6 +41,7 @@ export function registryUpstreamEqualV1(left: RegistryUpstreamV1 | undefined, ri
   const a = left.latest, b = right.latest;
   if (!a || !b) return a === b;
   return a.kind === 'version' && b.kind === 'version' ? a.version === b.version
+    : a.kind === 'wellKnown' && b.kind === 'wellKnown' ? a.indexUrl === b.indexUrl && a.name === b.name && a.digest === b.digest && a.publishedDigest === b.publishedDigest
     : a.kind === 'gitTree' && b.kind === 'gitTree' && a.repo === b.repo && a.path === b.path
       && a.commit === b.commit && a.treeSha === b.treeSha;
 }
@@ -48,6 +49,7 @@ export function registryUpstreamEqualV1(left: RegistryUpstreamV1 | undefined, ri
 export function compareRegistryContentRefV1(current: RegistryContentRefV1, latest: RegistryContentRefV1 | 'removed'): RegistryUpstreamV1['state'] {
   if (latest === 'removed') return 'removed_from_source';
   const equal = current.kind === 'version' && latest.kind === 'version' ? current.version === latest.version
+    : current.kind === 'wellKnown' && latest.kind === 'wellKnown' ? current.indexUrl === latest.indexUrl && current.name === latest.name && current.digest === latest.digest && current.publishedDigest === latest.publishedDigest
     : current.kind === 'gitTree' && latest.kind === 'gitTree'
       && current.repo === latest.repo && current.path === latest.path && current.treeSha === latest.treeSha;
   return equal ? 'current' : 'update_available';
