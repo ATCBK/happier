@@ -40,6 +40,16 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
 }
 
 describe('createActionExecutor execution interception', () => {
+  it.each([false, true])('diagnoses invalid generic Action inputs before interception (observed=%s)', async observed => {
+    const interceptActionExecution = vi.fn(async () => ({ status: 'continue' as const, input: {} }));
+    const executor = createExecutor(observed ? { interceptActionExecution } : {});
+    expect(await executor.execute('session.title.set', { sessionId: 'session-1', title: 42 }, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters', details: { issues: [{
+        code: 'invalid_type', path: ['title'], expected: 'string',
+      }] } });
+    expect(interceptActionExecution).not.toHaveBeenCalled();
+  });
+
   const runStartInput = {
     sessionId: 'session-1',
     intent: 'delegate',
@@ -150,7 +160,9 @@ describe('createActionExecutor execution interception', () => {
       { surface: 'cli', actionCaller: { kind: 'host' } },
     );
 
-    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters', details: { issues: [{
+      code: 'invalid_type', path: ['title'], expected: 'string',
+    }] } });
     expect(isActionApprovalRequired).not.toHaveBeenCalled();
     expect(sessionStateFieldSet).not.toHaveBeenCalled();
   });

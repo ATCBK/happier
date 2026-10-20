@@ -78,6 +78,20 @@ function createExternalSpawnApprovalContext(requestId: string) {
 describe('session.spawn_new canonical execution', () => {
   const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
 
+  it.each(['agent', 'mcp', 'cli'] as const)('returns repairable directory validation facts on %s', async surface => {
+    const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => {
+      throw new Error('Invalid input must not create a Session');
+    });
+    const result = await createActionExecutor({ sessionSpawnNew } as ActionExecutorDeps).execute('session.spawn_new', {
+      ...canonicalInput, directory: { kind: 'local', path: '/private/submitted-path' },
+    }, { surface, authority: surface === 'cli' ? 'present_user' : 'account_automation' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters', details: { issues: [{
+      code: 'invalid_union', path: ['directory', 'kind'], acceptedValues: ['path', 'managed'],
+    }] } });
+    expect(JSON.stringify(result)).not.toContain('/private/submitted-path');
+    expect(sessionSpawnNew).not.toHaveBeenCalled();
+  });
+
   it('keeps a Discussion-owned slot on one birth identity across caller surfaces and uncertain replies', async () => {
     // Native Session creation is the external boundary; Action parsing and birth identity stay real.
     const births: Parameters<ActionExecutorDeps['sessionSpawnNew']>[0][] = [];
@@ -1127,7 +1141,7 @@ describe('session.spawn_new canonical execution', () => {
       actionRequestId: 'legacy-request-7',
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',

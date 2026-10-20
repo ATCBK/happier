@@ -1153,7 +1153,7 @@ describe('createActionExecutor (session control)', () => {
       'session.message.send' as any,
       { sessionId: 's1', message: 'Hello', idempotencyKey: 'message-42', localId: 'forged-1' },
       { surface: 'plugin', actionCaller },
-    )).resolves.toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+    )).resolves.toMatchObject({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
     expect(sessionSendMessage).not.toHaveBeenCalled();
 
     // A plugin caller reaching the generic input schema through another surface
@@ -1178,7 +1178,7 @@ describe('createActionExecutor (session control)', () => {
       'session.message.send' as any,
       { sessionId: 's1', message: 'Hello', providerConnectionId: null },
       { surface: 'cli', defaultSessionId: null },
-    )).resolves.toEqual({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+    )).resolves.toMatchObject({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
     expect(sessionSendMessage).not.toHaveBeenCalled();
 
     // The same native source with a model id — concrete or the reset sentinel
@@ -1224,7 +1224,7 @@ describe('createActionExecutor (session control)', () => {
           contributionLocalId: 'inbound',
         },
       },
-    )).resolves.toEqual({
+    )).resolves.toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -1311,7 +1311,7 @@ describe('createActionExecutor (session control)', () => {
         surface: 'plugin',
         actionCaller: { kind: 'plugin', pluginId: 'acme.channels' },
       },
-    )).resolves.toEqual({
+    )).resolves.toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2028,7 +2028,7 @@ describe('createActionExecutor (session control)', () => {
       'session.transcript.get',
       { sessionId: 's1', includeRaw: true },
       pluginContext,
-    )).resolves.toEqual({
+    )).resolves.toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2369,7 +2369,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli' },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       error: 'invalid_parameters',
       errorCode: 'invalid_parameters',
@@ -2390,7 +2390,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2451,7 +2451,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2477,7 +2477,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2509,7 +2509,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2535,7 +2535,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2566,7 +2566,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2593,7 +2593,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2614,7 +2614,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2642,7 +2642,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
@@ -2664,7 +2664,7 @@ describe('createActionExecutor (session control)', () => {
       { surface: 'cli', defaultSessionId: null },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',

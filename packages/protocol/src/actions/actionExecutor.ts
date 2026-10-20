@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { actionInputValidationFailure } from './executor/actionInputValidation.js';
 import { CodeIntelligenceActionInputSchema } from './codeIntelligenceActionFamily.js';
 import { queryCodeIntelligenceFallback } from '../machines/codeIntelligenceFallback.js';
 import { ActionInvokeInputSchema } from './actionInvokeInput.js';
@@ -2889,7 +2890,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     hostInternal = false,
   ): Promise<Readonly<
     | { ok: true; input: unknown }
-    | { ok: false; errorCode: string; error: string }
+    | ActionExecuteFailure
   >> {
     const schema = hostInternal ? spec.inputSchema : callerInputSchema(spec, ctx);
     const parsed = schema.safeParse(input ?? {});
@@ -2897,7 +2898,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       const timingIssue = spec.id === 'session.permission_mode.set'
         ? parsed.error.issues.find((issue) => issue.path[0] === 'applyTiming')
         : undefined;
-      return { ok: false, errorCode: 'invalid_parameters', error: timingIssue?.message ?? 'invalid_parameters' };
+      return { ...actionInputValidationFailure(parsed.error), error: timingIssue?.message ?? 'invalid_parameters' };
     }
     if (hostInternal) return { ok: true, input: parsed.data };
     const caller = ctx.actionCaller ?? { kind: 'host' as const };
@@ -3984,7 +3985,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       ? { success: true as const, data: existingAdmission.input }
       : spec.inputSchema.safeParse(bound.input ?? {});
     if (!parsed.success) {
-      const invalid = { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' } as const;
+      const invalid = actionInputValidationFailure(parsed.error);
       return actionId === 'execution.run.start'
         ? classifyExecutionRunStartFailure(invalid, 'noRunCreated')
         : invalid;
@@ -11542,7 +11543,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     if (actionId === 'session.spawn_new' && isAgentCaller(ctx)) {
       const authoring = SessionSpawnNewAgentAuthoringInputV2Schema.safeParse(input ?? {});
       if (!authoring.success) return settlePrepareResult(actionId,
-        { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+        actionInputValidationFailure(authoring.error));
       const authored = authoring.data;
       if (typeof authored.profileId === 'string' && authored.roleId === undefined) {
         const availability = hostInternal ? null : resolveAvailabilityForContext(spec, ctx);
@@ -11593,7 +11594,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     if (!parsedInitialInput.success) {
       return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(
         actionId,
-        { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' },
+        actionInputValidationFailure(parsedInitialInput.error),
       ));
     }
     const initialCurrentSessionScopeFailure = selectorIntent || hasSessionQuestionAnswerOrigin(actionId, ctx)
@@ -11678,7 +11679,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     if (!parsedTransformedInput.success) {
       return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(
         actionId,
-        { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' },
+        actionInputValidationFailure(parsedTransformedInput.error),
       ));
     }
 
@@ -11688,7 +11689,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     if (!parsedSemanticInput.success) {
       return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(
         actionId,
-        { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' },
+        actionInputValidationFailure(parsedSemanticInput.error),
       ));
     }
 

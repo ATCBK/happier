@@ -251,6 +251,14 @@ retain the separate human-only live-result custody described below.
 
 ## Canonical owners
 
+In 0.3 development, shared Action input validation returns `invalid_parameters`
+with `details.issues`: each issue identifies its input `path` and validation
+`code`, plus `expected` for type failures or `acceptedValues` for literal,
+enum and discriminator failures. Agent spawn authoring and intercepted inputs
+use the same projection as ordinary Action admission. Diagnostics omit rejected
+values, unknown-key lists and custom validation prose; the existing Action
+failure envelope carries these details through Agent and MCP tools.
+
 In 0.3 development, `mcp.servers.duplicate` accepts only `{ serverId }` and returns
 `{ serverId: <new id> }`. The Protocol MCP Action owner reads the current Account
 catalog, allocates the copy's identity and unique name, and commits its configuration
