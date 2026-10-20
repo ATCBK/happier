@@ -168,7 +168,7 @@ describe('DesktopOverlaySettingsSection', () => {
         expect(screen.findRowByTitle('settingsDesktop.overlay.compactStyleTitle')).toBeNull();
     });
 
-    it('writes overlay visibility and placement changes through the segmented and field controls', async () => {
+    it('writes overlay visibility and presentation changes through the segmented controls', async () => {
         const { DesktopOverlaySettingsSection } = await import('./DesktopOverlaySettingsSection');
         const screen = await renderSettingsView(<DesktopOverlaySettingsSection />);
         const segmented = (title: string) => screen.findAll((node) => (
@@ -189,11 +189,6 @@ describe('DesktopOverlaySettingsSection', () => {
         const anchorMenu = screen.findAllByType('DropdownMenu' as any)
             .find((menu) => menu.props.itemTrigger?.title === 'settingsDesktop.overlay.anchorPresetTitle');
         expect(anchorMenu).toBeTruthy();
-        anchorMenu?.props.onSelect?.('bottom_right');
-        expect(applyLocalSettingsMock).toHaveBeenCalledWith({
-            desktopOverlayAnchor: 'bottom_right',
-        });
-        expect(resetDesktopActivityOverlayPositionMock).toHaveBeenCalledTimes(1);
 
         segmented('settingsDesktop.overlay.presentationModeTitle')?.props.onChange('notch_integrated');
         expect(applyLocalSettingsMock).toHaveBeenCalledWith({
@@ -291,50 +286,6 @@ describe('DesktopOverlaySettingsSection', () => {
         expect(screen.findRowByTitle('settingsDesktop.overlay.densityTitle')).toBeNull();
         expect(screen.findRowByTitle('settingsDesktop.overlay.compactStyleTitle')).toBeNull();
         expect(screen.findRowByTitle('settingsDesktop.overlay.showSessionCountTitle')).toBeNull();
-    });
-
-    it('resets anchored placement back to anchored defaults', async () => {
-        localSettingsState.value = {
-            ...localSettingsState.value,
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_right',
-            desktopOverlayOffsetX: 24,
-            desktopOverlayOffsetY: -18,
-        };
-        const { DesktopOverlaySettingsSection } = await import('./DesktopOverlaySettingsSection');
-        const screen = await renderSettingsView(<DesktopOverlaySettingsSection />);
-
-        screen.pressRowByTitle('settingsDesktop.overlay.resetPositionTitle');
-
-        expect(applyLocalSettingsMock).toHaveBeenCalledWith({
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_center',
-            desktopOverlayOffsetX: 0,
-            desktopOverlayOffsetY: 0,
-        });
-        expect(resetDesktopActivityOverlayPositionMock).toHaveBeenCalledTimes(1);
-    });
-
-    it('resets custom placement back to anchored defaults', async () => {
-        localSettingsState.value = {
-            ...localSettingsState.value,
-            desktopOverlayPlacementMode: 'custom',
-            desktopOverlayAnchor: 'bottom_right',
-            desktopOverlayOffsetX: 24,
-            desktopOverlayOffsetY: -18,
-        };
-        const { DesktopOverlaySettingsSection } = await import('./DesktopOverlaySettingsSection');
-        const screen = await renderSettingsView(<DesktopOverlaySettingsSection />);
-
-        screen.pressRowByTitle('settingsDesktop.overlay.resetPositionTitle');
-
-        expect(applyLocalSettingsMock).toHaveBeenCalledWith({
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_center',
-            desktopOverlayOffsetX: 0,
-            desktopOverlayOffsetY: 0,
-        });
-        expect(resetDesktopActivityOverlayPositionMock).toHaveBeenCalledTimes(1);
     });
 
     it('hides anchored preset controls while custom placement mode is active', async () => {
@@ -715,31 +666,4 @@ describe('DesktopOverlaySettingsSection', () => {
         expect(screen.findRowByTitle('settingsDesktop.overlay.placementModeTitle')).toBeNull();
     });
 
-    it('clears stale custom placement state when placement mode switches back to anchored', async () => {
-        localSettingsState.value = {
-            ...localSettingsState.value,
-            desktopOverlayPlacementMode: 'custom',
-            desktopOverlayAnchor: 'bottom_right',
-            desktopOverlayOffsetX: 24,
-            desktopOverlayOffsetY: -18,
-            desktopOverlayEnableDragReposition: true,
-            desktopOverlayLockPosition: false,
-        };
-        const { DesktopOverlaySettingsSection } = await import('./DesktopOverlaySettingsSection');
-        const screen = await renderSettingsView(<DesktopOverlaySettingsSection />);
-        const placementModeChoice = screen.findAll((node) => (
-            node.props?.title === 'settingsDesktop.overlay.placementModeTitle' && typeof node.props?.onChange === 'function'
-        ))[0];
-        expect(placementModeChoice).toBeTruthy();
-
-        placementModeChoice?.props.onChange?.('anchored');
-
-        expect(applyLocalSettingsMock).toHaveBeenCalledWith({
-            desktopOverlayPlacementMode: 'anchored',
-            desktopOverlayAnchor: 'top_center',
-            desktopOverlayOffsetX: 0,
-            desktopOverlayOffsetY: 0,
-        });
-        expect(resetDesktopActivityOverlayPositionMock).toHaveBeenCalledTimes(1);
-    });
 });

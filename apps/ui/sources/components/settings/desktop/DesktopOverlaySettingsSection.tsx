@@ -17,7 +17,7 @@ import {
 import { useLocalSettings } from '@/sync/domains/state/storage';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
-import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 import {
     ANCHOR_OPTIONS,
@@ -30,7 +30,6 @@ import {
 } from './DesktopOverlaySettingsSection.options';
 import { DesktopOverlayChoiceDropdownRow } from './DesktopOverlayChoiceDropdownRow';
 import { DESKTOP_SETTINGS } from './desktopSettings';
-import { commitDesktopOverlayPlacement } from './desktopOverlayPlacement';
 
 
 /**
@@ -46,6 +45,7 @@ const OVERLAY_SECTIONS_AFTER_ENABLED = [
 export const DesktopOverlaySettingsSection = React.memo(function DesktopOverlaySettingsSection() {
     const localSettings = useLocalSettings();
     const applyLocalSettings = useApplyLocalSettings();
+    const { setSetting } = useSettingActionFeedback();
     const [resolvedHostMode, setResolvedHostMode] = React.useState<'floating' | 'notch_integrated' | null>(null);
 
     const desktopPolicy = React.useMemo(
@@ -100,16 +100,12 @@ export const DesktopOverlaySettingsSection = React.memo(function DesktopOverlayS
     }, [applyLocalSettings]);
 
     const handleResetPosition = React.useCallback(() => {
-        fireAndForget(commitDesktopOverlayPlacement({ kind: 'reset' }, setLocalSetting), {
-            tag: 'DesktopOverlaySettingsSection.resetPosition',
-        });
-    }, [setLocalSetting]);
+        void setSetting(DESKTOP_SETTINGS.settings.placementMode, 'anchored');
+    }, [setSetting]);
 
     const handlePlacementModeSelect = React.useCallback((value: 'anchored' | 'custom') => {
-        fireAndForget(commitDesktopOverlayPlacement({ kind: 'mode', value }, setLocalSetting), {
-            tag: 'DesktopOverlaySettingsSection.selectPlacementMode',
-        });
-    }, [setLocalSetting]);
+        void setSetting(DESKTOP_SETTINGS.settings.placementMode, value);
+    }, [setSetting]);
 
     return (
         <>
@@ -302,9 +298,7 @@ export const DesktopOverlaySettingsSection = React.memo(function DesktopOverlayS
                                         selectedValue={desktopPolicy.anchor}
                                         choices={ANCHOR_OPTIONS}
                                         onSelect={(value) => {
-                                            fireAndForget(commitDesktopOverlayPlacement({ kind: 'anchor', value }, setLocalSetting), {
-                                                tag: 'DesktopOverlaySettingsSection.selectAnchorPreset',
-                                            });
+                                            void setSetting(DESKTOP_SETTINGS.settings.anchorPreset, value);
                                         }}
                                     />
                                 </SettingAnchor>
