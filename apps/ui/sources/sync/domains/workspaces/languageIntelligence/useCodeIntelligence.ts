@@ -22,7 +22,7 @@ export type UseCodeIntelligenceInput = Readonly<{
     openLocation: CodeIntelligenceControllerInput['openLocation'];
 }>;
 
-const INACTIVE_SNAPSHOT: CodeIntelligenceSnapshot = Object.freeze({ mode: 'fallback', status: 'idle', selection: null, kind: null, result: null });
+const INACTIVE_SNAPSHOT: CodeIntelligenceSnapshot = Object.freeze({ mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null });
 const noSubscription = () => () => undefined;
 const getInactiveSnapshot = () => INACTIVE_SNAPSHOT;
 

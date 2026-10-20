@@ -15,6 +15,8 @@ export type CodeIntelligenceSnapshot = Readonly<{
     mode: 'fallback';
     status: 'idle' | 'searching' | 'ready' | 'unavailable';
     selection: CodeIntelligenceSelection | null;
+    /** The result's name stays fixed while the pointer inspects other names. */
+    querySelection: CodeIntelligenceSelection | null;
     kind: 'definition' | 'references' | null;
     result: Extract<CodeIntelligenceFallbackResult, { status: 'ok' }> | null;
     reason?: string;
@@ -31,7 +33,7 @@ export type CodeIntelligenceControllerInput = Readonly<{
 }>;
 
 export function createCodeIntelligenceController(input: CodeIntelligenceControllerInput) {
-    let snapshot: CodeIntelligenceSnapshot = { mode: 'fallback', status: 'idle', selection: null, kind: null, result: null };
+    let snapshot: CodeIntelligenceSnapshot = { mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null };
     const listeners = new Set<() => void>();
     let pending: AbortController | null = null;
     let disposed = false;
@@ -68,7 +70,7 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
     }
     function retire(): void {
         abortPending();
-        publish({ mode: 'fallback', status: 'unavailable', selection: null, kind: null, result: null, reason: 'account_unavailable' });
+        publish({ mode: 'fallback', status: 'unavailable', selection: null, querySelection: null, kind: null, result: null, reason: 'account_unavailable' });
     }
     const retirement = input.accountLifetime.onRetire(retire);
 
@@ -83,11 +85,11 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
             const text = input.getText();
             const selection = select(text, position);
             if (!selection) {
-                publish({ mode: 'fallback', status: 'idle', selection: null, kind: null, result: null });
+                publish({ mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null });
                 return;
             }
-            const prior = sameSelection(snapshot.selection, selection) && snapshot.kind === kind ? snapshot.result : null;
-            publish({ mode: 'fallback', status: 'searching', selection, kind, result: prior });
+            const prior = sameSelection(snapshot.querySelection, selection) && snapshot.kind === kind ? snapshot.result : null;
+            publish({ mode: 'fallback', status: 'searching', selection, querySelection: selection, kind, result: prior });
             const response = await input.query({
                 rootPath: input.scope.rootPath, path: input.path, kind,
                 line: position.line + 1, symbol: selection.identifier.symbol,
@@ -95,17 +97,17 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
             }, request.signal);
             if (request.signal.aborted || !available()) return;
             if (text !== input.getText()) {
-                publish({ mode: 'fallback', status: 'idle', selection: null, kind: null, result: null });
+                publish({ mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null });
                 return;
             }
             if (response.status !== 'ok') {
-                publish({ mode: 'fallback', status: 'unavailable', selection, kind, result: null, reason: response.reason });
+                publish({ mode: 'fallback', status: 'unavailable', selection: snapshot.selection, querySelection: selection, kind, result: null, reason: response.reason });
                 return;
             }
-            publish({ mode: 'fallback', status: 'ready', selection, kind, result: response });
+            publish({ mode: 'fallback', status: 'ready', selection: snapshot.selection, querySelection: selection, kind, result: response });
             if (kind === 'definition' && response.locations[0]) await input.openLocation(response.locations[0]);
         } catch {
-            if (!request.signal.aborted && available()) publish({ mode: 'fallback', status: 'unavailable', selection: snapshot.selection, kind, result: null, reason: 'transport_failed' });
+            if (!request.signal.aborted && available()) publish({ ...snapshot, status: 'unavailable', kind, result: null, reason: 'transport_failed' });
         } finally {
             if (pending === request) pending = null;
         }
@@ -128,7 +130,7 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
         definition: (position: CodeIntelligencePosition) => query('definition', position),
         references: (position: CodeIntelligencePosition) => query('references', position),
         cancel: (): void => { abortPending(); if (snapshot.status === 'searching') publish({ ...snapshot, status: snapshot.result ? 'ready' : 'idle' }); },
-        dismiss: (): void => { abortPending(); publish({ mode: 'fallback', status: 'idle', selection: null, kind: null, result: null }); },
+        dismiss: (): void => { abortPending(); publish({ mode: 'fallback', status: 'idle', selection: null, querySelection: null, kind: null, result: null }); },
         dispose: (): void => { abortPending(); retirement.dispose(); disposed = true; listeners.clear(); },
     };
 }

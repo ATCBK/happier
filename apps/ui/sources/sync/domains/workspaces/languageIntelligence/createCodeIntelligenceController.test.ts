@@ -107,4 +107,20 @@ describe('fallback code intelligence controller', () => {
         expect(f.controller.getSnapshot().selection?.anchor?.y).toBe(48);
         f.controller.dispose();
     });
+
+    it('keeps reference results tied to their queried name while another name is inspected', async () => {
+        const f = fixture();
+        const pending = f.controller.references({ line: 0, character: 16 });
+        await Promise.resolve();
+        f.controller.inspect({ line: 0, character: 7 });
+        f.requests[0].resolve(result);
+        await pending;
+        expect(f.controller.getSnapshot().selection?.identifier.symbol).toBe('total');
+        expect(f.controller.getSnapshot().querySelection?.identifier.symbol).toBe('answer');
+        f.controller.inspect(null);
+        expect(f.controller.getSnapshot()).toMatchObject({ selection: null, querySelection: { identifier: { symbol: 'answer' } }, result });
+        f.controller.dismiss();
+        expect(f.controller.getSnapshot().querySelection).toBeNull();
+        f.controller.dispose();
+    });
 });
