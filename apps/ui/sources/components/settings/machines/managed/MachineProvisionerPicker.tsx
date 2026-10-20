@@ -87,14 +87,14 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         // The last answers stay while this read runs, even across a refreshed binding of the same Account;
         // a settled read replaces them, and another Account never sees them.
         if (checksAccount.current !== binding.accountId) { checksAccount.current = binding.accountId; setChecks({}); }
-        void Promise.all(catalog.provisioners.map(async provisioner => ({
-            id: buildQualifiedPluginContributionKey(provisioner.contribution),
-            result: await catalog.client!.read('machines.provisioners.check', { homeId: catalog.homeId!, controller, contribution: provisioner.contribution }, { signal: abort.signal, onApprovalPending }),
-        }))).then(results => {
-            if (abort.signal.aborted || !binding.isCurrent()) return;
-            setChecks(Object.fromEntries(results.map(({ id, result }) => [id, result])));
-            setError(results.some(({ result }) => result.kind === 'failed' && result.code !== 'credential_unavailable') ? 'unavailable' : null);
-        }).catch(() => { if (!abort.signal.aborted && binding.isCurrent()) setError('unavailable'); });
+        // Each provisioner settles on its own: a slow or failed check never holds back the others' answers.
+        const current = () => !abort.signal.aborted && binding.isCurrent();
+        void Promise.all(catalog.provisioners.map(async provisioner => {
+            const id = buildQualifiedPluginContributionKey(provisioner.contribution);
+            const result = await catalog.client!.read('machines.provisioners.check', { homeId: catalog.homeId!, controller, contribution: provisioner.contribution }, { signal: abort.signal, onApprovalPending });
+            if (current()) setChecks(previous => ({ ...previous, [id]: result }));
+        })).then(() => { if (current()) setError(null); })
+            .catch(() => { if (current()) setError('unavailable'); });
         return () => { abort.abort(); retirement.dispose(); };
     }, [catalog.binding, catalog.homeId, catalog.client, catalog.provisioners, controller, onApprovalPending]);
     const open = (contribution: string, connectPurpose?: string) => {
@@ -157,7 +157,8 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
     const presenceNowMs = useMachinePresenceNowMs(observedMachines);
     const controllerOnline = scope.machine ? resolveMachinePickerPresence(scope.machine, presenceNowMs,
         catalog.binding?.isCurrent() ? catalog.binding.scope : null).status === 'online' : false;
-    const failure = catalog.error ?? error;
+    const checkFailed = Object.values(checks).some(result => result.kind === 'failed' && result.code !== 'credential_unavailable');
+    const failure = catalog.error ?? error ?? (checkFailed ? 'unavailable' : null);
     // The controller's own state, said once under the chip that changes it.
     // A catalog that answered speaks for itself; presence only explains an empty or failed one.
     const scopeState = !controller ? null

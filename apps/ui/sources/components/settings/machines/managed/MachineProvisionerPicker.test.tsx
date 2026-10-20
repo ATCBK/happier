@@ -421,6 +421,23 @@ describe('provisioner picker demand', () => {
     }
     await screen.unmount();
   });
+  it('shows each check as it answers, so one slow provisioner leaves the others readable', async () => {
+    const { serverId, release } = await arrangeCatalog({ check: (_read, localId) => localId === 'beta' });
+    const { t } = await import('@/text');
+    const { MachineProvisionerPicker } = await import('./MachineProvisionerPicker');
+    const screen = await renderPicker(<MachineProvisionerPicker serverId={serverId} onSelectProvisioner={vi.fn()} />);
+    const cards = () => [...new Map(screen.tree.findAll(node => Array.isArray(node.props.cards))
+      .flatMap(node => node.props.cards as { title: string; status: { label: string } }[]).map(card => [card.title, card])).values()];
+    try {
+      await waitForHomeGovernance(() => expect(cards().find(card => card.title === 'Alpha')?.status.label).toBe('License required'));
+      // Beta's read is still pending: it says so itself and nothing else is blamed.
+      expect(cards().find(card => card.title === 'Beta')?.status.label).toBe(t('managedMachines.add.status.checking'));
+      expect(screen.findByTestId('managed-picker.unavailable')).toBeNull();
+    } finally {
+      release();
+    }
+    await screen.unmount();
+  });
   it('keeps retained checks display-only when the replacement catalog fails, and enables Choose after recovery', async () => {
     const { serverId, provisioners } = await arrangeCatalog({});
     const onSelect = vi.fn();
