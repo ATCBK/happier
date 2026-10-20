@@ -778,6 +778,12 @@ an original-return tuple alone cannot authorize caller-authored text. None of th
 introduces another credential or uses human HTTP posting to invent Agent provenance. The
 Discussion's own key remains the content key, independent of an optional source Session.
 
+Development-source publisher diagnostics retain typed refusal codes and identify the
+content-free approval, original-custody, exact-result or publication stage in the existing
+correlated RPC completion record. A thrown transient prerequisite read is unavailable,
+not proof that posting was denied; it does not authorize publication. Definitive refusals
+remain closed, and neither diagnostic records private text or changes approval authority.
+
 Human-required approved creation retains the canonical present-user ingress check at the
 publisher: an Account-writable approval Artifact cannot establish that authority by itself.
 Omitted mutation retry IDs derive from that Artifact's existing identity, with distinct
