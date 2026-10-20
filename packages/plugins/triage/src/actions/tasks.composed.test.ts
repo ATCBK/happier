@@ -41,7 +41,7 @@ async function withExternalTaskSource(
         readRequests: readonly string[];
         setWriteResult: (result: TriageTaskWriteResultV1 | null) => void;
     }>) => Promise<void>,
-    options: Readonly<{ readOnly?: boolean; retired?: boolean; secondInstance?: boolean; initialTaskPage?: boolean; firstInstanceKeepsPaging?: boolean; scopeSelection?: boolean }> = {},
+    options: Readonly<{ readOnly?: boolean; retired?: boolean; secondInstance?: boolean; initialTaskPage?: boolean; firstInstanceKeepsPaging?: boolean; scopeSelection?: boolean; completedScan?: boolean; completedScanSupport?: boolean; unboundedCompleted?: boolean }> = {},
 ) {
     const descriptor = TriageSourceDescriptorV1Schema.parse({
         ...fixture.descriptor,
@@ -49,6 +49,7 @@ async function withExternalTaskSource(
         kinds: [fixture.descriptor.kinds[0], {
             id: 'issue', workflowSubject: 'issue', displayName: 'Issue', task: true,
             taskCapabilities: {
+                ...(options.completedScanSupport === false ? {} : { completedScan: true }),
                 createFields: ['title'], editFields: ['title'],
                 completingTransitionId: 'finish',
                 transitions: [{ id: 'begin', label: 'Begin', state: { presentation: 'active', nativeLabel: 'Started', stage: 'started' } },
@@ -73,6 +74,13 @@ async function withExternalTaskSource(
                 inputSchema: protocol.operations.scan.declaration.input.schema,
                 resultSchema: protocol.operations.scan.declaration.resultSchema,
                 run: async (input) => {
+                    if (options.completedScan || options.unboundedCompleted) {
+                        const selected = options.unboundedCompleted || input.completed?.kindIds.length === 1
+                            && input.completed.kindIds[0] === 'issue' && input.completed.sinceMs <= 100;
+                        return { kind: 'complete', observations: selected ? [{ ...task, snapshot: { ...task.snapshot,
+                            state: { presentation: 'resolved', completionReason: 'completed' }, completedAtMs: 100 } }] : [],
+                            evidence: { kind: 'walkFinished' } };
+                    }
                     const selectedTask = input.instance.instance.sourceInstanceId === instanceId ? task
                         : { ...task, localRef: { ...task.localRef, entryId: 'task-2' } };
                     const observedTask = options.scopeSelection ? { ...selectedTask, snapshot: {
@@ -228,6 +236,29 @@ async function withExternalTaskSource(
 }
 
 describe('Tasks through a separately authored source and registered aggregate Actions', () => {
+    it('sends the agent task lens completion boundary only to declared task kinds through admitted scan wiring', async () => {
+        await withExternalTaskSource(async ({ aggregate }) => {
+            const input = { v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest', tasks: { completedSinceMs: 100 } };
+            const taskRead = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', input, { surface: 'agent' }));
+            expect(taskRead.window.rows).toMatchObject([{ observation: { outcome: { kind: 'present', snapshot: { completedAtMs: 100 } } } }]);
+            const ordinary = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('entries/list-v1', input, { surface: 'agent' }));
+            expect(ordinary.window.rows).toEqual([]);
+        }, { completedScan: true });
+    });
+    it('keeps completion coverage partial when an external task source has not declared the read capability', async () => {
+        await withExternalTaskSource(async ({ aggregate }) => {
+            const read = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {
+                v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest', tasks: { completedSinceMs: 100 },
+            }, { surface: 'agent' }));
+            expect(read.window.coverage).toBe('partial');
+            expect(read.window.lanes).toMatchObject([{ exhausted: false,
+                health: { kind: 'partial', reason: 'completedScanUnavailable' } }]);
+            const older = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {
+                v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest', tasks: { completedSinceMs: 101 },
+            }, { surface: 'agent' }));
+            expect(older.window.rows).toEqual([]);
+        }, { unboundedCompleted: true, completedScanSupport: false });
+    });
     it('completes once through the declared role and rereads due/completion facts through the same strict list consumer', async () => {
         await withExternalTaskSource(async ({ aggregate, writes }) => {
             const result = TriageTaskWriteResultV1Schema.parse(await aggregate.invokeAction('tasks/transition-v1', {

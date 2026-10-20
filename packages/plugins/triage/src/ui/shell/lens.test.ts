@@ -11,6 +11,12 @@ import { readTriageWindowLensV1 } from './lens.js';
 const SOURCE = { pluginId: 'acme.scm', localId: 'github' } as const;
 
 describe('the window lens the shell reads from the one reducer', () => {
+  it('supplies the local Monday boundary only for the Tasks lens, including a Sunday', () => {
+    const now = new Date(2026, 9, 25, 14, 30).getTime();
+    const state = { ...TRIAGE_SURFACE_INITIAL_STATE_V1, filters: { ...TRIAGE_LIST_NO_FILTERS_V1, tasks: 'mine' as const } };
+    expect(readTriageWindowLensV1(state, now)).toMatchObject({ tasks: { completedSinceMs: new Date(2026, 9, 19).getTime() } });
+    expect(readTriageWindowLensV1(TRIAGE_SURFACE_INITIAL_STATE_V1, now)).not.toHaveProperty('tasks');
+  });
   it('composes to exactly the window owner default when the reader has changed nothing', () => {
     // This is what keeps a fresh mount from marking its own window stale before
     // its first pass has even settled: the lens it publishes IS the store's.

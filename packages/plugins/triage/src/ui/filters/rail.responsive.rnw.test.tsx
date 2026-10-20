@@ -194,6 +194,34 @@ afterEach(async () => {
 });
 
 describe('the PRs & Issues lens under the shell’s own measurement', () => {
+    it('offers configured source and unit choices before any entries arrive on wide and phone layouts', async () => {
+        const original = listResult();
+        const result = TriageListEntriesResultV1Schema.parse({ ...original, configuredSources: [
+            { ...original.configuredSources[0], displayLabel: 'Work account', scope: {
+                unit: { singularLabel: 'Project', pluralLabel: 'projects' },
+                projection: { kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['11'] },
+                    units: [{ id: '11', label: 'Platform' }] },
+            } },
+            { ...original.configuredSources[0], sourceInstanceId: '22222222-2222-4222-8222-222222222222',
+                displayLabel: 'Personal account', scope: {
+                    unit: { singularLabel: 'Project', pluralLabel: 'projects' },
+                    projection: { kind: 'page', status: 'complete', selection: { kind: 'all' }, units: [] },
+                } },
+        ], window: { ...original.window, rows: [], coverage: 'partial' } });
+        const shell = await mountShell(result);
+        await measureFillRegion(WIDE_WIDTH);
+        const work = await filterFacetOption(shell, 'Source', { name: 'Work account' });
+        await act(async () => { await shell.press(work); });
+        await expect(shell.getByRole('button', { name: 'Remove Source Work account' })).resolves.toBeDefined();
+        await measureFillRegion(COMPACT_WIDTH);
+        await expect(filterFacetOption(shell, 'Scope', { name: 'Platform — Work account' })).resolves.toBeDefined();
+        await expect(filterFacetOption(shell, 'Scope', { name: 'All projects — Personal account' })).resolves.toBeDefined();
+        const personal = await filterFacetOption(shell, 'Source', { name: 'Personal account' });
+        await act(async () => { await shell.press(personal); });
+        await expect(shell.getByRole('button', { name: 'Remove Source Work account' })).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Remove Source Personal account' })).resolves.toBeDefined();
+    });
+
     it.each([
         [{ kind: 'initial' }, 'Show results · Not yet synchronized'],
         [{ kind: 'sourcesUnreachable', message: 'Offline', retryable: true }, 'Show results · Unavailable'],

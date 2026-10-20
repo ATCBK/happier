@@ -93,16 +93,16 @@ const SMART_PRECEDENCE_COPY: readonly (readonly [
 export function readTriageFacetMenuGroupsV1(facets: readonly TriageFilterFacetPlanV1[]): readonly MenuGroup[] {
   // An option key is unique across the whole rail (`plan.ts`), so it is the menu row's identity.
   return facets
-    .filter((facet) => facet.options.length > 0)
+    .filter((facet) => facet.options.length > 0 || (facet.notices?.length ?? 0) > 0)
     .map((facet) => ({
       id: facet.facet,
       accessibilityLabel: facet.label,
-      items: facet.options.map((option) => ({
+      items: [...facet.options.map((option) => ({
         id: option.key,
         label: option.label,
         kind: 'checkbox' as const,
         checked: option.selected,
-      })),
+      })), ...(facet.notices ?? []).map((label, index) => ({ id: `${facet.facet}:notice:${index}`, label, disabled: true }))],
     }));
 }
 

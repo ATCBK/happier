@@ -44,6 +44,7 @@ export type TriageFilterFacetPlanV1 = Readonly<{
   facet: TriageFilterFacetIdV1;
   label: string;
   options: readonly TriageFilterOptionV1[];
+  notices?: readonly string[];
 }>;
 
 const ENGLISH_TEXT: TriageTextResolverV1 = (_key, fallback = '') => fallback;
@@ -149,20 +150,29 @@ function planScopeFacet(input: Readonly<{
   filters: SurfaceFilterSelectionV1;
 }>, text: TriageTextResolverV1): TriageFilterFacetPlanV1 {
   const values = new Map<string, Readonly<{ value: CorpusScopeFilterValueV1; label: string }>>();
+  const notices: string[] = [];
   const add = (value: CorpusScopeFilterValueV1, label: string) => {
     const key = triageScopeFilterKeyV1(value);
     if (!values.has(key)) values.set(key, { value, label });
   };
   for (const summary of input.configuredSources) {
     const projection = summary.scope?.projection;
-    if (projection?.kind !== 'page') continue;
     const base = { source: summary.source, sourceInstanceId: summary.sourceInstanceId };
+    if (projection?.kind === 'failed') {
+      notices.push(`${instanceLabel(base, input.configuredSources)}: ${text('plugins.triage.surface.filters.scopesUnavailable',
+        'Configured scopes could not be read. Refresh to try again.')}`);
+    } else if (projection?.kind === 'page' && projection.status === 'partial') {
+      notices.push(`${instanceLabel(base, input.configuredSources)}: ${text('plugins.triage.surface.filters.scopesPartial',
+        'Some configured scopes could not be read. Refresh to try again.')}`);
+    }
+    if (projection?.kind !== 'page') continue;
     if (projection.selection.kind === 'all') {
       add(base, text('plugins.triage.surface.filters.allUnits', 'All {units}')
         .replace('{units}', summary.scope?.unit.pluralLabel ?? ''));
     } else {
+      const unitsById = new Map(projection.units.map((unit) => [unit.id, unit]));
       for (const unitId of projection.selection.unitIds) {
-        const unit = projection.units.find((unit) => unit.id === unitId);
+        const unit = unitsById.get(unitId);
         add({ ...base, unitId, ...(unit?.collisionScope === undefined ? {} : { collisionScope: unit.collisionScope }) },
           unit?.label ?? unitId);
       }
@@ -184,6 +194,7 @@ function planScopeFacet(input: Readonly<{
   }
   const qualify = new Set([...values.values()].map(({ value }) => triageSourceFilterKeyV1(value))).size > 1;
   return Object.freeze({ facet: 'scopes', label: text('plugins.triage.surface.filters.scope', 'Scope'),
+    ...(notices.length === 0 ? {} : { notices: Object.freeze(notices) }),
     options: Object.freeze([...values.entries()].map(([key, { value, label }]) => {
       const selection = { facet: 'scopes', value } as const;
       return Object.freeze({ key: `scopes:${key}`,

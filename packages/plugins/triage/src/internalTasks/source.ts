@@ -75,6 +75,7 @@ export async function scanInternalTasks(input: TriageScanInputV1, context: Plugi
   if (!isInternalTaskConfiguredInstanceV1(input.instance)) return { kind: 'failed', failure: INVALID_ADDRESS };
   const list = await readTasks(context);
   if (list === null) return { kind: 'failed', failure: UNAVAILABLE };
+  const completedSinceMs = input.completed?.kindIds.includes('task') ? input.completed.sinceMs : undefined;
   let after: string | undefined;
   let limit: number;
   if (input.page.kind === 'initial') limit = input.page.limit;
@@ -83,19 +84,25 @@ export async function scanInternalTasks(input: TriageScanInputV1, context: Plugi
       const cursor: unknown = JSON.parse(input.page.continuation.token);
       if (typeof cursor !== 'object' || cursor === null || !('after' in cursor) || typeof cursor.after !== 'string'
         || !('limit' in cursor) || typeof cursor.limit !== 'number' || !Number.isSafeInteger(cursor.limit) || cursor.limit < 1
-        || Object.keys(cursor).some(key => key !== 'after' && key !== 'limit')) return { kind: 'failed', failure: INVALID_ADDRESS };
+        || ('completedSinceMs' in cursor ? cursor.completedSinceMs : undefined) !== completedSinceMs
+        || Object.keys(cursor).some(key => key !== 'after' && key !== 'limit' && key !== 'completedSinceMs')) return { kind: 'failed', failure: INVALID_ADDRESS };
       after = cursor.after; limit = cursor.limit;
     } catch { return { kind: 'failed', failure: INVALID_ADDRESS }; }
   }
   const byId = new Map(list.todos.map(task => [task.id, task]));
-  const ids = [...new Set([...list.undoneOrder, ...list.completedOrder, ...list.todos.map(task => task.id)])].filter(id => byId.has(id));
+  const ids = [...new Set([...list.undoneOrder, ...list.completedOrder, ...list.todos.map(task => task.id)])].filter(id => {
+    const task = byId.get(id);
+    return task !== undefined && (completedSinceMs === undefined || task.state !== 'completed'
+      || task.completedAt !== undefined && task.completedAt >= completedSinceMs);
+  });
   const start = after === undefined ? 0 : ids.indexOf(after) + 1;
   if (after !== undefined && start === 0) return { kind: 'failed', failure: { class: 'transient', code: 'taskOrderChanged' } };
   const page = ids.slice(start, start + limit).flatMap(id => { const task = byId.get(id); return task ? [observation(task, list)] : []; });
   return start + limit >= ids.length
     ? { kind: 'complete', observations: page, evidence: { kind: 'walkFinished' } }
     : { kind: 'page', observations: page, evidence: { kind: 'partial', reason: 'pageLimit' },
-      continuation: { v: 1, token: JSON.stringify({ after: ids[start + limit - 1], limit }) } };
+      continuation: { v: 1, token: JSON.stringify({ after: ids[start + limit - 1], limit,
+        ...(completedSinceMs === undefined ? {} : { completedSinceMs }) }) } };
 }
 
 export async function getInternalTask(input: TriageGetInputV1, context: PluginInvocationContext): Promise<TriageGetResultV1> {

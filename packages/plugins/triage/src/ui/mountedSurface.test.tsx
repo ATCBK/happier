@@ -27,6 +27,7 @@ import {
     TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
     TriageListEntriesInputV1Schema,
 } from '../actions/listEntriesProtocol.js';
+import { TRIAGE_TASKS_LIST_ACTION_LOCAL_ID_V1 } from '../actions/tasksProtocol.js';
 import { readTriageActionsForSurface } from '../actions/actionsCatalog.js';
 import {
     TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1,
@@ -158,7 +159,7 @@ function presentObservation(input: Readonly<{
     };
 }
 
-function createHarness() {
+function createHarness(options: Readonly<{ tasks?: boolean }> = {}) {
     const { collections, control } = createTestkitCorpusCollections();
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow('a', SOURCE_A, INSTANCE_A, 1, LABEL_A)));
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow('b', SOURCE_B, INSTANCE_B, 2, LABEL_B)));
@@ -191,7 +192,8 @@ function createHarness() {
                 v: 1,
                 purpose: 'triage-source',
                 displayName: 'Example forge',
-                kinds: [{ id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' }],
+                kinds: options.tasks ? [{ id: 'issue', workflowSubject: 'issue', displayName: 'Issue', task: true }]
+                    : [{ id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' }],
             },
             operations: { listInstances: {}, scan: handle, get: {} },
             surfaces: { detail: {} },
@@ -239,7 +241,10 @@ function createHarness() {
     const executeScan: TriageAdmittedOperationExecutorV1 = async (operation, input) => {
         const scan = scans.get(operation as unknown as object);
         if (scan === undefined) throw new Error('No admitted scan handle for this operation.');
-        return await scan(input);
+        const result = await scan(input);
+        return !options.tasks || result.kind === 'failed' ? result : { ...result,
+            observations: result.observations.map(row => ({ ...row, localRef: { ...row.localRef, kindId: 'issue' } })),
+        };
     };
 
     const actionCalls: string[] = [];
@@ -279,7 +284,8 @@ function createHarness() {
                 { catalog: accountKv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1) },
             );
         }
-        if (String(request.action) !== TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1) {
+        const taskOnly = String(request.action) === TRIAGE_TASKS_LIST_ACTION_LOCAL_ID_V1;
+        if (String(request.action) !== TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1 && !taskOnly) {
             // An unrouted Action used to fall through into the list handler and
             // be parsed as a list input, so a surprise read was answered with
             // somebody else's result instead of being seen. It is recorded here
@@ -292,6 +298,7 @@ function createHarness() {
             sourceInstances: collections.sourceInstances,
             readAdmittedSources: async () => admitted,
             executeScan,
+            taskOnly,
             nowMs: () => Date.now(),
         });
     }
@@ -426,7 +433,7 @@ describe('the mounted PRs & Issues surface', () => {
         expect(harness.actionCalls.filter((id) => id === 'tasks/create-v1')).toEqual([]);
     });
     it('does not mistake an unreadable Session-link index for an empty Agents lens', async () => {
-        const harness = createHarness();
+        const harness = createHarness({ tasks: true });
         const shell = await mountSurface(renderShellSurface, harness, 'tasks-agents-unavailable', {}, { subPath: 'tasks,agents' });
         await settleWindow('view', shell);
         // This host fixture has no Account Collection transport: no link read can establish absence.
@@ -434,7 +441,7 @@ describe('the mounted PRs & Issues surface', () => {
             .resolves.toEqual({ content: 'Some linked Session activity could not be read.' });
         await expect(shell.getByText('Nothing needs you')).rejects.toBeDefined();
     });
-    it('applies Smart precedence through the addressed mounted Action and retains it when omitted', async () => {
+    it('applies instance/unit filters and Smart precedence through the addressed mounted Action', async () => {
         const harness = createHarness();
         const shell = await mountSurface(renderShellSurface, harness, 'triage-smart-parity');
         await settleWindow('view', shell);
@@ -443,16 +450,22 @@ describe('the mounted PRs & Issues surface', () => {
         const address = detail.mountedAction;
         if (!address || typeof address !== 'object' || Array.isArray(address)) throw new Error('Missing mounted address');
         const smartPolicy = { v: 1, precedence: ['activity', 'attention'] } as const;
+        const filters = { ...TRIAGE_ROUTE_DEFAULT_LENS_V1.filters,
+            sources: [{ source: SOURCE_A, sourceInstanceId: INSTANCE_A }],
+            scopes: [{ source: SOURCE_A, sourceInstanceId: INSTANCE_A, unitId: 'unit-a', collisionScope: 'example/repository' }],
+        };
         for (const policy of [smartPolicy, undefined]) {
             const input = TriageMountedUiInputV1Schema.parse({ mountId: address.mountId, operation: {
-                kind: 'setLens', query: '', filters: TRIAGE_ROUTE_DEFAULT_LENS_V1.filters, order: 'smart',
+                kind: 'setLens', query: '', filters, order: 'smart',
                 ...(policy === undefined ? {} : { smartPolicy: policy }),
             } });
             await act(async () => {
                 expect(await invokeTriageMountedUiAction(harness.ephemeralSharedScope, input.mountId, input.operation,
                     new AbortController().signal)).toEqual({ status: 'applied' });
             });
-            expect(parseTriageRouteSubPathV1(harness.settledLocations.at(-1))).toMatchObject({ order: 'smart', smartPolicy });
+            expect(parseTriageRouteSubPathV1(harness.settledLocations.at(-1))).toMatchObject({ order: 'smart', smartPolicy, filters });
+            await visibleTexts(shell, ['Replace the duplicated normalizer', 'Older change']);
+            await expect(shell.queryByText('Middle change')).resolves.toBeUndefined();
         }
         const invalid = TriageMountedUiInputV1Schema.parse({ mountId: address.mountId, operation: {
             kind: 'setLens', query: '', filters: TRIAGE_ROUTE_DEFAULT_LENS_V1.filters, order: 'smart',

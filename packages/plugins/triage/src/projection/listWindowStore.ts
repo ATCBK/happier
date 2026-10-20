@@ -294,6 +294,7 @@ function sameFilterSelection(
 
 function sameAcquisitionLens(left: TriageListLensV1, right: TriageListLensV1): boolean {
     return left.order === right.order
+        && left.tasks?.completedSinceMs === right.tasks?.completedSinceMs
         && left.smartPolicy.v === right.smartPolicy.v
         && left.smartPolicy.precedence[0] === right.smartPolicy.precedence[0]
         && left.smartPolicy.precedence[1] === right.smartPolicy.precedence[1]
@@ -746,6 +747,7 @@ export function createTriageListWindowStore(deps: Readonly<{
              */
             order: lens.order,
             smartPolicy: lens.smartPolicy,
+            ...(lens.tasks === undefined ? {} : { tasks: lens.tasks }),
         };
     }
 
@@ -767,6 +769,7 @@ export function createTriageListWindowStore(deps: Readonly<{
             limit: 0,
             order: lens.order,
             smartPolicy: lens.smartPolicy,
+            ...(lens.tasks === undefined ? {} : { tasks: lens.tasks }),
         };
     }
 

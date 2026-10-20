@@ -63,6 +63,7 @@ export type TriageScanLaneV1 = Readonly<{
     declaredKindIds: readonly string[];
     /** Optional lens selection. Validate all declared kinds before charging selected rows. */
     selectedKindIds?: readonly string[];
+    completed?: TriageScanInputV1['completed'];
     /** The exact configured value, passed unchanged to every invocation. */
     configured: TriageConfiguredSourceInstanceV1;
     /**
@@ -215,9 +216,10 @@ function chargedAgainstLimit(result: Extract<TriageScanResultV1, { kind: 'page' 
 }
 
 function scanInputFor(state: LaneState): TriageScanInputV1 {
+    const completed = state.lane.completed === undefined ? {} : { completed: state.lane.completed };
     return state.continuation === null
-        ? { v: 1, instance: state.lane.configured, page: { kind: 'initial', limit: state.pageLimit } }
-        : { v: 1, instance: state.lane.configured, page: { kind: 'continuation', continuation: state.continuation } };
+        ? { v: 1, instance: state.lane.configured, ...completed, page: { kind: 'initial', limit: state.pageLimit } }
+        : { v: 1, instance: state.lane.configured, ...completed, page: { kind: 'continuation', continuation: state.continuation } };
 }
 
 export async function runTriageScanPass(input: Readonly<{

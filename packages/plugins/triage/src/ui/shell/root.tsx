@@ -470,6 +470,8 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     },
   );
   const taskAudience = surface.filters.tasks;
+  const windowLens = readTriageWindowLensV1(surface);
+  const completedSinceMs = windowLens.tasks?.completedSinceMs;
   // Agents membership needs relationship truth even when no live Session has answered.
   const sessionActivityUnavailable = sessionActivity.unavailable
     || (taskAudience === 'agents' && sessionActivity.linksStatus === 'unavailable');
@@ -574,6 +576,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           display: { text, stale: listedStale },
           ...(taskAudience === undefined ? {} : { tasks: {
             audience: taskAudience,
+            completedSinceMs,
             isTask: (entryRef) => resolveTriageSourceDescriptorV1(surfaceContext.targetedContributions, entryRef.source)
               ?.kinds.some((kind) => kind.id === entryRef.kindId && kind.task === true) === true,
             capabilitiesOf: (entryRef) => resolveTriageSourceDescriptorV1(surfaceContext.targetedContributions, entryRef.source)
@@ -585,7 +588,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       previousItems.current = planned;
       return planned;
     },
-    [listedStale, listedWindow, listsItems, marks.pins, sessionActivity.agentStates, sessionActivity.linkedSessions, surfaceContext.locale, surfaceContext.targetedContributions, taskAudience, text],
+    [completedSinceMs, listedStale, listedWindow, listsItems, marks.pins, sessionActivity.agentStates, sessionActivity.linkedSessions, surfaceContext.locale, surfaceContext.targetedContributions, taskAudience, text],
   );
   /**
    * A suggestion every entry of a group shares ("Mentioned" on each of 52) is said once, beside the group's own
@@ -1676,7 +1679,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     },
   }), [itemAnatomy, routeLens]);
 
-  useTriageWindowLensBinding(window.setLens, readTriageWindowLensV1(surface));
+  useTriageWindowLensBinding(window.setLens, windowLens);
   useTriageRouteBinding({
     queue: routeQueue,
     surface,
@@ -3072,8 +3075,10 @@ function useTriageWindowLensBinding(
   lens: TriageListLensV1,
 ): void {
   const { filters, limit, order, query, smartPolicy } = lens;
+  const completedSinceMs = lens.tasks?.completedSinceMs;
 
   React.useEffect(() => {
-    setLens({ filters, limit, order, query, smartPolicy });
-  }, [filters, limit, order, query, setLens, smartPolicy]);
+    setLens({ filters, limit, order, query, smartPolicy,
+      ...(completedSinceMs === undefined ? {} : { tasks: { completedSinceMs } }) });
+  }, [completedSinceMs, filters, limit, order, query, setLens, smartPolicy]);
 }

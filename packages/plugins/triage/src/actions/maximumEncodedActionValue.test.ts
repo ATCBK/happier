@@ -216,7 +216,7 @@ const structurallyUnboundedSchemas = {
 } as const satisfies Readonly<Record<string, MeasurableSchemaV1>>;
 
 /**
- * A finite witness for task facts, used only to keep the existing independent
+ * A finite witness for task and configured-unit facts, used only to keep the existing independent
  * row/frontier envelope regression. These example relationships/transitions are
  * not product bounds or a maximum of the now provider-sized list result.
  */
@@ -228,7 +228,11 @@ function withTaskFactsWitness(fragment: PluginJsonSchema): PluginJsonSchema {
         ...(fragment.items === undefined ? {} : { items: withTaskFactsWitness(fragment.items) }),
         ...(fragment.properties === undefined ? {} : { properties: Object.fromEntries(
             Object.entries(fragment.properties).map(([key, child]) => [key,
-                key === 'relations' ? { const: {
+                key === 'scope' ? { const: {
+                    unit: { singularLabel: 'Project', pluralLabel: 'projects' },
+                    projection: { kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['project-1'] },
+                        units: [{ id: 'project-1', label: 'Platform' }] },
+                } } : key === 'relations' ? { const: {
                     parent: taskFactsEntryRef, children: { total: 1, completed: 0, entries: [taskFactsEntryRef], complete: true },
                     blockedBy: [taskFactsEntryRef],
                 } } : key === 'taskCapabilities' ? { const: {
@@ -343,6 +347,8 @@ describe('aggregate Action value shapes', () => {
             'listEntriesResult',
         );
         const parsed = TriageListEntriesResultV1Schema.parse(maximal);
+        expect(parsed.configuredSources[0]?.scope?.projection).toMatchObject({ kind: 'page',
+            selection: { kind: 'selected', unitIds: ['project-1'] } });
         expect(parsed.window.rows).toHaveLength(MAX_TRIAGE_LIST_WINDOW_ROWS_V1);
         expect(parsed.window.rows.reduce((total, item) => total + 1 + item.otherObservations.length, 0))
             .toBe(triageListRowBudgetV1(MAX_TRIAGE_LIST_SOURCE_BATCH_V1));

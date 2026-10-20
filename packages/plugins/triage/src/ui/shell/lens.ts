@@ -21,8 +21,12 @@ import type { TriageSurfaceStateV1 } from '../state/surface.js';
  * is, and the derivation that keeps that count inside the transport gate lives
  * with the owner (`actions/maximumEncodedActionValue.test.ts`).
  */
-export function readTriageWindowLensV1(state: TriageSurfaceStateV1): TriageListLensV1 {
+export function readTriageWindowLensV1(state: TriageSurfaceStateV1, nowMs = Date.now()): TriageListLensV1 {
+  const weekStart = new Date(nowMs);
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - (weekStart.getDay() + 6) % 7);
   return Object.freeze({
+    ...(state.filters.tasks === undefined ? {} : { tasks: { completedSinceMs: weekStart.getTime() } }),
     order: state.order,
     smartPolicy: state.smartPolicy,
     // The settled query only. An IME-intermediate composition would rebuild the

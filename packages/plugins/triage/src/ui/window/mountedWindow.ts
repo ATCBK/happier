@@ -8,6 +8,7 @@ import {
   type TriageListEntriesResultV1,
 } from '../../actions/listEntriesProtocol.js';
 import type { TriageListLensV1 } from '../../projection/listWindow.js';
+import { TRIAGE_TASKS_LIST_ACTION_LOCAL_ID_V1 } from '../../actions/tasksProtocol.js';
 import {
   createTriageListWindowStore,
   type TriageListWindowSnapshotV1,
@@ -113,7 +114,7 @@ async function readEntriesThrough(
   options?: PluginCancellationOptions,
 ): Promise<TriageListEntriesResultV1> {
   const result = await host.executeAction(
-    TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
+    input.tasks === undefined ? TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1 : TRIAGE_TASKS_LIST_ACTION_LOCAL_ID_V1,
     input,
     options,
   );

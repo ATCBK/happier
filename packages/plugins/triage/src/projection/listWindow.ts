@@ -1,9 +1,11 @@
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 import type { TriageListInvocationErrorV1 } from '../actions/listEntriesProtocol.js';
 import {
+    triageTaskStatusCategoryV1,
     type TriageEntryRefV1,
     type TriageSourceFailureV1,
     type TriageSourceScanEvidenceV1,
+    type TriageSourceEntrySnapshotV1,
 } from '@happier-dev/triage-protocol/v1';
 
 import { deriveDisplayedAttention, type CorpusDisplayedAttentionV1 } from '../corpus/attention/deriveAttention.js';
@@ -239,6 +241,8 @@ export type TriageListOrderV1 = 'newest' | 'oldest' | 'smart';
 
 /** The one lens every consumer of the shared window reads through. */
 export type TriageListLensV1 = Readonly<{
+    /** The Tasks page supplies its calendar boundary; no source chooses a retention policy. */
+    tasks?: Readonly<{ completedSinceMs: number }>;
     order: TriageListOrderV1;
     /**
      * The bounded Smart precedence policy. It is carried on every lens, not
@@ -252,6 +256,15 @@ export type TriageListLensV1 = Readonly<{
     filters: SurfaceFilterSelectionV1;
     limit: number;
 }>;
+
+/** Shared by the list Action, mounted window and pin projection; missing dates prove no membership. */
+export function triageTaskCompletionMatchesWindowV1(
+    snapshot: TriageSourceEntrySnapshotV1,
+    sinceMs: number | undefined,
+): boolean {
+    return sinceMs === undefined || triageTaskStatusCategoryV1(snapshot.state) !== 'completed'
+        || snapshot.completedAtMs !== undefined && snapshot.completedAtMs >= sinceMs;
+}
 
 export const TRIAGE_LIST_DEFAULT_LENS_V1: TriageListLensV1 = Object.freeze({
     order: 'newest',
@@ -535,7 +548,8 @@ export function foldTriageListWindow(input: Readonly<{
             projectTriageEntrySearchText(observations),
             terms,
         );
-        if (matchesFilters(row, input.lens.filters) && matchesQuery) rows.push(row);
+        if (matchesFilters(row, input.lens.filters) && matchesQuery
+            && (content === null || triageTaskCompletionMatchesWindowV1(content.outcome.snapshot, input.lens.tasks?.completedSinceMs))) rows.push(row);
     }
 
     // Ordering has one owner, and it is not this assembler: `rankCorpusWindow`

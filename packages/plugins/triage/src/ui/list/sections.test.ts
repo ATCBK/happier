@@ -146,8 +146,8 @@ describe('the PRs & Issues grouping axis', () => {
       state: { presentation: 'resolved' as const } }] };
     const tasks = { audience: 'mine' as const, isTask: () => true, hasSessions: () => false, capabilitiesOf: () => capabilities };
     const [item] = planTriageListItemsV1({ rows: [task], pins: [], workflowSubjectOf: pullRequests, tasks });
-    expect(item?.task).toMatchObject({ completingTransitionId: 'done' });
-    expect(item!.task).toEqual({ category: 'started', statusLabel: 'In Review', relations: { children: { total: 5, completed: 3 } } });
+    expect(item!.task).toEqual({ category: 'started', statusLabel: 'In Review', completingTransitionId: 'done',
+      relations: { children: { total: 5, completed: 3 } } });
     const [plain] = planTriageListItemsV1({ rows: [task], pins: [], workflowSubjectOf: pullRequests });
     expect(plain!.task).toBeUndefined();
   });

@@ -12,7 +12,6 @@ import {
     MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1,
     MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1,
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
-    MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1,
     TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1,
     TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
     TriageEntryLocatorV1Schema,
@@ -26,6 +25,7 @@ import {
     TriageSourceViewerFactsV1Schema,
     TriageSourceScopeUnitDescriptorV1Schema,
     TriageListScopeUnitsResultV1Schema,
+    TriageSourceScopeUnitIdV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 
 import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../projection/listWindow.js';
@@ -112,9 +112,6 @@ export const TriageListSourceFilterValueV1Schema = defineProtocolObject({
     source: PluginContributionIdentityV1Schema,
     sourceInstanceId: TriageSourceInstanceIdV1Schema.optional(),
 }, { policy: 'closed' });
-const scopeUnitId = defineProtocolUtf8String({
-    maxUtf8Bytes: MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1, minLength: 1, pattern: TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
-});
 export const TriageListScopeFilterValueV1Schema = defineProtocolUnion([
     defineProtocolObject({
         source: PluginContributionIdentityV1Schema,
@@ -124,7 +121,7 @@ export const TriageListScopeFilterValueV1Schema = defineProtocolUnion([
     defineProtocolObject({
         source: PluginContributionIdentityV1Schema,
         sourceInstanceId: TriageSourceInstanceIdV1Schema,
-        unitId: scopeUnitId,
+        unitId: TriageSourceScopeUnitIdV1Schema,
         collisionScope: triageCollisionScope.optional(),
     }, { policy: 'closed' }),
     defineProtocolObject({
@@ -243,6 +240,10 @@ export function triageListRowBudgetV1(_laneCount: number): number {
 
 export const TriageListEntriesInputV1Schema = defineProtocolObject({
     v: defineProtocolLiteral(1),
+    /** Only the task list Action consumes this lens; PRs & Issues stays open-only. */
+    tasks: defineProtocolObject({
+        completedSinceMs: defineProtocolNumber({ integer: true, minimum: 0, maximum: 8640000000000000 }),
+    }, { policy: 'closed' }).optional(),
     sources: TriageListSourceSelectionV1Schema,
     limit: defineProtocolNumber({
         integer: true,

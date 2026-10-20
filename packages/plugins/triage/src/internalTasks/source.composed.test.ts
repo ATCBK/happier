@@ -35,6 +35,20 @@ async function withSource(run: (kit: Awaited<ReturnType<typeof createPluginTestk
 }
 
 describe('registered internal Happier task source', () => {
+  it('reads active and recently completed personal tasks from the same Account list without inferring unknown completion dates', async () => {
+    const todos = [
+      { ...predecessor, id: 'active', state: 'unstarted' },
+      { ...predecessor, id: 'recent', state: 'completed', done: true, completedAt: 100 },
+      { ...predecessor, id: 'old', state: 'completed', done: true, completedAt: 99 },
+      { ...predecessor, id: 'unknown', state: 'completed', done: true },
+    ];
+    await withSource(async kit => {
+      const scan = TriageScanResultV1Schema.parse(await kit.invokeAction('internal/tasks/scan-v1', {
+        v: 1, instance, completed: { kindIds: ['task'], sinceMs: 100 }, page: { kind: 'initial', limit: 20 },
+      }));
+      expect(scan.kind === 'complete' && scan.observations.map(row => row.localRef.entryId)).toEqual(['active', 'recent']);
+    }, { status: 'ok', scope, todos, undoneOrder: ['active'], completedOrder: ['recent', 'old', 'unknown'] });
+  });
   it('projects personal due/completion facts and the declared one-step completion through registered scan admission', async () => {
     await withSource(async kit => {
       const scan = TriageScanResultV1Schema.parse(await kit.invokeAction('internal/tasks/scan-v1', {

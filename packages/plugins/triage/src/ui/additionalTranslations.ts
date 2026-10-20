@@ -1,5 +1,8 @@
 export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
   "en": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "All {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "Configured scopes could not be read. Refresh to try again.",
+    "plugins.triage.surface.filters.scopesPartial": "Some configured scopes could not be read. Refresh to try again.",
     "plugins.triage.surface.session.explainPr": "Explain this PR in chat",
     "plugins.triage.surface.orchestrate.title": "Orchestrate this",
     "plugins.triage.surface.orchestrate.instruction": "Plan and orchestrate the work described in this issue.",
@@ -344,6 +347,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Restore",
   }),
   "de": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "Alle {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "Die konfigurierten Bereiche konnten nicht gelesen werden. Zum Wiederholen aktualisieren.",
+    "plugins.triage.surface.filters.scopesPartial": "Einige konfigurierte Bereiche konnten nicht gelesen werden. Zum Wiederholen aktualisieren.",
     "plugins.triage.surface.session.explainPr": "Diesen PR im Chat erklären",
     "plugins.triage.surface.orchestrate.title": "Dies orchestrieren",
     "plugins.triage.surface.orchestrate.instruction": "Plane und orchestriere die in diesem Issue beschriebene Arbeit.",
@@ -688,6 +694,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Wiederherstellen",
   }),
   "ru": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "Все {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "Не удалось прочитать настроенные области. Обновите, чтобы повторить.",
+    "plugins.triage.surface.filters.scopesPartial": "Не удалось прочитать некоторые настроенные области. Обновите, чтобы повторить.",
     "plugins.triage.surface.session.explainPr": "Объяснить этот PR в чате",
     "plugins.triage.surface.orchestrate.title": "Оркестрировать",
     "plugins.triage.surface.orchestrate.instruction": "Спланируй и организуй работу, описанную в этой задаче.",
@@ -1032,6 +1041,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Восстановить",
   }),
   "pl": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "Wszystkie {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "Nie udało się odczytać skonfigurowanych zakresów. Odśwież, aby spróbować ponownie.",
+    "plugins.triage.surface.filters.scopesPartial": "Nie udało się odczytać części skonfigurowanych zakresów. Odśwież, aby spróbować ponownie.",
     "plugins.triage.surface.session.explainPr": "Wyjaśnij ten PR na czacie",
     "plugins.triage.surface.orchestrate.title": "Orkiestruj zadanie",
     "plugins.triage.surface.orchestrate.instruction": "Zaplanuj i skoordynuj pracę opisaną w tym zgłoszeniu.",
@@ -1376,6 +1388,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Przywróć",
   }),
   "es": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "Todos: {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "No se pudieron leer los ámbitos configurados. Actualiza para volver a intentarlo.",
+    "plugins.triage.surface.filters.scopesPartial": "No se pudieron leer algunos ámbitos configurados. Actualiza para volver a intentarlo.",
     "plugins.triage.surface.session.explainPr": "Explicar este PR en el chat",
     "plugins.triage.surface.orchestrate.title": "Orquestar esto",
     "plugins.triage.surface.orchestrate.instruction": "Planifica y coordina el trabajo descrito en esta incidencia.",
@@ -1720,6 +1735,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Restaurar",
   }),
   "fr": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "Tous : {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "Impossible de lire les périmètres configurés. Actualisez pour réessayer.",
+    "plugins.triage.surface.filters.scopesPartial": "Certains périmètres configurés n’ont pas pu être lus. Actualisez pour réessayer.",
     "plugins.triage.surface.session.explainPr": "Expliquer cette PR dans le chat",
     "plugins.triage.surface.orchestrate.title": "Orchestrer ce travail",
     "plugins.triage.surface.orchestrate.instruction": "Planifie et orchestre le travail décrit dans cette issue.",
@@ -2064,6 +2082,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Rétablir",
   }),
   "it": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "Tutti: {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "Impossibile leggere gli ambiti configurati. Aggiorna per riprovare.",
+    "plugins.triage.surface.filters.scopesPartial": "Impossibile leggere alcuni ambiti configurati. Aggiorna per riprovare.",
     "plugins.triage.surface.session.explainPr": "Spiega questa PR in chat",
     "plugins.triage.surface.orchestrate.title": "Orchestra questo lavoro",
     "plugins.triage.surface.orchestrate.instruction": "Pianifica e orchestra il lavoro descritto in questa issue.",
@@ -2408,6 +2429,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Ripristina",
   }),
   "pt": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "Todos: {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "Não foi possível ler os âmbitos configurados. Atualize para tentar novamente.",
+    "plugins.triage.surface.filters.scopesPartial": "Não foi possível ler alguns âmbitos configurados. Atualize para tentar novamente.",
     "plugins.triage.surface.session.explainPr": "Explicar este PR no chat",
     "plugins.triage.surface.orchestrate.title": "Orquestrar este trabalho",
     "plugins.triage.surface.orchestrate.instruction": "Planeia e coordena o trabalho descrito nesta issue.",
@@ -2752,6 +2776,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Restaurar",
   }),
   "ca": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "Tots: {units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "No s’han pogut llegir els àmbits configurats. Actualitza per tornar-ho a provar.",
+    "plugins.triage.surface.filters.scopesPartial": "No s’han pogut llegir alguns àmbits configurats. Actualitza per tornar-ho a provar.",
     "plugins.triage.surface.session.explainPr": "Explica aquest PR al xat",
     "plugins.triage.surface.orchestrate.title": "Orquestra aquesta tasca",
     "plugins.triage.surface.orchestrate.instruction": "Planifica i coordina la feina descrita en aquesta incidència.",
@@ -3096,6 +3123,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "Restaura",
   }),
   "zh-Hans": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "全部{units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "无法读取已配置的范围。请刷新重试。",
+    "plugins.triage.surface.filters.scopesPartial": "部分已配置的范围无法读取。请刷新重试。",
     "plugins.triage.surface.session.explainPr": "在聊天中解释此 PR",
     "plugins.triage.surface.orchestrate.title": "编排此任务",
     "plugins.triage.surface.orchestrate.instruction": "规划并编排此问题中描述的工作。",
@@ -3440,6 +3470,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "恢复",
   }),
   "zh-Hant": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "全部{units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "無法讀取已設定的範圍。請重新整理後再試。",
+    "plugins.triage.surface.filters.scopesPartial": "部分已設定的範圍無法讀取。請重新整理後再試。",
     "plugins.triage.surface.session.explainPr": "在聊天中解釋此 PR",
     "plugins.triage.surface.orchestrate.title": "編排此任務",
     "plugins.triage.surface.orchestrate.instruction": "規劃並編排此問題中描述的工作。",
@@ -3784,6 +3817,9 @@ export const TRIAGE_ADDITIONAL_UI_TRANSLATIONS = Object.freeze({
     "plugins.triage.surface.actions.restoreAction": "還原",
   }),
   "ja": Object.freeze({
+    "plugins.triage.surface.filters.allUnits": "すべての{units}",
+    "plugins.triage.surface.filters.scopesUnavailable": "設定済みの範囲を読み込めませんでした。更新して再試行してください。",
+    "plugins.triage.surface.filters.scopesPartial": "設定済みの範囲の一部を読み込めませんでした。更新して再試行してください。",
     "plugins.triage.surface.session.explainPr": "この PR をチャットで説明",
     "plugins.triage.surface.orchestrate.title": "この作業をオーケストレーション",
     "plugins.triage.surface.orchestrate.instruction": "このIssueに記載された作業を計画し、調整してください。",

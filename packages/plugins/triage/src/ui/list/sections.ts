@@ -2,7 +2,7 @@ import type { TriageEntryLocatorV1, TriageEntryRelationsV1, TriageSourceWorkflow
 import { projectTriageDetailFieldsV1, projectTriageDetailFieldTextV1, triageTaskStatusCategoryV1 } from '@happier-dev/triage-protocol/v1';
 
 import { CORPUS_LANE } from '../../corpus/fold/lane.js';
-import { triageEntryRowKey, type TriageListRowV1 } from '../../projection/listWindow.js';
+import { triageEntryRowKey, triageTaskCompletionMatchesWindowV1, type TriageListRowV1 } from '../../projection/listWindow.js';
 import type { TriagePinnedEntryV1 } from '../marks/pinCommand.js';
 import {
   indexTriagePinsByEntry,
@@ -166,9 +166,7 @@ export function planTriageListItemsV1(input: Readonly<{
     if (input.tasks === undefined) return true;
     if (!input.tasks.isTask(ref)) return false;
     const snapshot = row?.content?.outcome.snapshot;
-    if (input.tasks.completedSinceMs !== undefined && snapshot !== undefined
-      && triageTaskStatusCategoryV1(snapshot.state) === 'completed'
-      && (snapshot.completedAtMs === undefined || snapshot.completedAtMs < input.tasks.completedSinceMs)) return false;
+    if (snapshot !== undefined && !triageTaskCompletionMatchesWindowV1(snapshot, input.tasks.completedSinceMs)) return false;
     if (input.tasks.audience === 'everyone') return true;
     if (input.tasks.audience === 'agents') return input.tasks.hasSessions(triageEntryRowKey(ref));
     return row?.observations.some((observation) => observation.outcome.kind === 'present'

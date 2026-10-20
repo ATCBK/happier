@@ -45,14 +45,17 @@ function admits(value: Readonly<Record<string, unknown>>): boolean {
     return TriageListEntriesInputV1Schema.safeParse(value).success;
 }
 
-function fragmentAt(path: readonly string[]): PluginJsonSchema {
-    let fragment: PluginJsonSchema = TriageListEntriesInputV1Schema.jsonSchema;
+function fragmentsAt(path: readonly string[]): readonly PluginJsonSchema[] {
+    let fragments: readonly PluginJsonSchema[] = [TriageListEntriesInputV1Schema.jsonSchema];
     for (const segment of path) {
-        const next = segment === '[]' ? fragment.items : fragment.properties?.[segment];
-        if (next === undefined) throw new Error(`no schema fragment at ${path.join('.')}`);
-        fragment = next;
+        fragments = fragments.flatMap((fragment) => [fragment, ...(fragment.anyOf ?? []), ...(fragment.oneOf ?? [])]
+            .flatMap((variant) => {
+                const next = segment === '[]' ? variant.items : variant.properties?.[segment];
+                return next === undefined ? [] : [next];
+            }));
+        if (fragments.length === 0) throw new Error(`no schema fragment at ${path.join('.')}`);
     }
-    return fragment;
+    return fragments;
 }
 
 const boundedStrings = [
@@ -122,11 +125,11 @@ describe('the aggregate list wire string bounds', () => {
      * the boundary admitting what the parser rejects.
      */
     it.each(boundedStrings)('publishes $name as a byte bound the host boundary enforces', ({ bound, path }) => {
-        const fragment = fragmentAt(path);
-
-        expect(fragment['x-happier-max-utf8-bytes']).toBe(bound);
-        expect(fragment.maxLength).toBeUndefined();
-        expect(fragment.minLength).toBe(1);
-        expect(fragment.pattern).toBeDefined();
+        for (const fragment of fragmentsAt(path)) {
+            expect(fragment['x-happier-max-utf8-bytes']).toBe(bound);
+            expect(fragment.maxLength).toBeUndefined();
+            expect(fragment.minLength).toBe(1);
+            expect(fragment.pattern).toBeDefined();
+        }
     });
 });

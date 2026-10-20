@@ -189,7 +189,8 @@ describe('the aggregate list Action handler', () => {
         const state = resolveTriageListShellState(snapshot);
         expect(state.kind).toBe('window');
         if (state.kind !== 'window' || !state.failure) throw new Error('Expected named source failure');
-        expect(readTriageListFailureNotice(state.failure).description).toContain('plugin_action_caller_unavailable');
+        expect(state.failure.sources[0]).toMatchObject({ code: 'plugin_action_caller_unavailable', retryable: false });
+        expect(readTriageListFailureNotice(state.failure).description).not.toContain('plugin_action_caller_unavailable');
         expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
             sourceInstanceId: INSTANCE_ID, code: 'plugin_action_caller_unavailable', retryable: false,
         }));

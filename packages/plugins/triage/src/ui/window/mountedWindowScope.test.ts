@@ -204,6 +204,28 @@ afterEach(() => {
   while (leases.length > 0) leases.pop()?.release();
 });
 
+it('uses the same mounted owner for a task completion window and restarts paging when its boundary changes', async () => {
+  const scope = createSharedScope();
+  const h = createHostStub(INSTANCE_A, { paged: true });
+  acquire(h.host, scope);
+  const lens = { ...TRIAGE_LIST_DEFAULT_LENS_V1, tasks: { completedSinceMs: 100 } };
+  setTriageListWindowLens(lens, h.host, scope);
+  await refreshTriageListWindow('manual', h.host, scope);
+  expect(h.calls).toContain('tasks/list-v1');
+  expect(h.inputs.filter(input => input.limit > 0).at(-1)).toMatchObject({ tasks: { completedSinceMs: 100 } });
+  await loadMoreTriageListWindow(h.host, scope);
+  expect(h.inputs.filter(input => input.limit > 0).at(-1)).toMatchObject({ tasks: { completedSinceMs: 100 }, resume: expect.any(Array) });
+  setTriageListWindowLens({ ...lens, tasks: { completedSinceMs: 200 } }, h.host, scope);
+  await refreshTriageListWindow('manual', h.host, scope);
+  const restarted = h.inputs.filter(input => input.limit > 0).at(-1);
+  expect(restarted).toMatchObject({ tasks: { completedSinceMs: 200 } });
+  expect(restarted).not.toHaveProperty('resume');
+  setTriageListWindowLens(TRIAGE_LIST_DEFAULT_LENS_V1, h.host, scope);
+  await refreshTriageListWindow('manual', h.host, scope);
+  expect(h.calls.at(-1)).toBe('entries/list-v1');
+  expect(h.inputs.at(-1)).not.toHaveProperty('tasks');
+});
+
 describe('the mounted PRs & Issues window is scoped by its host-owned lifetime', () => {
   it('forwards readiness from the actual read client and ignores another artifact without acquiring data', () => {
     const first = createHostStub(INSTANCE_A);
