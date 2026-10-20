@@ -1,0 +1,180 @@
+export type ImagePreviewCacheKey = Readonly<{
+    sessionId: string;
+    signature: string;
+    filePath: string;
+}>;
+
+export type ImagePreviewCacheValue =
+    | Readonly<{ status: 'loaded'; uri: string; cleanup?: (() => void | Promise<void>) | null; byteLength?: number | null; mimeType?: string }>
+    | Readonly<{ status: 'error'; error: string }>;
+
+export type ImagePreviewCacheEntry = Readonly<{
+    value: ImagePreviewCacheValue;
+    byteSize: number;
+    cachedAtMs: number;
+    sessionId: string;
+    signature: string;
+    filePath: string;
+}>;
+
+export type ImagePreviewCacheOptions = Readonly<{
+    maxEntries: number;
+    maxTotalBytes: number;
+    now: () => number;
+}>;
+
+export class ImagePreviewCache {
+    private readonly entries = new Map<string, ImagePreviewCacheEntry>();
+    private readonly retained = new Map<string, number>();
+    private readonly pending = new Map<string, { controller: AbortController; promise: Promise<ImagePreviewCacheValue> }>();
+    private totalBytes = 0;
+    private maxEntries: number;
+    private maxTotalBytes: number;
+
+    constructor(private readonly options: ImagePreviewCacheOptions) {
+        this.maxEntries = Number.isFinite(options.maxEntries) ? Math.max(0, options.maxEntries) : 0;
+        this.maxTotalBytes = Number.isFinite(options.maxTotalBytes) ? Math.max(0, options.maxTotalBytes) : 0;
+    }
+
+    get(key: ImagePreviewCacheKey): ImagePreviewCacheValue | null {
+        const storageKey = this.toStorageKey(key);
+        const existing = this.entries.get(storageKey) ?? null;
+        if (!existing) return null;
+
+        // Refresh LRU order by reinserting at the end.
+        this.entries.delete(storageKey);
+        this.entries.set(storageKey, existing);
+        return existing.value;
+    }
+
+    retain(key: ImagePreviewCacheKey): void {
+        const storageKey = this.toStorageKey(key);
+        this.retained.set(storageKey, (this.retained.get(storageKey) ?? 0) + 1);
+    }
+
+    release(key: ImagePreviewCacheKey): void {
+        const storageKey = this.toStorageKey(key);
+        const count = this.retained.get(storageKey) ?? 0;
+        if (count > 1) this.retained.set(storageKey, count - 1);
+        else {
+            this.retained.delete(storageKey);
+            this.pending.get(storageKey)?.controller.abort();
+            this.evictIfNeeded();
+        }
+    }
+
+    /** The cache owns a shared fill; one disappearing consumer cannot cancel another's read. */
+    load(key: ImagePreviewCacheKey, loader: (signal: AbortSignal) => Promise<ImagePreviewCacheValue>): Promise<ImagePreviewCacheValue> {
+        const cached = this.get(key);
+        if (cached) return Promise.resolve(cached);
+        const storageKey = this.toStorageKey(key);
+        const pending = this.pending.get(storageKey);
+        if (pending && !pending.controller.signal.aborted) return pending.promise;
+        const controller = new AbortController();
+        const promise = loader(controller.signal).then(value => {
+            // A cancelled fill must not revoke a retry's mounted URI by replacing it.
+            if (controller.signal.aborted && (this.entries.has(storageKey) || this.pending.get(storageKey)?.promise !== promise)) {
+                this.cleanupValue(value);
+                return value;
+            }
+            // A late successful fill is still cache-owned and subject to ordinary eviction.
+            if (value.status === 'loaded') this.set(key, value);
+            return value;
+        }).finally(() => {
+            if (this.pending.get(storageKey)?.promise === promise) this.pending.delete(storageKey);
+        });
+        this.pending.set(storageKey, { controller, promise });
+        return promise;
+    }
+
+    setLimits(limits: Readonly<{ maxEntries: number; maxTotalBytes: number }>): void {
+        this.maxEntries = Number.isFinite(limits.maxEntries) ? Math.max(0, limits.maxEntries) : 0;
+        this.maxTotalBytes = Number.isFinite(limits.maxTotalBytes) ? Math.max(0, limits.maxTotalBytes) : 0;
+        this.evictIfNeeded();
+    }
+
+    set(key: ImagePreviewCacheKey, value: ImagePreviewCacheValue): void {
+        if (!key.sessionId || !key.signature || !key.filePath) return;
+        const storageKey = this.toStorageKey(key);
+
+        const previous = this.entries.get(storageKey) ?? null;
+        if (previous) {
+            this.totalBytes -= previous.byteSize;
+            this.entries.delete(storageKey);
+            this.cleanupValue(previous.value);
+        }
+
+        const byteSize = this.estimateBytes(value);
+        const entry: ImagePreviewCacheEntry = {
+            value,
+            byteSize,
+            cachedAtMs: this.options.now(),
+            sessionId: key.sessionId,
+            signature: key.signature,
+            filePath: key.filePath,
+        };
+        this.entries.set(storageKey, entry);
+        this.totalBytes += byteSize;
+        this.evictIfNeeded();
+    }
+
+    invalidateSession(sessionId: string): void {
+        if (!sessionId) return;
+        for (const [storageKey, entry] of this.entries) {
+            if (entry.sessionId !== sessionId) continue;
+            this.entries.delete(storageKey);
+            this.totalBytes -= entry.byteSize;
+            this.cleanupValue(entry.value);
+        }
+    }
+
+    invalidatePaths(input: Readonly<{ sessionId: string; paths: ReadonlySet<string> }>): void {
+        const sessionId = input.sessionId;
+        if (!sessionId) return;
+
+        for (const [storageKey, entry] of this.entries) {
+            if (entry.sessionId !== sessionId) continue;
+            if (!input.paths.has(entry.filePath)) continue;
+            this.entries.delete(storageKey);
+            this.totalBytes -= entry.byteSize;
+            this.cleanupValue(entry.value);
+        }
+    }
+
+    private estimateBytes(value: ImagePreviewCacheValue): number {
+        if (value.status === 'loaded') {
+            if (typeof value.byteLength === 'number' && Number.isFinite(value.byteLength)) {
+                return Math.max(0, Math.floor(value.byteLength));
+            }
+            return Math.max(0, value.uri.length * 2);
+        }
+        return Math.max(0, value.error.length * 2);
+    }
+
+    private cleanupValue(value: ImagePreviewCacheValue): void {
+        if (value.status !== 'loaded' || typeof value.cleanup !== 'function') return;
+        try {
+            void Promise.resolve(value.cleanup()).catch(() => undefined);
+        } catch {}
+    }
+
+    private toStorageKey(key: ImagePreviewCacheKey): string {
+        return `${key.sessionId}\u0000${key.signature}\u0000${key.filePath}`;
+    }
+
+    private evictIfNeeded(): void {
+        const maxEntries = this.maxEntries;
+        const maxTotalBytes = this.maxTotalBytes;
+
+        while (this.entries.size > maxEntries || (maxTotalBytes > 0 && this.totalBytes > maxTotalBytes)) {
+            const oldestKey = [...this.entries.keys()].find(key => !this.retained.has(key));
+            if (!oldestKey) break;
+            const oldest = this.entries.get(oldestKey);
+            this.entries.delete(oldestKey);
+            if (oldest) {
+                this.totalBytes -= oldest.byteSize;
+                this.cleanupValue(oldest.value);
+            }
+        }
+    }
+}
