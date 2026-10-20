@@ -56,6 +56,7 @@ export const SessionFollowSourceProjectionV1Schema = lazyZodSchema(() => z.stric
 
 export const SessionFollowSourceProjectionMessageV1Schema = lazyZodSchema(() => z.strictObject({
   seq: z.number().check(z.int(), z.minimum(0)),
+  localId: z.nullable(z.string()),
   content: SessionStoredMessageContentSchema,
   messageRole: z.optional(SessionMessageRoleSchema),
   createdAt: z.number().check(z.int()),

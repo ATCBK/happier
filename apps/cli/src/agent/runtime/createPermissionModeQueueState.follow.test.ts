@@ -186,7 +186,9 @@ describe('protected Follow queue to host context', () => {
             : JSON.stringify(currentState) } : {}) },
         messages: requestScenario ? [] : (scenario === 'two-originals'
           ? [4, 5, 6].filter(seq => seq > afterTranscriptSeq && seq <= observedTranscriptSeq)
-          : [observedTranscriptSeq]).map(observedTranscriptSeq => ({ seq: observedTranscriptSeq, createdAt: observedTranscriptSeq,
+          : [observedTranscriptSeq]).map(observedTranscriptSeq => ({ seq: observedTranscriptSeq,
+          localId: scenario === 'two-originals' && observedTranscriptSeq === 6 ? null : `source-original-${observedTranscriptSeq}`,
+          createdAt: observedTranscriptSeq,
           content: { t: 'plain', v: { role: 'agent', content: scenario === 'two-originals' && observedTranscriptSeq === 6
             ? { type: 'codex', data: { type: 'message', message: 'Later terminal-only outcome' } }
             : scenario === 'two-originals'

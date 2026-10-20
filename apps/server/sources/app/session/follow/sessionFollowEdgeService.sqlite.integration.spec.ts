@@ -474,6 +474,7 @@ describe('SessionFollowEdge service', () => {
         await db.sessionMessage.create({ data: {
             sessionId: source.id,
             seq: 3,
+            localId: 'runner-original-3',
             content: encryptionMode === 'plain'
                 ? { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'current' } } }
                 : { t: 'encrypted', c: 'Y3VycmVudA' },
@@ -503,7 +504,14 @@ describe('SessionFollowEdge service', () => {
         const request = { ...historicalRequest, afterTranscriptSeq: 2, observedTranscriptSeq: 3 };
         await expect(inTx((tx) => projectSessionFollowSourceForRunnerInTx(tx, {
             principal, destinationSessionId: destination.id, request,
-        }))).resolves.toMatchObject({ source: { id: source.id, agentState }, messages: [{ seq: 3 }], hasMore: false });
+        }))).resolves.toMatchObject({ source: { id: source.id, agentState }, messages: [{ seq: 3, localId: 'runner-original-3' }], hasMore: false });
+
+        // Stored transcript reads preserve historical ids; only original
+        // admission applies the current Pending identity grammar.
+        await db.sessionMessage.update({ where: { sessionId_seq: { sessionId: source.id, seq: 3 } }, data: { localId: '' } });
+        await expect(inTx((tx) => projectSessionFollowSourceForRunnerInTx(tx, {
+            principal, destinationSessionId: destination.id, request,
+        }))).resolves.toMatchObject({ messages: [{ seq: 3, localId: '' }] });
 
         // If another accepted input advances the edge before this projection
         // request arrives, the stale request must not replay that consumed row.

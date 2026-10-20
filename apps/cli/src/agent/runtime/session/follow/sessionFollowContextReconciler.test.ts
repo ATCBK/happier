@@ -90,7 +90,7 @@ function originalInputFixture(texts: readonly string[]) {
           latestTurnStatus: null, latestTurnStatusObservedAt: null, latestReadyEventSeq: null, latestReadyEventAt: null,
           meaningfulActivityAt: null, agentStateVersion: 0 },
         messages: texts.flatMap((text, index) => index + 1 > request.afterTranscriptSeq && index + 1 <= request.observedTranscriptSeq
-          ? [{ seq: index + 1, createdAt: 1, messageRole: 'agent', content: { t: 'plain', v: {
+          ? [{ seq: index + 1, localId: `original-${index + 1}`, createdAt: 1, messageRole: 'agent', content: { t: 'plain', v: {
             ...buildAcpAgentMessageEnvelope({ provider: 'codex', body: { type: 'message', message: text } }),
             role: state.corruptSeq === index + 1 ? 'invalid' : 'agent' } } }] : []), hasMore: false });
     } } });
@@ -208,7 +208,7 @@ describe('Session Follow context reconciler', () => {
           archivedAt: null, createdAt: 1, updatedAt: 1, active: true, activeAt: 1, thinking: false,
           thinkingAt: null, latestTurnStatus: null, latestTurnStatusObservedAt: null, latestReadyEventSeq: null,
           latestReadyEventAt: null, meaningfulActivityAt: null, agentStateVersion: 0 },
-        messages: [{ seq: 1, createdAt: 1,
+        messages: [{ seq: 1, localId: 'committed-report', createdAt: 1,
           messageRole: 'agent', content: { t: 'plain', v: { role: 'agent',
             content: { type: 'event', data: { type: 'worker-report', summary: 'One committed report',
               deliverables: [{ kind: 'workspace_file', sessionId: 'source', path: 'result.md' }] } } } } }],
@@ -410,7 +410,7 @@ describe('Session Follow context reconciler', () => {
           latestReadyEventAt: null, meaningfulActivityAt: null, agentStateVersion: observed.agentStateVersion,
           ...(kind === 'request' ? { agentState: JSON.stringify({ requests: { question: {
             tool: 'AskUserQuestion', arguments: {}, kind: 'user_action', createdAt: 3,
-          } } }) } : {}) }, messages: kind === 'message' ? [{ seq: 4, createdAt: 4,
+          } } }) } : {}) }, messages: kind === 'message' ? [{ seq: 4, localId: 'rule-original', createdAt: 4,
           content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Retained original report' } } } }] : [], hasMore: false });
       } } });
     try {

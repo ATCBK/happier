@@ -842,6 +842,36 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         expect((await f.observe()).observations).toEqual([]);
     });
 
+    it('does not let a manager terminal fallback consume an unadmitted report', async () => {
+        const f = await fixture();
+        const original = await f.originals(true);
+        const reportSeq = await f.appendReport('Original report remains unadmitted');
+        await f.appendReply('Later source completion', 'completed-after-report');
+        original.admissionFault.originalSeq = reportSeq;
+        await original.dispatchPending();
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
+        const legacyReconcile = f.makeReconciler();
+        const terminal = await f.wake(legacyReconcile);
+        if (terminal) {
+            await f.commitWorkerWake(terminal);
+            terminal.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: terminal.wakeEventLocalId! });
+            await vi.waitFor(() => expect(f.acknowledgements).toHaveLength(1));
+            await Promise.all(f.acknowledgements);
+        }
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toMatchObject({ deliveredTranscriptSeq: reportSeq - 1 });
+        original.admissionFault.originalSeq = null;
+        const recovered = await original.prepare('natural', 8192);
+        expect(recovered?.representedFollowLocalInputIds).toHaveLength(1);
+        expect(recovered?.workerUpdates).toMatchObject([{ ownerState: 'published', result: 'Original report remains unadmitted' }]);
+        await original.accept(recovered!);
+        const finalOriginal = await original.prepare('natural', 8192);
+        expect(finalOriginal?.representedFollowLocalInputIds).toHaveLength(1);
+        await original.accept(finalOriginal!);
+        expect(f.acceptedPrompts[1]).toContain('Later source completion');
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toMatchObject({ deliveredTranscriptSeq: 4 });
+        expect((await f.wake(legacyReconcile))?.workerUpdates).toMatchObject([{ ownerState: 'settled' }]);
+    });
+
     it.each(['receiver', 'source'] as const)('preserves the CONT14 originals 7–11 and private deliverable across held publisher replacement and bounded intake (%s)', async entry => {
         const f = await fixture('in_progress', { preset: 'important' });
         for (let index = 0; index < 5; index++) await f.appendTurnInput(`earlier-turn-${index}`);
@@ -956,12 +986,20 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         expect(f.acceptedPrompts[1]).not.toContain('Actual later final result');
         expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id)))
             .toMatchObject({ deliveredTranscriptSeq: secondSeq, deliveredTurnId: null });
+        const finalOriginal = await original.prepare('natural');
+        expect(finalOriginal?.representedFollowLocalInputIds).toHaveLength(1);
+        await original.accept(finalOriginal!);
+        expect(f.acceptedPrompts[2]).toContain('Actual later final result');
+        expect(f.acceptedPrompts[2]).not.toContain('Later original finding');
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id)))
+            .toMatchObject({ deliveredTranscriptSeq: secondSeq + 2, deliveredTurnId: null });
         const terminal = await f.makeReconciler()({ signal: new AbortController().signal, deliveryIntent: 'wake' });
-        expect(terminal?.workerUpdates).toMatchObject([{ ownerState: 'settled', result: 'Actual later final result' }]);
+        expect(terminal?.workerUpdates).toMatchObject([{ ownerState: 'settled' }]);
         await f.commitWorkerWake(terminal!);
         terminal!.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: terminal!.wakeEventLocalId! });
         expect(await Promise.all(f.acknowledgements)).toEqual([
-            expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true }),
+            expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true }),
+            expect.objectContaining({ ok: true }), expect.objectContaining({ ok: true }),
         ]);
         expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id)))
             .toMatchObject({ deliveredTurnId: 'later-turn', deliveredTurnStatus: 'completed' });

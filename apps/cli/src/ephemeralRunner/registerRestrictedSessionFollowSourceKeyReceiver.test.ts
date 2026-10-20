@@ -177,6 +177,7 @@ describe('restricted Follow source-key receiver', () => {
           },
           messages: [{
             seq: 2,
+            localId: null,
             content: { t: 'encrypted', c: encryptedContent },
             createdAt: 2,
             accountActor: null,

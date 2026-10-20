@@ -4,6 +4,7 @@ import type { SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/fol
 import type { SessionAwarenessProjectionV1 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -47,6 +48,32 @@ function plainSourceTransport(overrides: Partial<ReturnType<typeof createSession
 }
 
 describe('Session Follow source hydrator', () => {
+  it.each(['plain', 'e2ee'] as const)('keeps a restricted %s manager terminal behind an unadmitted original but supports legacy rows', async mode => {
+    const ctx = { encryptionKey: new Uint8Array(32).fill(21), encryptionVariant: 'dataKey' as const };
+    const material = createSessionFollowSourceMaterialResolver();
+    material.installPreparedDataKey({ sourceSessionId: 'source', dataKey: ctx.encryptionKey });
+    try {
+      for (const localId of ['report-original', null]) {
+        const payload = { role: 'agent', content: { type: 'event', data: { type: 'worker-report', summary: 'Pending report' } } };
+        const hydrate = createSessionFollowSourceHydrator({ session: destinationSession,
+          credentials: { token: 'token', encryption: null }, sourceMaterialResolver: material,
+          deps: { fetchRunnerSourceProjection: async () => SessionFollowSourceProjectionResponseV1Schema.parse({ v: 1, source: {
+            id: 'source', encryptionMode: mode, metadata: mode === 'plain' ? '{}' : encryptSessionPayload({ ctx, payload: {} }),
+            archivedAt: null, createdAt: 1, updatedAt: 1, active: true, activeAt: Date.now(), thinking: false, thinkingAt: null,
+            latestTurnStatus: 'completed', latestTurnId: 'completed-turn', latestTurnStatusObservedAt: 1,
+            latestReadyEventSeq: null, latestReadyEventAt: null, meaningfulActivityAt: 1, agentStateVersion: 0,
+          }, messages: [{ seq: 2, localId, createdAt: 1, messageRole: 'event', content: mode === 'plain'
+            ? { t: 'plain', v: payload } : { t: 'encrypted', c: encryptSessionPayload({ ctx, payload }) } }], hasMore: false }) } });
+        const result = await hydrate({ signal: new AbortController().signal,
+          observation: { ...observation, relation: 'manager', attachedAt: 1,
+            observed: { ...observation.observed, transcriptSeq: 2, turn: { id: 'completed-turn', status: 'completed' } } } });
+        expect(result?.observed.transcriptSeq).toBe(localId === null ? 2 : 1);
+        expect(result?.observed.turn).toEqual(localId === null ? { id: 'completed-turn', status: 'completed' } : null);
+        if (localId !== null) expect(result?.workerUpdate).toBeUndefined();
+      }
+    } finally { material.dispose(); }
+  });
+
   it('retains a transient Home failure at an admitted request original final recheck', async () => {
     const material = createSessionFollowSourceMaterialResolver();
     let unavailable = false;
@@ -100,7 +127,7 @@ describe('Session Follow source hydrator', () => {
             createdAt: 1, updatedAt: 1, active: true, activeAt: Date.now(), thinking: false, thinkingAt: null,
             latestTurnStatus: 'completed', latestTurnId: 'completed-turn', latestTurnStatusObservedAt: 1,
             latestReadyEventSeq: 2, latestReadyEventAt: 1, meaningfulActivityAt: 1, agentStateVersion: 0,
-          }, messages: [{ seq: 2, createdAt: 1, messageRole: 'event',
+          }, messages: [{ seq: 2, localId: 'ready-original', createdAt: 1, messageRole: 'event',
             ...(variant === 'row_sidechain' ? { sidechainId: 'child' } : {}), content: mode === 'plain'
             ? { t: 'plain', v: payload } : { t: 'encrypted', c: encryptSessionPayload({ ctx, payload }) } }], hasMore: false }) },
         });
@@ -373,7 +400,7 @@ describe('Session Follow source hydrator', () => {
         thinking: false, thinkingAt: null, latestTurnStatus: null, latestTurnStatusObservedAt: null,
         latestReadyEventSeq: null, latestReadyEventAt: null, meaningfulActivityAt: null, agentStateVersion: 0,
       },
-      messages: [{ seq: 2, content: { t: 'encrypted' as const, c: encryptedContent }, createdAt: 2, accountActor: null }],
+      messages: [{ seq: 2, localId: null, content: { t: 'encrypted' as const, c: encryptedContent }, createdAt: 2, accountActor: null }],
       hasMore: false,
     }));
     const hydrate = createSessionFollowSourceHydrator({
@@ -1008,7 +1035,7 @@ describe('Session Follow source hydrator', () => {
             thinking: false, thinkingAt: null, latestTurnStatus: null, latestTurnStatusObservedAt: null,
             latestReadyEventSeq: null, latestReadyEventAt: null, meaningfulActivityAt: null, agentStateVersion: 0,
           },
-          messages: [{ seq: 2, content: { t: 'encrypted' as const, c: encryptedContent }, createdAt: 2, accountActor: null }],
+          messages: [{ seq: 2, localId: null, content: { t: 'encrypted' as const, c: encryptedContent }, createdAt: 2, accountActor: null }],
           hasMore: false,
         })) as never,
       },

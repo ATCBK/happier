@@ -414,9 +414,10 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     sourcePublisher?: SessionFollowRuleSourceOccurrenceV1['sourcePublisher']): Promise<SessionFollowReceiverRangeResult> => {
     const coveredEvents: { sourceSessionId: string; kind: FollowEventV1['kind'] }[] = [];
     if (!await current()) return { coveredEvents };
-    // Reconnect and source invalidation re-read the real configured Run
-    // sources. Their retained original is never inferred from a parent turn.
-    if (!request.sourceSessionId) {
+    // Receiver recovery re-reads configured Run sources. A source publisher's
+    // notification repairs its own Session prefix without scanning other work.
+    // A Run's retained original is never inferred from a parent turn.
+    if (!sourcePublisher) {
       let cursor: string | undefined;
       do {
         const path = SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(request.destinationSessionId));

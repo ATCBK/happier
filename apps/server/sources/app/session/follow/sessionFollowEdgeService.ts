@@ -289,7 +289,7 @@ export async function projectSessionFollowSourceForRunnerInTx(
             seq: { gt: input.request.afterTranscriptSeq, lte: input.request.observedTranscriptSeq },
         },
         select: {
-            seq: true, content: true, messageRole: true, createdAt: true,
+            seq: true, localId: true, content: true, messageRole: true, createdAt: true,
             inputAdmissionReceipt: true, authorAccountId: true,
         },
         orderBy: { seq: 'asc' },
@@ -328,6 +328,7 @@ export async function projectSessionFollowSourceForRunnerInTx(
         },
         messages: page.map((message, index) => ({
             seq: message.seq,
+            localId: message.localId,
             content: message.content,
             ...(() => {
                 const role = SessionMessageRoleSchema.safeParse(message.messageRole);

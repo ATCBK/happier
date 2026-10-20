@@ -48,7 +48,7 @@ describe('Session Follow prompt composition through the canonical owner', () => 
               createdAt: 1, updatedAt: 1, active: true, activeAt: 1, thinking: false, thinkingAt: null,
               latestTurnStatus: null, latestTurnStatusObservedAt: null, latestReadyEventSeq: null, latestReadyEventAt: null,
               meaningfulActivityAt: null, agentStateVersion: 0 },
-            messages: [{ seq: 1, createdAt: 1, messageRole: 'agent', content: { t: 'plain', v: { role: 'agent',
+            messages: [{ seq: 1, localId: 'direction-original', createdAt: 1, messageRole: 'agent', content: { t: 'plain', v: { role: 'agent',
               content: kind === 'goal_changed' ? { type: 'event', data: { type: 'goal-changed' } }
                 : { type: 'codex', data: { type: 'message', message: 'Please review' } } } } }], hasMore: false,
           }),

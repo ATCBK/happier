@@ -32,7 +32,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { readSessionFollowSemanticSourceEvent } from './sessionFollowRuleSourceEvidence';
-import { SessionFollowSourceRequestsV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
+import { SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
@@ -944,8 +944,9 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
           publishedReport = { text: event.data.summary, seq: row.seq,
             ...(event.data.deliverables ? { deliverables: event.data.deliverables } : {}) };
         }
+        const decoded = isManager || selectsVoiceOriginals
+          ? decodeTranscriptBody({ role: row.role, content: row.content, meta: row.meta }) : null;
         if (observation.relation === 'manager') {
-          const decoded = decodeTranscriptBody({ role: row.role, content: row.content, meta: row.meta });
           if (decoded && !decoded.sidechainId) {
             for (const call of decoded.toolCalls ?? []) {
               const name = call.name.startsWith('mcp__happier__') ? call.name.slice('mcp__happier__'.length) : call.name;
@@ -975,18 +976,27 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
         const projected = projectOpenedSessionFollowRow(row, !input.disclosure, voiceOriginal ? observation.sourceSessionId : undefined);
         const content = recordValue(row.content);
         const semanticBody = content?.type === 'acp' || content?.type === 'codex' ? recordValue(content.data) : content;
-        const decoded = voiceOriginal ? decodeTranscriptBody({ role: row.role, content: row.content, meta: row.meta }) : null;
-        const voiceSidechain = voiceOriginal && (row.sidechainId || decoded?.sidechainId);
-        if (voiceOriginal && !voiceSidechain && content?.type === 'event'
+        const sourceSidechain = row.sidechainId || decoded?.sidechainId;
+        if (voiceOriginal && !sourceSidechain && content?.type === 'event'
           && recordValue(content.data)?.type === 'worker-report' && projected.summary === null) {
           return { ...buildUnavailableEnvelope({ observation, awareness }), sourceRecencyMs };
         }
-        const originalEvent = voiceSidechain ? null : projected.summary && isAuthoritativeHumanSessionFollowMessageV1(projected.summary)
+        const originalEvent = sourceSidechain ? null : projected.summary && isAuthoritativeHumanSessionFollowMessageV1(projected.summary)
           ? { kind: 'person_wrote' as const }
           : row.role === 'agent' && semanticBody && typeof semanticBody.type === 'string' && !decoded?.sidechainId
             ? readSessionFollowSemanticSourceEvent({ ...semanticBody, type: semanticBody.type })
               ?? (content?.type === 'text' ? { kind: 'message' as const } : null)
             : null;
+        // A manager's optional Turn fact cannot consume a selected transcript
+        // original before its admitted input exists. Keep that prefix pending
+        // even when admission failed and there is no queued input to expose it.
+        // Account Voice retains its independent original-reader lifetime.
+        if (isManager && !input.disclosure && !('kind' in observation) && originalEvent
+          && observation.policy && resolveFollowDeliveryV1({ policies: [observation.policy], event: originalEvent }).selected
+          && SessionFollowSourceMessageV1Schema.safeParse({ localId: storedRow.localId, seq: row.seq }).success) {
+          omittedObservedMessage = true;
+          break;
+        }
         const selected = !voiceOriginal || originalEvent !== null
           && observation.policy !== undefined
           && resolveFollowDeliveryV1({ policies: [observation.policy], event: originalEvent }).person.voice;
