@@ -23,6 +23,8 @@ export type LocalServicesScanResult = Readonly<{
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
     /** Private OS coverage facts consumed by the canonical ownership normalizer. */
     socketOwnerReadFailures?: readonly number[];
+    /** Linux count-only scans attribute only the supplied internal PIDs. */
+    listenerOwnersRestricted?: true;
 }>;
 
 /**
@@ -33,7 +35,10 @@ export type LocalServicesScanResult = Readonly<{
  * stdout on a stalled loop — indistinguishable from "nothing is listening". Linux reads `/proc`
  * and spawns nothing, so it has never been exposed to it.
  */
-export async function scanPlatformLocalServices(options: Readonly<{ includeProcessFacts?: boolean }> = {}): Promise<LocalServicesScanResult> {
+export async function scanPlatformLocalServices(options: Readonly<{
+    includeProcessFacts?: boolean;
+    listenerOwnerPids?: readonly number[];
+}> = {}): Promise<LocalServicesScanResult> {
     if (process.platform === 'darwin') {
         const result = await readDarwinLocalServiceListeners({
             execFile: execFileWithDeadline,
@@ -75,5 +80,6 @@ export async function scanPlatformLocalServices(options: Readonly<{ includeProce
         workspaces: [],
         diagnostics: result.diagnostics,
         socketOwnerReadFailures: result.socketOwnerReadFailures,
+        ...(result.listenerOwnersRestricted ? { listenerOwnersRestricted: true } : {}),
     };
 }

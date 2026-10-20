@@ -78,7 +78,7 @@ import {
     type HostedWebStaticAssetLifecycleSyncResult,
 } from './plugins/staticAssets/lifecycle';
 
-type LocalServicesScanner = (options?: Readonly<{ includeProcessFacts?: boolean }>) => Promise<LocalServicesScanResult>;
+type LocalServicesScanner = (options?: Parameters<typeof scanPlatformLocalServices>[0]) => Promise<LocalServicesScanResult>;
 
 type LocalServiceWorkspaceFactsSource = readonly LocalServiceWorkspaceFact[] | LocalServiceWorkspaceFactsSnapshot;
 type LocalServiceWorkspaceFactsProvider =
@@ -421,7 +421,14 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         }
         // The same native scan can be promoted while it is pending. Its process
         // census is consumed only by inventory/Guard readers, never a count-only tick.
-        let result = await scan({ includeProcessFacts: false });
+        const internalProcessPids = params.internalProcessPids?.() ?? [process.pid];
+        let result = await scan({ includeProcessFacts: false,
+            ...(!needsPresentation() ? { listenerOwnerPids: internalProcessPids } : {}) });
+        if (needsPresentation() && result.listenerOwnersRestricted) {
+            // A reader can join a pending count-only flight. Attribute all listeners before
+            // publishing details; the same refresh owner still coalesces its readers.
+            result = await scan({ includeProcessFacts: false });
+        }
         if (needsPresentation() && result.readProcessFacts) {
             result = { ...result, processes: await result.readProcessFacts() };
         }
@@ -461,7 +468,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
             terminalRegistry,
             ...(ownership ? { ownership: ownership.rows } : {}),
             staleAfterMs,
-            internalProcessPids: params.internalProcessPids?.() ?? [process.pid],
+            internalProcessPids,
             internalEndpointUrls: params.internalEndpointUrls?.(),
         });
         let snapshotWithDiagnostics: NormalizedLocalServiceInventorySnapshot = {
