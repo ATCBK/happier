@@ -130,6 +130,7 @@ function fingerprintImportOpenAuthorizationScope(input: DirectTransferImportOpen
             path: input.path ?? null,
             sizeBytes: input.sizeBytes ?? null,
             overwrite: input.overwrite ?? null,
+            ...(input.expectedHash === undefined ? {} : { expectedHash: input.expectedHash }),
             sha256: input.sha256 ?? null,
           })),
     additionalAllowedWriteDirs: input.additionalAllowedWriteDirs ? [...input.additionalAllowedWriteDirs] : null,

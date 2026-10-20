@@ -50,6 +50,7 @@ export const DirectTransferImportOpenRequestSchema = z.discriminatedUnion('t', [
       path: z.unknown(),
       sizeBytes: z.unknown(),
       overwrite: z.unknown(),
+      expectedHash: z.optional(z.unknown()),
       sha256: z.optional(z.unknown()),
     }),
     zMini.extend(SessionAttachmentUploadInitRequestV1Schema, directTransferImportOpenCommonFields),
