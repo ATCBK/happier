@@ -13,8 +13,9 @@ import type { SelectionListDynamicSectionCache } from './selectionListDynamicSec
  * existing Phase 1 consumers compile unchanged.
  *
  * NOTE: there is intentionally NO `SelectionListFooterAction` type. Functional
- * actions render in the input field's right-side `inputSuffix` slot, not the
- * footer. The footer renders only keyboard hints and is hidden on touch devices.
+ * actions render in the input field's right-side `inputSuffix` slot. The footer
+ * renders keyboard hints (hidden on touch devices) and, when a list commits to one
+ * whole-list action, `footerAction` at its trailing edge on every device.
  *
  * NOTE: there is intentionally NO `SelectionListPathTargetPlatform` type.
  * Path/Windows-vs-Unix is a path-domain concept owned by the path adapter
@@ -885,6 +886,12 @@ export type SelectionListProps = Readonly<{
     bodyHeader?: React.ReactNode;
     /** Content after the last row that scrolls with the rows (a "Custom…" entry). See `bodyHeader`. */
     bodyFooter?: React.ReactNode;
+    /**
+     * The one action the list commits to as a whole ("Replace in 3 files"), seated at the footer's
+     * trailing edge beside the keyboard hints. Unlike the hints it also renders on touch devices, where
+     * the footer then holds only this action. Row-level actions still belong to their rows.
+     */
+    footerAction?: React.ReactNode;
     /** Optional element rendered to the left of the input (e.g. folder icon). */
     inputPrefix?: React.ReactNode;
     /** Notified when the search field gains focus (a host revealing rows only once someone starts adding). */

@@ -37,6 +37,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: theme.space.s12,
     },
+    withAction: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s12,
+    },
+    animatorBesideAction: { flex: 1, minWidth: 0 },
     hint: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -68,6 +74,8 @@ export type SelectionListFooterProps = Readonly<{
     hints: ReadonlyArray<SelectionListKeyboardHint>;
     /** When false, the entire footer renders nothing (touch device). Defaults to true. */
     hardwareKeyboardAvailable?: boolean;
+    /** The list's one whole-list action, at the trailing edge; shown with or without a keyboard. */
+    action?: React.ReactNode;
     testID?: string;
 }>;
 
@@ -126,19 +134,20 @@ export function SelectionListFooter(props: SelectionListFooterProps): React.Reac
         opacity: opacity.value,
     }));
 
-    if (!keyboardAvailable) return null;
-    if (renderedHints.length === 0 && props.hints.length === 0) return null;
+    const action = props.action ?? null;
+    if (!keyboardAvailable && action === null) return null;
+    if (renderedHints.length === 0 && props.hints.length === 0 && action === null) return null;
     return (
         <View
             testID={props.testID}
             onLayout={(event) => setNarrow(isHappierPageRowNarrow(event.nativeEvent.layout.width))}
-            style={[styles.container, { backgroundColor: paintColor(theme.colors.surface.base, 'transparent') }]}
+            style={[styles.container, action !== null ? styles.withAction : null, { backgroundColor: paintColor(theme.colors.surface.base, 'transparent') }]}
         >
             <Animated.View
                 testID={selectionListTestId(props.testID, 'hints-animator')}
-                style={[styles.animator, animatedStyle]}
+                style={[styles.animator, action !== null ? styles.animatorBesideAction : null, animatedStyle]}
             >
-                {renderedHints.filter((hint) => !(narrow && isEscapeHint(hint))).map((hint) => (
+                {(keyboardAvailable ? renderedHints : []).filter((hint) => !(narrow && isEscapeHint(hint))).map((hint) => (
                     <View
                         key={hint.id}
                         testID={selectionListTestId(props.testID, 'hint', hint.id)}
@@ -151,6 +160,7 @@ export function SelectionListFooter(props: SelectionListFooterProps): React.Reac
                     </View>
                 ))}
             </Animated.View>
+            {action}
         </View>
     );
 }
