@@ -1,4 +1,4 @@
-import { buildScmReviewedMarksKey, createScmReviewedMarksRecordPort, clearScmReviewedMarksRecord, type ScmComparison, type ScmReviewedMarkResponse } from '@happier-dev/protocol/scm';
+import { buildScmReviewedMarksKey, createScmReviewedMarksRecordPort, buildScmReviewScopeId, type ScmReviewedMarkResponse, type ScmReviewedMarksSelection } from '@happier-dev/protocol/scm';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { AccountStorageContext } from '@/sync/encryption/accountStorageContext';
 import type { ServerFetch } from '@/sync/http/client';
@@ -9,29 +9,21 @@ import { createScmReviewedMarksState, reconcileScmReviewedMarksState, type ScmRe
 function errorCode(error: unknown): string {
   return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : 'reviewed_marks_unavailable';
 }
-export async function clearScmReviewedMarksForComparisonId(params: Readonly<{
-  comparisonId: string; credentials: AuthCredentials; request: ServerFetch;
-  shouldContinue: () => boolean; encryption?: AccountStorageContext['encryption'];
-}>): Promise<ScmReviewedMarkResponse> {
-  try {
-    if (!params.shouldContinue()) throw new AccountKvScopeRetiredError();
-    const transport = createAccountKvJsonTransport({ ...params, key: buildScmReviewedMarksKey(params.comparisonId) });
-    const result = await clearScmReviewedMarksRecord({ comparisonId: params.comparisonId, transport });
-    return result;
-  } catch (error) { return { success: false, errorCode: errorCode(error), error: error instanceof Error ? error.message : 'Reviewed marks are unavailable' }; }
-}
 /** A mounted comparison captures its Home/Account lifetime; no global marks singleton. */
-export function createScmReviewedMarksOperations(params: Readonly<{
-  comparison: ScmComparison; credentials: AuthCredentials; request: ServerFetch;
+export function createScmReviewedMarksOperations(params: ScmReviewedMarksSelection & Readonly<{
+  credentials: AuthCredentials; request: ServerFetch;
   shouldContinue: () => boolean; encryption?: AccountStorageContext['encryption'];
-  /** Admitted exact-comparison Action; this observer never writes around its policy. */
+  /** Optional admitted Action transport for callers that execute an agent intent. */
   setReviewedAction?: (refs: readonly string[], reviewed: boolean) => Promise<ScmReviewedMarkResponse>;
+  getSelection?: () => ScmReviewedMarksSelection;
 }>) {
-  const key = buildScmReviewedMarksKey(params.comparison.id);
+  const scopeId = buildScmReviewScopeId(params.comparison ? { repositoryRootPath: params.comparison.repository.rootPath, source: params.comparison.source } : params.source);
+  const key = buildScmReviewedMarksKey(scopeId);
   let retired = false;
   const current = () => !retired && params.shouldContinue();
   const transport = createAccountKvJsonTransport({ ...params, key, shouldContinue: current });
-  const port = createScmReviewedMarksRecordPort({ comparison: params.comparison, transport });
+  const port = createScmReviewedMarksRecordPort({ ...(params.comparison ? { comparison: params.comparison } : { source: params.source }),
+    transport, ...(params.getSelection ? { getSelection: params.getSelection } : {}) });
   let state = createScmReviewedMarksState();
   const retiredState: ScmReviewedMarksState = { status: 'retired', record: null, version: -1, errorCode: 'account_kv_scope_retired' };
   const listeners = new Set<() => void>();
@@ -78,7 +70,9 @@ export function createScmReviewedMarksOperations(params: Readonly<{
   return {
     key, read, setReviewed: (refs: readonly string[], reviewed: boolean) => perform(() => params.setReviewedAction
       ? params.setReviewedAction(refs, reviewed)
-      : Promise.resolve({ success: false, errorCode: 'reviewed_marks_unavailable', error: 'The comparison Action target is unavailable.' })),
+      : port.setReviewed(refs, reviewed)),
+    setReviewedKeys: (keys: readonly string[], reviewed: boolean) => perform(() => port.setReviewedKeys(keys, reviewed)),
+    clear: () => perform(() => port.clear()),
     getSnapshot: () => current() ? state : retiredState,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     retire: () => { retired = true; disposePush(); apply({ status: 'retired', record: null, version: state.version }); listeners.clear(); },

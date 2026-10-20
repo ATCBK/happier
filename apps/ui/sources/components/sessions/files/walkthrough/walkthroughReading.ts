@@ -4,7 +4,8 @@ import type { ScmDiffSummaryAnalysisCoverage, ScmDiffSummaryOutputState, ScmDiff
 import type { ScmDiffSummaryResult } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { parsePatch } from 'diff';
 
-import { countHunkLines, isMetadataOccurrence, locateComparisonOccurrences, type LocatedOccurrence } from '@/components/sessions/files/comparison/comparisonOccurrences';
+import { isMetadataOccurrence, locateComparisonOccurrences, type LocatedOccurrence } from '@happier-dev/protocol/scm/comparisonOccurrences';
+import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 import { compareScmPaths } from '@/scm/scmStatusFiles';
 
 /**
@@ -197,7 +198,7 @@ function resolvePhase(walkthrough: WalkthroughReadingInput['walkthrough']): Walk
 
 /** Shared reading progress; Board consumes it without parsing captured code or building reading-view detail. */
 export function buildWalkthroughReadingProgress(input: Readonly<{
-    comparison: Pick<ScmComparison, 'id'>;
+    comparison: ScmComparison;
     walkthrough: WalkthroughReadingInput['walkthrough'];
     reviewed: WalkthroughReadingInput['reviewed'];
 }>): WalkthroughReadingProgress {
@@ -206,7 +207,7 @@ export function buildWalkthroughReadingProgress(input: Readonly<{
         id: stop.id,
         title: stop.title,
         changeRefs: stop.changeRefs,
-        reviewed: isScmSelectionReviewed(input.reviewed, input.comparison.id, stop.changeRefs),
+        reviewed: isScmSelectionReviewed(input.reviewed, input.comparison, stop.changeRefs),
     }));
     return {
         phase: resolvePhase(input.walkthrough),
@@ -235,9 +236,9 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
             || (hunks.length > 0 && completeFilePatch(file, hunks) === null)) ? 'invalid_diff' : unavailableReason;
         evidenceByPath.set(file.path, { declaredAvailable, unavailableReason: fullReason });
         for (const hunk of hunks) {
-            const lines = countHunkLines(hunk);
-            added += lines.added;
-            removed += lines.removed;
+            const lines = parseUnifiedDiffHunks(hunk).flatMap((entry) => entry.lines);
+            added += lines.filter((line) => line.kind === 'add').length;
+            removed += lines.filter((line) => line.kind === 'remove').length;
         }
         if (fullReason !== null) unavailableCount += 1;
     }
@@ -268,7 +269,8 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
                 .sort((left, right) => left - right)
                 .map((hunkIndex) => hunks[hunkIndex]!);
             const lines = selected.reduce((sum, hunk) => {
-                const next = countHunkLines(hunk);
+                const body = parseUnifiedDiffHunks(hunk).flatMap((entry) => entry.lines);
+                const next = { added: body.filter((line) => line.kind === 'add').length, removed: body.filter((line) => line.kind === 'remove').length };
                 return { added: sum.added + next.added, removed: sum.removed + next.removed };
             }, { added: 0, removed: 0 });
             const numbers = stopNumbersByPath.get(file.path) ?? [];
@@ -337,7 +339,8 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
     }
     const filesByPath = new Map(comparison.inventory.files.map((file) => [file.path, file]));
     const fileLines = (file: ScmComparisonFile) => (hunksByPath.get(file.path) ?? []).reduce((sum, hunk) => {
-        const next = countHunkLines(hunk);
+        const body = parseUnifiedDiffHunks(hunk).flatMap((entry) => entry.lines);
+        const next = { added: body.filter((line) => line.kind === 'add').length, removed: body.filter((line) => line.kind === 'remove').length };
         return { added: sum.added + next.added, removed: sum.removed + next.removed };
     }, { added: 0, removed: 0 });
     const others: WalkthroughOtherChange[] = otherPaths.map((path) => {

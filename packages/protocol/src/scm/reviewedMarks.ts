@@ -2,12 +2,13 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { ScmComparisonSchema, ScmComparisonSourceSchema, type ScmComparison } from './comparison.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
+import { buildScmChangeKeys, buildScmReviewScopeId } from './comparisonOccurrences.js';
 
 /** Workspace's existing Account JSON namespace owns mode admission and transition inventory. */
-export const SCM_REVIEWED_MARKS_KV_PREFIX = 'workspace:scm-reviewed:v1:';
+export const SCM_REVIEWED_MARKS_KV_PREFIX = 'workspace:scm-reviewed:scope:';
 const changeRefs = z.array(z.string().check(z.minLength(1))).check(z.refine(refs => new Set(refs).size === refs.length, 'Change references must be unique'));
 export const ScmReviewedMarksRecordSchema = lazyZodSchema(() => z.strictObject({
-  v: z.literal(1), comparisonId: z.string().check(z.minLength(1)), reviewedChangeRefs: changeRefs,
+  v: z.literal(1), scopeId: z.string().check(z.minLength(1)), reviewedChangeKeys: changeRefs,
 }));
 const storedReviewedMarksRecordSchema = createStoredReadSchema(ScmReviewedMarksRecordSchema);
 export type ScmReviewedMarksRecord = z.infer<typeof ScmReviewedMarksRecordSchema>;
@@ -18,6 +19,8 @@ export const ScmReviewedMarkInputSchema = lazyZodSchema(() => z.union([
   z.strictObject({ cwd: z.string().check(z.minLength(1)), resultId: z.string().check(z.minLength(1)), changeRefs: selectedChangeRefs }),
   z.strictObject({ v: z.literal(2), cwd: z.string().check(z.minLength(1)), comparisonId: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
     source: ScmComparisonSourceSchema, sessionId: z.optional(z.string().check(z.minLength(1))), changeRefs: selectedChangeRefs }),
+  z.strictObject({ v: z.literal(2), cwd: z.string().check(z.minLength(1)), source: ScmComparisonSourceSchema,
+    sessionId: z.optional(z.string().check(z.minLength(1))), changeKeys: selectedChangeRefs }),
 ]));
 export type ScmReviewedMarkInput = z.infer<typeof ScmReviewedMarkInputSchema>;
 export const ScmReviewedMarkResponseSchema = lazyZodSchema(() => z.discriminatedUnion('success', [
@@ -36,31 +39,26 @@ export type ScmReviewedMarksJsonTransport = Readonly<{
 export class ScmReviewedMarksError extends Error {
   constructor(readonly code: 'reviewed_marks_invalid_record' | 'reviewed_marks_invalid_selection', message: string) { super(message); }
 }
-export function buildScmReviewedMarksKey(comparisonId: string): string {
-  return SCM_REVIEWED_MARKS_KV_PREFIX + encodeURIComponent(z.string().check(z.minLength(1)).parse(comparisonId));
+export function buildScmReviewedMarksKey(scopeId: string): string {
+  return SCM_REVIEWED_MARKS_KV_PREFIX + encodeURIComponent(z.string().check(z.minLength(1)).parse(scopeId));
 }
 export function parseScmReviewedMarksRecord(comparison: ScmComparison, value: unknown): ScmReviewedMarksRecord {
-  const record = parseScmReviewedMarksRecordForId(comparison.id, value);
-  const ids = new Set(comparison.inventory.files.flatMap(file => file.occurrences.map(occurrence => occurrence.id)));
-  if (record.reviewedChangeRefs.some(ref => !ids.has(ref))) {
-    throw new ScmReviewedMarksError('reviewed_marks_invalid_record', 'Reviewed marks do not identify this exact comparison');
-  }
-  return record;
+  return parseScmReviewedMarksRecordForId(buildScmReviewScopeId({ repositoryRootPath: comparison.repository.rootPath, source: comparison.source }), value);
 }
-function parseScmReviewedMarksRecordForId(comparisonId: string, value: unknown): ScmReviewedMarksRecord {
-  if (value === null) return { v: 1, comparisonId, reviewedChangeRefs: [] };
+function parseScmReviewedMarksRecordForId(scopeId: string, value: unknown): ScmReviewedMarksRecord {
+  if (value === null) return { v: 1, scopeId, reviewedChangeKeys: [] };
   const parsed = storedReviewedMarksRecordSchema.safeParse(value);
-  if (!parsed.success || parsed.data.comparisonId !== comparisonId) {
-    throw new ScmReviewedMarksError('reviewed_marks_invalid_record', 'Reviewed marks do not identify this exact comparison');
+  if (!parsed.success || parsed.data.scopeId !== scopeId) {
+    throw new ScmReviewedMarksError('reviewed_marks_invalid_record', 'Reviewed marks do not identify this review scope');
   }
   return parsed.data;
 }
 
-function parseScmReviewedMarksSnapshot(comparisonId: string, snapshot: ScmReviewedMarksJsonSnapshot) {
+function parseScmReviewedMarksSnapshot(scopeId: string, snapshot: ScmReviewedMarksJsonSnapshot) {
   if (snapshot.value === null && snapshot.version !== -1 && !snapshot.tombstone) {
     throw new ScmReviewedMarksError('reviewed_marks_invalid_record', 'A stored JSON null is not a reviewed-mark record');
   }
-  return { record: parseScmReviewedMarksRecordForId(comparisonId, snapshot.value), version: snapshot.version };
+  return { record: parseScmReviewedMarksRecordForId(scopeId, snapshot.value), version: snapshot.version };
 }
 async function writeScmReviewedMarksIntent(params: Readonly<{
   transport: ScmReviewedMarksJsonTransport;
@@ -70,8 +68,8 @@ async function writeScmReviewedMarksIntent(params: Readonly<{
   let current = params.parseSnapshot(await params.transport.read());
   const writeIntent = async () => {
     const record = params.apply(current.record);
-    if (record.reviewedChangeRefs.length === current.record.reviewedChangeRefs.length
-      && record.reviewedChangeRefs.every((ref, index) => ref === current.record.reviewedChangeRefs[index])) {
+    if (record.reviewedChangeKeys.length === current.record.reviewedChangeKeys.length
+      && record.reviewedChangeKeys.every((key, index) => key === current.record.reviewedChangeKeys[index])) {
       return { success: true as const, record: current.record, version: current.version };
     }
     const result = await params.transport.compareAndSet(record, current.version);
@@ -85,14 +83,14 @@ async function writeScmReviewedMarksIntent(params: Readonly<{
   const reconciled = await writeIntent();
   return reconciled.success ? reconciled : { ...reconciled, errorCode: 'reviewed_marks_conflict', error: 'Reviewed marks changed concurrently' };
 }
-/** Explicit result deletion needs the exact comparison identity, not its deleted code. */
+/** Reset review is explicit and applies to the stable content scope. */
 export function clearScmReviewedMarksRecord(params: Readonly<{
-  comparisonId: string; transport: ScmReviewedMarksJsonTransport;
+  scopeId: string; transport: ScmReviewedMarksJsonTransport;
 }>): Promise<ScmReviewedMarkResponse> {
-  const comparisonId = z.string().check(z.minLength(1)).parse(params.comparisonId);
+  const scopeId = z.string().check(z.minLength(1)).parse(params.scopeId);
   return writeScmReviewedMarksIntent({ transport: params.transport,
-    parseSnapshot: snapshot => parseScmReviewedMarksSnapshot(comparisonId, snapshot),
-    apply: record => ({ ...record, reviewedChangeRefs: [] }),
+    parseSnapshot: snapshot => parseScmReviewedMarksSnapshot(scopeId, snapshot),
+    apply: record => ({ ...record, reviewedChangeKeys: [] }),
   });
 }
 export function applyScmReviewedMarkIntent(comparison: ScmComparison, value: unknown, refs: readonly string[], reviewed: boolean): ScmReviewedMarksRecord {
@@ -101,30 +99,66 @@ export function applyScmReviewedMarkIntent(comparison: ScmComparison, value: unk
   if (new Set(refs).size !== refs.length || refs.some(ref => !ids.has(ref))) {
     throw new ScmReviewedMarksError('reviewed_marks_invalid_selection', 'Marking requires exact captured change references');
   }
-  const selected = new Set(refs);
-  const next = reviewed ? [...record.reviewedChangeRefs, ...refs.filter(ref => !record.reviewedChangeRefs.includes(ref))]
-    : record.reviewedChangeRefs.filter(ref => !selected.has(ref));
-  return { ...record, reviewedChangeRefs: next };
+  const keysByRef = buildScmChangeKeys(comparison);
+  if (refs.some(ref => (keysByRef.get(ref)?.length ?? 0) === 0)) {
+    throw new ScmReviewedMarksError('reviewed_marks_invalid_selection', 'Captured content evidence is unavailable for this selection');
+  }
+  return applyScmReviewedKeysIntent(record.scopeId, record, [...new Set(refs.flatMap(ref => keysByRef.get(ref) ?? []))], reviewed);
 }
-export function isScmSelectionReviewed(record: ScmReviewedMarksRecord | null, comparisonId: string, refs: readonly string[]): boolean {
-  if (!record || record.comparisonId !== comparisonId || refs.length === 0) return false;
-  const marked = new Set(record.reviewedChangeRefs);
-  return refs.every(ref => marked.has(ref));
+export function isScmSelectionReviewed(record: ScmReviewedMarksRecord | null, comparison: ScmComparison, refs: readonly string[]): boolean {
+  if (!record || record.scopeId !== buildScmReviewScopeId({ repositoryRootPath: comparison.repository.rootPath, source: comparison.source }) || refs.length === 0) return false;
+  const marked = new Set(record.reviewedChangeKeys);
+  const keysByRef = buildScmChangeKeys(comparison);
+  return refs.every(ref => { const keys = keysByRef.get(ref); return keys !== undefined && keys.length > 0 && keys.every(key => marked.has(key)); });
 }
 
+export function applyScmReviewedKeysIntent(scopeId: string, value: unknown, keys: readonly string[], reviewed: boolean): ScmReviewedMarksRecord {
+  const record = parseScmReviewedMarksRecordForId(scopeId, value);
+  if (new Set(keys).size !== keys.length || keys.some(key => typeof key !== 'string' || key.length === 0)) {
+    throw new ScmReviewedMarksError('reviewed_marks_invalid_selection', 'Marking requires unique content keys');
+  }
+  const selected = new Set(keys);
+  return { ...record, reviewedChangeKeys: reviewed
+    ? [...record.reviewedChangeKeys, ...keys.filter(key => !record.reviewedChangeKeys.includes(key))]
+    : record.reviewedChangeKeys.filter(key => !selected.has(key)) };
+}
+
+export type ScmReviewedMarksSource = Readonly<{ repositoryRootPath: string; source: ScmComparison['source']; changeKeys: readonly string[] }>;
+export type ScmReviewedMarksSelection = Readonly<{ comparison: ScmComparison; source?: never } | { comparison?: never; source: ScmReviewedMarksSource }>;
+
 /** Both UI and agent Actions apply the same intent to the latest per-key CAS winner. */
-export function createScmReviewedMarksRecordPort(params: Readonly<{ comparison: ScmComparison; transport: ScmReviewedMarksJsonTransport }>) {
-  const comparison = ScmComparisonSchema.parse(params.comparison);
+export function createScmReviewedMarksRecordPort(params: ScmReviewedMarksSelection & Readonly<{
+  transport: ScmReviewedMarksJsonTransport;
+  /** A mounted scope may receive new displayed evidence while its Account observer stays mounted. */
+  getSelection?: () => ScmReviewedMarksSelection;
+}>) {
+  const comparison = params.comparison ? ScmComparisonSchema.parse(params.comparison) : null;
+  const scopeId = buildScmReviewScopeId(comparison ? { repositoryRootPath: comparison.repository.rootPath, source: comparison.source } : params.source!);
+  const currentSelection = () => {
+    const selected = params.getSelection?.() ?? (comparison ? { comparison } : { source: params.source! });
+    const scope = selected.comparison ? { repositoryRootPath: selected.comparison.repository.rootPath, source: selected.comparison.source } : selected.source;
+    if (buildScmReviewScopeId(scope) !== scopeId) throw new ScmReviewedMarksError('reviewed_marks_invalid_selection', 'The displayed review scope changed');
+    return selected;
+  };
   const parseSnapshot = (snapshot: ScmReviewedMarksJsonSnapshot) => {
-    const parsed = parseScmReviewedMarksSnapshot(comparison.id, snapshot);
-    return { ...parsed, record: parseScmReviewedMarksRecord(comparison, parsed.record) };
+    return parseScmReviewedMarksSnapshot(scopeId, snapshot);
   };
   const read = async () => parseSnapshot(await params.transport.read());
   const setReviewed = async (refs: readonly string[], reviewed: boolean): Promise<ScmReviewedMarkResponse> => {
     // Validate the explicit intent before reading or writing Account data.
+    const comparison = currentSelection().comparison;
+    if (!comparison) throw new ScmReviewedMarksError('reviewed_marks_invalid_selection', 'Captured evidence is required for occurrence references');
     applyScmReviewedMarkIntent(comparison, null, refs, reviewed);
     return writeScmReviewedMarksIntent({ transport: params.transport, parseSnapshot,
       apply: record => applyScmReviewedMarkIntent(comparison, record, refs, reviewed) });
   };
-  return { read, setReviewed, clear: () => clearScmReviewedMarksRecord({ comparisonId: comparison.id, transport: params.transport }) };
+  const setReviewedKeys = (keys: readonly string[], reviewed: boolean): Promise<ScmReviewedMarkResponse> => {
+    const selected = currentSelection();
+    const allowedKeys = new Set(selected.comparison ? [...buildScmChangeKeys(selected.comparison).values()].flat() : selected.source.changeKeys);
+    if (keys.some(key => !allowedKeys.has(key))) throw new ScmReviewedMarksError('reviewed_marks_invalid_selection', 'Content keys do not belong to the displayed evidence');
+    applyScmReviewedKeysIntent(scopeId, null, keys, reviewed);
+    return writeScmReviewedMarksIntent({ transport: params.transport, parseSnapshot,
+      apply: record => applyScmReviewedKeysIntent(scopeId, record, keys, reviewed) });
+  };
+  return { read, setReviewed, setReviewedKeys, clear: () => { currentSelection(); return clearScmReviewedMarksRecord({ scopeId, transport: params.transport }); } };
 }
