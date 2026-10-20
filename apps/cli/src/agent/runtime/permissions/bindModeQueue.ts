@@ -1,5 +1,7 @@
 import type { Metadata, PermissionMode, UserMessage } from '@/api/types';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { FILE_REVIEW_NOTE_KIND, formatFileReviewNoteV1, readFileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
+import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { isConditionalPendingSteerClaim } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { normalizePendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
@@ -215,6 +217,21 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     markHandledUserPromptIdentity(localId, userMessageSeq);
 
     const participantMeta = message.meta?.happier;
+    const receipt = SessionInputAdmissionReceiptV1Schema.safeParse(message.inputAdmissionReceipt);
+    const admittedFileReviewNote = receipt.success && receipt.data.nextTurnNote === FILE_REVIEW_NOTE_KIND;
+    if (admittedFileReviewNote || (participantMeta !== null && typeof participantMeta === 'object'
+      && 'kind' in participantMeta && participantMeta.kind === FILE_REVIEW_NOTE_KIND)) {
+      const note = readFileReviewNoteV1(message.meta);
+      if (!note || !admittedFileReviewNote) {
+        opts.inFlightSteer?.rejectPromptBeforeProvider?.({ localIds, userMessageSeq, reason: 'unsupported_action' });
+        return true;
+      }
+      // Information cannot alter configuration, execute a slash command, steer,
+      // wake the idle loop or borrow the next real input's permission witness.
+      opts.queue.pushIsolate({ text: formatFileReviewNoteV1(note), localId, userMessageSeq, fileReviewNote: note },
+        { permissionMode: opts.getCurrentPermissionMode() ?? 'default' });
+      return true;
+    }
     if (participantMeta !== null && typeof participantMeta === 'object'
       && 'kind' in participantMeta && participantMeta.kind === 'participant_message.v1') {
       // Retained native input cannot fall through to primary batching or steer.

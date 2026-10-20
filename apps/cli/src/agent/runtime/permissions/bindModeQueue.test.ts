@@ -7,10 +7,12 @@ import type {
   PermissionModeQueuedPrompt,
   PermissionModeQueuedPromptMode,
 } from '@/agent/runtime/permissions/queuedPrompt';
-import { combinePermissionModeQueuedPrompts } from '@/agent/runtime/permissions/queuedPrompt';
+import { appendNextTurnContextToQueuedPrompt, combinePermissionModeQueuedPrompts, isNextTurnContextQueuedPrompt } from '@/agent/runtime/permissions/queuedPrompt';
 import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema, SessionInputRequestV2Schema, settleSessionInputRequestV1, settleSessionInputRequestV2,
   withSessionInputAuthorityV1, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { formatFileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
+import { prepareSessionInputForProviderDispatch } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
 import {
   ProviderConnectionIdSchema,
   withParticipantRecipientV1,
@@ -24,6 +26,62 @@ source_kind="legacyUnknown"
 </happier_input_context>`;
 
 describe('registerPermissionModeMessageQueueBinding', () => {
+  it.each([false, true])('retains file review notes until actual input without steering or waking (running=%s)', async running => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
+      batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,
+      withContext: appendNextTurnContextToQueuedPrompt,
+    });
+    const harness = createSessionHarness();
+    const steerText = vi.fn(async () => {});
+    const onPromptQueuedDuringTurn = vi.fn();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {},
+      inFlightSteer: { isTurnInFlight: () => running, supportsInFlightSteer: () => true,
+        steerText, registerProviderAcceptedEffect() {}, onPromptQueuedDuringTurn },
+    });
+    for (const [index, action] of ['discard', 'restore', 'undo'].entries()) {
+      harness.emit({ role: 'user', localId: `review-${index}`, content: { type: 'text', text: `File review ${action}` },
+        inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', nextTurnNote: 'file_review_note.v1' },
+        meta: { happier: { kind: 'file_review_note.v1', payload: { action, paths: ['src/app.ts'] } } } });
+    }
+    expect(queue.size()).toBe(0);
+    expect(steerText).not.toHaveBeenCalled();
+    expect(onPromptQueuedDuringTurn).not.toHaveBeenCalled();
+    // Real input keeps its own provider witness; retained notes are descriptive context.
+    queue.push({ text: 'Continue', localId: 'actual-input', userMessageSeq: 9 }, { permissionMode: 'default' });
+    const batch = await queue.waitForMessagesAndGetAsString();
+    expect(batch?.message.localIds).toEqual(['actual-input']);
+    expect(batch?.message.userMessageSeq).toBe(9);
+    expect(batch?.message.text).toBe('Continue');
+    const prepared = await prepareSessionInputForProviderDispatch({ prompt: batch!.message, transformedUserText: batch!.message.text,
+      providerNativeCommand: false, signal: new AbortController().signal, localId: 'actual-input' });
+    for (const action of ['discard', 'restore', 'undo'] as const) {
+      expect(prepared.renderPrompt().split(formatFileReviewNoteV1({ action, paths: ['src/app.ts'] }))).toHaveLength(2);
+    }
+    expect(prepared.renderPrompt()).not.toContain('File review discard');
+  });
+
+  it('rejects an unreceipted or malformed file review note before it can become input', async () => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
+      batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,
+      withContext: appendNextTurnContextToQueuedPrompt,
+    });
+    const harness = createSessionHarness();
+    const rejectPromptBeforeProvider = vi.fn();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {},
+      inFlightSteer: { isTurnInFlight: () => false, supportsInFlightSteer: () => false, steerText: async () => {},
+        registerProviderAcceptedEffect() {}, rejectPromptBeforeProvider },
+    });
+    harness.emit({ role: 'user', localId: 'unreceipted', content: { type: 'text', text: 'Do not dispatch' },
+      meta: { happier: { kind: 'file_review_note.v1', payload: { action: 'discard', paths: ['app.ts'] } } } });
+    harness.emit({ role: 'user', localId: 'malformed', content: { type: 'text', text: 'Do not dispatch' },
+      inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', nextTurnNote: 'file_review_note.v1' },
+      meta: { happier: { kind: 'file_review_note.v1', payload: { action: 'keep', paths: ['app.ts'] } } } });
+    expect(queue.size()).toBe(0);
+    expect(rejectPromptBeforeProvider.mock.calls.map(([input]) => input.localIds)).toEqual([['unreceipted'], ['malformed']]);
+  });
+
   it('keeps independently cancellable wake replies separate even with the same admitted cause', async () => {
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => JSON.stringify(mode), {
       batcher: combinePermissionModeQueuedPrompts,

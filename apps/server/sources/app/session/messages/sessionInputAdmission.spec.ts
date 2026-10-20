@@ -12,6 +12,19 @@ const access: EffectiveSessionAccess = {
 };
 
 describe("Session input admission constraints", () => {
+    it.each(['authenticatedAccount', 'authenticatedMachine'] as const)('retains only explicit quiet review intent through the %s receipt and transport projection', issuer => {
+        const inputAdmissionReceipt = buildSessionInputAdmissionReceipt({
+            ...(issuer === 'authenticatedAccount' ? { issuer, access } : { issuer }),
+            nextTurnNote: 'file_review_note.v1',
+        });
+        expect(inputAdmissionReceipt.nextTurnNote).toBe('file_review_note.v1');
+        expect(projectSessionInputAdmissionReceipt(inputAdmissionReceipt)).toEqual({ inputAdmissionReceipt });
+        const ordinary = buildSessionInputAdmissionReceipt(issuer === 'authenticatedAccount' ? { issuer, access } : { issuer });
+        expect(isSameSessionInputAdmissionIssuer(inputAdmissionReceipt, ordinary)).toBe(false);
+        const message = { id: 'note', seq: 1, localId: 'note', messageRole: 'user' as const,
+            content: { t: 'encrypted' as const, c: 'opaque-note' }, createdAt: new Date(1), updatedAt: new Date(1), inputAdmissionReceipt };
+        expect(serializePendingMaterializedMessage(message, { nativeAdmission: true })).toHaveProperty('inputAdmissionReceipt', inputAdmissionReceipt);
+    });
     it.each(['authenticatedMachine', 'authenticatedAccount'] as const)('keeps private Follow proof inside %s admission custody, including native materialization', issuer => {
         const publicReceipt = { v: 1, issuer, ...(issuer === 'authenticatedAccount' ? { actorAccountId: 'owner', sessionRelationship: 'owner' } : {}) };
         const inputAdmissionReceipt = SessionInputAdmissionReceiptV1Schema.parse({ ...publicReceipt,

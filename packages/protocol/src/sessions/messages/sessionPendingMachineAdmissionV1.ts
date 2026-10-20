@@ -8,6 +8,7 @@ import {
   SessionInputEnqueueResultV1Schema,
   SessionInputRequestEqualityEvidenceV1Schema,
   SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
+  SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1,
 } from './sessionInputAdmission.js';
 import { SessionStoredMessageContentSchema } from './sessionStoredMessageContent.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
@@ -30,6 +31,7 @@ export const SessionPendingEnqueueByMachineFieldsV1 = {
   requestEqualityEvidenceV1: z.optional(SessionInputRequestEqualityEvidenceV1Schema),
   reply: z.optional(SessionMessageReplyAdmissionV1Schema),
   ...SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
+  ...SESSION_NEXT_TURN_NOTE_ADMISSION_FIELDS_V1,
   /** Existing invocation authorization plus exact Machine-signed payload; never raw caller constraints. */
   externalAction: z.optional(z.lazy(() => ExternalActionMachineRpcExecutionV1Schema)),
 };

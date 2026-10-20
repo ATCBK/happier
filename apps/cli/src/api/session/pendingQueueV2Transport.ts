@@ -304,6 +304,7 @@ export type PendingQueueWriteBody = Readonly<(
     followSources?: SessionPendingEnqueueByMachineRequestV1['followSources'];
     followRelations?: SessionPendingEnqueueByMachineRequestV1['followRelations'];
     followDeliveryV1?: SessionPendingEnqueueByMachineRequestV1['followDeliveryV1'];
+    nextTurnNote?: SessionPendingEnqueueByMachineRequestV1['nextTurnNote'];
 }>>;
 
 type PendingQueueSocketMaterializeResult =

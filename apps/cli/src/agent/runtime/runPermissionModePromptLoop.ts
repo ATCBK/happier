@@ -1681,6 +1681,8 @@ export async function runPermissionModePromptLoop(opts: {
         const representedFollowDeliveries = message.message.followDeliveries?.filter(follow =>
           preparedHostContext?.representedFollowLocalInputIds?.includes(follow.localInputId)) ?? [];
         const representedPendingInputs = [
+          ...(providerNativeCommand ? [] : message.message.fileReviewNoteContext ?? []).flatMap(note => note.localId
+            ? [{ localId: note.localId, userMessageSeq: note.userMessageSeq }] : []),
           ...representedFollowDeliveries.map(follow => ({ localId: follow.localInputId, userMessageSeq: follow.userMessageSeq })),
           ...(message.message.returnedAnswerContext ?? []).flatMap(answer => answer.localId
             ? [{ localId: answer.localId, userMessageSeq: answer.userMessageSeq }] : []),
@@ -1790,6 +1792,10 @@ export async function runPermissionModePromptLoop(opts: {
           if (!answer.localId) continue;
           opts.messageQueue.discardMatching(prompt => prompt.localId === answer.localId
             && prompt.returnedAnswer?.delivery === 'next_turn');
+        }
+        for (const note of providerNativeCommand ? [] : message.message.fileReviewNoteContext ?? []) {
+          if (!note.localId) continue;
+          opts.messageQueue.discardMatching(prompt => prompt.localId === note.localId && prompt.fileReviewNote !== undefined);
         }
         recordPreparationPhase('native_send_entered');
         const providerSend = Object.keys(promptDeliveryMeta).length === 0

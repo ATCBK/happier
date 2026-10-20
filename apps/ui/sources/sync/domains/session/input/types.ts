@@ -87,7 +87,7 @@ export type SessionMessageCallerSurface =
  * Trusted in-process admission selector. This never crosses Action/plugin JSON
  * or a server wire shape; the canonical Message record builder consumes it.
  */
-export type SessionMessageHostAdmissionOrigin = 'voice';
+export type SessionMessageHostAdmissionOrigin = 'voice' | 'file_review_note';
 
 export type SubmitSessionUserMessageOptions = Readonly<{
     sessionId: string;

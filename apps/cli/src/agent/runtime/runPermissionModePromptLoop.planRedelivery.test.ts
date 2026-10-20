@@ -5,7 +5,8 @@ import { createMutableApiSessionClientFixture } from '@/testkit/backends/session
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { MessageQueue2 } from './modeMessageQueue';
-import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from './permissions/queuedPrompt';
+import { appendNextTurnContextToQueuedPrompt, combinePermissionModeQueuedPrompts, isNextTurnContextQueuedPrompt,
+  type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from './permissions/queuedPrompt';
 import { runPermissionModePromptLoop } from './runPermissionModePromptLoop';
 import { createSessionProviderInputConsumerSessionAdapter } from './waitForNextPermissionModeMessage';
 import { createSessionProviderInputConsumer } from './session/input/sessionProviderInputConsumer';
@@ -26,16 +27,19 @@ type PlanTurn = Readonly<{
 
 async function dispatchPlans(turns: readonly PlanTurn[], nativePlans?: string[], initialNativePlan?: string,
   nativeMarkers?: AgentSessionStartupInstructionsMarkerV1[], initialResumeId?: string,
-  retainedEvents?: unknown[]) {
+  retainedEvents?: unknown[], reviewNotes = false) {
+  const dispatchedInputs: (readonly string[])[] = [];
   const session = createMutableApiSessionClientFixture<Metadata>({ overrides: {
     enqueueSessionEventCommitted: async event => {
       retainedEvents?.push(event);
       return { persisted: true, delivered: true };
     },
+    markPendingProviderInputDispatched: ids => { dispatchedInputs.push([...ids]); },
   } });
   session.__setMetadata(createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }));
   const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
-    (mode) => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts },
+    (mode) => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts,
+      isContextOnly: isNextTurnContextQueuedPrompt, withContext: appendNextTurnContextToQueuedPrompt },
   );
   const inputConsumer = createSessionProviderInputConsumer({
     messageQueue: queue,
@@ -48,6 +52,8 @@ async function dispatchPlans(turns: readonly PlanTurn[], nativePlans?: string[],
   let finished = false;
   let nativeInstructions: AgentSessionStartupInstructionsV1 | null = initialNativePlan
     ? { v: 1, id: 'happier.coding_session_plan', revision: 1, instructions: initialNativePlan } : null;
+  if (reviewNotes) queue.push({ text: 'Review facts', localId: 'review-note', userMessageSeq: 1,
+    fileReviewNote: { action: 'discard', paths: ['app.ts'] } }, { permissionMode: 'default' });
   queue.push({ text: turns[0].text, localId: 'input-0' }, { permissionMode: 'default', appendSystemPrompt: 'BASE_OVERRIDE' });
   // Only the Agent's native I/O and Session transport are substituted. Queue,
   // prompt composition/dispatch and provider-acceptance custody remain real.
@@ -106,6 +112,10 @@ async function dispatchPlans(turns: readonly PlanTurn[], nativePlans?: string[],
     keepAlive: () => undefined, setThinking: () => undefined,
     sendReady: () => {
       index += 1;
+      if (reviewNotes && index === 1) {
+        expect(queue.getContextOnlyMessages().map(note => note.localId)).toEqual(['review-note']);
+        expect(dispatchedInputs.flat()).not.toContain('review-note');
+      }
       if (index === turns.length) { finished = true; return; }
       queue.push({ text: turns[index].text, localId: `input-${index}` }, { permissionMode: 'default', appendSystemPrompt: 'BASE_OVERRIDE' });
     },
@@ -121,10 +131,19 @@ async function dispatchPlans(turns: readonly PlanTurn[], nativePlans?: string[],
     formatPromptErrorMessage: String,
   });
   expect(runtimeListeners.size).toBe(0);
+  if (reviewNotes) {
+    expect(queue.getContextOnlyMessages()).toEqual([]);
+    expect(dispatchedInputs.at(-1)).toContain('review-note');
+  }
   return prompts;
 }
 
 describe('session prompt-plan re-delivery', () => {
+  it('sends native control bytes unchanged and retains review notes for the following ordinary input', async () => {
+    expect(await dispatchPlans([{ text: '/native-command', plan: '' }, { text: 'Continue', plan: '' }],
+      undefined, undefined, undefined, undefined, undefined, true))
+      .toEqual(['/native-command', 'Continue\n\nReview facts']);
+  });
   it('retains content-free facts at the real normal dispatch without claiming an unavailable native prefix', async () => {
     const retainedEvents: unknown[] = [];
     const duplicate = 'PRIVATE instruction /private/repo 🦉';

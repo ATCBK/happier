@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { prepareSessionInputForProviderDispatch } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
+import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
 
 import {
   appendNextTurnContextToQueuedPrompt,
@@ -11,6 +13,51 @@ import {
 } from './queuedPrompt';
 
 describe('combinePermissionModeQueuedPrompts', () => {
+  it.each(['Continue', '/native-command'])('preserves primary grammar and renders a review note only at dispatch (%s)', async primary => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode, {
+      batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,
+      withContext: appendNextTurnContextToQueuedPrompt,
+    });
+    const mode = { permissionMode: 'default' as const };
+    queue.push({ text: 'Review facts', localId: 'note', fileReviewNote: { action: 'discard', paths: ['app.ts'] } }, mode);
+    queue.push({ text: '/compact', localId: 'local-command' }, mode);
+    const command = (await queue.waitForMessagesAndGetAsString())!.message;
+    expect(parseSpecialCommand(command.text).type).toBe('compact');
+    // Local command handling never dispatches or retires the retained note.
+    expect(queue.getContextOnlyMessages().map(note => note.localId)).toEqual(['note']);
+    queue.push({ text: primary, localId: 'actual' }, mode);
+    const input = (await queue.waitForMessagesAndGetAsString())!.message;
+    expect(input.text).toBe(primary);
+    const prepared = await prepareSessionInputForProviderDispatch({ prompt: input, transformedUserText: input.text,
+      providerNativeCommand: primary.startsWith('/'), signal: new AbortController().signal, localId: 'actual' });
+    expect(prepared.renderPrompt()).toBe(primary.startsWith('/') ? primary : `${primary}\n\nReview facts`);
+    expect(input.localIds).toEqual(['actual']);
+  });
+  it('adds only newly joined file review note text when a composed input is requeued', async () => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode, {
+      batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,
+      withContext: appendNextTurnContextToQueuedPrompt,
+    });
+    const mode = { permissionMode: 'default' as const };
+    const first: PermissionModeQueuedPrompt = { text: 'First review note', localId: 'note-1', userMessageSeq: 1,
+      fileReviewNote: { action: 'discard', paths: ['one.ts'] } };
+    const second: PermissionModeQueuedPrompt = { text: 'Second review note', localId: 'note-2', userMessageSeq: 2,
+      fileReviewNote: { action: 'restore', paths: ['two.ts'] } };
+    queue.push(first, mode);
+    queue.push({ text: 'Continue', localId: 'actual', userMessageSeq: 3 }, mode);
+    const composed = (await queue.waitForMessagesAndGetAsString())!.message;
+    queue.push(second, mode);
+    queue.push(composed, mode);
+    const requeued = (await queue.waitForMessagesAndGetAsString())!.message;
+    expect(requeued.text).toBe('Continue');
+    const prepared = await prepareSessionInputForProviderDispatch({ prompt: requeued, transformedUserText: requeued.text,
+      providerNativeCommand: false, signal: new AbortController().signal, localId: 'actual' });
+    expect(prepared.renderPrompt().split(first.text)).toHaveLength(2);
+    expect(prepared.renderPrompt().split(second.text)).toHaveLength(2);
+    expect(requeued.fileReviewNoteContext?.map(note => note.localId)).toEqual(['note-1', 'note-2']);
+    expect(requeued.localIds).toEqual(['actual']);
+    expect(requeued.userMessageSeqs).toEqual([3]);
+  });
   it('retains a quiet returned answer without replacing the natural input native witness', async () => {
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode, {
       batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,

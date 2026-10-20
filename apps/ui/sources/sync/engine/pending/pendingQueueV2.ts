@@ -639,10 +639,11 @@ export function serializePendingEnqueueBodyForServerWire(
     if (!isPlainObject(parsed) || readPendingLocalId(parsed.localId) === null) {
         return null;
     }
+    if (parsed.nextTurnNote !== undefined && mode !== 'pending_input_v5') throw createPendingServerUpgradeRequiredError();
     if (isPlainObject(parsed.requestedAction) && parsed.requestedAction.kind === 'reset_start'
-        && mode !== 'pending_input_v4') throw createPendingServerUpgradeRequiredError();
+        && mode !== 'pending_input_v4' && mode !== 'pending_input_v5') throw createPendingServerUpgradeRequiredError();
     if (mode === 'indeterminate') return null;
-    if (mode === 'pending_input_v3' || mode === 'pending_input_v4') return canonicalBody;
+    if (mode === 'pending_input_v3' || mode === 'pending_input_v4' || mode === 'pending_input_v5') return canonicalBody;
     if (mode === 'pending_input_v1') {
         if (!('resumeWhenAvailable' in parsed)) return canonicalBody;
         const v1Body = { ...parsed };
@@ -716,7 +717,7 @@ function serializePersistedPendingEnqueueForServerWire(
     mode: PendingInputServerWireMode,
 ): string | null {
     if (!request.recipient) return serializePendingEnqueueBodyForServerWire(request.body, mode, 'stored');
-    if (mode !== 'pending_input_v3' && mode !== 'pending_input_v4') throw createPendingTargetUpdateRequiredError();
+    if (mode !== 'pending_input_v3' && mode !== 'pending_input_v4' && mode !== 'pending_input_v5') throw createPendingTargetUpdateRequiredError();
     return request.body;
 }
 
@@ -1675,6 +1676,7 @@ async function buildPendingEnqueueWriteBody(params: Parameters<typeof buildPendi
     deliveryMode?: 'external_handoff';
     requestedAction: PendingRequestedActionV1;
     resumeWhenAvailable?: true;
+    nextTurnNote?: 'file_review_note.v1';
 }): Promise<Record<string, unknown>> {
     const body = await buildPendingUserMessageWriteBody(params);
     if (!params.recipient) return {
@@ -1682,6 +1684,7 @@ async function buildPendingEnqueueWriteBody(params: Parameters<typeof buildPendi
         ...(params.targetMachineId ? { targetMachineId: params.targetMachineId } : {}),
         ...(params.deliveryMode ? { deliveryMode: params.deliveryMode } : {}),
         requestedAction: params.requestedAction,
+        ...(params.nextTurnNote ? { nextTurnNote: params.nextTurnNote } : {}),
         ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
     };
     return SessionExecutionRunPendingEnqueueRequestV1Schema.parse({
@@ -2271,9 +2274,12 @@ export function enqueuePendingMessageV2(
     const existing = inFlightPendingEnqueueByProjectionIdentity.get(identityKey);
     const normalizedRecipient = params.recipient ? normalizeParticipantRecipientRoutingIdentityV1(params.recipient) : undefined;
     const recipient = normalizedRecipient?.kind === 'execution_run' ? normalizedRecipient : undefined;
+    if (params.hostAdmissionOrigin === 'file_review_note' && params.serverWireMode !== 'pending_input_v5') {
+        return Promise.reject(createPendingServerUpgradeRequiredError());
+    }
     if (params.requestedAction?.kind === 'reset_start') {
         if (recipient || params.deliveryMode || params.resumeWhenAvailable) return Promise.reject(createPendingTargetConflictError());
-        if (params.serverWireMode !== 'pending_input_v4') return Promise.reject(createPendingServerUpgradeRequiredError());
+        if (params.serverWireMode !== 'pending_input_v4' && params.serverWireMode !== 'pending_input_v5') return Promise.reject(createPendingServerUpgradeRequiredError());
     }
     if (existing) {
         if (!isPendingMessageForRecipient(existing, recipient)) return Promise.reject(createPendingTargetConflictError());
@@ -2336,7 +2342,7 @@ async function enqueuePendingMessageV2Owned(params: {
     let text = params.text;
     const normalizedRecipient = params.recipient ? normalizeParticipantRecipientRoutingIdentityV1(params.recipient) : undefined;
     const recipient = normalizedRecipient?.kind === 'execution_run' ? normalizedRecipient : undefined;
-    if (recipient && params.serverWireMode !== 'pending_input_v3' && params.serverWireMode !== 'pending_input_v4') {
+    if (recipient && params.serverWireMode !== 'pending_input_v3' && params.serverWireMode !== 'pending_input_v4' && params.serverWireMode !== 'pending_input_v5') {
         throw createPendingTargetUpdateRequiredError();
     }
     if (recipient && params.deliveryMode) throw createPendingTargetConflictError();
@@ -2370,7 +2376,7 @@ async function enqueuePendingMessageV2Owned(params: {
             ? await findPendingOutboxMessage(sessionId, requestedLocalId, outboxScope)
             : null;
     } catch (error) {
-        if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+        if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
         throw error;
     }
     if (existingOutboxRow && !isPendingMessageForRecipient(existingOutboxRow.request, recipient)) {
@@ -2379,7 +2385,7 @@ async function enqueuePendingMessageV2Owned(params: {
     const effectiveRequestedAction = existingOutboxRow
         ? readPendingEnqueueRequestedAction(existingOutboxRow.request.body)
         : (params.requestedAction ?? DEFAULT_PENDING_REQUESTED_ACTION_V1);
-    if (effectiveRequestedAction?.kind === 'reset_start' && params.serverWireMode !== 'pending_input_v4') {
+    if (effectiveRequestedAction?.kind === 'reset_start' && params.serverWireMode !== 'pending_input_v4' && params.serverWireMode !== 'pending_input_v5') {
         throw createPendingServerUpgradeRequiredError();
     }
     if (existingOutboxRow && isPendingOutboxMessageQuarantined(existingOutboxRow)) {
@@ -2387,7 +2393,7 @@ async function enqueuePendingMessageV2Owned(params: {
         // remote Home's durable quarantine, but never paint it into a different
         // active Home that happens to use the same bare Session id.
         if (isActiveScope()) upsertPendingOutboxQuarantineDiagnostic(existingOutboxRow, outboxScope);
-        if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+        if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
         throw new Error('Persisted pending outbox row is quarantined');
     }
     if (recipient && !existingOutboxRow && !params.targetMachineId) throw createPendingTargetUpdateRequiredError();
@@ -2453,7 +2459,9 @@ async function enqueuePendingMessageV2Owned(params: {
         text = prepared.text;
         metaOverrides = { ...metaOverrides, [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: prepared.structuredInput };
     }
-    if (!recipient && isActiveScope()) storage.getState().markSessionOptimisticThinking(sessionId);
+    if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') {
+        storage.getState().markSessionOptimisticThinking(sessionId);
+    }
     const effectiveDeliveryMode = existingOutboxRow
         ? readPendingEnqueueDeliveryMode(existingOutboxRow.request.body)
         : params.deliveryMode;
@@ -2488,7 +2496,7 @@ async function enqueuePendingMessageV2Owned(params: {
             return { rawRecord, acceptedComposerAdmission: undefined };
         } catch (error) {
             await abandonPrepared();
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             throw error;
         }
     })();
@@ -2581,6 +2589,7 @@ async function enqueuePendingMessageV2Owned(params: {
                         recipient, targetMachineId,
                         deliveryMode: effectiveDeliveryMode,
                         requestedAction: effectiveRequestedAction ?? DEFAULT_PENDING_REQUESTED_ACTION_V1,
+                        ...(params.hostAdmissionOrigin === 'file_review_note' ? { nextTurnNote: 'file_review_note.v1' as const } : {}),
                         ...(params.resumeWhenAvailable === true ? { resumeWhenAvailable: true as const } : {}),
                     })),
                 },
@@ -2618,7 +2627,7 @@ async function enqueuePendingMessageV2Owned(params: {
             const payload = await response.json().catch(() => null) as unknown;
             assertPendingTargetAcknowledgement(payload, outboxRow.request.recipient);
             let didWrite: boolean | undefined;
-            if (params.serverWireMode === 'pending_input_v1' || params.serverWireMode === 'pending_input_v3' || params.serverWireMode === 'pending_input_v4') {
+            if (params.serverWireMode === 'pending_input_v1' || params.serverWireMode === 'pending_input_v3' || params.serverWireMode === 'pending_input_v4' || params.serverWireMode === 'pending_input_v5') {
                 didWrite = assertCurrentServerPendingEnqueueResponse({
                     payload,
                     localId,
@@ -2687,20 +2696,20 @@ async function enqueuePendingMessageV2Owned(params: {
         }
         if (outcome.alreadySettled === true) {
             removeLocalPendingOutboxProjectionsIfOwned(sessionId, localId, outboxScope);
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             return { localId, accepted: true, settled: true, ...(typeof outcome.didWrite === 'boolean' ? { didWrite: outcome.didWrite } : {}) };
         }
 
         if (outcome.cancelled) {
             await abandonPrepared();
             retirePendingProjectionAfterConfirmedCancellation(sessionId, localId, outboxScope);
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             return { localId, accepted: true, cancelled: true, ...(typeof outcome.didWrite === 'boolean' ? { didWrite: outcome.didWrite } : {}) };
         }
 
         if (outcome.wireIndeterminate === true) {
             (await setPendingMessageSendState(sessionId, localId, 'unconfirmed', outboxScope));
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             return { localId, accepted: false };
         }
 
@@ -2715,26 +2724,26 @@ async function enqueuePendingMessageV2Owned(params: {
         if (!hasDurableOutboxCustody) {
             await abandonPrepared();
             removePendingOutboxProjectionIfOwned(sessionId, localId, outboxScope);
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             throw e;
         }
         if (isTransientConnectivityError(e)) {
             (await setPendingMessageSendState(sessionId, localId, 'unconfirmed', outboxScope));
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             return { localId, accepted: false };
         }
         if (serverCommitMayExist) {
             (await setPendingMessageSendState(sessionId, localId, 'unconfirmed', outboxScope));
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             return { localId, accepted: false };
         }
         if (existingOutboxRow !== null) {
             (await setPendingMessageSendState(sessionId, localId, 'unconfirmed', outboxScope));
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             throw e;
         }
         if (isPendingCancellationRequested(outboxScope, sessionId, localId)) {
-            if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+            if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
             throw e;
         }
         try {
@@ -2744,7 +2753,7 @@ async function enqueuePendingMessageV2Owned(params: {
         } catch {
             // Retain the known durable projection if retirement fails, and preserve the original send error.
         }
-        if (!recipient && isActiveScope()) storage.getState().clearSessionOptimisticThinking(sessionId);
+        if (!recipient && isActiveScope() && params.hostAdmissionOrigin !== 'file_review_note') storage.getState().clearSessionOptimisticThinking(sessionId);
         throw e;
     }
 }
@@ -2871,7 +2880,7 @@ export async function retryPendingOutboxOperationV2(params: {
             const recordAcceptance = capturePendingSnapshotAcceptance(outboxScope, sessionId, current.request.recipient);
             const payload = await response.json().catch(() => null) as unknown;
             assertPendingTargetAcknowledgement(payload, current.request.recipient);
-            if (params.serverWireMode === 'pending_input_v1' || params.serverWireMode === 'pending_input_v3' || params.serverWireMode === 'pending_input_v4') {
+            if (params.serverWireMode === 'pending_input_v1' || params.serverWireMode === 'pending_input_v3' || params.serverWireMode === 'pending_input_v4' || params.serverWireMode === 'pending_input_v5') {
                 assertCurrentServerPendingEnqueueResponse({
                     payload,
                     localId: pendingLocalId,
@@ -3245,7 +3254,7 @@ export async function updatePendingRequestedActionV2(params: {
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
 }): Promise<PendingResetStartSetResultV1> {
     if (params.requestedAction.kind === 'reset_start') {
-        if (params.serverWireMode !== 'pending_input_v4') throw createPendingServerUpgradeRequiredError();
+        if (params.serverWireMode !== 'pending_input_v4' && params.serverWireMode !== 'pending_input_v5') throw createPendingServerUpgradeRequiredError();
         if (params.resumeWhenAvailable !== undefined) throw createPendingTargetConflictError();
     }
     const localId = params.localId;
@@ -3255,7 +3264,7 @@ export async function updatePendingRequestedActionV2(params: {
     let wireRequestedAction = params.requestedAction;
     let body: Record<string, unknown> = { requestedAction: wireRequestedAction };
     if (params.resumeWhenAvailable !== undefined) {
-        if (params.serverWireMode === 'pending_input_v3' || params.serverWireMode === 'pending_input_v4') {
+        if (params.serverWireMode === 'pending_input_v3' || params.serverWireMode === 'pending_input_v4' || params.serverWireMode === 'pending_input_v5') {
             body = {
                 requestedAction: wireRequestedAction,
                 resumeWhenAvailable: params.resumeWhenAvailable,

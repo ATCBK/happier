@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { buildReviewCommentsOutboundMessage as buildCanonicalReviewCommentsOutboundMessage, withParticipantRecipientV1 } from '@happier-dev/protocol';
 
 import { buildReviewCommentsOutboundMessage } from './buildReviewCommentsOutboundMessage';
+import { buildAskSelectionDrafts } from '@/components/ui/code/selection/askSelectionModel';
+import { ReviewCommentsMessageMetaV1Schema } from '@happier-dev/protocol/messages/structured/reviewCommentsV1';
 
 const draft = {
     id: 'draft-1',
@@ -24,6 +26,16 @@ const draft = {
 };
 
 describe('buildReviewCommentsOutboundMessage', () => {
+    it('retains an anchored Ask quote with no comment body in the actual outbound envelope', () => {
+        const drafts = buildAskSelectionDrafts({ filePath: 'src/a.ts', source: 'file', text: 'selected code', savedText: 'selected code',
+            ranges: [{ startLine: 1, endLine: 1, text: 'selected code' }] });
+        const outbound = buildReviewCommentsOutboundMessage({ sessionId: 'session-1', drafts, additionalMessage: 'Why is this needed?' });
+        const envelope = ReviewCommentsMessageMetaV1Schema.parse(outbound.metaOverrides.happier);
+        expect(envelope.payload.comments).toMatchObject([{ body: '', includeInPrompt: true,
+            anchor: { kind: 'range', startLine: 1, endLine: 1 }, snapshot: { selectedLines: ['selected code'] } }]);
+        expect(outbound.text).toContain('selected code');
+        expect(outbound.text).toContain('Why is this needed?');
+    });
     it('materializes the same exact review input for the host Action and canonical Run recipient', () => {
         const params = { sessionId: 'session-1', drafts: [draft, { ...draft, id: 'detached', includeInPrompt: false }],
             additionalMessage: 'Saved stop explanation at revision 3' };
@@ -34,6 +46,12 @@ describe('buildReviewCommentsOutboundMessage', () => {
         expect(withParticipantRecipientV1(canonical.metaOverrides, { kind: 'execution_run', runId: 'writer' })).toMatchObject({
             happier: { kind: 'review_comments.v1', payload: { comments: [expect.objectContaining({ id: draft.id })] } },
         });
+        const whitespace = buildCanonicalReviewCommentsOutboundMessage({ ...params,
+            drafts: [{ ...draft, body: '  Keep this question.  ' }] });
+        expect(whitespace.metaOverrides).toMatchObject({
+            happier: { payload: { comments: [{ body: 'Keep this question.' }] } },
+        });
+        expect(whitespace.text).toContain('  Keep this question.  ');
     });
     it('preserves attachment metadata alongside review comment metadata', () => {
         const outbound = buildReviewCommentsOutboundMessage({

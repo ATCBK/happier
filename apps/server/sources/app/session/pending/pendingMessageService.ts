@@ -663,6 +663,7 @@ export type EnqueuePendingMessageResult =
     | { ok: false; error: "transaction-unavailable"; retryAfterMs: number; correlationId?: string };
 
 type EnqueuePendingMessageInput = {
+    nextTurnNote?: SessionInputAdmissionReceiptV1['nextTurnNote'];
     executionRunFrontier?: ExecutionRunFollowFrontierWitness;
     followSources?: SessionInputAdmissionReceiptV1['followSources'];
     followRelations?: SessionInputAdmissionReceiptV1['followRelations'];
@@ -797,6 +798,12 @@ async function enqueuePendingMessageWithAdmission(
         return { ok: false, error: "invalid-params" };
     }
     const requestedAction = requestedActionResult.data;
+    if (params.nextTurnNote !== undefined && (params.nextTurnNote !== 'file_review_note.v1'
+        || requestedAction.kind !== 'enqueue' || targetExecutionRunId !== null
+        || deliveryMode !== undefined || admissionMode !== undefined || params.resumeWhenAvailable === true
+        || params.reply !== undefined || params.followDeliveryV1 !== undefined)) {
+        return { ok: false, error: 'invalid-params' };
+    }
     if (requestedAction.kind === 'reset_start' && (targetExecutionRunId !== null || deliveryMode !== undefined
         || admissionMode !== undefined || params.resumeWhenAvailable === true)) return { ok: false, error: 'invalid-params' };
     const directTokenInput = admission.kind === "account" && admission.authentication.apiTokenGrant !== undefined;
@@ -877,7 +884,8 @@ async function enqueuePendingMessageWithAdmission(
             let inputAdmissionReceipt = admission.kind === "account"
                 ? SessionInputAdmissionReceiptV1Schema.parse({
                     ...buildSessionInputAdmissionReceipt({ issuer: "authenticatedAccount", access: access.access,
-                        callerInputConstraints: admission.authentication.callerInputConstraints ?? admission.authentication.apiTokenGrant }),
+                        callerInputConstraints: admission.authentication.callerInputConstraints ?? admission.authentication.apiTokenGrant,
+                        ...(params.nextTurnNote ? { nextTurnNote: params.nextTurnNote } : {}) }),
                     ...(params.followSources ? { followSources: params.followSources } : {}),
                     ...(params.followRelations ? { followRelations: params.followRelations } : {}),
                     ...(params.followDeliveryV1 ? { followDeliveryV1: params.followDeliveryV1 } : {}),
@@ -1599,6 +1607,7 @@ async function enqueuePendingMessageWithAdmission(
  * are revalidated transactionally; only the admitted exact target is retained in the receipt.
  */
 export async function enqueuePendingMessageByAuthenticatedMachine(params: Readonly<{
+    nextTurnNote?: SessionInputAdmissionReceiptV1['nextTurnNote'];
     followSourceApp?: Pick<Fastify, 'forwardRpcForUser'>;
     sourceAuthentication?: SessionAccessAuthentication;
     reply?: SessionMessageReplyAdmissionV1;
@@ -1629,7 +1638,8 @@ export async function enqueuePendingMessageByAuthenticatedMachine(params: Readon
         executionRunFrontier = read.value;
     }
     const inputAdmissionReceipt = SessionInputAdmissionReceiptV1Schema.parse({
-        ...buildSessionInputAdmissionReceipt({ issuer: "authenticatedMachine", callerInputConstraints: params.callerInputConstraints }),
+        ...buildSessionInputAdmissionReceipt({ issuer: "authenticatedMachine", callerInputConstraints: params.callerInputConstraints,
+            ...(params.nextTurnNote ? { nextTurnNote: params.nextTurnNote } : {}) }),
         ...(params.followSources ? { followSources: params.followSources } : {}),
         ...(params.followRelations ? { followRelations: params.followRelations } : {}),
         ...(params.followDeliveryV1 ? { followDeliveryV1: params.followDeliveryV1 } : {}),
@@ -1638,6 +1648,7 @@ export async function enqueuePendingMessageByAuthenticatedMachine(params: Readon
         throw new Error("Machine admission receipt parsed to the wrong issuer arm");
     }
     const result = await enqueuePendingMessageWithAdmission({
+        ...(params.nextTurnNote ? { nextTurnNote: params.nextTurnNote } : {}),
         ...(executionRunFrontier ? { executionRunFrontier } : {}),
         ...(params.reply ? { reply: params.reply } : {}),
         actorUserId: params.accountId,

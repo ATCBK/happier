@@ -123,7 +123,12 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
     const nativePrompt = input.providerNativeCommand
       ? [input.transformedUserText, rendered].filter(Boolean).join('\n\n')
       : rendered;
-    finalPrompt = [nativePrompt, ...runFollowNotices].filter(Boolean).join('\n');
+    // Keep primary slash/native command grammar untouched in queue custody.
+    // Informational review facts join only the final actual provider input.
+    const reviewNoteText = input.providerNativeCommand ? ''
+      : (input.prompt.fileReviewNoteContext ?? []).map(note => note.text).join('\n\n');
+    finalPrompt = [nativePrompt, reviewNoteText].filter(Boolean).join('\n\n');
+    finalPrompt = [finalPrompt, ...runFollowNotices].filter(Boolean).join('\n');
     return finalPrompt;
   };
   const requiredPrompt = renderPrompt();

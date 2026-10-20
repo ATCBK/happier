@@ -15,6 +15,7 @@ import type { ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/a
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { SessionInputReturnedAnswerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/participants';
+import type { FileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
 
 export type HostContextOnlyInput = (
   | Readonly<{ kind: 'session_follow'; prepared: SessionFollowReconciledContext }>
@@ -52,6 +53,9 @@ export type PermissionModeQueuedPromptMode = Readonly<{
 }>;
 
 export type PermissionModeQueuedPrompt = Readonly<{
+  /** Validated descriptive note backed by the original informational admission receipt. */
+  fileReviewNote?: FileReviewNoteV1;
+  fileReviewNoteContext?: readonly Readonly<{ text: string; localId: string | null; userMessageSeq: number | null }>[];
   discussionAddressing?: DiscussionAddressingV1;
   actionRequestAttributionV1?: ActionRequestAttributionV1;
   text: string;
@@ -170,6 +174,9 @@ export function combinePermissionModeQueuedPrompts(
       : {}),
     ...(first?.inputProvenance ? { inputProvenance: first.inputProvenance } : {}),
     ...(first?.returnedAnswer ? { returnedAnswer: first.returnedAnswer } : {}),
+    ...(first?.fileReviewNote ? { fileReviewNote: first.fileReviewNote } : {}),
+    ...(prompts.some(prompt => prompt.fileReviewNoteContext?.length)
+      ? { fileReviewNoteContext: prompts.flatMap(prompt => prompt.fileReviewNoteContext ?? []) } : {}),
     ...(prompts.some(prompt => prompt.returnedAnswerContext?.length)
       ? { returnedAnswerContext: prompts.flatMap(prompt => prompt.returnedAnswerContext ?? []) } : {}),
     ...(prompts.some(prompt => prompt.followDeliveries?.length)
@@ -178,7 +185,7 @@ export function combinePermissionModeQueuedPrompts(
 }
 
 export function isNextTurnContextQueuedPrompt(prompt: PermissionModeQueuedPrompt): boolean {
-  return prompt.returnedAnswer?.delivery === 'next_turn'
+  return prompt.fileReviewNote !== undefined || prompt.returnedAnswer?.delivery === 'next_turn'
     || Boolean(prompt.followDeliveries?.length && prompt.followDeliveries.every(({ delivery }) =>
       delivery.delivery === 'next_turn'));
 }
@@ -191,15 +198,21 @@ export function appendNextTurnContextToQueuedPrompt(
   const userMessageSeqs = normalizePermissionModeQueuedPromptUserMessageSeqs(prompt);
   const answers = [...prompt.returnedAnswerContext ?? []];
   const followDeliveries = [...prompt.followDeliveries ?? []];
+  const fileReviewNotes = [...prompt.fileReviewNoteContext ?? []];
   for (const item of context) {
     if (!isNextTurnContextQueuedPrompt(item)) throw new Error('Only protected next-turn information can join an input');
     if (item.returnedAnswer) answers.push({ reply: item.returnedAnswer, text: item.text,
       localId: item.localId, userMessageSeq: item.userMessageSeq ?? null });
+    if (item.fileReviewNote && !(item.localId !== null && fileReviewNotes.some(note => note.localId === item.localId))) {
+      fileReviewNotes.push({ text: item.text, localId: item.localId, userMessageSeq: item.userMessageSeq ?? null });
+    }
     followDeliveries.push(...item.followDeliveries ?? []);
     // Retained information is represented context, not another native primary
     // input or permission witness. Its exact identity travels with that context.
   }
-  return { ...prompt, localIds, ...(userMessageSeqs.length ? { userMessageSeqs,
+  return { ...prompt,
+    ...(fileReviewNotes.length ? { fileReviewNoteContext: fileReviewNotes } : {}),
+    localIds, ...(userMessageSeqs.length ? { userMessageSeqs,
     userMessageSeq: Math.max(...userMessageSeqs) } : {}),
     ...(answers.length ? { returnedAnswerContext: answers } : {}),
     ...(followDeliveries.length ? { followDeliveries } : {}) };
