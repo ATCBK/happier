@@ -26,7 +26,11 @@ import type { RepositoryFileDropTarget } from '@/components/workspaces/files/rep
 import type { LazyDirectoryTreeNode } from '@/hooks/ui/filesystem/lazyDirectoryTreeTypes';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
+import Reanimated, { FadeIn } from 'react-native-reanimated';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { useLiveFileWriteAgentLabels } from '@/components/workspaces/files/useWorkspaceFileWriteTabPresentation';
 import { Icon } from '@/components/ui/icons/Icon';
 import { HAPPIER_TREE_ROW_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
@@ -203,6 +207,17 @@ function ScmChangePathTag(props: Readonly<{ path: string; theme: AppTheme }>) {
     );
 }
 
+/**
+ * A row that appeared while the tree was open (an Agent created the file) fades in over `durationMs.fast`,
+ * opacity only; reduced motion shows it at once. Decided once, when the row mounts.
+ */
+function TreeRowArrival(props: Readonly<{ arrived: boolean; children: React.ReactNode }>) {
+    const reducedMotion = useReducedMotionPreference();
+    const [entering] = React.useState(() => props.arrived && !reducedMotion ? FadeIn.duration(motionTokens.durationMs.fast) : undefined);
+    if (!entering) return <>{props.children}</>;
+    return <Reanimated.View entering={entering}>{props.children}</Reanimated.View>;
+}
+
 function renderEntryIcon(node: WorkspaceRepositoryTreeNode, theme: AppTheme) {
     if (node.type === 'directory') {
         return <Icon name="folder" size={16} color={theme.colors.text.secondary} />;
@@ -222,7 +237,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         ...(props.revealedPaths ?? []),
         ...(props.scmSnapshot?.entries.flatMap(entry => entry.previousPath ? [entry.path, entry.previousPath] : [entry.path]) ?? []),
     ], [props.revealedPaths, props.scmSnapshot]);
-    const { rootLoading: treeRootLoading, rootError: treeRootError, rootLoaded, nodes: treeNodes, toggleDirectory: toggleTreeDirectory, retryRoot, retryDirectory, gitIgnoreAvailable } = useWorkspaceRepositoryTreeBrowser({
+    const { rootLoading: treeRootLoading, rootError: treeRootError, rootLoaded, nodes: treeNodes, toggleDirectory: toggleTreeDirectory, retryRoot, retryDirectory, gitIgnoreAvailable, liveFileWrites, arrivedPaths } = useWorkspaceRepositoryTreeBrowser({
         scope: props.scope,
         enabled: props.directoryListing !== false,
         expandedPaths,
@@ -289,6 +304,19 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         focusedRevealRef.current = request;
         treeKeyboard.focusPath(request.path);
     }, [nodes, props.revealRequest, treeKeyboard.focusPath]);
+    // The one moving thing in the tree: the file an Agent is writing now (lab FB1), named for assistive tech.
+    const writerLabels = useLiveFileWriteAgentLabels(liveFileWrites);
+    const liveWriteSignature = React.useMemo(() => [...liveFileWrites.keys()].join('\n'), [liveFileWrites]);
+    // A row that appeared after a re-list fades in once (opacity only, siblings move at once); scrolling
+    // back to it later does not replay the fade.
+    const fadedArrivalsRef = React.useRef<Readonly<{ source: ReadonlySet<string>; faded: Set<string> }>>({ source: arrivedPaths, faded: new Set() });
+    if (fadedArrivalsRef.current.source !== arrivedPaths) fadedArrivalsRef.current = { source: arrivedPaths, faded: new Set() };
+    const claimArrival = React.useCallback((path: string) => {
+        const arrivals = fadedArrivalsRef.current;
+        if (!arrivals.source.has(path) || arrivals.faded.has(path)) return false;
+        arrivals.faded.add(path);
+        return true;
+    }, []);
     const badgeIndex = useScmTreeBadgeIndex(props.scmSnapshot ?? null);
     const badgeSignature = buildScmTreeBadgeSignature(props.scmSnapshot ?? null);
     const selectedPath = props.selectedPath ?? null;
@@ -300,6 +328,9 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         changedOnly,
         selectedPath,
         detailsMode,
+        liveFileWrites,
+        writerLabels,
+        claimArrival,
         onOpenFile,
         fileHref: props.fileHref,
         onOpenFilePinned: props.onOpenFilePinned,
@@ -326,6 +357,9 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         changedOnly,
         selectedPath,
         detailsMode,
+        liveFileWrites,
+        writerLabels,
+        claimArrival,
         onOpenFile,
         props.fileHref,
         props.onOpenFilePinned,
@@ -353,6 +387,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         accountScope?.accountId,
         treeKeyboard.activePath,
         badgeSignature,
+        liveWriteSignature,
         // The web badge index lands a tick after the snapshot (useScmTreeBadgeIndex): mounted rows must
         // redraw when it arrives, or they keep the badge-less first render.
         badgeIndex ? 'badges' : 'no-badges',
@@ -380,6 +415,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         accountScope?.accountId,
         treeKeyboard.activePath,
         badgeSignature,
+        liveWriteSignature,
         badgeIndex,
         changedOnly,
         selectedPath,
@@ -437,7 +473,13 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
                 : '';
 
         const metadata = rowState.renderRowMetadata?.(node);
-        const shouldShowRight = showDetailsInline || metadata != null || Boolean(badge) || (isDirectoryNode(node) && node.isLoadingChildren);
+        const liveWrite = node.type === 'file' ? rowState.liveFileWrites.get(node.path) : undefined;
+        // Spins in the change mark's slot while the write runs, then the letter returns (lab FB1 `.fl-wspin`).
+        const writingMark = liveWrite ? (
+            <ActivitySpinner testID={`${rowTestId}-writing`} size={iconMatchedSpinnerSize(12)} color={rowState.theme.colors.text.secondary}
+                accessibilityLabel={t('files.agentWritingThisFile', { agent: rowState.writerLabels.get(liveWrite.sessionId) })} />
+        ) : null;
+        const shouldShowRight = showDetailsInline || metadata != null || Boolean(badge) || writingMark != null || (isDirectoryNode(node) && node.isLoadingChildren);
         const right = shouldShowRight ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s10 }}>
                 {metadata}
@@ -494,7 +536,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
                         ) : null}
                         {rowState.changeRows || rowState.rowSelection ? <ScmChangePathTag path={node.path} theme={rowState.theme} /> : null}
                         {rowState.changedOnly && badge.isComplete !== false ? <DiffStat added={badge.added} removed={badge.removed} /> : null}
-                        {rowState.rowSelection || rowState.changeRows ? null : (
+                        {rowState.rowSelection || rowState.changeRows ? null : writingMark ?? (
                             <Text
                                 testID={`${rowTestId}-change`}
                                 style={{ fontSize: 12, width: 12, textAlign: 'center', color: changeToneColor, ...Typography.mono('semiBold') }}
@@ -503,7 +545,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
                             </Text>
                         )}
                     </View>
-                ) : null}
+                ) : writingMark}
                 {isDirectoryNode(node) && node.isLoadingChildren ? (
                     <ActivitySpinner size="small" color={rowState.theme.colors.text.secondary} />
                 ) : null}
@@ -526,7 +568,9 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         const proposalEmphasis = rowState.rowProposal && (node.type === 'file' || node.type === 'directory')
             ? proposalEmphasisOf(rowState.rowProposal, node)
             : null;
+        const arrived = (node.type === 'file' || node.type === 'directory') && rowState.claimArrival(node.path);
         return (
+            <TreeRowArrival arrived={arrived}>
             <WorkspaceDestinationRow existingMenu={Boolean(rowActions)} href={node.type === 'file' ? rowState.fileHref?.(node.path) ?? null : null}
                 dragSource={rowState.accountScope?.serverId === rowState.workspaceScope.serverId}
                 entityItem={node.type === 'file' && rowState.accountScope?.serverId === rowState.workspaceScope.serverId ? {
@@ -637,6 +681,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
             />
             </View>
             </WorkspaceDestinationRow>
+            </TreeRowArrival>
         );
     }, []);
 

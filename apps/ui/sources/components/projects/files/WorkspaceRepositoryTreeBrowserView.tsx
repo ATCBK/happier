@@ -1,6 +1,6 @@
 import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import { useRepositoryTreeBrowserState } from '@/hooks/workspaces/files/repositoryTreeBrowserState';
-import { RepositoryTreeVisibilityControl } from '@/components/workspaces/files/repositoryTree/RepositoryTreeVisibilityControl';
+import { useQuickOpenFilesLauncher } from '@/components/workspaces/files/useQuickOpenEmptyState';
 import * as React from 'react';
 import { Platform, View, type ScrollViewProps } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -17,6 +17,7 @@ import { computeExpandedPathsForReveal } from '@/components/workspaces/files/rep
 import { clearCachedWorkspaceRepositoryDirectoryEntries } from '@/sync/domains/workspaces/files/workspaceRepositoryDirectory';
 import { workspaceFileSearchCache } from '@/sync/domains/workspaces/files/workspaceFileSearch';
 import { useWorkspaceFileQuery } from '@/sync/domains/workspaces/files/useWorkspaceFileQuery';
+import { UNIVERSAL_SEARCH_PAGE_SIZE } from '@/components/appShell/search/universalSearchResult';
 import { workspaceCreateDirectory, workspaceWriteFile } from '@/sync/ops/workspaceFileSystem';
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
@@ -95,6 +96,8 @@ export type WorkspaceRepositoryTreeBrowserViewProps = Readonly<{
     effectsEnabled?: boolean;
     transferEffectsEnabled?: boolean;
     contextKey?: string;
+    /** The Session these files belong to: quick open from the tree lists what it changed (lab FB2). */
+    sessionId?: string | null;
     rootLabel?: string;
     rootHeading?: React.ReactNode;
     machineName?: string | null;
@@ -156,7 +159,6 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         changedOnly: storedChangedOnly, setChangedOnly: setShowChangedOnly, detailsMode, setDetailsMode,
         searchQuery: uncontrolledSearchQuery, setSearchQuery: setUncontrolledSearchQuery } = useRepositoryTreeBrowserState(tryBuildWorkspaceCacheKey(workspaceScope) ?? '');
     // Changed-only and file-query modes belong to the tree; a Code page always lists its folder.
-    const showChangedOnly = props.folderPage ? false : storedChangedOnly;
     const machine = useServerScopedMachine(workspaceScope.serverId, workspaceScope.machineId);
     const presence = useMachinePresenceSummary(workspaceScope.serverId, workspaceScope.machineId);
     const machineRpcTargetAvailable = props.effectsEnabled !== false && presence.reachability === 'reachable';
@@ -166,6 +168,14 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     const widget = useIsWidgetFrameBody();
     const workspaceScmController = useWorkspaceScmSnapshotController(props.scmSnapshot === undefined && machineRpcTargetAvailable ? workspaceScope : null);
     const effectiveScmSnapshot = props.scmSnapshot !== undefined ? props.scmSnapshot : workspaceScmController.snapshot ?? null;
+    // The one changed-file count (the header's, Git's): unknown keeps the All | Changed control, a known
+    // zero (or no repository) hides it and shows every file (lab FB1z).
+    const changedCount = effectiveScmSnapshot == null ? null
+        : effectiveScmSnapshot.repo.isRepo !== true ? 'none' as const
+            : selectScmChangedFiles(effectiveScmSnapshot).length || 'none' as const;
+    // Changed only belongs to the tree; a Code page always lists its folder.
+    const showChangedOnly = props.folderPage ? false : storedChangedOnly && changedCount !== 'none';
+    const launchQuickOpen = useQuickOpenFilesLauncher({ scope: workspaceScope, sessionId: props.sessionId });
     const serverSnapshot = useServerFeaturesSnapshotForServerId(workspaceScope.serverId, {
         enabled: Boolean(workspaceScope.serverId) && machineRpcTargetAvailable,
     });
@@ -216,7 +226,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     const searchQuery = props.searchQuery ?? uncontrolledSearchQuery;
     const setSearchQuery = props.onSearchQueryChange ?? setUncontrolledSearchQuery;
 
-    const fileQuery = useWorkspaceFileQuery({ scope: workspaceScope, query: searchQuery, enabled: !props.folderPage && !showChangedOnly && machineRpcTargetAvailable, limit: 200, reloadToken: treeReloadNonce, contextKey: props.contextKey });
+    const fileQuery = useWorkspaceFileQuery({ scope: workspaceScope, query: searchQuery, enabled: !props.folderPage && machineRpcTargetAvailable, pageSize: UNIVERSAL_SEARCH_PAGE_SIZE, reloadToken: treeReloadNonce, contextKey: props.contextKey });
     const searchResults = fileQuery.items;
     const isSearching = fileQuery.isSearching;
 
@@ -260,7 +270,8 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     }, [props.onOpenFile, props.onOpenFilePinned, revealPath]);
 
 
-    const shouldShowSearchResults = !folderPage && !showChangedOnly && searchQuery.trim().length > 0;
+    // The field filters by name in either view; its results stand in place of the tree.
+    const shouldShowSearchResults = !folderPage && searchQuery.trim().length > 0;
 
     React.useEffect(() => {
         if (shouldShowSearchResults || showChangedOnly) {
@@ -642,8 +653,6 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     }, [allowCreateActions, createFolder, handleTreeOpenFile, machineRpcTargetAvailable, props.buildFileMenuContext, props.fileHref, rowActions, transferActionsAvailable, uploadInto]);
 
     // This pane has no header of its own, so its + menu ends the toolbar (the session pane's header carries it).
-    // The one changed-file count, needed only while its chip shows.
-    const changedCount = showChangedOnly && effectiveScmSnapshot?.repo.isRepo === true ? selectScmChangedFiles(effectiveScmSnapshot).length : null;
     const machineName = props.machineName ?? (machine ? getMachineDisplayName(machine).trim() || null : null);
     const createMenuSelectRef = React.useRef(onSelectCreateMenuItem);
     createMenuSelectRef.current = onSelectCreateMenuItem;
@@ -708,6 +717,8 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                         searchResultsQuery={fileQuery.resultQuery}
                         searchError={Boolean(fileQuery.error)}
                         hasMore={fileQuery.hasMore}
+                        canLoadMore={fileQuery.canLoadMore}
+                        onLoadMore={fileQuery.loadMore}
                         onRetry={fileQuery.retry}
                         onFolderPress={(folder) => handleRevealPath(folder.fullPath.replace(/\/+$/, ''), true)}
                         onFilePress={(file) => props.onOpenFile(file.fullPath)}
@@ -777,6 +788,9 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         <View style={{ flex: 1, minHeight: 0 }}>
             {actionApproval.approvalId && !composed ? approvalNotice('row') : null}
             {props.createMenuPlacement === 'paneHeader' ? <BrowserPaneHeader action={createMenu} line={props.paneHeaderLine} /> : null}
+            {/* Lab FB1o: the freshness line sits under the pane header, above the toolbar; the tree stays at full strength. */}
+            {reachability.unreachable && !reachability.announced
+                ? <CheckoutReachabilityLine scope={workspaceScope} testID="repository-tree-offline" /> : null}
             {(showSearchBar || folderPage) && !widget && !composed ? (
                 <RepositoryTreeToolbar
                     testIDPrefix={props.createMenuPlacement === 'paneHeader' ? 'repository-tree' : 'workspace-repository-tree'}
@@ -793,11 +807,10 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                     refreshing={treeRootLoading}
                     trailing={props.createMenuPlacement === 'paneHeader' ? undefined : createMenu}
                     onRequestClose={props.onRequestClose}
+                    onQuickOpen={launchQuickOpen}
+                    visibility={{ mode: visibilityMode, available: gitIgnoreAvailable, onChange: setVisibilityMode }}
                 />
             ) : null}
-            {reachability.unreachable && !reachability.announced
-                ? <CheckoutReachabilityLine scope={workspaceScope} testID="repository-tree-offline" /> : null}
-            {!showChangedOnly && !shouldShowSearchResults && !widget && !composed ? <RepositoryTreeVisibilityControl mode={visibilityMode} available={gitIgnoreAvailable} onChange={setVisibilityMode} /> : null}
             {Platform.OS === 'web' ? (
                 <>
                     <input

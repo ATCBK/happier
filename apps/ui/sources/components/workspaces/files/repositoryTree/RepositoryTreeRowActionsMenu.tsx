@@ -21,6 +21,23 @@ export type RepositoryTreeRowActionMenuItemId =
 
 type RepositoryTreeRowActionItem = Omit<ItemAction, 'onPress'>;
 
+/** One glyph per item of the shared file menu (lab FB1k); an item without one keeps the file mark. */
+const FILE_MENU_ITEM_ICONS: Readonly<Record<string, ItemAction['icon']>> = {
+    open: 'eye',
+    openBeside: 'square-split-horizontal',
+    openWithBlame: 'clock-counter-clockwise',
+    copyPath: 'copy',
+    copyLink: 'link',
+    attachToMessage: 'paperclip',
+    saveAsArtifact: 'file-arrow-up',
+    download: 'download',
+    shareFile: 'share-network',
+    rename: 'pencil',
+    openInDefaultApp: 'arrow-square-out',
+    restoreBeforeTurn: 'clock-counter-clockwise',
+    discard: 'arrow-arc-left',
+};
+
 // Touch rows open the menu from a long press; the anchor stays, the … is not drawn.
 const renderNoTrigger = () => null;
 
@@ -59,8 +76,7 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
     const sharedActions = React.useMemo(() => sharedItems.map(item => ({
         id: `repository-tree-menuitem-${item.id === 'copyPath' ? 'copy-path' : item.id}`,
         title: item.title ?? t(item.titleKey),
-        icon: item.id === 'rename' ? 'pencil' as const : item.id === 'download' ? 'download' as const
-            : item.id === 'copyPath' || item.id === 'copyLink' ? 'copy' as const : 'file' as const,
+        icon: FILE_MENU_ITEM_ICONS[item.id] ?? 'file',
         disabled: item.state !== 'enabled',
         subtitle: item.state === 'enabled' ? undefined : item.state.disabledReason,
         destructive: item.destructive,
@@ -121,19 +137,29 @@ export function RepositoryTreeRowActionsMenu(props: Readonly<{
         ];
     }, [props.disableWriteActions, props.downloadActionsEnabled, props.folderCreation?.newFolder, props.folderCreation?.upload, props.kind, theme.colors.text.secondary]);
 
+    const menuTitle = props.path.split('/').filter(Boolean).at(-1) ?? props.path;
+    // Lab FB1k: open first (under the file's name), then share, the row's own file operations, and Discard
+    // last and red, each run of rows set apart by a quiet rule.
+    const rowActions = React.useMemo<ItemAction[]>(() => {
+        const inGroup = (id: string, title = '') => (action: ItemAction): ItemAction => ({ ...action, group: { id, title } });
+        return [
+            ...sharedActions.filter((_, index) => sharedItems[index].group === 'open').map(inGroup('open', menuTitle)),
+            ...workspaceOpen.items.filter(item => item.id !== 'workspace.open.right' || !sharedItems.some(shared => shared.id === 'openBeside'))
+                .map(item => inGroup('open', menuTitle)({ id: item.id, title: item.title, icon: item.icon, onPress: () => { workspaceOpen.select(item.id); } })),
+            ...sharedActions.filter((_, index) => sharedItems[index].group !== 'open' && sharedItems[index].group !== 'change').map(inGroup('share')),
+            ...items.map(item => inGroup('file')({ ...item, onPress: () => props.onSelect(item.id as RepositoryTreeRowActionMenuItemId) })),
+            ...sharedActions.filter((_, index) => sharedItems[index].group === 'change').map(inGroup('change')),
+        ];
+    }, [items, menuTitle, props.onSelect, sharedActions, sharedItems, workspaceOpen]);
+
     const safePath = React.useMemo(() => toTestIdSafeValue(props.path), [props.path]);
     const triggerId = `repository-tree-row-menu-${safePath}`;
 
     return (
         <ItemRowActions
-            title={props.path.split('/').filter(Boolean).at(-1) ?? props.path}
-            actions={[...workspaceOpen.items.filter(item => item.id !== 'workspace.open.right' || !sharedItems.some(shared => shared.id === 'openBeside')).map(item => ({
-                id: item.id, title: item.title, icon: item.icon,
-                onPress: () => { workspaceOpen.select(item.id); },
-            })), ...sharedActions.filter((_, index) => sharedItems[index].group !== 'change'), ...items.map((item) => ({
-                ...item,
-                onPress: () => props.onSelect(item.id as RepositoryTreeRowActionMenuItemId),
-            })), ...sharedActions.filter((_, index) => sharedItems[index].group === 'change')]}
+            title={menuTitle}
+            // Lab FB1k: open first, then share, the row's own file operations, and Discard last and red.
+            actions={rowActions}
             overflowTriggerTestID={triggerId}
             compactThreshold={Number.POSITIVE_INFINITY}
             compactActionIds={[]}

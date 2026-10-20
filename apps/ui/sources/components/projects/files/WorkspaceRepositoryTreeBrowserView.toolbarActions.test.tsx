@@ -350,22 +350,37 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
     const menuItem = (screen: Awaited<ReturnType<typeof renderView>>, testID: string, id: string) =>
         menu(screen, testID)?.props.items.find((item: any) => item.id === id);
 
-    it('prunes the same tree to the changed files in place, and the chip clears it', async () => {
+    it('prunes the same tree to the changed files under Changed, and All restores it', async () => {
         const screen = await renderView();
         expect(latestWorkspaceRepositoryTreeListProps.current?.changedOnly).toBe(false);
 
         await act(async () => {
-            screen.pressByTestId('workspace-repository-tree-filter-changed');
+            screen.pressByTestId('workspace-repository-tree-show-changed');
             await settle();
         });
 
         expect(screen.findAllByTestId('workspace-repository-tree-list-stub')).toHaveLength(1);
         expect(latestWorkspaceRepositoryTreeListProps.current?.changedOnly).toBe(true);
         await act(async () => {
-            screen.pressByTestId('workspace-repository-tree-changed-only-chip');
+            screen.pressByTestId('workspace-repository-tree-show-all');
             await settle();
         });
         expect(latestWorkspaceRepositoryTreeListProps.current?.changedOnly).toBe(false);
+    });
+
+    it('offers All | Changed only while something changed, and shows every file when nothing did (lab FB1z)', async () => {
+        const changed = workspaceScmControllerState.snapshot;
+        try {
+            // A snapshot is immutable (its changed-file list is memoized by identity): nothing changed is a new one.
+            workspaceScmControllerState.snapshot = { ...changed, entries: [] };
+            const screen = await renderView();
+            expect(screen.findByTestId('workspace-repository-tree-show-changed')).toBeNull();
+            expect(latestWorkspaceRepositoryTreeListProps.current?.changedOnly).toBe(false);
+        } finally {
+            workspaceScmControllerState.snapshot = changed;
+        }
+        const screen = await renderView();
+        expect(screen.findByTestId('workspace-repository-tree-show-changed')).toBeTruthy();
     });
 
     it('shows the tree loading on the View menu while the root refreshes', async () => {

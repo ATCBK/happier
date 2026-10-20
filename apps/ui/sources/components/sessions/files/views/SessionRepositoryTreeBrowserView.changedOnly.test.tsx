@@ -39,22 +39,21 @@ describe('Session shared browser changed-only, header and View menu', () => {
     async function render(serverId = fixture.scope.serverId) {
         const { SessionRepositoryTreeBrowserView } = await import('./SessionRepositoryTreeBrowserView');
         const screen = await fixture.render(<SessionRepositoryTreeBrowserView sessionId="s1" serverId={serverId} onOpenFile={() => {}} />);
-        await vi.waitFor(() => expect(screen.findByTestId('repository-tree-filter-changed')).not.toBeNull());
+        await vi.waitFor(() => expect(screen.findByTestId('repository-tree-show-changed')).not.toBeNull());
         return screen;
     }
     const rowId = (path: string) => `repository-tree-row-${toTestIdSafeValue(path)}`;
 
-    it('prunes the same tree in place and restores all files through the changed-only chip', async () => {
+    it('prunes the same tree in place under Changed and restores all files under All', async () => {
         const { WorkspaceRepositoryTreeList } = await import('@/components/projects/files/WorkspaceRepositoryTreeList');
         const screen = await render();
         const original = screen.findAllByType(WorkspaceRepositoryTreeList)[0];
-        await screen.pressByTestIdAsync('repository-tree-filter-changed');
+        await screen.pressByTestIdAsync('repository-tree-show-changed');
         expect(screen.findAllByType(WorkspaceRepositoryTreeList)[0]).toBe(original);
         for (const path of ['src/a.ts', 'src/b.ts', 'README.md']) expect(screen.findByTestId(rowId(path))).toBeTruthy();
         expect(screen.findByTestId(rowId('scratch/'))).toBeNull();
-        expect(screen.findByTestId('repository-tree-changed-only-chip')).toBeTruthy();
-        await screen.pressByTestIdAsync('repository-tree-changed-only-chip');
-        expect(screen.findByTestId('repository-tree-changed-only-chip')).toBeNull();
+        // All | Changed is one segmented view switch (lab FB1); All restores every file in place.
+        await screen.pressByTestIdAsync('repository-tree-show-all');
         expect(screen.findByTestId(rowId('src/a.ts'))).toBeNull();
     });
 
@@ -76,7 +75,7 @@ describe('Session shared browser changed-only, header and View menu', () => {
         fixture.setSnapshot(fileViewSnapshot({ rootPath: fixture.scope.rootPath, entries: changedEntries }));
         fixture.storage.getState().setSessionRepositoryTreeExpandedPaths('s1', ['src']);
         const screen = await render(fixture.scope.serverId);
-        await screen.pressByTestIdAsync('repository-tree-filter-changed');
+        await screen.pressByTestIdAsync('repository-tree-show-changed');
         expect(screen.findByTestId(rowId('src/a.ts'))).toBeTruthy();
         expect(screen.findByTestId(rowId('other-home.ts'))).toBeNull();
     });
@@ -96,7 +95,7 @@ describe('Session shared browser changed-only, header and View menu', () => {
         // The folder this Session works in, then how many files changed (the Git pane's vocabulary).
         expect(line?.segments[0]).toContain(`changed-browser-${fixtureIndex}`);
         expect(line?.segments.at(-1)).toBe('sessionGitPane.header.changed:{"count":"3"}');
-        await screen.pressByTestIdAsync('repository-tree-filter-changed');
+        await screen.pressByTestIdAsync('repository-tree-show-changed');
         expect(content!.action).toBe(action);
         expect(content!.line).toBe(line);
     });

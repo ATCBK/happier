@@ -82,8 +82,9 @@ it('keeps the shared visibility choice reachable on a Code folder page', async (
     await screen.pressByTestIdAsync('workspace-repository-tree-all-files');
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-generated.txt')).toBeTruthy());
     await screen.pressByTestIdAsync('workspace-repository-tree-view');
-    await vi.waitFor(() => expect(screen.findByTestId('workspace-repository-tree-all-files')).toBeTruthy());
-    await screen.pressByTestIdAsync('workspace-repository-tree-all-files');
+    // Project view | All files are the two choices of one group (lab FB1v); Project view hides them again.
+    await vi.waitFor(() => expect(screen.findByTestId('workspace-repository-tree-project-files')).toBeTruthy());
+    await screen.pressByTestIdAsync('workspace-repository-tree-project-files');
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-generated.txt')).toBeNull());
 });
 

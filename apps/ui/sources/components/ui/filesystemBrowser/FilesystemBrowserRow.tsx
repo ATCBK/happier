@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { hapticsMedium } from '@/components/ui/theme/haptics';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -87,6 +88,10 @@ export type FilesystemBrowserRowProps = Readonly<{
     onRetryError?: (node: FilesystemBrowserNode) => void | Promise<void>;
     wrapContent?: ((input: FilesystemBrowserWrapContentInput) => React.ReactElement) | null;
 }>;
+
+function playRowMenuHaptic() {
+    void hapticsMedium();
+}
 
 export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.ReactElement {
     const { theme } = useUnistyles();
@@ -185,6 +190,8 @@ export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.Re
                     reducedMotion={reducedMotion}
                     onActivate={props.onPress ?? (() => {})}
                     onLongPress={props.onLongPress}
+                    // Once, at the long-press threshold that opens the row menu (lab FB1k).
+                    onActionsLongPress={playRowMenuHaptic}
                     onContextMenu={props.onContextMenu}
                     keyboardShortcuts={props.treeItemProps?.webKeyShortcuts}
                     onFocus={props.treeItemProps?.onFocus ?? (() => {})}
