@@ -3,6 +3,7 @@
  */
 
 import { apiSocket } from '../api/session/apiSocket';
+import { resolveSessionExplicitControlIntent, writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 import { Platform } from 'react-native';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { publishDisplayTitleToMetadata } from '@/sync/state/displayTitlePublish';
@@ -1328,13 +1329,54 @@ export async function sessionStop(sessionId: string): Promise<SessionStopRespons
 
 export async function sessionStopWithServerScope(
     sessionId: string,
-    opts?: Omit<Parameters<typeof stopSessionUsingCanonicalStrategy>[0], 'sessionId'>,
+    opts?: Omit<Parameters<typeof stopSessionUsingCanonicalStrategy>[0], 'sessionId'> & Readonly<{
+        actionContext?: ActionExecutorContext;
+    }>,
 ): Promise<SessionStopResponse> {
-    const stopResult = await stopSessionUsingCanonicalStrategy({
-        ...opts,
-        sessionId,
-        serverId: opts?.serverId ?? null,
-    });
+    let accountContext: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | undefined;
+    let stopResult: Awaited<ReturnType<typeof stopSessionUsingCanonicalStrategy>>;
+    try {
+        const intent = resolveSessionExplicitControlIntent({ rawSession: { id: sessionId }, actionContext: opts?.actionContext });
+        if (intent === 'unauthorized' || intent === 'self_stop_forbidden') throw new Error('Explicit Stop caller unavailable');
+        let scope = opts?.scope;
+        let isCurrent = opts?.isCurrent;
+        if (intent !== 'automatic') {
+            const serverId = opts?.serverId ?? scope?.serverId ?? resolvePreferredServerIdForSessionId(sessionId)
+                ?? getActiveServerSnapshot().serverId;
+            if (!scope) {
+                accountContext = await captureLazyActionAccountContext(serverId, opts?.signal);
+                scope = accountContext.accountLifetime.scope;
+                isCurrent = accountContext.accountLifetime.isCurrent;
+            }
+            const accountLifetime = { scope, isCurrent: isCurrent ?? (() => true) };
+            const assertCurrent = () => {
+                opts?.signal?.throwIfAborted();
+                if (!accountLifetime.isCurrent()) throw new Error('Session Account authority retired before Stop');
+            };
+            assertCurrent();
+            const stop = { v: 1, cause: 'explicit_stop', requestId: randomUUID(), requestedAtMs: nowServerMs(),
+                ...(intent === 'manager' && opts?.actionContext?.actionCaller?.kind === 'session'
+                    ? { managerSessionId: opts.actionContext.actionCaller.sessionId } : {}),
+            } as const;
+            // The UI owns Account credentials; restricted runners only receive
+            // the existing physical Stop after the owner tuple acknowledges it.
+            await getSyncSingleton().patchSessionMetadataWithRetry(sessionId,
+                metadata => writeSessionExplicitStopV1ToMetadata(metadata, stop), {
+                    serverId, accountLifetime,
+                    shouldContinue: () => !opts?.signal?.aborted && accountLifetime.isCurrent(),
+                });
+            assertCurrent();
+        }
+        stopResult = await stopSessionUsingCanonicalStrategy({
+            ...opts, sessionId, serverId: opts?.serverId ?? scope?.serverId ?? null,
+            ...(scope ? { scope } : {}), ...(isCurrent ? { isCurrent } : {}),
+        });
+    } catch (error) {
+        return { sessionId, stopped: false, success: false, code: 'session_stop_control_unavailable',
+            message: error instanceof Error ? error.message : 'Session Stop control unavailable' };
+    } finally {
+        accountContext?.dispose();
+    }
     const confirmation: SessionStopResult = stopResult.success
         ? stopResult.stopOutcome
             ? { sessionId, stopped: false, stopOutcome: stopResult.stopOutcome }

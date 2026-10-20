@@ -1998,8 +1998,8 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       return result ?? { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     }),
 
-    sessionStop: async ({ sessionId, serverId, signal }) =>
-      await withAccountLifetime(signal, signal => sessionStopWithServerScope(sessionId, { serverId, signal,
+    sessionStop: async ({ sessionId, serverId, signal, context }) =>
+      await withAccountLifetime(signal, signal => sessionStopWithServerScope(sessionId, { serverId, signal, actionContext: context,
         ...(accountContext ? { scope: accountContext.accountLifetime.scope,
           isCurrent: accountContext.accountLifetime.isCurrent } : {}) })),
 
