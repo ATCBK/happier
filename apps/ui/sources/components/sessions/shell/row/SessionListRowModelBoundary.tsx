@@ -20,7 +20,7 @@ import type {
 } from '../SessionListHeaderFrame';
 import type {
     UseSessionInlineDragCancelEvent,
-    UseSessionInlineDragDropResultEvent,
+    UseSessionInlineDragParams,
     UseSessionInlineDragResolveDropResultEvent,
     UseSessionInlineDragResolvedDrop,
 } from '../useSessionInlineDrag';
@@ -74,7 +74,7 @@ export type SessionListRowModelBoundaryProps = Readonly<{
     nativeContextMenuSessionKey: string | null;
     onDragCancel: (event: UseSessionInlineDragCancelEvent) => void;
     onDragStart: (sessionKey: string) => void;
-    onDropResult: (event: UseSessionInlineDragDropResultEvent) => void;
+    onDropResult: UseSessionInlineDragParams['onDropResult'];
     onRegisterTreeRowBounds: RegisterSessionListTreeRowBounds;
     onUnregisterTreeRowBounds: UnregisterSessionListTreeRowBounds;
     overlayShared: TreeDropOverlaySharedValues;
