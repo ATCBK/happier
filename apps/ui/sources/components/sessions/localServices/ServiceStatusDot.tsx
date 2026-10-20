@@ -10,9 +10,9 @@ const DOT_SIZE = 8;
 /**
  * How a service's status reads as a dot.
  *
- * - `running`: the work-status neutral ink on its soft ring, still. Healthy is quiet (DESIGN: colour
- *   means state — amber needs you, rose failed — and no indefinite decorative animation on routine
- *   surfaces), so a server that has been up for three hours neither glows green nor pulses for three hours.
+ * - `running`: the success ink on its soft ring, still. A running server is presence — "live" is the
+ *   identity of the state, the one place DESIGN lets green speak (like a Machine's online dot, lab
+ *   `s-services`). It never pulses: a server up for three hours does not animate for three hours.
  * - `starting` / `stopping`: the same dot, pulsing, because it is actually in progress; it stops the
  *   moment the supervisor settles. That is what tells them from `running` (H-UX F-11).
  * - `stale`: a neutral dot, no ring. `stopped` / `unavailable`: a tertiary dot, no ring.
@@ -59,9 +59,11 @@ export function ServiceStatusDot(props: Readonly<{
     const { theme } = useUnistyles();
     const tone = serviceDotTone(props.status);
     const ringed = tone === 'live' || tone === 'starting';
-    // Live work takes the shared healthy (neutral) Work-status glyph ink, the same one a running tool
-    // group or Work row draws; the ring, not a hue, tells a live service from a stale one.
-    const color = ringed
+    // A live service is presence (success ink); a starting/stopping one keeps the neutral Work-status
+    // glyph ink a running tool group draws, and its pulse tells it from a settled one.
+    const color = tone === 'live'
+        ? theme.colors.state.success.foreground
+        : tone === 'starting'
         ? workStatusGlyphColor(theme.colors, 'neutral')
         : tone === 'idle'
             ? theme.colors.state.neutral.foreground
@@ -72,7 +74,7 @@ export function ServiceStatusDot(props: Readonly<{
         <StatusDot
             testID={props.testID}
             color={color}
-            halo={ringed ? theme.colors.state.neutral.background : undefined}
+            halo={tone === 'live' ? theme.colors.state.success.background : ringed ? theme.colors.state.neutral.background : undefined}
             size={DOT_SIZE}
             isPulsing={tone === 'starting'}
             animationEnabled={props.animationEnabled !== false}

@@ -18,6 +18,7 @@ import { renderPageHeaderText } from '@/components/ui/layout/PageHeader';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
+import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -643,7 +644,7 @@ export function DetectedLocalServicesPane(props: Readonly<{
                         ) : null}
                         {detailRow ? null : effectReview}
                         {hasRows
-                            ? sections.map((entry) => (
+                            ? sections.map((entry, index) => (
                                 <View key={entry.section} testID={`${testID}-section-${entry.section}`}>
                                     {entry.section === 'happier' ? (
                                         <ItemGroup selectableItemCountOverride={1}>
@@ -662,13 +663,24 @@ export function DetectedLocalServicesPane(props: Readonly<{
                                             </ExpandableItem>
                                         </ItemGroup>
                                     ) : (
-                                        <ItemGroup
-                                            title={`${sectionTitle(entry.section, machineName)} ${entry.rows.length}`}
-                                            surface="none"
-                                            selectableItemCountOverride={entry.rows.length}
-                                        >
-                                            {entry.rows.map(renderRow)}
-                                        </ItemGroup>
+                                        <>
+                                            {/* What the rows share and how many: the list's quiet group label
+                                                (lab s-services), not a page section title. */}
+                                            <CollectionListGroupLabel
+                                                testID={`${testID}-section-${entry.section}-label`}
+                                                title={sectionTitle(entry.section, machineName)}
+                                                count={entry.rows.length}
+                                                first={index === 0}
+                                            />
+                                            <ItemGroup
+                                                header="none"
+                                                accessibilityLabel={sectionTitle(entry.section, machineName)}
+                                                surface="none"
+                                                selectableItemCountOverride={entry.rows.length}
+                                            >
+                                                {entry.rows.map(renderRow)}
+                                            </ItemGroup>
+                                        </>
                                     )}
                                 </View>
                             ))
