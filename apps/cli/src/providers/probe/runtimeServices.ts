@@ -9,13 +9,13 @@ import { readContributedProviderCatalogParserIds } from '@happier-dev/protocol/p
 import { createProviderManagedRuntimeDeclarationEqualityKeyV1, resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
 import { serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { ProviderErrorV1, ProviderCatalogRuntimeStateRecordV1, ProviderMergedCatalogRowV1, ProviderObservationAuthorizationFingerprintV1, ProviderProbeObservationIdentityV1, ProviderRuntimeStateFileV1, ProviderSettingsV1 } from '@happier-dev/protocol';
-import type { DaemonProviderDraftProbeRequestV1 } from '@happier-dev/protocol/rpc/providers';
+import type { DaemonProviderDraftProbeRequestV1, DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import type { ProviderConnectionsCatalogSnapshotV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 
 import { configuration } from '@/configuration';
 import { readStoredCredentials } from '@/persistence';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createAccountScopedProviderCatalogReader } from '@/providers/modelManagement/remoteProjection';
+import { createAccountScopedProviderCatalogReader, createAccountScopedProviderModelProjectionReader } from '@/providers/modelManagement/remoteProjection';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { readProviderModelNameCatalog, resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
 import {
@@ -132,12 +132,16 @@ function catalogAdmissionError(catalog: ProviderConnectionsCatalogSnapshotV1, id
 export type RuntimeProviderOperationScope = ProviderProbeOperationScope & Readonly<{
   /** Exact executable-registry generation admitted for this operation. */
   resolveContributedCatalogParsers?: ResolveContributedProviderCatalogParsers;
+  getAccountSettingsSnapshot?: () => ActiveAccountSettingsSnapshot | null;
+  resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
 }>;
 
 /** Exact Account settings basis for one bulk presentation pass. */
 export type RuntimeProviderPresentationResolutionBasis = Readonly<{
   accountSettings: unknown;
   settingsRead: ReturnType<typeof readProviderSettingsForCli>;
+  /** Display facts from the exact registry lease held by this presentation pass. */
+  modelNameCatalog?: ReturnType<typeof readProviderModelNameCatalog>;
   savedSecretResources?: readonly SavedSecretCatalogResourceInputV1[];
   resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
 }>;
@@ -212,6 +216,10 @@ export type RuntimeProviderServices = Readonly<{
     scope?: RuntimeProviderOperationScope,
     settingsBasis?: RuntimeProviderPresentationResolutionBasis,
   ): Promise<RuntimeProviderCatalogContext>;
+  readPlacedModelProjection(
+    request: DaemonProviderModelProjectionRequestV1 & Readonly<{ sourceConnectionId: string }>,
+    scope: RuntimeProviderOperationScope,
+  ): Promise<DaemonProviderModelProjectionResponseV1 | null>;
   scheduleDemandRefresh(
     identity: RuntimeProviderIdentity,
     trigger: 'detail_open' | 'picker_open' | 'manual_refresh',
@@ -477,7 +485,8 @@ export function createRuntimeProviderServices(input: Readonly<{
     if (!isProviderFeatureEnabled()) {
       return { ok: false as const, error: providerFeatureDisabled(identity).error };
     }
-    let snapshot = settingsBasis ? null : getSnapshot();
+    const readSnapshot = scope.getAccountSettingsSnapshot ?? getSnapshot;
+    let snapshot = settingsBasis ? null : readSnapshot();
     if (!isProviderFeatureEnabled()) {
       return { ok: false as const, error: providerFeatureDisabled(identity).error };
     }
@@ -497,7 +506,7 @@ export function createRuntimeProviderServices(input: Readonly<{
         }
         throw error;
       }
-      snapshot = getSnapshot();
+      snapshot = readSnapshot();
       if (!isProviderFeatureEnabled()) return { ok: false as const, error: providerFeatureDisabled(identity).error };
       if (catalog.status !== 'ready') return { ok: false as const, error: catalogAdmissionError(catalog, identity) };
       if (!snapshot) return { ok: false as const, error: createProviderErrorV1('provider_authorization_changed', identity) };
@@ -626,12 +635,14 @@ export function createRuntimeProviderServices(input: Readonly<{
       ok: true as const,
       value: {
         connection: resolution.record,
+        readSnapshot,
         snapshot,
         providerSettings,
         settingsRead,
         accountSettings,
         savedSecretResources: settingsBasis ? settingsBasis.savedSecretResources : snapshot?.savedSecretResources,
-        resolveManagedPurposeBindingIntent: settingsBasis?.resolveManagedPurposeBindingIntent ?? input.resolveManagedPurposeBindingIntent,
+        resolveManagedPurposeBindingIntent: settingsBasis?.resolveManagedPurposeBindingIntent
+          ?? scope.resolveManagedPurposeBindingIntent ?? input.resolveManagedPurposeBindingIntent,
         registry,
         dnsEvidenceByEndpointUrl,
         ...(admittedAccountSettingsBasis
@@ -1045,7 +1056,7 @@ export function createRuntimeProviderServices(input: Readonly<{
           connection: context.value.connection,
           providerSettings: context.value.providerSettings,
           snapshot,
-          getAccountSettingsSnapshot: getSnapshot,
+          getAccountSettingsSnapshot: scope.getAccountSettingsSnapshot ?? getSnapshot,
           lifetime: scope.lifetime,
         });
     if (!admission.ok) return admission;
@@ -1069,6 +1080,7 @@ export function createRuntimeProviderServices(input: Readonly<{
     identity: Readonly<{ connectionId: string; machineId: string }>,
     resolved: SavedResolution,
     runtimeState: Awaited<ReturnType<ProviderRuntimeStateStore['read']>>,
+    modelNameCatalog = readProviderModelNameCatalog(resolved.registry),
   ) => {
     const request = resolved.request;
     const catalogFingerprint = request.probes.length === 0
@@ -1077,7 +1089,7 @@ export function createRuntimeProviderServices(input: Readonly<{
     return projectProviderCatalogContextRuntimeState({
       status: 'success' as const,
       connection: resolved.connection,
-      modelNameCatalog: readProviderModelNameCatalog(resolved.registry),
+      modelNameCatalog,
       providerSettings: resolved.providerSettings,
       runtimeState,
       allowedObservationAuthorizationFingerprints: request.observationAuthorizationFingerprints,
@@ -1124,7 +1136,8 @@ export function createRuntimeProviderServices(input: Readonly<{
       return {
         status: 'success' as const,
         connection: connectionContext.value.connection,
-        modelNameCatalog: readProviderModelNameCatalog(connectionContext.value.registry),
+        modelNameCatalog: settingsBasis?.modelNameCatalog
+          ?? readProviderModelNameCatalog(connectionContext.value.registry),
         providerSettings: connectionContext.value.providerSettings,
         runtimeState,
         allowedObservationAuthorizationFingerprints: [] as const,
@@ -1148,7 +1161,7 @@ export function createRuntimeProviderServices(input: Readonly<{
     }
     if (!resolved.ok) return { status: 'error' as const, error: resolved.error };
     if (!isProviderFeatureEnabled()) return providerFeatureDisabled(identity);
-    return projectResolvedCatalogContext(identity, resolved.value, runtimeState);
+    return projectResolvedCatalogContext(identity, resolved.value, runtimeState, settingsBasis?.modelNameCatalog);
   };
 
   const runResolvedCatalogProbe = createResolvedProviderProbeRunner({
@@ -1169,10 +1182,12 @@ export function createRuntimeProviderServices(input: Readonly<{
     schedule: (key, trigger, operation, options) => scheduler.runHealth(key, trigger, operation, options),
   });
 
-  async function readPlacedGatewayCatalog<T extends ProviderCatalogRefreshResult | ProviderSavedModelsRpcResult>(
+  async function readPlacedGatewayCatalog<T extends ProviderCatalogRefreshResult | ProviderSavedModelsRpcResult | DaemonProviderModelProjectionResponseV1>(
     identity: RuntimeProviderIdentity,
     context: Extract<Awaited<ReturnType<typeof resolveConnectionContext>>, { ok: true }>['value'],
-    read: (reader: ReturnType<typeof createAccountScopedProviderCatalogReader>, target: RuntimeProviderIdentity, signal: AbortSignal) => Promise<T>,
+    read: (reader: ReturnType<typeof createAccountScopedProviderCatalogReader> & Readonly<{
+      project: ReturnType<typeof createAccountScopedProviderModelProjectionReader>;
+    }>, target: RuntimeProviderIdentity, signal: AbortSignal) => Promise<T>,
   ): Promise<T | Readonly<{ status: 'error'; error: ProviderErrorV1 }> | null> {
     const { connection } = context;
     const placement = connection.connection.gatewayPlacement;
@@ -1189,16 +1204,20 @@ export function createRuntimeProviderServices(input: Readonly<{
       lifetime: context.lifetime, registry: context.registry,
       accountSettingsBasis: context.accountSettingsBasis,
       dnsEvidenceByConnectionId: new Map([[identity.connectionId, context.dnsEvidenceByEndpointUrl]]),
+      getAccountSettingsSnapshot: context.readSnapshot,
+      resolveManagedPurposeBindingIntent: context.resolveManagedPurposeBindingIntent,
     };
     // Resolve the hub's source from the peer's admitted catalog, including the
     // hub grant, through the same owner that authorizes a local probe.
     const hub = await resolveSaved({ ...identity, machineId: placement.machineId }, 'catalog', admittedScope);
     if (!hub.ok) return { status: 'error', error: hub.error };
-    const reader = createAccountScopedProviderCatalogReader({
+    const readerInput = {
       serverUrl: resolveServerHttpBaseUrl(), readCredentials: readStoredCredentials,
-      readAccountSettingsSnapshot: async () => getSnapshot(),
+      readAccountSettingsSnapshot: async () => context.readSnapshot(),
       isCurrent: () => isProviderFeatureEnabled() && getActiveAccountSettingsSnapshotLifetimeToken() === lifetimeToken,
-    });
+    };
+    const reader = { ...createAccountScopedProviderCatalogReader(readerInput),
+      project: createAccountScopedProviderModelProjectionReader(readerInput) };
     let result: T;
     try {
       result = await awaitAbortableWithinProviderOperation(signal => read(reader, {
@@ -1231,10 +1250,30 @@ export function createRuntimeProviderServices(input: Readonly<{
         if (!fingerprints.includes(result.requestFingerprint)) return {
           status: 'error', error: createProviderErrorV1('provider_authorization_changed', identity),
         };
+      } else if ('groups' in result && result.groups.some(group => (
+        group.connectionId !== identity.connectionId
+        || group.connectionRevision !== connection.connection.revision
+        || group.sourceAuthority?.connectionSecurityFingerprint !== connection.connectionSecurityFingerprint
+        || connection.deployment.kind !== 'managedLocal'
+        || group.sourceAuthority?.provider.identity.pluginId !== connection.deployment.implementationIdentity.pluginId
+        || group.sourceAuthority?.provider.identity.localId !== connection.deployment.implementationIdentity.localId
+        || group.rows.some(row => row.ref.providerConnectionId !== identity.connectionId
+          || row.ref.agentTargetKey !== result.agentTargetKey || row.descriptor.id !== row.ref.modelId)
+      ))) {
+        return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', identity) };
       }
     }
     return result;
   }
+
+  const readPlacedModelProjection: RuntimeProviderServices['readPlacedModelProjection'] = async (request, scope) => {
+    const identity = { connectionId: request.sourceConnectionId, machineId: request.machineId };
+    const context = await resolveConnectionContext(identity, scope);
+    if (!context.ok) return { status: 'error', error: context.error };
+    return readPlacedGatewayCatalog(identity, context.value, (reader, target, signal) => reader.project({
+      ...request, machineId: target.machineId,
+    }, signal));
+  };
 
   async function probeSaved(
     identity: RuntimeProviderIdentity,
@@ -1641,7 +1680,7 @@ export function createRuntimeProviderServices(input: Readonly<{
 
   return Object.freeze({
     probe, probeDraft, models, summary, modelLoadCatalog, modelLoadAuthorization,
-    resolveCatalogContext, resolvePresentationCatalogContext, scheduleDemandRefresh, runtimeStore,
+    resolveCatalogContext, resolvePresentationCatalogContext, readPlacedModelProjection, scheduleDemandRefresh, runtimeStore,
     probeInfrastructure: Object.freeze({ client, scheduler }),
   });
 }

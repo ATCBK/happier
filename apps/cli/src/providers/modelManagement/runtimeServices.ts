@@ -338,6 +338,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
   const projectModels = async (
     request: DaemonProviderModelProjectionRequestV1,
     accountContext?: RuntimeProviderAccountModelProjectionContext,
+    signal?: AbortSignal,
   ): Promise<DaemonProviderModelProjectionResponseV1> => {
     if (!input.featureGate.isEnabled('providers')) {
       return DaemonProviderModelProjectionResponseV1Schema.parse({
@@ -357,7 +358,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     const routeConsumer = Boolean(request.providerConnection || request.connectedAccountTarget
       || request.application || request.includeTeamCredentialRequestPolicySupport);
     const operationLifetime = createProviderOperationLifetime({
-      ...(accountContext ? { signal: accountContext.signal } : {}),
+      signal: accountContext?.signal ?? signal,
       wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
     });
     const isAccountCurrent = async () => !accountContext || (
@@ -449,11 +450,21 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         (!request.sourceConnectionId || connection.id === request.sourceConnectionId)
         && (!request.providerConnection || connection.id === request.providerConnection.connectionId)
       ));
+      const hasPickerDemand = (connectionId: string, kind: Parameters<typeof resolveProviderModelPickerVisibility>[0]['kind']) => (
+        resolveProviderModelPickerVisibility({ connectionId, kind,
+          modelPickerVisibilityByConnectionId: settingsRead.settings.modelPickerVisibilityByConnectionId }).shown
+        || request.mode === 'management' || Boolean(request.sourceConnectionId) || routeConsumer
+        || request.currentSelection?.providerConnectionId === connectionId
+        || settingsRead.settings.defaultsByAgentTargetKey[request.agentTargetKey]?.ref.providerConnectionId === connectionId
+        || request.favoriteSelections?.some(ref => ref.providerConnectionId === connectionId) === true
+      );
       const resolutionFailures = new Map<ProviderConnectionId, DaemonProviderModelProjectionRefreshFailureV1['error']>();
       const dnsEvidenceByConnectionId = new Map<string, ProviderEndpointDnsEvidence>();
       const operationScope: RuntimeProviderOperationScope = {
         registry,
         dnsEvidenceByConnectionId,
+        ...(accountContext ? { getAccountSettingsSnapshot: accountContext.getAccountSettingsSnapshot,
+          resolveManagedPurposeBindingIntent: accountContext.resolveManagedPurposeBindingIntent } : {}),
         ...(snapshot.scopeKey
           ? {
               accountSettingsBasis: {
@@ -484,6 +495,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         accountSettings: snapshot.settings,
         savedSecretResources: snapshot.savedSecretResources,
         settingsRead,
+        modelNameCatalog,
         ...(accountContext ? { resolveManagedPurposeBindingIntent: accountContext.resolveManagedPurposeBindingIntent } : {}),
       });
       const indexRuntimeState = (runtimeState: ProviderRuntimeStateFileV1) => {
@@ -521,6 +533,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       };
       const initialRuntimeState = await sharedRuntime.runtimeStore.read();
       const initialRuntimeStateForConnection = indexRuntimeState(initialRuntimeState);
+      const placedProjections = new Map<string, Extract<DaemonProviderModelProjectionResponseV1, { status: 'success' }>>();
       // Resolve the immutable Account/registry basis once per source. A slow
       // source spends the existing operation budget, and only that source is
       // refused; successful admissions survive the later observation refresh.
@@ -529,6 +542,24 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         const failure = resolutionFailures.get(connection.id);
         if (failure) return { connection, context: { status: 'error' as const, error: failure } };
         try {
+          if (connection.gatewayPlacement?.kind === 'machine'
+            && connection.gatewayPlacement.machineId !== request.machineId) {
+            const sourceKind = connection.source.kind === 'custom' ? 'custom'
+              : getProviderContribution(registry, connection.source.contributionKey)?.definition.kind;
+            const demand = sourceKind === undefined || hasPickerDemand(connection.id, sourceKind);
+            const placed = await awaitWithinProviderOperation(sharedRuntime.readPlacedModelProjection({
+              ...request, sourceConnectionId: connection.id, mode: 'management',
+              ...(!demand ? { refreshPolicy: 'current_only' as const } : {}),
+            }, operationScope), operationLifetime);
+            if (placed) {
+              if (placed.status === 'error') {
+                resolutionFailures.set(connection.id, placed.error);
+                return { connection, context: { status: 'error' as const, error: placed.error } };
+              }
+              placedProjections.set(connection.id, placed);
+              return { connection, context: null };
+            }
+          }
           const context = await awaitWithinProviderOperation(sharedRuntime.resolvePresentationCatalogContext(
             identity, initialRuntimeStateForConnection(connection.id), operationScope, presentationSettingsBasis,
           ), operationLifetime);
@@ -566,14 +597,15 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       const presentationContexts = await Promise.all([...connectionsById.keys()].map(connectionId => pendingContexts.get(connectionId)!));
       const assemble = (runtimeState: ProviderRuntimeStateFileV1) => {
         const runtimeStateForConnection = indexRuntimeState(runtimeState);
-        const resolvedContexts = presentationContexts.map(({ connection, context }) => {
+        const resolvedContexts = presentationContexts.flatMap(({ connection, context }) => {
+          if (!context) return [];
           const connectionRuntimeState = runtimeStateForConnection(connection.id);
-          return {
+          return [{
             connection,
             connectionRuntimeState,
             context: context.status === 'success'
               ? projectProviderCatalogContextRuntimeState(context, connectionRuntimeState) : context,
-          };
+          }];
         });
         const catalogs: ProviderConnectionCatalog[] = [];
         const modelLoadProjectionByConnectionId = new Map<string, Readonly<{
@@ -614,17 +646,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             if (!targetMatches) continue;
           }
           resolvedConnectionById.set(connection.id, context.connection);
-          const sourceShown = resolveProviderModelPickerVisibility({
-            connectionId: connection.id,
-            kind: context.connection.source.kind === 'custom' ? 'custom' : context.connection.source.definition.kind,
-            modelPickerVisibilityByConnectionId: settingsRead.settings.modelPickerVisibilityByConnectionId,
-          }).shown;
-          const hasExactException = request.currentSelection?.providerConnectionId === connection.id
-            || settingsRead.settings.defaultsByAgentTargetKey[request.agentTargetKey]?.ref.providerConnectionId === connection.id
-            || request.favoriteSelections?.some(ref => ref.providerConnectionId === connection.id);
-          const authorizedForDemand = context.connection.authorization.authorized && (sourceShown
-            || request.mode === 'management' || Boolean(request.sourceConnectionId) || hasExactException === true
-            || routeConsumer);
+          const authorizedForDemand = context.connection.authorization.authorized && hasPickerDemand(connection.id,
+            context.connection.source.kind === 'custom' ? 'custom' : context.connection.source.definition.kind);
           if (authorizedForDemand) {
             pickerDemand.push({
               connectionId: connection.id,
@@ -706,6 +729,20 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             coldDemand.push({ connectionId: connection.id, machineId: request.machineId });
           }
         }
+        for (const placed of placedProjections.values()) {
+          for (const group of placed.groups) {
+            const connection = connectionsById.get(group.connectionId)!;
+            const sourceKind = connection.source.kind === 'custom' ? 'custom'
+              : getProviderContribution(registry, connection.source.contributionKey)!.definition.kind;
+            catalogs.push({ ...group, agentTargetKey: request.agentTargetKey, sourceKind,
+              authorization: group.authorization.authorized ? { authorized: true }
+                : { authorized: false, errorCode: group.authorization.error.code },
+              rows: group.rows.map(row => ({ ...row, presentation: {
+                compatibility: row.compatibility, endpointHealth: null, catalog: row.catalog, loadState: row.loadState,
+              } })), staleRows: [],
+            });
+          }
+        }
         return { catalogs, modelLoadProjectionByConnectionId, confirmedByRef, resolvedConnectionById, pickerDemand, coldDemand };
       };
 
@@ -755,6 +792,10 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         settingsRead.settings.connections.map((connection) => [connection.id, connection] as const),
       );
       const groups = projection.groups.map((group) => {
+          const placed = placedProjections.get(group.connectionId)?.groups.find(candidate => candidate.connectionId === group.connectionId);
+          if (placed) return { ...placed, rows: group.rows.map(row => ({
+            ...placed.rows.find(candidate => candidate.ref.modelId === row.ref.modelId)!, visibility: row.visibility,
+          })) };
           const catalog = catalogByConnectionId.get(group.connectionId);
           if (!catalog) throw new TypeError('Projected Provider catalog is absent');
           const connection = connectionById.get(group.connectionId);
@@ -926,6 +967,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           void sharedRuntime.scheduleDemandRefresh(identity, 'picker_open', operationScope);
         }
       }
+      refreshFailures.push(...[...placedProjections.values()].flatMap(placed => placed.refreshFailures ?? []));
       const hiddenSources = request.application ? [] : projection.hiddenSources.flatMap((source) => {
         const catalog = catalogByConnectionId.get(source.connectionId);
         return catalog ? [{ ...source, connectionRole: catalog.connectionRole,
@@ -1036,7 +1078,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       projectModels: projectionRequest => projectModels({
         ...projectionRequest,
         ...(request.refreshPolicy === 'current_only' ? { refreshPolicy: 'current_only' as const } : {}),
-      }),
+      }, undefined, signal),
       createRequestId: randomUUID,
       ...(signal ? { signal } : {}),
     });
@@ -1053,7 +1095,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     signal?: AbortSignal,
   ): Promise<DaemonProviderTeamCredentialBrokerEligibilityResponseV1> => {
     const projectCurrentModels = (projectionRequest: DaemonProviderModelProjectionRequestV1) => (
-      projectModels({ ...projectionRequest, refreshPolicy: 'current_only' })
+      projectModels({ ...projectionRequest, refreshPolicy: 'current_only' }, undefined, signal)
     );
     const result = 'scope' in request
       ? await resolveTeamCredentialBrokerEligibility({
@@ -1081,7 +1123,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       },
       includeDirectMaterialization: true,
       refreshPolicy: 'current_only',
-    });
+    }, undefined, request.signal);
     request.signal.throwIfAborted();
     if (projection.status !== 'success') return null;
     const registry = await resolveManagementRegistry();

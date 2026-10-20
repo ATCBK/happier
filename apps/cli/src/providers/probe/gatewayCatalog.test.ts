@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS, ProviderConnectionIdSchema, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { DaemonProviderModelsResponseV1Schema, DaemonProviderProbeResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
+import { DaemonProviderModelProjectionRequestV1Schema, DaemonProviderModelProjectionResponseV1Schema, DaemonProviderModelsResponseV1Schema, DaemonProviderProbeResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createProviderProbeRequestFingerprintV1 } from '@happier-dev/protocol/providers/securityFingerprintsV1';
 import * as persistence from '@/persistence';
@@ -12,9 +12,10 @@ import { createMachineSharedProviderGatewayResolver } from '@/daemon/machine/boo
 import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { createRuntimeProviderConnectionServices } from '@/providers/connections/runtimeServices';
+import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 import type { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { createRuntimeProviderServices } from './runtimeServices';
@@ -134,16 +135,39 @@ it('honours a committed peer grant on the next probe and model read through its 
           },
         }),
       });
+      const hubModels = createRuntimeProviderModelManagementServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
+        featureGate: { isEnabled: () => true }, registry: fixture.contributes, getAccountSettingsSnapshot: snapshot,
+        resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
+        acquireRuntimeLease: async () => {
+          const lease = fixture.gateway!.controller.tryAcquireRuntimeRegistry();
+          if (!lease) throw new Error('Expected hub model registry');
+          return lease;
+        },
+        modelSettingsMutation: async (): Promise<never> => { throw new Error('No model-settings mutation'); },
+      });
       transport.call.mockImplementation(async ({ machineId, method, request, signal }) => {
         expect(machineId).toBe(fixture.machineId);
         if (method === RPC_METHODS.DAEMON_PROVIDERS_PROBE) return DaemonProviderProbeResponseV1Schema.parse(await hub.probe(request, 'manual_refresh', { signal }));
         if (method === 'daemon.providers.models') return DaemonProviderModelsResponseV1Schema.parse(await hub.models(request));
+        if (method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) return DaemonProviderModelProjectionResponseV1Schema.parse(await hubModels.projectModels(DaemonProviderModelProjectionRequestV1Schema.parse(request)));
         throw new Error('Unexpected hub RPC');
       });
       const peer = createRuntimeProviderServices({ machineId: peerId, happyHomeDir: homeDir,
         featureGate: { isEnabled: () => true }, registry: fixture.contributes,
         resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
       });
+      const peerModels = createRuntimeProviderModelManagementServices({ machineId: peerId, happyHomeDir: homeDir,
+        featureGate: { isEnabled: () => true }, registry: fixture.contributes,
+        resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
+        acquireRuntimeLease: async () => {
+          const lease = fixture.gateway!.controller.tryAcquireRuntimeRegistry();
+          if (!lease) throw new Error('Expected peer registry');
+          return lease;
+        },
+        modelSettingsMutation: async (): Promise<never> => { throw new Error('No model-settings mutation'); },
+      });
+      const projectPeerModels = () => peerModels.projectModels({ machineId: peerId,
+        agentTargetKey: fixture.agentTargetKey, sourceConnectionId: 'run-gateway', mode: 'management' });
       const request = { connectionId: ProviderConnectionIdSchema.parse('run-gateway'), machineId: peerId };
       expect(await peer.probe(request)).toMatchObject({ status: 'error', error: { code: 'provider_not_enabled_on_machine' } });
       expect(transport.call).not.toHaveBeenCalled();
@@ -198,5 +222,47 @@ it('honours a committed peer grant on the next probe and model read through its 
       expect(transport.call).not.toHaveBeenCalled();
       expect(await setEnabled(true)).toMatchObject({ status: 'success' });
       expect(await peer.probe(request)).toMatchObject({ status: 'success', models: [{ id: 'gateway-model' }] });
+      const projection = await projectPeerModels();
+      expect(projection, JSON.stringify(projection)).toMatchObject({ status: 'success',
+        groups: [{ connectionId: 'run-gateway', authorization: { authorized: true },
+          rows: expect.arrayContaining([expect.objectContaining({ descriptor: expect.objectContaining({ id: 'gateway-model' }) })]) }],
+      });
+      expect(projection.status === 'success' ? projection.refreshFailures ?? [] : []).toEqual([]);
+      expect(await peerModels.projectModels({ machineId: peerId, agentTargetKey: fixture.agentTargetKey }))
+        .toMatchObject({ status: 'success', groups: [], hiddenSources: [{ connectionId: 'run-gateway',
+          modelCount: projection.status === 'success' ? projection.groups[0]!.rows.length : 0 }] });
+      expect(await peerModels.projectModels({ machineId: peerId, agentTargetKey: fixture.agentTargetKey,
+        favoriteSelections: [{ agentTargetKey: fixture.agentTargetKey, providerConnectionId: request.connectionId, modelId: 'gateway-model' }] }))
+        .toMatchObject({ status: 'success', groups: [{ connectionId: 'run-gateway', rows: [{ descriptor: { id: 'gateway-model' } }] }] });
+      transport.call.mockImplementationOnce(async input => {
+        const reply = DaemonProviderModelProjectionResponseV1Schema.parse(await callHub(input));
+        return reply.status === 'success' ? { ...reply, groups: reply.groups.map(group => ({
+          ...group, connectionRevision: group.connectionRevision + 1,
+        })) } : reply;
+      });
+      expect(await projectPeerModels()).toMatchObject({ status: 'success', groups: [],
+        refreshFailures: [{ error: { code: 'provider_authorization_changed' } }] });
+      transport.call.mockImplementationOnce(async input => {
+        const reply = await callHub(input);
+        expect(await setEnabled(false)).toMatchObject({ status: 'success' });
+        return reply;
+      });
+      expect(await projectPeerModels()).toMatchObject({ status: 'success', groups: [],
+        refreshFailures: [{ error: { code: 'provider_authorization_changed' } }] });
+      transport.call.mockClear();
+      expect(await projectPeerModels()).toMatchObject({ status: 'success', groups: [],
+        refreshFailures: [{ error: { code: 'provider_not_enabled_on_machine' } }] });
+      expect(transport.call).not.toHaveBeenCalled();
+      expect(await setEnabled(true)).toMatchObject({ status: 'success' });
+      expect(await projectPeerModels()).toMatchObject({ status: 'success',
+        groups: [{ connectionId: 'run-gateway', authorization: { authorized: true } }] });
+      const ownedSnapshot = getActiveAccountSettingsSnapshot();
+      resetActiveAccountSettingsSnapshotForTests();
+      expect(await peerModels.projectModelsForAccount({ machineId: peerId, agentTargetKey: fixture.agentTargetKey,
+        sourceConnectionId: 'run-gateway', mode: 'management' }, {
+        getAccountSettingsSnapshot: () => ownedSnapshot,
+        resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
+        signal: new AbortController().signal, isCurrent: () => true,
+      })).toMatchObject({ status: 'success', groups: [{ connectionId: 'run-gateway', authorization: { authorized: true } }] });
     } finally { await fixture.cleanup(); }
   }));
