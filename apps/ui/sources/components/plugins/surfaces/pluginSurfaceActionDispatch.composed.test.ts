@@ -613,6 +613,37 @@ describe('Account Action placement through the executable dispatcher', () => {
         } finally { await activation.composition.unload(); accountLifetime.retire(); }
     });
 
+    it('retains the UI origin at the strict Machine boundary of a nested Account Action', async () => {
+        const accountLifetime = clientAccountLifetime();
+        const sourceId = 'acme.provider-source';
+        const provider = PluginProjectedActionV2Schema.parse({ ...resolveDaemonTargetAction({ pluginId: sourceId, localId: 'list' }), surfaces: ['plugin'] });
+        const requests: ReturnType<typeof DaemonPluginStructuredMessageActionExecuteRequestSchema.parse>[] = [];
+        const machine: PluginSurfaceContributedActionTransport = async (machineId, request) => {
+            requests.push(DaemonPluginStructuredMessageActionExecuteRequestSchema.parse({
+                machineId, qualifiedActionId: request.qualifiedActionId,
+                expectedContributorOccurrenceId: request.expectedContributorOccurrenceId,
+                executionSurface: request.executionSurface, invocation: request.invocation,
+                input: request.input,
+            }));
+            return { supported: true, result: { ok: true, result: { rows: ['provider'] } } };
+        };
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountHandler: async (_value, context) => context.services.actions.execute({ pluginId: sourceId, localId: 'list' }, {}) });
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            expect(await dispatchPluginSurfaceAction({
+                action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {},
+                invocationSurface: 'ui', clientAction: {},
+                contributedAction: { machineId: 'provider-machine', serverId: 'server-client-action', execute: machine },
+                pluginUiProjection: activation.projection,
+                resolveContributedAction: identity => identity.pluginId === sourceId ? provider : resolveExactClientAction(activation.action)(identity),
+            })).toEqual({ ok: true, result: { rows: ['provider'] } });
+            expect(requests).toHaveLength(1);
+            expect(requests[0]).toMatchObject({ executionSurface: 'ui', invocation: { kind: 'clientPluginAction' } });
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
     it('uses the selected Machine only for a nested provider Action from the Account semantic entry', async () => {
         const accountLifetime = clientAccountLifetime();
         const sourceId = 'acme.provider-source';
@@ -1112,8 +1143,12 @@ describe('plugin-surface action branch selection', () => {
             requests.push(request.payload); request.onIssued?.();
             throw new Error('acknowledgement lost after the nested mutation was emitted');
         });
+        const authorErrors: unknown[] = [];
         const activation = createClientActionActivation({
-            surfaces: ['agent'], handler: async (_input, context) => await context.ui.executeAction(nestedIdentity, {}),
+            surfaces: ['agent'], handler: async (_input, context) => {
+                try { return await context.ui.executeAction(nestedIdentity, {}); }
+                catch (error) { authorErrors.push(error); throw error; }
+            },
         });
         await activation.composition.unload();
         try {
@@ -1126,7 +1161,8 @@ describe('plugin-surface action branch selection', () => {
             await shown;
             expect(requests).toEqual([]);
             confirm();
-            expect(await pending).toMatchObject({ ok: false, reason: 'plugin_ui_action_outcome_unknown' });
+            expect(await pending).toMatchObject({ ok: false, code: 'timeout', reason: 'plugin_ui_action_outcome_unknown' });
+            expect(authorErrors).toEqual([expect.objectContaining({ code: 'plugin_action_outcome_unknown' })]);
             expect(requests).toEqual([expect.objectContaining({ executionSurface: 'agent', presentUserIntent: 'confirmed', invocation: expect.objectContaining({ kind: 'clientPluginAction' }) })]);
             expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse(requests[0]).success).toBe(true);
         } finally { nestedActionConfirmation.onShow = null; await activation.composition.unload(); }

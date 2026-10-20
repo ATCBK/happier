@@ -186,8 +186,10 @@ describe('plugin UI projection admission custody', () => {
         const uncompressed = loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
         const key = `plugin-ui-projection-warm-cache-v1:${ACCOUNT_A.serverId}:${ACCOUNT_A.accountId}`;
         const serialized = store.get(key)!;
+        const translations = projection.familiesById.pluginUi?.entriesById['translations:acme.browser'];
+        if (translations?.contributionKind !== 'translations') throw new Error('Expected translation projection');
         // Saving one complete duplicate bundle's bytes is material to browser storage, not formatting.
-        expect(serialized.length).toBeLessThan(JSON.stringify(uncompressed).length - JSON.stringify(projection.familiesById.pluginUi?.entriesById['translations:acme.browser'].bundles).length);
+        expect(serialized.length).toBeLessThan(JSON.stringify(uncompressed).length - JSON.stringify(translations.bundles).length);
         vi.resetModules();
         const fresh = await import('./projectionWarmCache');
         await (await import('@/sync/domains/state/warmCacheEncryptionKey')).prepareWarmCacheEncryptionKey();

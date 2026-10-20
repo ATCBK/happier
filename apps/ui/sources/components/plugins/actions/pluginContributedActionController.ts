@@ -1237,7 +1237,6 @@ export function createPluginContributedActionController(params: Readonly<{
         const admitted = protocol.contributions.some((contribution) => (
             contribution.contributor.pluginId === operation.contributor.pluginId
             && contribution.contributor.contributionId === operation.contributor.contributionId
-            && contribution.contributor.occurrenceId === operation.contributor.occurrenceId
             && contribution.operations.some((candidate) => (
                 sameTargetedContributionOperation(candidate, operation)
             ))

@@ -302,6 +302,8 @@ export type DispatchPluginSurfaceActionInput = Readonly<{
     pluginUiProjection?: PluginUiProjectionModel | null;
     /** UI is the default; Voice supplies its own canonical invoking surface. */
     invocationSurface?: PluginSurfaceActionInvocationSurface;
+    /** Host-private root origin, retained across autonomous plugin continuations. */
+    originSurface?: Exclude<PluginSurfaceActionInvocationSurface, 'plugin'>;
     /**
      * The current raw V2 Action projection. Target selection belongs to this
      * producer-owned descriptor, never to a daemon binding or caller-local
@@ -337,11 +339,17 @@ type PluginSurfaceActionDispatchFailure = Extract<
 /** Keep the public failure envelope when an Action is called by plugin code. */
 function pluginActionDispatchFailureError(outcome: PluginSurfaceActionDispatchFailure): PluginError {
     return new PluginError({
-        code: outcome.reason,
+        code: outcome.reason === 'plugin_ui_action_outcome_unknown'
+            ? PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE : outcome.reason,
         ...(outcome.message === undefined ? {} : { message: outcome.message }),
         ...(outcome.retryable === undefined ? {} : { retryable: outcome.retryable }),
         ...(outcome.remediation === undefined ? {} : { remediation: outcome.remediation }),
     });
+}
+
+function readActionOriginSurface(input: DispatchPluginSurfaceActionInput) {
+    const surface = input.invocationSurface ?? 'ui';
+    return input.originSurface ?? (surface === 'plugin' ? null : surface);
 }
 
 function failure(
@@ -643,6 +651,7 @@ function clientActionExecuteAction(
                     ? {}
                     : { resolveContributedAction: input.resolveContributedAction }),
                 invocationSurface: input.invocationSurface ?? 'ui',
+                ...(input.originSurface ? { originSurface: input.originSurface } : {}),
                 invocation: clientActionInvocation(selection),
                 signal: cancellation.signal,
                 isCurrent: selection.isCurrent,
@@ -1015,6 +1024,8 @@ async function executeClientContributedAction(
     const initial = resolveClientContributedActionSelection(input, identity, projectedAction);
     if (!initial) return failure('unavailable', 'plugin_surface_client_action_unavailable');
     const invocationSurface = input.invocationSurface ?? 'ui';
+    const originSurface = readActionOriginSurface(input);
+    if (!originSurface) return failure('unavailable', 'plugin_action_origin_unavailable');
     // Built only if the gate actually asks the person.
     const requestCurrentIntent: PluginSurfaceActionCurrentIntentPresenter = (request) => (
         resolveCurrentIntentPresenter(input, projectedAction, invocationSurface)(request)
@@ -1189,7 +1200,7 @@ async function executeClientContributedAction(
                             ...(input.contributedAction ? { contributedAction: input.contributedAction } : {}),
                             clientAction: current.binding, pluginUiProjection: input.pluginUiProjection,
                             resolveContributedAction: input.resolveContributedAction,
-                            invocationSurface: 'plugin', invocation: clientActionInvocation(current),
+                            invocationSurface: 'plugin', originSurface, invocation: clientActionInvocation(current),
                             signal: options.signal,
                             ...(options.expectedContributorOccurrenceId === undefined ? {} : {
                                 expectedContributorOccurrenceId: options.expectedContributorOccurrenceId,
@@ -1279,7 +1290,7 @@ async function executeClientContributedAction(
                 serverId: authority.serverId,
                 expectedContributorOccurrenceId: current.action.occurrenceId,
                 qualifiedActionId: buildQualifiedPluginContributionKey(identity),
-                executionSurface: invocationSurface,
+                executionSurface: originSurface,
                 invocation: messageInvocation,
                 ...(current.binding.sessionId ? { sessionId: current.binding.sessionId } : {}),
                 messageActionReference: reference,
@@ -1312,7 +1323,7 @@ async function executeClientContributedAction(
         return actionOutcomeUnknownFailure(code) ?? clientActionFailure(code);
     }
     const authorPayload = readPluginActionFailureAuthorPayload(result.data);
-    return clientActionFailure(result.code, {
+    return actionOutcomeUnknownFailure(result.code) ?? clientActionFailure(result.code, {
         message: result.message,
         ...(result.retryable === undefined ? {} : { retryable: result.retryable }),
         ...(authorPayload.remediation === undefined
@@ -1629,6 +1640,8 @@ async function executeContributedAction(
         return failure('stale_surface', 'plugin_ui_generation_retired');
     }
 
+    const originSurface = readActionOriginSurface(input);
+    if (!originSurface) return failure('unavailable', 'plugin_action_origin_unavailable');
     const execute = binding.execute ?? machinePluginStructuredMessageActionExecute;
     // The admitted projection owns whether this invocation can produce a daemon
     // operation at all; a declaration-free Action still carries no request id.
@@ -1659,7 +1672,7 @@ async function executeContributedAction(
                 input: actionInput as PluginJsonValueV2,
             }),
         // UI-D26: the dispatcher owns this stamp; no caller can omit it.
-        executionSurface: input.invocationSurface ?? 'ui',
+        executionSurface: originSurface,
         // A mounted host supplies the exact producer binding at this one
         // canonical projection point. Host-presented Composer/Message controls
         // instead forward their typed current intent; neither can impersonate

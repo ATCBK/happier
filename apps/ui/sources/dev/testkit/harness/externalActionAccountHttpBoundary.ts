@@ -31,6 +31,8 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
         execute(input: unknown, context: Readonly<{
             target: NonNullable<ExternalActionRequestEnvelopeV1['target']>;
             invocation: ExternalActionRequesterInvocationV1;
+            requestId?: string;
+            signal?: AbortSignal | null;
         }>): Promise<unknown> | unknown;
     }
     | {
@@ -38,6 +40,8 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
         requesterInvocation: 'none';
         execute(input: unknown, context: Readonly<{
             target: NonNullable<ExternalActionRequestEnvelopeV1['target']>;
+            requestId?: string;
+            signal?: AbortSignal | null;
         }>): Promise<unknown> | unknown;
     }
 )>) {
@@ -48,6 +52,7 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
         installationPublicKey: encodeBase64(installation.publicKey, 'base64'),
     };
     return {
+        machine,
         async handle(url: URL, init?: RequestInit): Promise<Response | null> {
             if (url.origin !== new URL(params.serverUrl).origin) return null;
             if (url.pathname === '/v1/machines') return Response.json([machine]);
@@ -79,14 +84,15 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
             let result: unknown;
             if (params.requesterInvocation === 'none') {
                 if (request?.executionAuthorization?.requesterAccountContext) throw new Error('Unexpected private requester Account carrier');
-                result = await params.execute(envelope.input, { target });
+                result = await params.execute(envelope.input, { target, requestId: envelope.requestId, signal: init?.signal });
             } else {
                 if (!request) throw new Error('Expected an authorized private requester Account carrier');
                 const opened = openExternalActionRequesterAccountContextV1({ authorization: request.executionAuthorization,
                     purpose: { kind: 'external_action' }, machineId: machine.id, installationId: machine.installationId!,
                     serverIdentityId: params.serverIdentityId, installationPrivateKey: installation.privateKey, includeInvocation: true });
                 if (!opened?.invocation) throw new Error('Invalid private requester Account carrier');
-                result = await params.execute(envelope.input, { target, invocation: opened.invocation });
+                result = await params.execute(envelope.input, { target, invocation: opened.invocation,
+                    requestId: envelope.requestId, signal: init?.signal });
             }
             const failure = params.failure?.(result);
             return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({

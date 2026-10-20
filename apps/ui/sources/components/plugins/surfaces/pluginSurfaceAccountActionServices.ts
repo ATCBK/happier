@@ -53,6 +53,7 @@ export function createPluginSurfaceAccountActionServices(input: Readonly<{
                 accountLifetime: input.accountLifetime, signal,
             });
             assertCurrent();
+            signal.throwIfAborted();
             machineDeclarations = result.supported ? result.sourceDeclarations : [];
         }
         return declarations();

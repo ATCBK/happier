@@ -1197,6 +1197,29 @@ describe('Plugin Account Availability reader', () => {
             .toEqual({ kind: 'rejected', reason: 'non_portable' });
     });
 
+    it('keeps a source-runtime bundled Channels census descriptive until its daemon source is admitted', () => {
+        const materialization = PluginMachineMaterializationV1Schema.parse({
+            ...machineBoundMaterialization(),
+            pluginId: 'happier.channels',
+            materializationId: 'daemon-selected:happier.channels',
+            sourceClass: 'bundledFirstParty',
+        });
+        const reader = createPluginAccountAvailabilityReader({ scope, snapshot: snapshot({
+            materializations: [materialization],
+            snapshots: [{ serverIdentityId: materialization.serverIdentityId,
+                machineId: materialization.machineId, materializations: [materialization] }],
+        }) });
+
+        expect(reader.readMaterializations()).toMatchObject({ kind: 'available', materializations: [materialization] });
+        expect(reader.classifyRelease(materialization)).toEqual({
+            serverIdentityId: materialization.serverIdentityId,
+            materializationRef: { machineId: materialization.machineId,
+                materializationId: materialization.materializationId, pluginId: materialization.pluginId },
+            releaseContent: 'unknown',
+            validation: { kind: 'rejected', reason: 'non_portable' },
+        });
+    });
+
     it('fails closed after the store moves to a different Account scope', () => {
         const store = createPluginAccountAvailabilityReaderStore();
         store.replace({ scope, snapshot: snapshot() });

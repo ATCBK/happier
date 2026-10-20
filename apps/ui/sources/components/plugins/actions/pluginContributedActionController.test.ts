@@ -709,6 +709,32 @@ describe('plugin contributed Action controller', () => {
         })).toBeNull();
     });
 
+    it('selects the exact Machine operation when its descriptor parent belongs to an Account occurrence', async () => {
+        const operation = targetedOperation({ localId: 'setup', occurrenceId: 'machine-source-current' });
+        const selected = action({ id: 'setup', occurrenceId: operation.contributor.occurrenceId,
+            surfaces: ['plugin'], scopes: ['settings'], placementBindings: [] });
+        const projected = targetedContributions(operation);
+        const current = { ...projected, points: projected.points.map(point => ({ ...point,
+            protocols: point.protocols.map(protocol => ({ ...protocol,
+                contributions: protocol.contributions.map(contribution => ({ ...contribution, contributor: {
+                    ...contribution.contributor, occurrenceId: 'account-source-current', sourceCustody: {
+                        kind: 'account_release' as const, pluginId: operation.contributor.pluginId,
+                        version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                    },
+                } })),
+            })),
+        })) };
+        const controller = createPluginContributedActionController({ resolveCurrent: () => snapshot([selected], { targeted: current }) });
+        await expect(controller.selectActionInput(selectionRequest(operation))).resolves.toMatchObject({
+            kind: 'direct', result: { action: operation.action, selection: { contributor: {
+                pluginId: operation.contributor.pluginId, sourceCustody: operation.contributor.sourceCustody,
+            } } },
+        });
+        await expect(controller.selectActionInput(selectionRequest({ ...operation, contributor: {
+            ...operation.contributor, occurrenceId: 'replacement-operation',
+        } }))).resolves.toEqual({ kind: 'unavailable', reason: 'action_not_found' });
+    });
+
     it('uses exact mounted target membership instead of globally scanning matching local Action ids', async () => {
         const operation = targetedOperation({
             pluginId: 'acme.selected',

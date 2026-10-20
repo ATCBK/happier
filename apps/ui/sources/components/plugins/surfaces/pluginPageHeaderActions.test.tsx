@@ -23,6 +23,10 @@ const { PluginSurfaceInteractionBoundary } =
   await import('@/components/plugins/shared/PluginSurfaceInteractionBoundary');
 const { renderPluginNavigationActions, PluginArtifactHostingStatusProvider } =
   await import('./pluginPageHeaderActions');
+const { PaneMainColumnContext } =
+  await import('@/components/appShell/panes/mainColumn/usePaneMainColumn');
+const { PaneRegionProvider } =
+  await import('@/components/appShell/panes/paneRegion');
 
 function isInside(node: ReactTestInstance, testID: string): boolean {
   for (let parent = node.parent; parent; parent = parent.parent) {
@@ -139,6 +143,49 @@ describe('plugin page header actions', () => {
 
     const idle = await renderScreen(hostedPage(null, true));
     expect(idle.root.findAllByType(SurfaceFreshnessLine)).toHaveLength(0);
+  });
+
+  /**
+   * D14: a plugin page that is a pane host's main column offers Hide in its own header row, wired to
+   * the host's main column, exactly like a core page header; anywhere else (a side pane, no pane
+   * host) it draws nothing.
+   */
+  function mainColumnPage(region: 'main' | 'side' | null, setHidden: (hidden: boolean) => void) {
+    const main = {
+      hidden: false, canHide: true, folded: false,
+      labels: { hideLabel: 'Hide Acme', showLabel: 'Show Acme' }, identity: { name: 'Acme' },
+      setHidden, toggle: () => setHidden(true),
+    };
+    const actions = renderPluginNavigationActions(null);
+    return (
+      <DestinationInstanceHost
+        tabId="prs"
+        ref={{ kind: 'settings', params: {} }}
+        pathname="/plugins/acme/page"
+        focused
+        visible
+        phone={false}
+        navigation={{ push: () => {}, replace: () => {}, back: () => {} }}
+      >
+        <PaneMainColumnContext.Provider value={region === null ? null : main}>
+          <PluginSurfaceInteractionBoundary surfaceId="acme-page" snapshotTitle="Acme" enabled>
+            {region === null ? actions : <PaneRegionProvider region={region}>{actions}</PaneRegionProvider>}
+          </PluginSurfaceInteractionBoundary>
+        </PaneMainColumnContext.Provider>
+      </DestinationInstanceHost>
+    );
+  }
+
+  it('offers Hide for a plugin page in the main column and hides that column', async () => {
+    const hidden: boolean[] = [];
+    const screen = await renderScreen(mainColumnPage('main', (value) => hidden.push(value)));
+    await screen.pressByTestIdAsync('pane-main-hide');
+    expect(hidden).toEqual([true]);
+
+    const side = await renderScreen(mainColumnPage('side', () => {}));
+    expect(side.findByTestId('pane-main-hide')).toBeNull();
+    const isolated = await renderScreen(mainColumnPage(null, () => {}));
+    expect(isolated.findByTestId('pane-main-hide')).toBeNull();
   });
 });
 

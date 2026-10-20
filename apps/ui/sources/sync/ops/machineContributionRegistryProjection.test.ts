@@ -1029,6 +1029,18 @@ describe('machine contribution registry projection ops', () => {
         expect(network.requests.map(request => request.method)).toContain(RPC_METHODS.DAEMON_PLUGIN_SETTINGS_SET);
     });
 
+    it('refuses a local plugin invocation surface before issuing a daemon Action RPC', async () => {
+        const { machinePluginStructuredMessageActionExecute } = await import('./machineContributionRegistryProjection');
+
+        await expect(machinePluginStructuredMessageActionExecute('machine-1', {
+            serverId: 'server-a',
+            expectedContributorOccurrenceId: 'acme.preview-occurrence-7',
+            qualifiedActionId: 'acme.preview/open-preview',
+            executionSurface: 'plugin',
+        })).resolves.toEqual({ supported: false, reason: 'error' });
+        expect(network.requests).toEqual([]);
+    });
+
     it('routes structured-message actions through the exact contributor occurrence fence', async () => {
         machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, result: { opened: true } });
         const { machinePluginStructuredMessageActionExecute } = await import('./machineContributionRegistryProjection');

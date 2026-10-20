@@ -6,6 +6,7 @@ import { NavigationHeaderActions } from '@/components/ui/layout/NavigationHeader
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { usePluginSurfaceInteractionAvailable } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
 import type { PluginAccountHostedArtifactPublicationResult } from '@/sync/domains/plugins/availability/accountHostedArtifactPublication';
+import { PaneMainHideButton } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
 import { t } from '@/text';
 import { splitHappierPagePrimaryOperation } from '@happier-dev/plugin-ui/presentation';
 
@@ -133,6 +134,8 @@ function PluginPageHeaderActions(
       {hosting ? <PluginArtifactHostingChip status={hosting} /> : null}
       {routeActions}
       {props.actions}
+      {/* A plugin page that is a pane host's main column offers Hide like every page header there (D14); it draws nothing elsewhere. */}
+      <PaneMainHideButton />
     </>
   );
 }

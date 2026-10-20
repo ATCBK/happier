@@ -305,10 +305,13 @@ function createAccountAvailabilityReader(input: Pick<
     PluginAccountAvailabilityReader,
     'readMaterializations' | 'readCurrentSettingsDeclaration'
 >): PluginAccountAvailabilityReader {
+    const unavailable = createPluginAccountAvailabilityReaderStore().bind(ACCOUNT_SCOPE);
     return {
         ...input,
-        readAccountUiProjection: createPluginAccountAvailabilityReaderStore().bind(ACCOUNT_SCOPE).readAccountUiProjection,
-        readInstalledPlugins: createPluginAccountAvailabilityReaderStore().bind(ACCOUNT_SCOPE).readInstalledPlugins,
+        readAccountUiProjection: unavailable.readAccountUiProjection,
+        readCurrentAccountExecution: unavailable.readCurrentAccountExecution,
+        readCurrentAccountExecutionDeclarations: unavailable.readCurrentAccountExecutionDeclarations,
+        readInstalledPlugins: unavailable.readInstalledPlugins,
         readCurrentArtifact: () => ({
             kind: 'unavailable',
             code: 'account_availability_not_loaded',
