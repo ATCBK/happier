@@ -111,7 +111,6 @@ export function installNavigationShellCommonModuleMocks(
             dispatch: vi.fn(),
             state: {
                 activeScopeId: null,
-                focusMode: { scopeId: null },
                 scopes: {},
             },
             getDriver: () => null,

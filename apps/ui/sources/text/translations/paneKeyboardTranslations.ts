@@ -1,5 +1,20 @@
 import type { SupportedLanguage } from '../_all';
 
+export const paneRegionLabels = {
+  en: { rail: 'App navigation', navigation: 'Navigation column', right: 'Side panel', details: 'Editor and details', main: 'Main column', bottom: 'Bottom panel' },
+  fr: { rail: 'Navigation de l’application', navigation: 'Colonne de navigation', right: 'Panneau latéral', details: 'Éditeur et détails', main: 'Colonne principale', bottom: 'Panneau inférieur' },
+  de: { rail: 'App-Navigation', navigation: 'Navigationsspalte', right: 'Seitenbereich', details: 'Editor und Details', main: 'Hauptspalte', bottom: 'Unterer Bereich' },
+  es: { rail: 'Navegación de la aplicación', navigation: 'Columna de navegación', right: 'Panel lateral', details: 'Editor y detalles', main: 'Columna principal', bottom: 'Panel inferior' },
+  it: { rail: 'Navigazione dell’app', navigation: 'Colonna di navigazione', right: 'Pannello laterale', details: 'Editor e dettagli', main: 'Colonna principale', bottom: 'Pannello inferiore' },
+  pt: { rail: 'Navegação do aplicativo', navigation: 'Coluna de navegação', right: 'Painel lateral', details: 'Editor e detalhes', main: 'Coluna principal', bottom: 'Painel inferior' },
+  ca: { rail: 'Navegació de l’aplicació', navigation: 'Columna de navegació', right: 'Tauler lateral', details: 'Editor i detalls', main: 'Columna principal', bottom: 'Tauler inferior' },
+  pl: { rail: 'Nawigacja aplikacji', navigation: 'Kolumna nawigacji', right: 'Panel boczny', details: 'Edytor i szczegóły', main: 'Główna kolumna', bottom: 'Dolny panel' },
+  ru: { rail: 'Навигация приложения', navigation: 'Колонка навигации', right: 'Боковая панель', details: 'Редактор и подробности', main: 'Основная колонка', bottom: 'Нижняя панель' },
+  ja: { rail: 'アプリのナビゲーション', navigation: 'ナビゲーション列', right: 'サイドパネル', details: 'エディターと詳細', main: 'メイン列', bottom: '下部パネル' },
+  'zh-Hans': { rail: '应用导航', navigation: '导航列', right: '侧面板', details: '编辑器与详情', main: '主列', bottom: '底部面板' },
+  'zh-Hant': { rail: '應用程式導覽', navigation: '導覽欄', right: '側面板', details: '編輯器與詳細資訊', main: '主欄', bottom: '底部面板' },
+} as const satisfies Record<SupportedLanguage, Readonly<Record<'rail' | 'navigation' | 'right' | 'details' | 'main' | 'bottom', string>>>;
+
 type PaneKeyboardCopy = Readonly<{
   commands: Readonly<{ shellColumnToggle: string; panesMainToggle: string; panesSideToggle: string; panesArrangementToggle: string; panesRegionNext: string; panesRegionPrevious: string }>;
   groups: Readonly<{ panes: string; terminal: string; search: string; review: string; files: string; code: string }>;

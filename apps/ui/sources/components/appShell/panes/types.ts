@@ -62,6 +62,8 @@ export type PaneBuiltinAdapter = Readonly<{
  * selected-destination resolver has already proved belongs to `rightSidebarTab`.
  */
 export type PaneRightSidebarAdapter = Readonly<{
+    /** The catalog owner may retain its selected pane while offering no tab to open. */
+    available?: boolean;
     renderActionRail?: (context: Readonly<{ scopeId: PaneScopeId }>) => React.ReactNode;
     render: (context: Readonly<{ scopeId: PaneScopeId }>) => React.ReactNode;
 }>;

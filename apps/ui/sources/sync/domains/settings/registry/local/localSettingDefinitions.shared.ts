@@ -1,35 +1,21 @@
 import { z } from 'zod/mini';
 import { SelectedPaneDestinationV1Schema } from '@/components/appShell/panes/model/selectedPaneDestination';
 
-export function bucketNormalizedPaneSize(
-    value: number,
-    basisValue: unknown,
-    smallMaxFraction: number,
-    mediumMaxFraction: number,
-): 'small' | 'medium' | 'large' {
-    const basisPx =
-        typeof basisValue === 'number' && Number.isFinite(basisValue) && basisValue > 0
-            ? basisValue
-            : 1;
-    const normalizedFraction = value / basisPx;
-    if (normalizedFraction <= smallMaxFraction) return 'small';
-    if (normalizedFraction <= mediumMaxFraction) return 'medium';
-    return 'large';
-}
-
 export function objectKeyCount(value: unknown): number {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
     return Object.keys(value as Record<string, unknown>).length;
 }
 
-export function serializeNormalizedPaneSizeWithBasisKey(
-    basisKey: string,
-    fallbackBasis: number,
-    smallMaxFraction: number,
-    mediumMaxFraction: number,
+/** Preserve the former default-container bucket cut points as literal pixels. */
+export function serializePaneSizePxBucket(
+    smallMaxPx: number,
+    mediumMaxPx: number,
 ) {
-    return (value: number, record?: Readonly<Record<string, unknown>>) =>
-        bucketNormalizedPaneSize(value, record?.[basisKey] ?? fallbackBasis, smallMaxFraction, mediumMaxFraction);
+    return (value: number): 'small' | 'medium' | 'large' => {
+        if (value <= smallMaxPx) return 'small';
+        if (value <= mediumMaxPx) return 'medium';
+        return 'large';
+    };
 }
 
 export function serializeDesktopOverlayAutoHideDelayBucket(value: number): '3s' | '6s' | '10s' | '30s' {

@@ -15,6 +15,7 @@ import {
 
 export const SPLIT_CANVAS_RATIO_MIN = 0.2;
 export const SPLIT_CANVAS_RATIO_MAX = 0.8;
+export const SPLIT_CANVAS_DEFAULT_RATIO = 0.5;
 
 function measuredRatioBounds(input: Readonly<{
     availableSizePx?: number;
@@ -96,14 +97,14 @@ function reduceSplitCanvasAction<TLeafPayload>(
             if (!findSplitCanvasLeaf(state.root, action.targetLeafId)) return state;
             if (action.availableSizePx !== undefined || action.minimumFirstSizePx !== undefined || action.minimumSecondSizePx !== undefined) {
                 const bounds = measuredRatioBounds(action);
-                if (!bounds || bounds.minRatio > 0.5 || bounds.maxRatio < 0.5) return state;
+                if (!bounds || bounds.minRatio > SPLIT_CANVAS_DEFAULT_RATIO || bounds.maxRatio < SPLIT_CANVAS_DEFAULT_RATIO) return state;
             }
             const nextRoot = splitSplitCanvasLeaf(state.root, {
                 targetLeafId: action.targetLeafId,
                 axis: action.axis,
                 placement: action.placement,
                 newLeaf: action.newLeaf,
-                ratio: 0.5,
+                ratio: SPLIT_CANVAS_DEFAULT_RATIO,
             });
             return {
                 ...state,
@@ -132,7 +133,7 @@ function reduceSplitCanvasAction<TLeafPayload>(
                 axis: 'row',
                 placement: action.placement,
                 newLeaf: removed.removedLeaf,
-                ratio: 0.5,
+                ratio: SPLIT_CANVAS_DEFAULT_RATIO,
             });
             return {
                 ...state,
