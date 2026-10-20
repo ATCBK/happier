@@ -35,6 +35,17 @@ async function withSource(run: (kit: Awaited<ReturnType<typeof createPluginTestk
 }
 
 describe('registered internal Happier task source', () => {
+  it('projects personal due/completion facts and the declared one-step completion through registered scan admission', async () => {
+    await withSource(async kit => {
+      const scan = TriageScanResultV1Schema.parse(await kit.invokeAction('internal/tasks/scan-v1', {
+        v: 1, instance, page: { kind: 'initial', limit: 20 },
+      }));
+      expect(scan).toMatchObject({ kind: 'complete', observations: [{ snapshot: { dueDate: new Date(30).toISOString(), completedAtMs: 25 } }] });
+      const declaration = PLUGIN_MANIFEST.contributes?.targetedPluginContributions?.find(entry => entry.id === 'internal');
+      expect(declaration?.descriptor).toMatchObject({ kinds: [{ taskCapabilities: { completingTransitionId: 'completed' } }] });
+    }, { status: 'ok', scope, todos: [{ ...predecessor, done: true, state: 'completed', dueAt: 30, completedAt: 25 }],
+      undoneOrder: [], completedOrder: [predecessor.id] });
+  });
   it('returns complete editable values only on an exact read of the existing task', async () => {
     const title = '界'.repeat(1000);
     const notes = 'Task notes\n\nPreserve whitespace.  \n';

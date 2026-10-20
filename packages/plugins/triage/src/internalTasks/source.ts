@@ -41,6 +41,10 @@ export function isInternalTaskConfiguredInstanceV1(instance: TriageConfiguredSou
 }
 function admitsRef(ref: TriageSourceEntryLocalRefV1): boolean { return ref.kindId === 'task' && ref.collisionScope === 'personal'; }
 
+function taskDueDate(task: Task): string | null {
+  return task.dueAt === undefined ? null : new Date(task.dueAt).toISOString();
+}
+
 async function readTasks(context: PluginInvocationContext): Promise<TaskList | null> {
   try {
     const result = await context.services.actions.execute('tasks.internal.list', {}, { signal: context.signal });
@@ -51,10 +55,13 @@ async function readTasks(context: PluginInvocationContext): Promise<TaskList | n
 function observation(task: Task, list: TaskList): Extract<TriageGetResultV1, { kind: 'present' }> {
   const title = projectTriageDisplayTextV1(task.title);
   const children = list.todos.filter(candidate => candidate.parentId === task.id);
+  const dueDate = taskDueDate(task);
   return {
     kind: 'present', localRef: internalTaskLocalRefV1(task.id), locator: { v: 1, displayPath: title.value || task.id, routingToken: task.id },
     snapshot: { v: 1, title: title.value || task.id, scopeLabel: 'Personal', scopeDisplayName: 'Happier',
       state: internalTaskStateV1(task.state), createdAtMs: task.createdAt, facts: [],
+      ...(dueDate === null ? {} : { dueDate }),
+      ...(task.state === 'completed' && task.completedAt !== undefined ? { completedAtMs: task.completedAt } : {}),
       relations: { ...(task.parentId === undefined ? {} : { parent: taskRef(task.parentId) }), blockedBy: (task.blockedBy ?? []).map(taskRef),
         children: { total: children.length, completed: children.filter(child => child.done).length, entries: children.map(child => taskRef(child.id)), complete: true } },
       ...(title.truncated ? { projectionTruncated: true } : {}),
@@ -99,7 +106,7 @@ export async function getInternalTask(input: TriageGetInputV1, context: PluginIn
   if (!task) return { kind: 'absent', localRef: input.localRef };
   return { ...observation(task, list), taskFields: {
     title: task.title, body: task.notes ?? '', assigneeIds: task.owner === undefined ? [] : [task.owner],
-    labelIds: [...(task.labels ?? [])], dueDate: task.dueAt === undefined ? null : new Date(task.dueAt).toISOString(),
+    labelIds: [...(task.labels ?? [])], dueDate: taskDueDate(task),
     parent: task.parentId === undefined ? null : taskRef(task.parentId), blockedBy: (task.blockedBy ?? []).map(taskRef),
   } };
 }

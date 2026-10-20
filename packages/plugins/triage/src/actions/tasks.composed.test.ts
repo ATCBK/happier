@@ -239,7 +239,8 @@ describe('Tasks through a separately authored source and registered aggregate Ac
             const read = TriageListEntriesResultV1Schema.parse(await aggregate.invokeAction('tasks/list-v1', {
                 v: 1, sources: { kind: 'allConfigured' }, limit: 10, order: 'newest',
             }, { surface: 'agent' }));
-            expect(read.window.rows[0]?.content?.outcome.snapshot).toMatchObject({ dueDate: '2026-10-25', completedAtMs: 100 });
+            expect(read.window.rows[0]?.observation.outcome).toMatchObject({ kind: 'present',
+                snapshot: { dueDate: '2026-10-25', completedAtMs: 100 } });
             expect(writes.map(write => write.role)).toEqual(['transition']);
         }, { initialTaskPage: true });
     });
