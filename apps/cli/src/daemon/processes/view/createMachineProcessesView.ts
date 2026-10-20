@@ -7,10 +7,11 @@ import type { MachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSa
 import type { LocalServiceInventoryRoutes } from '@/daemon/local/services/inventory/routes';
 import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
 import type { ProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';
+import type { ProcessStartIdentity } from '@/processes/census/processCensus';
 import { readProcessOwnershipBootTimeMs } from '../roots/listHappierProcessRoots';
 import type { createProcessOwnershipRuntime } from '../ownership/processOwnershipRuntime';
 import type { createLeftBehindPass } from '../leftBehind/leftBehindPass';
-import { processOwnerKey, type HappierProcessRoot, type ProcessOwnerRef } from '../ownership/types';
+import { equalProcessStart, processOwnerKey, type HappierProcessRoot, type ProcessOwnerRef } from '../ownership/types';
 import { createProcessMetrics } from './processMetrics';
 import { decodeProcessRef, processRef } from './processRef';
 import { projectMachineProcesses, type ProcessRequester, type ProcessRequesterIdentity, type ProcessesProjectionInput, type ProcessesProjectionOptions, type ProcessOwnershipRead } from './projectMachineProcesses';
@@ -82,7 +83,9 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
         facts: Readonly<{ ports?: NormalizedLocalServiceInventorySnapshot; identities?: typeof requesterIdentities }> = {}) =>
         projectMachineProcesses(read, request, requester, { ...options, allProcessesVisible: options.allProcessesVisible(),
             confirmed: options.leftBehind.confirmed(), ports: facts.ports ?? ports, bootTimeMs, requesterIdentities: facts.identities ?? requesterIdentities,
-            ...(watched ? { metrics: currentMetrics, history: metrics.history(), capturedAtMs: latestMetricAtMs } : {}) });
+            ...(watched ? { metrics: read === latestRead ? currentMetrics
+                : new Map([...currentMetrics].filter(([, metric]) => !metric.identityUnavailable)),
+                history: metrics.history(), capturedAtMs: latestMetricAtMs } : {}) });
     let currentMetrics: ReadonlyMap<number, import('./processMetrics').ProcessMetrics> = new Map();
     const notify = () => { for (const listener of listeners) listener(); };
     const discover = () => {
@@ -133,13 +136,28 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                     const snapshot = await options.processOwnershipRuntime.readProcessMetrics(metricPids);
                     if (disposed || controller.signal.aborted || !listeners.size) return;
                     if (snapshot.status === 'ok') {
+                        const sampled = new Set(metricPids);
+                        const observed = new Map(snapshot.rows.map(row => [row.pid, row]));
+                        const partial = new Set(snapshot.partial?.filter(item => !observed.has(item.pid) || item.missing.includes('start')).map(item => item.pid));
+                        // Only positive absence or a different birth retires cached
+                        // ownership. An unreadable generation remains uncertain.
+                        const retained = (row: { pid: number; start: ProcessStartIdentity }) =>
+                            !sampled.has(row.pid) || partial.has(row.pid)
+                            || !!observed.get(row.pid) && equalProcessStart(row.start, observed.get(row.pid)!.start);
+                        const rows = ownership.rows.filter(retained);
+                        if (rows.length !== ownership.rows.length) latestRead = { ...ownership, rows,
+                            snapshot: { ...ownership.snapshot, rows: ownership.snapshot.rows.filter(retained) } };
                         const owners = new Map<string, Map<number, string>>();
-                        for (const row of ownership.rows) if (row.owner && row.level !== 'left_behind' && row.level !== 'not_happier') {
+                        for (const row of rows) if (row.owner && row.level !== 'left_behind' && row.level !== 'not_happier') {
                             const key = processOwnerKey(row.owner);
                             const refs = owners.get(key) ?? new Map<number, string>();
                             refs.set(row.pid, processRef(row.pid, row.start)); owners.set(key, refs);
                         }
-                        currentMetrics = metrics.observe(snapshot, sample.intervalMs, owners);
+                        const observedMetrics = new Map(metrics.observe(snapshot, sample.intervalMs, owners));
+                        for (const row of rows) if (sampled.has(row.pid) && partial.has(row.pid)) {
+                            observedMetrics.set(row.pid, { ref: processRef(row.pid, row.start), memoryBytes: null, identityUnavailable: true });
+                        }
+                        currentMetrics = observedMetrics;
                         latestMetricAtMs = snapshot.capturedAtMs;
                         // A cold or expired CPU baseline needs two observations in
                         // this active watch. Returning after the first would let

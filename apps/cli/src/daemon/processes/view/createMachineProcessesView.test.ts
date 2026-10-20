@@ -29,15 +29,19 @@ import { createProcessCustodySamplingInvoker } from '@/subprocess/supervision/pr
 const boundary = vi.hoisted(() => ({ read: vi.fn<(input: ProcessCensusInput) => Promise<ProcessCensusSnapshot>>() }));
 vi.mock('@/processes/census/processCensus', () => ({ readProcessCensus: boundary.read }));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
-it('keeps a reused PID out of the previous owner history through the recipient watch projection', async () => {
+it.each(['reused', 'exited', 'unreadable', 'resources_unreadable'] as const)('reconciles a %s PID through the recipient watch projection', async observation => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     let reused = false;
     boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
         { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name: 'daemon', memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: null },
         { pid: 20, ppid: 1, start: { startTimeMs: 200 }, principal: { kind: 'uid', value: '1000' }, name: 'agent', memory: { bytes: 10, kind: 'rss' }, cpuTimeUs: null },
-        { pid: 42, ppid: reused ? 1 : 20, start: { startTimeMs: reused ? 2000 : 400, native: reused ? 'gen2' : 'gen1' },
-            principal: { kind: 'uid', value: '1000' }, name: reused ? 'unrelated' : 'tool', memory: { bytes: reused ? 999 : 100, kind: 'rss' }, cpuTimeUs: null },
-    ] }));
+        ...(!reused || observation === 'reused' || observation === 'resources_unreadable' ? [{ pid: 42, ppid: reused && observation === 'reused' ? 1 : 20,
+            start: { startTimeMs: reused && observation === 'reused' ? 2000 : 400, native: reused && observation === 'reused' ? 'gen2' : 'gen1' },
+            principal: { kind: 'uid' as const, value: '1000' }, name: reused && observation === 'reused' ? 'unrelated' : 'tool',
+            memory: reused && observation === 'resources_unreadable' ? null : { bytes: reused ? 999 : 100, kind: 'rss' as const }, cpuTimeUs: null },
+        ] : []),
+    ], ...(reused && (observation === 'unreadable' || observation === 'resources_unreadable')
+        ? { partial: [{ pid: 42, missing: observation === 'unreadable' ? ['start'] : ['memory', 'cpuTimeUs'] }] } : {}) }));
     const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
         { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
         { owner: { kind: 'session', sessionId: 'old-owner' }, pid: 20, start: { startTimeMs: 200 }, ownerCreatedAtMs: 200, live: true },
@@ -71,11 +75,30 @@ it('keeps a reused PID out of the previous owner history through the recipient w
         const second = await secondPending;
         expect(second.changed).toBe(true);
         if (!second.changed) throw new Error('Expected measured watch answer');
-        expect(second.answer.history?.['session:old-owner']?.at(-1)?.memoryBytes).toBeNull();
+        const unreadable = observation === 'unreadable' || observation === 'resources_unreadable';
+        expect(second.answer.owners[0].members.map(row => row.pid)).toEqual(unreadable ? [20, 42] : [20]);
+        expect(second.answer.totals.happier).toMatchObject({ processCount: unreadable ? 2 : 1, memoryBytes: unreadable ? null : 10 });
+        if (unreadable) expect(second.answer.owners[0].members.find(row => row.pid === 42))
+            .toMatchObject({ level: observation === 'unreadable' ? 'unknown' : 'proven', memoryBytes: null });
+        expect(second.answer.history?.['session:old-owner']?.at(-1)?.memoryBytes).toBe(unreadable ? null : 10);
         expect(second.answer.history?.['session:old-owner']?.[0].memoryBytes).toBe(110);
         expect(Object.keys(second.answer.history ?? {})).toEqual(['session:old-owner']);
         expect(second.answer.othersWork).toEqual({ count: 1 });
         expect(MachineProcessesWatchResultV1Schema.safeParse(second).success).toBe(true);
+        if (observation === 'unreadable') {
+            const ref = second.answer.owners[0].members.find(row => row.pid === 42)!.ref;
+            expect((await view.check({ machineId: 'm', refs: [ref] }, requester)).checks)
+                .toEqual([{ ref, present: false, identityEqual: false }]);
+        }
+        if (unreadable) {
+            reused = false;
+            const recoveredPending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal);
+            await vi.advanceTimersByTimeAsync(2000);
+            const recovered = await recoveredPending;
+            expect(recovered.changed && recovered.answer.owners[0].members.find(row => row.pid === 42))
+                .toMatchObject({ level: 'proven', memoryBytes: 100 });
+            expect(recovered.changed && recovered.answer.totals.happier.memoryBytes).toBe(110);
+        }
     } finally {
         cancellation.abort(); view.dispose(); pass.dispose(); await sampler.stop();
     }

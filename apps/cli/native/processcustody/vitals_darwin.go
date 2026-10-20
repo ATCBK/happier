@@ -85,7 +85,7 @@ func readNativeVitals(extras bool) (vitalsNativeSample, error) {
 
 var apfsVitalsDevice = regexp.MustCompile(`^/dev/(disk[0-9]+)s[0-9]+`)
 
-func readDarwinVitalsVolumes() ([]vitalsVolume, error) {
+func readDarwinVitalsMounts() ([]unix.Statfs_t, error) {
 	n, err := unix.Getfsstat(nil, unix.MNT_NOWAIT)
 	if err != nil {
 		return nil, err
@@ -95,9 +95,26 @@ func readDarwinVitalsVolumes() ([]vitalsVolume, error) {
 	if err != nil {
 		return nil, err
 	}
+	return stats[:n], nil
+}
+
+func darwinVitalsAPFSContainer(st unix.Statfs_t) string {
+	if nativeCString(st.Fstypename[:]) == "apfs" {
+		if match := apfsVitalsDevice.FindStringSubmatch(nativeCString(st.Mntfromname[:])); match != nil {
+			return match[1]
+		}
+	}
+	return ""
+}
+
+func readDarwinVitalsVolumes() ([]vitalsVolume, error) {
+	stats, err := readDarwinVitalsMounts()
+	if err != nil {
+		return nil, err
+	}
 	volumes := []vitalsVolume{}
 	seen := make(map[string]int)
-	for _, st := range stats[:n] {
+	for _, st := range stats {
 		mount := nativeCString(st.Mntonname[:])
 		if st.Flags&unix.MNT_LOCAL == 0 || (mount != "/" && mount != "/System/Volumes/Data" && !strings.HasPrefix(mount, "/Volumes/")) {
 			continue
@@ -107,14 +124,10 @@ func readDarwinVitalsVolumes() ([]vitalsVolume, error) {
 		if st.Flags&unix.MNT_RDONLY != 0 && mount != "/" {
 			continue
 		}
-		device := nativeCString(st.Mntfromname[:])
 		id := fmt.Sprintf("%d:%d", st.Fsid.Val[0], st.Fsid.Val[1])
-		container := ""
-		if nativeCString(st.Fstypename[:]) == "apfs" {
-			if match := apfsVitalsDevice.FindStringSubmatch(device); match != nil {
-				container = match[1]
-				id = "apfs:" + container
-			}
+		container := darwinVitalsAPFSContainer(st)
+		if container != "" {
+			id = "apfs:" + container
 		}
 		v := vitalsVolume{ID: id, Mount: mount, Label: filepath.Base(mount), TotalBytes: st.Blocks * uint64(st.Bsize), AvailableBytes: st.Bavail * uint64(st.Bsize), APFSContainerID: container, InodesExhausted: st.Files > 0 && st.Ffree == 0}
 		if mount == "/" || mount == "/System/Volumes/Data" {

@@ -20,6 +20,123 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Darwin's directory metadata is the OS boundary. Model a firmlink's REALDEVID
+// crossing while retaining real file identities, enumeration and allocation.
+type diskDarwinContainerDirectory struct {
+	diskDirectory
+	same, foreign, sameDevice string
+}
+
+func (directory diskDarwinContainerDirectory) entries(ctx context.Context) ([]diskEntry, string, error) {
+	entries, backend, err := directory.diskDirectory.entries(ctx)
+	for index := range entries {
+		switch entries[index].path {
+		case directory.same:
+			entries[index].meta.device = directory.sameDevice
+		case directory.foreign:
+			entries[index].meta.device = "foreign-container-device"
+		}
+	}
+	return entries, backend, err
+}
+
+func TestDiskDarwinCommandProducesSameContainerDeviceAllowance(t *testing.T) {
+	root := diskDarwinFixtureRoot(t)
+	rootMeta, err := diskReadMetadata(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := diskReadMetadata("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fs unix.Statfs_t
+	if err := unix.Statfs(root, &fs); err != nil {
+		t.Fatal(err)
+	}
+	if nativeCString(fs.Fstypename[:]) != "apfs" || sealed.device == rootMeta.device {
+		t.Skip("requires separate APFS startup System and Data devices")
+	}
+	same, foreign := filepath.Join(root, "same-container"), filepath.Join(root, "foreign-container")
+	for _, path := range []string{same, foreign} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "ordinary"), []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := diskOpenDirectoryForScan
+	diskOpenDirectoryForScan = func(path string) (diskDirectory, error) {
+		dir, err := diskOpenRoot(path)
+		if err == nil && path == root {
+			return diskDarwinContainerDirectory{dir, same, foreign, sealed.device}, nil
+		}
+		return dir, err
+	}
+	defer func() { diskOpenDirectoryForScan = original }()
+	request, err := json.Marshal(diskScanRequest{Root: root, ScratchDirectory: storageRenameTestRoot(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := diskScanCommand(nil, bytes.NewReader(append(request, '\n')), &output); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]bool{}
+	var summary diskSummary
+	for _, line := range bytes.Split(bytes.TrimSpace(output.Bytes()), []byte{'\n'}) {
+		var record diskEntryRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Type == "dir-entry" && record.Node.Kind == "file" {
+			files[record.Node.ID] = true
+		}
+		if record.Type == "summary" {
+			if err := json.Unmarshal(line, &summary); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if !files[filepath.Join(same, "ordinary")] || files[filepath.Join(foreign, "ordinary")] {
+		t.Fatalf("startup request did not distinguish APFS container crossing: files=%v skipped=%v", files, summary.Skipped)
+	}
+	if !reflect.DeepEqual(summary.Skipped, []diskIssue{{foreign, "foreign_device"}}) {
+		t.Fatalf("foreign-container refusal lost: %v", summary.Skipped)
+	}
+}
+
+func TestDiskDarwinStartupRelistTreatsDataFirmlinkAsFolder(t *testing.T) {
+	rootMeta, err := diskReadMetadata("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	usersMeta, err := diskReadMetadata("/Users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rootMeta.device == usersMeta.device {
+		t.Skip("requires a startup Data firmlink with a distinct REALDEVID")
+	}
+	// Direct relist observes the real startup boundary without recursively
+	// scanning user data. The ordinary command must produce its own allowance.
+	stream := runDiskOwnerRaw(t, "disk-scan", diskScanRequest{Root: "/", RelistOnly: true})
+	for _, line := range bytes.Split(bytes.TrimSpace(stream), []byte{'\n'}) {
+		var record diskEntryRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Type == "dir-entry" && record.Node.ID == "/Users" {
+			if record.Node.Kind != "folder" {
+				t.Fatalf("startup Data firmlink was treated as foreign: %#v", record.Node)
+			}
+			return
+		}
+	}
+	t.Fatal("startup relist did not expose /Users")
+}
+
 func TestDiskDarwinSnapshotCountInScanSummary(t *testing.T) {
 	root := diskDarwinFixtureRoot(t)
 	var fs unix.Statfs_t
