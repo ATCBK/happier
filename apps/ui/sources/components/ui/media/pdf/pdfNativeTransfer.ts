@@ -11,7 +11,7 @@ export async function transferPdfToWebView(input: Input): Promise<void> {
         const length = Math.min(input.sliceBytes, size - offset);
         const encoded = await input.source.readBase64(offset, length);
         input.signal.throwIfAborted();
-        if (atob(encoded).length !== length || await input.source.getSize() !== size) throw new Error('PDF file changed during download');
+        if (readCanonicalPaddedBase64DecodedLength(encoded) !== length || await input.source.getSize() !== size) throw new Error('PDF file changed during download');
         input.signal.throwIfAborted();
         input.injectJavaScript(`window.__pdfAppend(${JSON.stringify(encoded)});true;`);
     }
@@ -19,3 +19,5 @@ export async function transferPdfToWebView(input: Input): Promise<void> {
     input.signal.throwIfAborted();
     input.injectJavaScript('window.__pdfOpen();true;');
 }
+import { readCanonicalPaddedBase64DecodedLength } from '@happier-dev/protocol/crypto/base64';
+
