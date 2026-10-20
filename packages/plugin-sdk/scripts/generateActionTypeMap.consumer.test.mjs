@@ -20,7 +20,7 @@ function writeCanonicalSdkTypeFixtures(root) {
     export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
     export type PluginJsonValueV2 = JsonValue;
   `);
-  put('packages/plugin-sdk/src/scm/projections.ts', `
+  put('packages/plugin-sdk/src/scm/comparisonSource.ts', `
     import type { JsonValue } from '../identity.js';
     export type ScmComparisonSource =
       | { kind: 'turnCheckpoint'; sessionId?: string; turnId?: string; checkpointReceiptId?: string; evidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled' }

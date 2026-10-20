@@ -24,12 +24,7 @@ import type {
 export const COMPOSER_MEDIA_CONTENT_CAPABILITY_V1 = canonicalComposerMediaContentCapabilityV1;
 export const MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 = canonicalMaxComposerContentInspectBytesV1;
 
-/** A bounded inspection result; transfer/session implementation details remain host-private. */
-export type ComposerContentInspectResultV1 = Readonly<{
-    offset: number;
-    bytes: Uint8Array;
-    eof: boolean;
-}>;
+export type { ComposerContentInspectResultV1 } from './ui/publicContract.js';
 
 export function defineComposerReference(
     definition: PluginComposerReferenceDefinition,

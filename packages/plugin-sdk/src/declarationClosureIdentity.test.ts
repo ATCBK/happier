@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import ts from 'typescript';
@@ -178,6 +179,8 @@ const DECLARATION_CLOSURE_SOURCE_URLS = [
     './services/connectedAccounts.ts',
     './services/sessions.ts',
     './agentRuntime/session.ts',
+    './experimental/agentRuntime/realtime.ts',
+    './sessions/fileStores/records.ts',
     './actions/service.ts',
     './voice/client.ts',
 ] as const;
@@ -249,6 +252,115 @@ function emittedDeclaration(relativeSourceUrl: string): string {
     }
     return emittedDeclarationForSourcePath(sourcePath);
 }
+
+describe('native Voice public declaration boundary', () => {
+    it('retains the original public names as the same shared declarations', () => {
+        const program = getDeclarationEmissionOwner().program;
+        const checker = program.getTypeChecker();
+        const exported = (path: string, name: string): ts.Symbol => {
+            const source = program.getSourceFile(fileURLToPath(new URL(path, import.meta.url)));
+            if (!source) throw new Error(`Missing identity owner ${path}`);
+            const module = checker.getSymbolAtLocation(source);
+            if (!module) throw new Error(`Missing module ${path}`);
+            const symbol = checker.getExportsOfModule(module).find(candidate => candidate.name === name);
+            if (!symbol) throw new Error(`Missing ${path}#${name}`);
+            return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+        };
+        for (const [published, neutral, names] of [
+            ['./identity.ts', './sessions/fileStores/recordValues.ts', ['isRecord', 'readString', 'readTrimmedString', 'parseTimestampMs', 'parseJsonLine']],
+            ['./sessions/fileStores/records.ts', './sessions/fileStores/recordValues.ts', ['isRecord', 'readString', 'readTrimmedString', 'parseTimestampMs', 'parseJsonLine']],
+            ['./connectedAccounts.ts', './connected-accounts/materialization.ts', ['ConnectedAccountMaterialization']],
+            ['./experimental/agentRuntime/realtime.ts', './experimental/agentRuntime/realtimeContracts.ts', ['AgentSessionRealtimeAvailability', 'AgentSessionRealtimeStartInput', 'AgentSessionRealtimeStartResult', 'AgentSessionRealtimeConversation']],
+            ['./voice/projections.ts', './voice/contracts.ts', ['VoiceSchema', 'VoiceCredentialAccess', 'VoiceRawCredentialAccess', 'VoiceAccountOperationService']],
+            ['./services/sessions.ts', './sessions/authoring.ts', ['ProjectKeyV1', 'SessionSpawnNewInputV2', 'SessionServerStartSpawnDraftV1']],
+            ['./manifest.ts', './availability.ts', ['PluginAvailabilityDescriptor']],
+            ['./interactions.ts', './interactionContracts.ts', ['InteractionSeverity']],
+            ['./composer.ts', './ui/publicContract.ts', ['ComposerContentInspectResultV1']],
+            ['./scm/projections.ts', './scm/comparisonSource.ts', ['ScmComparisonSource']],
+        ] as const) {
+            for (const name of names) expect(exported(published, name), `${published}#${name}`).toBe(exported(neutral, name));
+        }
+    }, 30_000);
+
+    it('checks the public native client without daemon-only declaration owners', async () => {
+        const sdkRoot = fileURLToPath(new URL('..', import.meta.url));
+        const distRoot = resolve(sdkRoot, 'dist');
+        const configPath = fileURLToPath(new URL('../../plugin-ui/fixtures/external-authoring/tsconfig.voice-native.json', import.meta.url));
+        const native = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+            ...ts.sys,
+            onUnRecoverableConfigFileDiagnostic(diagnostic) {
+                throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+            },
+        });
+        if (!native) throw new Error(`Unable to parse ${configPath}`);
+        const manifest = JSON.parse(await readFile(resolve(sdkRoot, 'package.json'), 'utf8'));
+        const entry = resolve(sdkRoot, manifest.exports['./voice/client'].types);
+        const declarations = (() => {
+            const parsed = ts.getParsedCommandLineOfConfigFile(resolve(sdkRoot, 'tsconfig.json'), {}, {
+                ...ts.sys, onUnRecoverableConfigFileDiagnostic: diagnostic => {
+                    throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+                },
+            });
+            if (!parsed) throw new Error('Missing SDK declaration configuration');
+            const producer = ts.createProgram({
+                rootNames: [resolve(sdkRoot, manifest.exports['./voice/client']['happier-source'])],
+                options: { ...parsed.options, declaration: true, declarationMap: false,
+                    emitDeclarationOnly: true, incremental: false },
+            });
+            const emitted = new Map<string, string>();
+            const result = producer.emit(undefined, (path, contents) => {
+                if (path.endsWith('.d.ts')) emitted.set(resolve(path), contents);
+            }, undefined, true);
+            expect(result.diagnostics.map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([]);
+            return emitted;
+        })();
+        expect(declarations.has(entry)).toBe(true);
+        const inSdkDist = (path: string) => {
+            const suffix = relative(distRoot, resolve(path));
+            return !isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`);
+        };
+        const host = ts.createCompilerHost(native.options);
+        const originalReadFile = host.readFile.bind(host);
+        const originalFileExists = host.fileExists.bind(host);
+        const originalDirectoryExists = host.directoryExists!.bind(host);
+        host.fileExists = path => inSdkDist(path) ? declarations.has(resolve(path)) : originalFileExists(path);
+        host.directoryExists = path => originalDirectoryExists(path) || (inSdkDist(path)
+            && originalDirectoryExists(resolve(sdkRoot, 'src', relative(distRoot, path))));
+        host.readFile = path => inSdkDist(path) ? declarations.get(resolve(path)) : originalReadFile(path);
+        host.getSourceFile = (path, languageVersion) => {
+            const contents = host.readFile(path);
+            return contents === undefined ? undefined : ts.createSourceFile(path, contents, languageVersion, true);
+        };
+        // Resolve the real public export to freshly emitted source declarations,
+        // rather than whichever prior dist happens to be prepared in this checkout.
+        host.resolveModuleNames = (names, containingFile) => names.map(name => name === '@happier-dev/plugin-sdk/voice/client'
+            ? { resolvedFileName: entry, extension: ts.Extension.Dts, isExternalLibraryImport: true }
+            : ts.resolveModuleName(name, containingFile, native.options, host).resolvedModule);
+        const program = ts.createProgram({ rootNames: native.fileNames, options: native.options, host });
+        const sdkFiles = program.getSourceFiles().map(source => relative(distRoot, source.fileName).replaceAll('\\', '/'));
+        expect(sdkFiles).toContain('voice/client/index.d.ts');
+        expect(sdkFiles.filter(path => [
+            'externalSessions.d.ts', 'managed-services/contract.d.ts', 'activation.d.ts',
+            'services/index.d.ts', 'services/sessions.d.ts', 'agentRuntime/session.d.ts',
+        ].includes(path))).toEqual([]);
+        expect(ts.getPreEmitDiagnostics(program).map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')))
+            .toEqual([]);
+        const voiceModule = program.getSourceFile(resolve(distRoot, 'voice/client.d.ts'));
+        if (!voiceModule) throw new Error('Missing native Voice client declarations');
+        const checker = program.getTypeChecker();
+        const moduleSymbol = checker.getSymbolAtLocation(voiceModule);
+        if (!moduleSymbol) throw new Error('Missing native Voice module');
+        const micSymbol = checker.getExportsOfModule(moduleSymbol).find(symbol => symbol.name === 'VoiceMicSession');
+        if (!micSymbol) throw new Error('Missing native microphone contract');
+        const mic = checker.getDeclaredTypeOfSymbol(micSymbol);
+        expect(mic.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)).toBe(0);
+        const getStream = mic.getProperty('getStream');
+        if (!getStream) throw new Error('Missing typed microphone stream reader');
+        const streamReaders = checker.getSignaturesOfType(checker.getTypeOfSymbolAtLocation(getStream, voiceModule), ts.SignatureKind.Call);
+        expect(streamReaders).toHaveLength(1);
+        expect(checker.getReturnTypeOfSignature(streamReaders[0]!).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)).toBe(0);
+    }, 30_000);
+});
 
 function emittedIsolatedDeclaration(fileName: string, sourceText: string): string {
     const result = ts.transpileDeclaration(sourceText, {
@@ -1750,7 +1862,7 @@ describe('normal SDK declaration closure identities', () => {
         expect(actionsDeclaration).not.toContain('ReturnType<typeof canonicalGetActionSpec>');
 
         expect(voiceDeclaration).toContain(
-            "import type { ActionSpec } from '../actions/service.js';",
+            "import type { ActionSpec } from '../actions/actionTypeMap.generated.js';",
         );
         // `ActionSpec` and the realtime DTOs are curated differently on
         // purpose. `ActionSpec` is an SDK-owned identity, so naming Protocol's

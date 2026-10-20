@@ -29,18 +29,9 @@ import type {
     VoiceModelPackSupportArtifactV1,
     VoiceModelPackTransducerArtifactsV1,
 } from '@happier-dev/protocol/voice/modelPacks/contributionV1';
-import type {
-    VoiceRealtimeJsonValue,
-} from '@happier-dev/protocol/voice/realtime';
-
 import * as z from 'zod/mini';
 
-import type { PluginCancellationOptions } from '../lifecycle.js';
 import type { InteractionsService } from '../interactions.js';
-import type {
-    ConnectedAccountMaterialization,
-    ConnectedAccountMaterializationRequest,
-} from '../connectedAccounts.js';
 import type { PluginSettingsActionRuntime } from '../settingsActions.js';
 import type { PluginContributionLocalId } from '../identity.js';
 import type {
@@ -48,14 +39,14 @@ import type {
     VoiceClientToolDefinition,
 } from './client.js';
 import type { SpeechProviderRuntime } from './speech.js';
+import type { VoiceCredentialAccess, VoiceSchema } from './contracts.js';
 
 export type { ConnectedAccountHttpHeadersRequest } from '../connectedAccounts.js';
 
 /** Service-declared presentation facts, validated by the canonical contribution schema. */
 export type VoicePrivacyFacts = NonNullable<VoiceProviderSettings['privacyFacts']>;
 
-/** Native Mini schema; exported Protocol schemas retain their exact runtime identity. */
-export type VoiceSchema<TOutput> = z.ZodMiniType<TOutput>;
+export type { VoiceAccountOperationService, VoiceRawCredentialAccess, VoiceCredentialAccess, VoiceSchema } from './contracts.js';
 
 function isVoiceRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -182,32 +173,6 @@ export const VoiceModelPackRuntimeV1Schema: VoiceSchema<VoiceModelPackRuntimeV1>
 export const VoiceModelPackSupportArtifactKindV1Schema: VoiceSchema<VoiceModelPackSupportArtifactKindV1> = canonicalVoiceModelPackSupportArtifactKindV1Schema;
 export const VoiceModelPackSupportArtifactV1Schema: VoiceSchema<VoiceModelPackSupportArtifactV1> = canonicalVoiceModelPackSupportArtifactV1Schema;
 export const VoiceModelPackTransducerArtifactsV1Schema: VoiceSchema<VoiceModelPackTransducerArtifactsV1> = canonicalVoiceModelPackTransducerArtifactsV1Schema;
-
-export type VoiceAccountOperationService = Readonly<{
-    request(input: Readonly<{
-        operationId: string;
-        parameters: Readonly<Record<string, VoiceRealtimeJsonValue>>;
-        signal: AbortSignal;
-    }>): Promise<Readonly<{
-        status: number;
-        finalUrl: string;
-        headers: Readonly<Record<string, string>>;
-        body: Uint8Array;
-    }>>;
-}>;
-
-export type VoiceRawCredentialAccess = Readonly<{
-    materialize(
-        request: ConnectedAccountMaterializationRequest,
-        options?: PluginCancellationOptions,
-    ): Promise<ConnectedAccountMaterialization>;
-}>;
-
-export type VoiceCredentialAccess<P extends VoiceCredentialAccessPhase> = Readonly<{
-    phase: P;
-    mediated: VoiceAccountOperationService | null;
-    raw: VoiceRawCredentialAccess | null;
-}>;
 
 export type VoiceSettingsActionContext = Readonly<{
     credentials: VoiceCredentialAccess<'settings'>;

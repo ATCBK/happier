@@ -7,6 +7,16 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./runtime/agentRuntimeDiagnosticV1": {
+      "happier-source": "./src/runtime/agentRuntimeDiagnosticV1.ts",
+      "types": "./dist/runtime/agentRuntimeDiagnosticV1.d.ts",
+      "default": "./dist/runtime/agentRuntimeDiagnosticV1.js"
+    },
+    "./sessions/creation/sessionSpawnNewSelectionV2": {
+      "happier-source": "./src/sessions/creation/sessionSpawnNewSelectionV2.ts",
+      "types": "./dist/sessions/creation/sessionSpawnNewSelectionV2.d.ts",
+      "default": "./dist/sessions/creation/sessionSpawnNewSelectionV2.js"
+    },
     "./artifacts/artifactKindV1": {
       "happier-source": "./src/artifacts/artifactKindV1.ts",
       "types": "./dist/artifacts/artifactKindV1.d.ts",

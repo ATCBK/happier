@@ -43,7 +43,7 @@ export {
     parseTimestampMs,
     readString,
     readTrimmedString,
-} from './sessions/fileStores/records.js';
+} from './sessions/fileStores/recordValues.js';
 
 export type PluginContributionRef = Readonly<{
     pluginId: string;

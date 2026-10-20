@@ -282,8 +282,10 @@ const ROOT_TYPE_EXPORTS = [
     'ScmWorktreeEnrichmentEntry',
     'ScmWorktreePruneRequest',
     'ScmWorktreePruneResponse',
+    'ScmWorktreeReinstateRequest',
     'ScmWorktreeRemoveRequest',
     'ScmWorktreeRemoveResponse',
+    'ScmWorktreeRetireRequest',
     'ScmWorktreesEnrichmentRequest',
     'ScmWorktreesEnrichmentResponse',
     ...TRANSITIVE_DECLARATION_CLOSURE_TYPES,
@@ -610,7 +612,11 @@ describe('SCM package-local projections', () => {
     it('exposes exactly the approved source surface', () => {
         const program = createSdkProgram();
         expect(moduleExportNames(program, 'src/scm/projections.ts')).toEqual(ROOT_EXPORTS);
-        expect(moduleExportNames(program, 'src/scm/index.ts')).toEqual(ROOT_EXPORTS);
+        expect(moduleExportNames(program, 'src/scm/index.ts')).toEqual([...ROOT_EXPORTS,
+            'GitFileLineage', 'GitTemporaryIndex', 'GitTemporaryIndexCommand', 'GitTemporaryIndexCommandAdapter',
+            'GitTemporaryIndexCommandResult', 'GitTemporaryIndexFailure', 'GitTemporaryIndexSeed',
+            'createGitTemporaryIndex', 'parseGitComparisonOutput', 'resolveGitIndexPath',
+        ].sort());
     }, 120_000);
 
     it('preserves representative canonical runtime identities without wrappers', () => {

@@ -849,7 +849,7 @@ test('generated Action DTO signatures use the canonical SDK public declarations'
   assert.ok(!outputs.has('packages/plugin-sdk/src/actions/dtos/strictJsonValue.generated.ts'));
   assert.ok(!outputs.has('packages/plugin-sdk/src/actions/dtos/jsonSchema.generated.ts'));
   const scmFamily = outputs.get('packages/plugin-sdk/src/actions/dtos/scmDiffSummaryActionDtos.generated.ts');
-  assert.match(scmFamily, /import type \{ ScmComparisonSource \} from '\.\.\/\.\.\/scm\/projections\.js';/u);
+  assert.match(scmFamily, /import type \{ ScmComparisonSource \} from '\.\.\/\.\.\/scm\/comparisonSource\.js';/u);
   for (const output of outputs.values()) {
     assert.doesNotMatch(output, /export type ScmComparisonSource\s*=/u);
   }
