@@ -25,8 +25,14 @@ export function toggleSkillPreview(
   return next;
 }
 
-/** When every previewed skill is already in the library, the id the footer opens (the first); otherwise null and Add stays. */
-export function readOpenWhenAllHeld(items: readonly Pick<SkillInstallPreviewV1, 'inLibrary'>[]): string | null {
+/**
+ * What the footer offers when nothing previewed is new: Open for the one held skill, Done (close the dialog) when
+ * several are held (an Open would not say which); null while anything can still be added.
+ */
+export function readAllHeldFooter(
+  items: readonly Pick<SkillInstallPreviewV1, 'inLibrary'>[],
+): Readonly<{ kind: 'open'; skillId: string }> | Readonly<{ kind: 'done' }> | null {
   const first = items[0]?.inLibrary;
-  return first !== undefined && items.every((item) => item.inLibrary !== undefined) ? first : null;
+  if (first === undefined || !items.every((item) => item.inLibrary !== undefined)) return null;
+  return items.length === 1 ? { kind: 'open', skillId: first } : { kind: 'done' };
 }

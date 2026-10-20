@@ -24,7 +24,7 @@ import { nativePickFiles } from '@/utils/files/nativePickFiles';
 import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 
 import { SkillPreviewRows } from './SkillPreviewRows';
-import { readOpenWhenAllHeld, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
+import { readAllHeldFooter, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
 import { installSkills, previewSkillInstall } from './skillInstall';
 
 function describeUploadError(error: SkillUploadError): string {
@@ -64,6 +64,8 @@ export function SkillUploadInput(
   props: Readonly<{
     execute: MountedAuthoringActionExecute;
     onAdded: (skillId: string) => void;
+    /** Closes the dialog (the footer's Done when everything found is already held). */
+    onDone: () => void;
     testID: string;
   }>,
 ) {
@@ -216,7 +218,7 @@ export function SkillUploadInput(
     props.onAdded(outcome.skillIds[0]!);
   }, [props, state, ticked]);
 
-  const openWhenHeld = state.kind === 'ready' ? readOpenWhenAllHeld(state.items) : null;
+  const allHeld = state.kind === 'ready' ? readAllHeldFooter(state.items) : null;
   return (
     <View style={styles.fill}>
       <ScrollView style={styles.fill} contentContainerStyle={[styles.body, edge]}>
@@ -285,12 +287,19 @@ export function SkillUploadInput(
       </ScrollView>
       {state.kind === 'ready' ? (
         <CapabilityAddFooter testID={`${props.testID}.footer`} start={null}>
-          {openWhenHeld !== null ? (
+          {allHeld?.kind === 'open' ? (
             <RoundButton
               size="normal"
               title={t('capabilities.skillAdd.open')}
-              onPress={() => props.onAdded(openWhenHeld)}
+              onPress={() => props.onAdded(allHeld.skillId)}
               testID={`${props.testID}.add`}
+            />
+          ) : allHeld?.kind === 'done' ? (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.add.done')}
+              onPress={props.onDone}
+              testID={`${props.testID}.done`}
             />
           ) : (
             <RoundButton

@@ -13,7 +13,7 @@ import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourc
 import { t } from '@/text';
 
 import { previewRef, SkillPreviewRows } from './SkillPreviewRows';
-import { readOpenWhenAllHeld, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
+import { readAllHeldFooter, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
 import { installSkills, previewSkillInstall } from './skillInstall';
 
 /**
@@ -24,6 +24,8 @@ export function SkillLinkInput(
   props: Readonly<{
     execute: MountedAuthoringActionExecute;
     onAdded: (skillId: string) => void;
+    /** Closes the dialog (the footer's Done when everything found is already held). */
+    onDone: () => void;
     testID: string;
   }>,
 ) {
@@ -88,7 +90,7 @@ export function SkillLinkInput(
   }, [props, state, ticked, url]);
 
   const found = state.kind === 'found' ? state.items : null;
-  const openWhenHeld = found ? readOpenWhenAllHeld(found) : null;
+  const allHeld = found ? readAllHeldFooter(found) : null;
   return (
     <View style={styles.fill}>
       <ScrollView
@@ -169,12 +171,19 @@ export function SkillLinkInput(
             ) : null
           }
         >
-          {openWhenHeld !== null ? (
+          {allHeld?.kind === 'open' ? (
             <RoundButton
               size="normal"
               title={t('capabilities.skillAdd.open')}
-              onPress={() => props.onAdded(openWhenHeld)}
+              onPress={() => props.onAdded(allHeld.skillId)}
               testID={`${props.testID}.add`}
+            />
+          ) : allHeld?.kind === 'done' ? (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.add.done')}
+              onPress={props.onDone}
+              testID={`${props.testID}.done`}
             />
           ) : (
             <RoundButton

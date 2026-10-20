@@ -395,6 +395,7 @@ export function SkillAddModal(
                 props.onClose();
                 params.onAdded?.(skillId);
               }}
+              onDone={props.onClose}
               testID={`${TEST_ID}.link`}
             />
           ),
@@ -412,6 +413,7 @@ export function SkillAddModal(
                 props.onClose();
                 params.onAdded?.(skillId);
               }}
+              onDone={props.onClose}
               testID={`${TEST_ID}.upload`}
             />
           ),

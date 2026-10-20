@@ -66,7 +66,7 @@ const execute: MountedAuthoringActionExecute = async (_actionId, input) => {
 async function renderFailedAdd() {
   const { SkillLinkInput } = await import('./SkillLinkInput');
   const screen = await renderScreen(
-    <SkillLinkInput execute={execute} onAdded={() => {}} testID="link" />,
+    <SkillLinkInput execute={execute} onAdded={() => {}} onDone={() => {}} testID="link" />,
   );
   await act(async () => {
     screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills');
@@ -108,7 +108,7 @@ describe('SkillLinkInput outside references', () => {
     });
     const { SkillLinkInput } = await import('./SkillLinkInput');
     const screen = await renderScreen(
-      <SkillLinkInput execute={answer} onAdded={() => {}} testID="link" />,
+      <SkillLinkInput execute={answer} onAdded={() => {}} onDone={() => {}} testID="link" />,
     );
     await act(async () => {
       screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills');
@@ -153,7 +153,7 @@ describe('SkillLinkInput referenced siblings', () => {
       return { ok: true, result: { skillIds: ['skill-1'], includedInSessionId: null } };
     };
     const { SkillLinkInput } = await import('./SkillLinkInput');
-    const screen = await renderScreen(<SkillLinkInput execute={answer} onAdded={() => {}} testID="link" />);
+    const screen = await renderScreen(<SkillLinkInput execute={answer} onAdded={() => {}} onDone={() => {}} testID="link" />);
     await act(async () => {
       screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills');
     });
@@ -197,18 +197,19 @@ describe('SkillLinkInput skills the library already holds', () => {
   async function renderFound(items: readonly Record<string, unknown>[]) {
     const installs: unknown[] = [];
     const opened: string[] = [];
+    const done: string[] = [];
     const answer: MountedAuthoringActionExecute = async (_actionId, input) => {
       if ((input as { dryRun?: boolean }).dryRun === true) return { ok: true, result: { items } };
       installs.push(input);
       return { ok: true, result: { skillIds: ['skill-new'], includedInSessionId: null } };
     };
     const { SkillLinkInput } = await import('./SkillLinkInput');
-    const screen = await renderScreen(<SkillLinkInput execute={answer} onAdded={(id) => opened.push(id)} testID="link" />);
+    const screen = await renderScreen(<SkillLinkInput execute={answer} onAdded={(id) => opened.push(id)} onDone={() => done.push('done')} testID="link" />);
     await act(async () => {
       screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills');
     });
     await screen.pressByTestIdAsync('link.find');
-    return { screen, installs, opened };
+    return { screen, installs, opened, done };
   }
 
   it('marks a held skill In your library and the footer opens it instead of adding it again', async () => {
@@ -219,6 +220,16 @@ describe('SkillLinkInput skills the library already holds', () => {
     await screen.pressByTestIdAsync('link.add');
     expect(installs).toEqual([]);
     expect(opened).toEqual(['skill-held']);
+  });
+
+  it('offers Done, not an ambiguous Open, when several roots are held and none is new', async () => {
+    const { screen, installs, opened, done } = await renderFound([held, heldSibling]);
+    expect(screen.getTextContent()).toContain('Done');
+    expect(screen.findByTestId('link.add')).toBeNull();
+    await screen.pressByTestIdAsync('link.done');
+    expect(done).toEqual(['done']);
+    expect(opened).toEqual([]);
+    expect(installs).toEqual([]);
   });
 
   it('shows a held sibling as held, not as an added dependency, and counts its reference as covered', async () => {
