@@ -10,7 +10,7 @@ import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/m
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getStorage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { createFrontDoorActionExecute, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { createFrontDoorActionExecute, type FrontDoorActionExecute, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { writeDiscussionSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
 import type { DiscussionMentionSpan } from '@/components/discussions/discussionComposerDocument';
@@ -58,7 +58,8 @@ export function readArtifactActionFailure(result: unknown): ArtifactActionFailur
         : { code };
 }
 
-export function createArtifactActionsClient(scope: ServerAccountScope, execute = createFrontDoorActionExecute()) {
+export function createArtifactActionsClient(scope: ServerAccountScope,
+    execute: (...args: Parameters<FrontDoorActionExecute>) => ReturnType<FrontDoorActionExecute> = createFrontDoorActionExecute()) {
     const dispatch = (actionId: SurfaceActionId, input: unknown, operation?: Pick<UiActionOperation, 'presentUserConfirmation' | 'defaultSessionId'>) => execute(actionId, input, {
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
         // These private UI methods are direct person intents, not an agent/plugin authority adapter.
