@@ -2146,23 +2146,6 @@ describe('shared Account workflow run owner', () => {
     await expect(owner.execute({ actionId: 'workflow.run.cancel', input: { runId, expectedRevision: 0 }, context: {} })).resolves.toMatchObject({ run: { state: 'cancelled' }, intent: 'cancel_requested' });
   });
 
-  it.each([
-    [{ surface: 'ui' as const, actionCaller: { kind: 'host' as const } }, 'person'],
-    [{ surface: 'cli' as const, actionCaller: { kind: 'host' as const } }, 'person'],
-    [{ surface: 'mcp' as const, actionCaller: { kind: 'host' as const } }, 'agent'],
-    [{ surface: 'rpc' as const, actionCaller: { kind: 'host' as const } }, undefined],
-  ])('tells the Run storage how the Stop caller declared itself (%j)', async (context, stoppedVia) => {
-    const snapshot = runSnapshot();
-    const stored: unknown[] = [];
-    const owner = createWorkflowAccountRunActionOwner(ownerDeps({ execute: async (operation) => {
-      if (operation.operation !== 'cancel') throw new Error(`unexpected:${String(operation.operation)}`);
-      stored.push(operation);
-      return { run: { ...snapshot.run, state: 'cancelled' }, intent: 'cancelled' };
-    } }));
-    await owner.execute({ actionId: 'workflow.run.cancel', input: { runId, expectedRevision: 0 }, context });
-    expect(stored).toEqual([{ operation: 'cancel', runId, expectedRevision: 0, ...(stoppedVia ? { stoppedVia } : {}) }]);
-  });
-
   it.each(['workflow.run.get', 'workflow.run.cancel', 'workflow.run.invocations.list'] as const)(
     'rejects an explicit resource restriction that disagrees with the retained Run for %s', async (actionId) => {
       const snapshot = runSnapshot();

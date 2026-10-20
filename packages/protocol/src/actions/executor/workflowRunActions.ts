@@ -6,7 +6,7 @@ import { deriveWorkflowDestinationsV1, WorkflowDiscussionOriginV1Schema, type Wo
 import { listWorkflowAcceptedLeafSelectionsV1 } from '../../workflows/workflowStepSelectionV1.js';
 import { workflowBlockOrdinalV1 } from '../../workflows/workflowStepLabel.js';
 import { walkWorkflowBlocks } from '../../workflows/workflowDefinitionEditV1.js';
-import { WorkflowAuthoredInputV1Schema, WorkflowCheckpointEnvelopeV1Schema, WorkflowProgressEnvelopeV1Schema, WorkflowRunInvocationIndexV1Schema, WorkflowRunSummaryV1Schema, type WorkflowAuthoredInputV1, type WorkflowProgressEnvelopeV1, type WorkflowUsageV1, type WorkflowInvocationRecoveryAvailabilityV1, type WorkflowRunInvocationIndexV1, type WorkflowRunSummaryV1, type WorkflowRunStoppedViaV1, classifyWorkflowHoldV1, isWorkflowDraftPublicationLifecycleV1, applyWorkflowInvocationFactV1 } from '../../workflows/workflowProgressV1.js';
+import { WorkflowAuthoredInputV1Schema, WorkflowCheckpointEnvelopeV1Schema, WorkflowProgressEnvelopeV1Schema, WorkflowRunInvocationIndexV1Schema, WorkflowRunSummaryV1Schema, type WorkflowAuthoredInputV1, type WorkflowProgressEnvelopeV1, type WorkflowUsageV1, type WorkflowInvocationRecoveryAvailabilityV1, type WorkflowRunInvocationIndexV1, type WorkflowRunSummaryV1, classifyWorkflowHoldV1, isWorkflowDraftPublicationLifecycleV1, applyWorkflowInvocationFactV1 } from '../../workflows/workflowProgressV1.js';
 import { WorkflowActionOutputSchemasV1, WorkflowRunWaitSnapshotV1Schema, WorkflowRunListResultV1Schema, WorkflowRunAcceptedContextV1Schema, type WorkflowRunPrivateMetadataV1, type WorkflowRunAcceptedContextV1 } from '../../workflows/actionsV1.js';
 import { materializeWorkflowAcceptedSnapshotV1, readWorkflowAcceptedAgentStartLeavesV1, readWorkflowRunLeafStartRequestV1 } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, openWorkflowCheckpointStoredEnvelopeV1, openWorkflowFinalResultStoredEnvelopeV1, openWorkflowProgressStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
@@ -59,24 +59,6 @@ type WorkflowAcceptedAuthorizationCurrentness = (input: Readonly<{
 const EXACT_RECOVERY_ACTIVE_LIFECYCLES = new Set([
   'admitting', 'running', 'waiting_for_approval', 'needs_attention', 'cancel_requested', 'outcome_uncertain',
 ]);
-/**
- * How the caller of a Stop declared itself, from the host-stamped caller and surface (never Action input):
- * a person at the app, voice or CLI; an agent, whether a Session's or one on MCP; or an Automation or
- * another Workflow Run. A surface that says nothing about who is behind it declares nothing.
- */
-function resolveStoppedVia(context: Readonly<{ actionCaller?: { kind: string }; surface?: string | null }>): WorkflowRunStoppedViaV1 | undefined {
-  switch (context.actionCaller?.kind) {
-    case 'session': return 'agent';
-    case 'automationRun':
-    case 'workflowRun': return 'automation';
-    case 'host':
-    case undefined:
-      return context.surface === 'ui' || context.surface === 'voice' || context.surface === 'cli' ? 'person'
-        : context.surface === 'agent' || context.surface === 'mcp' ? 'agent' : undefined;
-    default: return undefined;
-  }
-}
-
 const EXACT_RECOVERY_RETRY_LIFECYCLES = new Set(['failed', 'cancelled']);
 const EXACT_RECOVERY_WORKSPACE_FAILURES = new Set([
   'conversation_workspace_mismatch', 'source_workspace_unavailable', 'committed_revision_unavailable',
@@ -2370,8 +2352,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     }
     if (args.actionId === 'workflow.run.pause' || args.actionId === 'workflow.run.cancel' || args.actionId === 'workflow.run.delete') {
       try {
-        const stoppedVia = args.actionId === 'workflow.run.cancel' ? resolveStoppedVia(args.context) : undefined;
-        return WorkflowActionOutputSchemasV1[args.actionId].parse(await deps.storage.execute({ operation: args.actionId.slice('workflow.run.'.length), ...args.input, ...(stoppedVia ? { stoppedVia } : {}) }, {
+        return WorkflowActionOutputSchemasV1[args.actionId].parse(await deps.storage.execute({ operation: args.actionId.slice('workflow.run.'.length), ...args.input }, {
           ...(args.context.signal ? { signal: args.context.signal } : {}),
           ...(args.actionId === 'workflow.run.delete' && args.context.onTransportIssued
             ? { onTransportIssued: args.context.onTransportIssued } : {}),

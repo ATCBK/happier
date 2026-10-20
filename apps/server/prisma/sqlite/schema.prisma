@@ -2989,10 +2989,6 @@ model AutomationRun {
     claimedAt          DateTime?
     startedAt          DateTime?
     finishedAt         DateTime?
-    /// Who asked for the Stop as its caller declared itself (person | agent | automation); null when not declared.
-    stopRequestedVia   String?
-    /// The Account that made that call; a Team editor can differ from the Run's owner.
-    stopRequestedByAccountId String?
     claimedByMachineId String?
     claimedByMachine   Machine?           @relation("AutomationRunClaimedByMachine", fields: [claimedByMachineId], references: [id], onDelete: SetNull)
     leaseExpiresAt     DateTime?

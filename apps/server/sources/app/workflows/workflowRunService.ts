@@ -1,6 +1,6 @@
 import { decodeKeysetCursorV1, encodeKeysetCursorV1, readKeysetCursorIdV1, readKeysetCursorTextV1 } from '@happier-dev/protocol/pagination/keysetCursorV1';
 import { measureExternalActionResultResponseEnvelopeUtf8BytesV1 } from '@happier-dev/protocol/actions/externalActionLimits';
-import { isWorkflowRunStoppedVia, projectWorkflowBigIntV1, type WorkflowInvocationLifecycleV1, type WorkflowRunOriginV1, type WorkflowRunStoppedViaV1, type WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { projectWorkflowBigIntV1, type WorkflowInvocationLifecycleV1, type WorkflowRunOriginV1, type WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { toAutomationRunExecutionInputV1Origin } from '@happier-dev/protocol/automations/automationApiV3';
 import { projectAutomationAccountCurrentnessWitnessV1, sameAutomationAccountContentIdentityV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
@@ -98,8 +98,6 @@ const workflowRunProjectionSelect = {
     createdAt: true,
     updatedAt: true,
     finishedAt: true,
-    stopRequestedVia: true,
-    stopRequestedByAccountId: true,
     assignments: { orderBy: { priority: "asc" as const }, take: 1, select: { machineId: true } },
     workflowInvocations: { take: 1, select: { id: true } },
     _count: { select: { workflowInvocations: { where: { lifecycle: "waiting_for_review" } } } },
@@ -196,10 +194,6 @@ function projectRun(row: WorkflowRunRow): WorkflowRunSummaryV1 {
         updatedAt: row.updatedAt.toISOString(),
         // Every Run row select carries the terminal-transition instant (`workflowRunProjectionSelect`).
         finishedAt: row.finishedAt?.toISOString() ?? null,
-        // Who asked for the Stop, as the stopping caller declared it; a Run nobody declared a stop for says nothing.
-        ...(row.stopRequestedVia !== null && row.stopRequestedByAccountId !== null
-            && isWorkflowRunStoppedVia(row.stopRequestedVia)
-            ? { stoppedBy: { via: row.stopRequestedVia, accountId: row.stopRequestedByAccountId } } : {}),
     };
 }
 
@@ -2070,9 +2064,6 @@ export async function cancelWorkflowRunTx(
         runId: string;
         expectedRevision: number;
         cause?: "permanent_target_loss";
-        /** The stopping caller's own declaration, and the Account that made the call (a Team editor is not the owner). */
-        stoppedVia?: WorkflowRunStoppedViaV1;
-        actorAccountId?: string;
     }>,
 ) {
     const deliveryBefore = await readOriginDeliverySignalTx(tx, params.accountId, params.runId);
@@ -2133,7 +2124,6 @@ export async function cancelWorkflowRunTx(
                 finishedAt: now,
             } : {}),
             ...(settlesCustody ? { workflowCustodyState: "settled" } : {}),
-            ...(params.stoppedVia ? { stopRequestedVia: params.stoppedVia, stopRequestedByAccountId: params.actorAccountId ?? params.accountId } : {}),
         },
     });
     if (changed.count !== 1) throw new WorkflowRunServiceError("currentness_conflict");
@@ -2191,11 +2181,11 @@ export async function cancelWorkflowRunTx(
     };
 }
 
-export async function cancelWorkflowRun(params: Readonly<{ accountId: string; runId: string; expectedRevision: number; stoppedVia?: WorkflowRunStoppedViaV1 }>) {
+export async function cancelWorkflowRun(params: Readonly<{ accountId: string; runId: string; expectedRevision: number }>) {
     return await inTx(async (tx) => {
         const access = await resolveEditableWorkflowRunAccessTx(tx, { actorAccountId: params.accountId, runId: params.runId });
         await loadAccountModeTx(tx, access.ownerAccountId, params.runId);
-        return await cancelWorkflowRunTx(tx, { ...params, accountId: access.ownerAccountId, actorAccountId: params.accountId });
+        return await cancelWorkflowRunTx(tx, { ...params, accountId: access.ownerAccountId });
     }, {
         // Ordered publication locks/replay and mode/control/row predicates fence this mutation.
         isolationLevel: "ReadCommitted",
