@@ -30,7 +30,7 @@ import type { SessionAttributedFile } from '@/scm/scmAttribution';
 import { t } from '@/text';
 import { useUnistyles } from 'react-native-unistyles';
 import { useCodeLinesSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
-import { showWorkspaceFileEditorComparison } from '@/components/workspaces/files/details/workspaceFileDetails/WorkspaceFileEditorComparison';
+import { showTextComparison } from '@/components/ui/code/diff/TextComparisonModal';
 import { ScmCommitSelectionCheckGlyph } from '@/components/sessions/sourceControl/commitSelection/ScmCommitSelectionToggleButton';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 
@@ -196,7 +196,7 @@ function FileFrame(props: Readonly<{ editing?: boolean }>) {
                 statusLabel={props.editing ? null : t('detailsSurface.file.statusModified')}
                 diffStat={props.editing ? null : { added: 4, removed: 2 }}
                 notice={props.editing ? (
-                    <SurfaceFreshnessLine tone="warning" reason={t('files.fileChangedExternally')} action={{ label: t('detailsSurface.file.compare'), onPress: () => showWorkspaceFileEditorComparison({ oldText: HOOK_TEXT.replace('never when the window resizes', 'only when the route changes'), newText: HOOK_TEXT, filePath: 'useSettingsRouteKey.ts' }) }} />
+                    <SurfaceFreshnessLine tone="warning" reason={t('files.fileChangedExternally')} action={{ label: t('detailsSurface.file.compare'), onPress: () => showTextComparison({ oldText: HOOK_TEXT.replace('never when the window resizes', 'only when the route changes'), newText: HOOK_TEXT, filePath: 'useSettingsRouteKey.ts', subtitle: t('files.fileChangedExternally') }) }} />
                 ) : null}
             />
             <View style={{ flex: 1, minHeight: 0 }}>
@@ -362,7 +362,6 @@ const FRAMES: ReadonlyArray<Readonly<{ id: string; title: string; render: () => 
                 group={group([], null)}
                 renderTabContent={() => null}
                 renderHeaderActions={() => <>
-                    <IconButton variant="plain" size={24} iconName="arrows-out" onPress={NOOP} accessibilityLabel={t('session.detailsPanel.enterFocusModeA11y')} />
                     <IconButton variant="plain" size={24} iconName="x" onPress={PANE.closeDetails} accessibilityLabel={t('common.close')} />
                 </>}
                 renderEmptyState={() => (

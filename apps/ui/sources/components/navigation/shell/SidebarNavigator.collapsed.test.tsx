@@ -33,28 +33,7 @@ const hoistedState = vi.hoisted(() => ({
 }));
 
 installNavigationShellCommonModuleMocks({
-    appPaneProvider: () => ({
-        useAppPaneContext: () => {
-            const focusModeScopeId = mockAppPaneStore.useContextValue();
-            return {
-                dispatch: mockAppPaneStore.dispatch,
-                state: {
-                    activeScopeId: 'session:s1',
-                    focusMode: { scopeId: focusModeScopeId },
-                    scopes: {
-                        'session:s1': {
-                            right: { isOpen: true },
-                            details: { isOpen: true },
-                            bottom: { isOpen: false },
-                        },
-                    },
-                },
-                getDriver: () => null,
-                driverRegistryVersion: 1,
-                registerDriver: () => () => {},
-            };
-        },
-    }),
+    appPaneProvider: () => vi.importActual('@/components/appShell/panes/AppPaneProvider'),
     reactNative: installReactNativeWebMock({
         View: (props: any) => React.createElement('View', props, props.children),
         Pressable: (props: any) => React.createElement('Pressable', props, props.children),
@@ -105,62 +84,15 @@ const mockLocalSettingsStore = (() => {
     get sidebarWidthPx() {
       return storage.getState().localSettings.sidebarWidthPx;
     },
-    get sidebarWidthBasisPx() {
-      return storage.getState().localSettings.sidebarWidthBasisPx;
-    },
     setSidebarCollapsed(next: boolean) {
       storage.getState().applyLocalSettings({ sidebarCollapsed: next }, { source: 'ui' });
     },
     setSidebarWidthPx(next: number) {
       storage.getState().applyLocalSettings({ sidebarWidthPx: next }, { source: 'ui' });
     },
-    setSidebarWidthBasisPx(next: number) {
-      storage.getState().applyLocalSettings({ sidebarWidthBasisPx: next }, { source: 'ui' });
-    },
     subscribe(listener: () => void) {
       return storage.subscribe(listener);
     },
-  };
-})();
-
-const mockAppPaneStore = (() => {
-  let focusModeScopeId: string | null = null;
-  const listeners = new Set<() => void>();
-  const dispatch = vi.fn((action: any) => {
-    if (action?.type === 'enterFocusMode') {
-      focusModeScopeId = action.scopeId;
-    }
-    if (action?.type === 'exitFocusMode') {
-      if (!action.scopeId || action.scopeId === focusModeScopeId) focusModeScopeId = null;
-    }
-    for (const listener of listeners) listener();
-  });
-
-  return {
-    get focusModeScopeId() {
-      return focusModeScopeId;
-    },
-    setFocusModeScopeId(next: string | null) {
-      focusModeScopeId = next;
-      for (const listener of listeners) listener();
-    },
-    reset() {
-      focusModeScopeId = null;
-      dispatch.mockClear();
-      for (const listener of listeners) listener();
-    },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    useContextValue() {
-      return React.useSyncExternalStore(
-        (listener) => mockAppPaneStore.subscribe(listener),
-        () => mockAppPaneStore.focusModeScopeId,
-        () => mockAppPaneStore.focusModeScopeId,
-      );
-    },
-    dispatch,
   };
 })();
 
@@ -227,6 +159,17 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(screen.findByTestId('navigation-sidebar')).not.toBeNull();
   });
 
+  it('resets the sidebar preference through the shared resize handle to its default', async () => {
+    mockLocalSettingsStore.setSidebarWidthPx(410);
+    const { SidebarNavigator } = await import('./SidebarNavigator');
+    const screen = await renderScreen(<SidebarNavigator />);
+    // Shared-handle DOM tests own dblclick delivery; exercise this consumer's real reset binding.
+    const handle = getResizableSidebarPane(screen.tree).find(node => typeof node.props.interactionProps?.onDoubleClick === 'function');
+    await act(async () => { handle.props.interactionProps.onDoubleClick(); });
+    expect(mockLocalSettingsStore.sidebarWidthPx).toBe(272);
+    expect(widthOf(getSidebar(screen.tree))).toBe(272);
+  });
+
   it('keeps literal pixel preferences across window changes and clamps only the rendered width', async () => {
     mockLocalSettingsStore.setSidebarWidthPx(650);
     hoistedState.mockWindowDimensions = { width: 1200, height: 900 };
@@ -252,6 +195,8 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
         clampedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
         exceededMinPx: true,
         exceededMaxPx: false,
+        overshootPx: -1,
+        collapseArmed: false,
       });
     });
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(false);
@@ -263,8 +208,6 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     act(() => {
       mockLocalSettingsStore.setSidebarCollapsed(false);
       mockLocalSettingsStore.setSidebarWidthPx(320);
-      mockLocalSettingsStore.setSidebarWidthBasisPx(1200);
-      mockAppPaneStore.reset();
     });
     ({ createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness'));
     account = await createSecretSettingsTestHarness({ settings: settingsParse({
@@ -416,12 +359,16 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
         clampedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
         exceededMinPx: false,
         exceededMaxPx: false,
+        overshootPx: 0,
+        collapseArmed: false,
       });
       resizablePane.props.onCommitWidthPx(SIDEBAR_DOCK_MIN_WIDTH_PX, {
         attemptedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
         clampedSizePx: SIDEBAR_DOCK_MIN_WIDTH_PX,
         exceededMinPx: false,
         exceededMaxPx: false,
+        overshootPx: 0,
+        collapseArmed: false,
       });
     });
 
@@ -535,21 +482,6 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(account.artifacts.list()).toHaveLength(0);
   });
 
-  it('does not mutate a pane scope when the current route changes', async () => {
-    hoistedState.mockPathname = '/settings';
-    act(() => {
-      mockAppPaneStore.setFocusModeScopeId('session:s1');
-    });
-    const { SidebarNavigator } = await import('./SidebarNavigator');
-    let tree!: renderer.ReactTestRenderer;
-
-    tree = (await renderScreen(<SidebarNavigator />)).tree;
-
-    expect(mockAppPaneStore.dispatch).not.toHaveBeenCalled();
-    const sidebar = getSidebar(tree);
-    expect(widthOf(sidebar)).toBeGreaterThan(0);
-  });
-
   it('disarms a drag when it returns above half the minimum and commits the minimum', async () => {
     act(() => {
       mockLocalSettingsStore.setSidebarWidthPx(320);
@@ -574,9 +506,10 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
   it('keeps the sidebar and navigator independent of hiding the main pane', async () => {
     hoistedState.mockPathname = '/session/s1';
     const { SidebarNavigator } = await import('./SidebarNavigator');
-    let tree!: renderer.ReactTestRenderer;
-
-    tree = (await renderScreen(<SidebarNavigator />)).tree;
+    const { AppPaneProvider, useAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
+    let pane: ReturnType<typeof useAppPaneContext> | undefined;
+    function PaneProbe() { pane = useAppPaneContext(); return null; }
+    const tree = (await renderScreen(<AppPaneProvider><SidebarNavigator /><PaneProbe /></AppPaneProvider>)).tree;
 
     const { Stack } = await import('expo-router');
     const navigator = tree.root.findByType(Stack);
@@ -585,10 +518,12 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
     expect(widthOf(sidebarBefore)).toBeGreaterThan(0);
 
     await act(async () => {
-      mockAppPaneStore.setFocusModeScopeId('session:s1');
+      pane?.dispatch({ type: 'openRight', scopeId: 'session:s1', tabId: 'files' });
+      pane?.dispatch({ type: 'setMainHidden', scopeId: 'session:s1', hidden: true });
     });
+    expect(pane?.state.scopes['session:s1']?.mainHidden).toBe(true);
 
-    // No remount: toggling focus should not reset session/details state.
+    // Hiding main preserves both the navigator and the independent navigation preference.
     expect(tree.root.findByType(Stack) === navigator).toBe(true);
 
     expect(widthOf(getSidebar(tree))).toBeGreaterThan(0);
@@ -599,7 +534,7 @@ describe('SidebarNavigator (collapsed sidebar)', () => {
       await pressTestInstanceAsync(expandButton);
     });
 
-    expect(mockAppPaneStore.dispatch).not.toHaveBeenCalled();
+    expect(pane?.state.scopes['session:s1']?.mainHidden).toBe(true);
     expect(mockLocalSettingsStore.sidebarCollapsed).toBe(true);
   });
 

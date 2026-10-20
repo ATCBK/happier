@@ -13,19 +13,13 @@ import type { ComposerReferenceSearchHost } from '@/components/autocomplete/comp
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { t } from '@/text';
 import { resolveComposerEntityDrop } from './composerEntityDrop';
+import { describeComposerEntityDropReason } from './composerEntityDropReason';
 import { useOptionalWorkspaceNavigation } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 import { resolveDestinationRefFromHref } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
-
-export function describeComposerEntityDropReason(code: string): string {
-    if (code === 'scopeMismatch') return t('entityDragDrop.surface.scopeMismatch');
-    if (code === 'notEditable') return t('entityDragDrop.composer.readOnly');
-    if (code === 'workspaceMismatch') return t('entityDragDrop.composer.otherWorkspace');
-    return t('entityDragDrop.composer.unavailable');
-}
 
 /** Only this feedback leaf observes carry changes; typing and pointer frames stay separate. */
 export function ComposerEntityDropTarget(props: Readonly<{

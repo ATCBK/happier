@@ -55,7 +55,9 @@ The unreleased 0.3 shell uses Plugin UI's resize primitive for both host panes a
 rails. Public `ListDetailLayout` and `Collection` expose controlled rail widths and an optional
 `resizeKey`; the presentation host supplies device-local sizing with plugin-namespaced keys.
 Installed plugins consume the host-provided runtime and share the same geometry and accessible
-handle. Plugins do not import app pane internals or create their own persistence record. App pages
+handle. Controlled collection widths govern the collection's own split; a host details pane retains
+its own width, placement and shared pane handle. Plugins do not import app pane internals or create
+their own persistence record. App pages
 also inherit their host's main-column visibility; their declared page identity supplies the hide/show
 wording. See [Collection presentation](collection-presentation.md) and
 [App shell panes](app-shell-panes.md) for the canonical owners.
@@ -1343,7 +1345,9 @@ using the same host navigation owner as transcript links, the tree and Search.
 `file.path` is workspace-relative; `anchor` uses `WorkspaceAnchorV1` and
 `anchorSource` selects file or diff coordinates. Optional `view` selects
 `view`, `changes` or `edit`, and `blame` requests the blame view. The outer
-Action `mode` still controls preview, kept-tab or split placement. Plugins must
+Action `mode` still controls preview, kept-tab or split placement.
+`changesScope` consumes the shared `FileChangesScope` selector, preserving the
+selected review turn rather than deriving another scope vocabulary. Plugins must
 declare the Action in their manifest capabilities; this does not grant file
 access or make paths outside the workspace openable. `workspace.files.link.get`
 returns the same canonical link without opening a tab. The `href` arm remains
@@ -3270,14 +3274,17 @@ and control owner as the shared Browser/Computer viewer. A provisioned graphical
 guest is an ordinary enrolled Machine; its provider cannot grant viewing or input,
 select a display, wake the guest from a passive viewer, or supply a second viewer
 transport. The source owner validates the exact window/display identity and
-capture geometry before input. Source removal or current access refusal retires
-the UI's selected source and control projection; opening a privacy settings page
-does not grant either OS permission.
+capture geometry before pointer input. Source removal or current Account access
+refusal retires the UI's selected source and control projection. OS capture
+permission loss withholds pixels and input while retaining the owner-confirmed
+share and its Stop sharing control; opening a privacy settings page does not
+grant either OS permission.
 
 Capture and input readiness are independent current native facts. On macOS these
-correspond to Screen Recording and Accessibility. A fresh `computer.targets.list`
-answer supplies their observed state; unknown grants refuse the affected
-operation. Whole-display selection remains explicit and the existing configurable
+correspond to Screen Recording and Accessibility. Picker enumeration and the
+retained source's `computer.control.status` read supply their observed state;
+control refresh does not request picker thumbnails. Unknown grants refuse the
+affected operation. Whole-display selection remains explicit and the existing configurable
 approval presents its consequence: other visible apps and notifications are
 included. Registration, target-schema membership and native archive availability
 are not evidence of a usable screen. The current pinned native contract qualifies

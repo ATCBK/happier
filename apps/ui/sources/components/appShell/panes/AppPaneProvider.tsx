@@ -59,6 +59,8 @@ const AppPaneContext = createContext<AppPaneContextValue | null>(null);
 type AppPaneFindSeedContextValue = Pick<AppPaneContextValue, 'fileFindSeedHandoff' | 'fileFindSeedAccountBindings'>;
 // Launch consumers need credential/handoff changes, not every pane reducer tick.
 const AppPaneFindSeedContext = createContext<AppPaneFindSeedContextValue | null>(null);
+// File origins need the stable transient focus owner, rather than every pane-state update.
+const AppPaneFocusReturnContext = createContext<PaneOverlayFocusReturnOwner | null>(null);
 
 type PersistedPaneSlot = Readonly<{
     isOpen: boolean;
@@ -239,11 +241,8 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         overlayFocusReturnOwnerRef.current = createPaneOverlayFocusReturnOwner();
     }
     const overlayFocusReturnOwner = overlayFocusReturnOwnerRef.current;
+    const pendingFileFocusReturns = useRef<Array<() => void>>([]);
     const dispatch = React.useCallback((action: AppPaneAction) => {
-        if (action.type === 'mergePersistedScopes') {
-            overlayFocusReturnOwner.clearAll();
-        }
-
         const capture = resolveOverlayFocusCapture(stateRef.current, action);
         if (capture) {
             overlayFocusReturnOwner.capture(capture.scopeId, capture.surface);
@@ -263,6 +262,25 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
             }
         }
         const nextState = appPaneReduce(previousState, action);
+        if (action.type === 'mergePersistedScopes' && nextState !== previousState) {
+            overlayFocusReturnOwner.clearAll();
+        }
+        if ('scopeId' in action && action.scopeId !== undefined) {
+            const previousDetails = previousState.scopes[action.scopeId]?.details;
+            const nextDetails = nextState.scopes[action.scopeId]?.details;
+            const activeKey = previousDetails?.focusedGroupId
+                ? previousDetails.groupsById[previousDetails.focusedGroupId]?.activeTabKey
+                : null;
+            const isClose = action.type === 'closeDetails' || action.type === 'closeDetailsTab' || action.type === 'closeDetailsGroup';
+            if (isClose && previousDetails?.isOpen && activeKey
+                && (!nextDetails?.isOpen || !nextDetails.tabsByKey[activeKey])) {
+                const restore = overlayFocusReturnOwner.takeDetailsTabReturn(action.scopeId, activeKey, 'pane');
+                if (restore) pendingFileFocusReturns.current.push(restore);
+            }
+            for (const key of Object.keys(previousDetails?.tabsByKey ?? {})) {
+                if (!nextDetails?.tabsByKey[key]) overlayFocusReturnOwner.forgetDetailsTabOrigin(action.scopeId, key);
+            }
+        }
         stateRef.current = nextState;
         setState(nextState);
         notifySessionTerminalWorkspaceChanged();
@@ -282,6 +300,12 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         }
     }, [overlayFocusReturnOwner, readPaneAccountScope]);
     const [driverRegistryVersion, setDriverRegistryVersion] = useState(0);
+
+    React.useLayoutEffect(() => {
+        const returns = pendingFileFocusReturns.current;
+        pendingFileFocusReturns.current = [];
+        for (const restore of returns) restore();
+    }, [state]);
 
     React.useLayoutEffect(() => registerSessionTerminalWorkspaceOwner({ getState: () => stateRef.current,
         getReadState: readQualifiedState, dispatch }), [dispatch, readQualifiedState]);
@@ -350,9 +374,9 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
 
     const findSeedValue = useMemo(() => ({ fileFindSeedHandoff, fileFindSeedAccountBindings }),
         [fileFindSeedHandoff, fileFindSeedAccountBindings]);
-    return <AppPaneContext.Provider value={value}><AppPaneFindSeedContext.Provider value={findSeedValue}>
+    return <AppPaneContext.Provider value={value}><AppPaneFindSeedContext.Provider value={findSeedValue}><AppPaneFocusReturnContext.Provider value={overlayFocusReturnOwner}>
         {props.children}
-    </AppPaneFindSeedContext.Provider></AppPaneContext.Provider>;
+    </AppPaneFocusReturnContext.Provider></AppPaneFindSeedContext.Provider></AppPaneContext.Provider>;
 });
 
 export function useAppPaneContext(): AppPaneContextValue {
@@ -367,4 +391,8 @@ export function useOptionalAppPaneContext(): AppPaneContextValue | null {
 
 export function useOptionalAppPaneFindSeedContext(): AppPaneFindSeedContextValue | null {
     return useContext(AppPaneFindSeedContext);
+}
+
+export function useOptionalPaneFocusReturnOwner(): PaneOverlayFocusReturnOwner | null {
+    return useContext(AppPaneFocusReturnContext);
 }

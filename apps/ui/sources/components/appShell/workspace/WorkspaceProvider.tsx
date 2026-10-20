@@ -14,7 +14,7 @@ import { bindWorkspaceBrowserHistory, createWorkspaceBrowserTransport, installWo
 import type { WorkspaceNavigationEntry } from './workspaceNavigationHistory';
 import { useWorkspaceState } from './useWorkspaceState';
 import { useWorkspaceTabSync } from './useWorkspaceTabSync';
-import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue, type WorkspacePhoneControls, type WorkspaceDestinationTitle } from './WorkspaceNavigationContext';
+import { WorkspaceNavigationProvider, type WorkspaceNavigationContextValue, type WorkspacePhoneControls, type WorkspaceDestinationTitle } from './WorkspaceNavigationContext';
 import type { DestinationNavigation } from './DestinationInstanceHost';
 import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCanvasHost';
 import { createWorkspaceActionAdapter, selectWorkspaceTabsToClose, workspaceActionFailure, type WorkspaceActionOutcome } from './workspaceActions';
@@ -504,6 +504,6 @@ export function WorkspaceProvider(props: Readonly<{
         navigationForTab(state.groups[state.focusedGroupId].activeTabId).pushRetainingCurrent?.(href);
     });
     return <WorkspaceRouteHostingContext.Provider value={ownsHref}>
-        <WorkspaceNavigationContext.Provider value={navigation}><WorkspaceWindowTitle />{typeof props.children === 'function' ? props.children(navigation) : props.children}</WorkspaceNavigationContext.Provider>
+        <WorkspaceNavigationProvider value={navigation}><WorkspaceWindowTitle />{typeof props.children === 'function' ? props.children(navigation) : props.children}</WorkspaceNavigationProvider>
     </WorkspaceRouteHostingContext.Provider>;
 }

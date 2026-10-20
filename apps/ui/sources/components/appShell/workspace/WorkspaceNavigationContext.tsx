@@ -60,6 +60,21 @@ export type WorkspaceNavigationContextValue = Readonly<{
 }>;
 
 export const WorkspaceNavigationContext = React.createContext<WorkspaceNavigationContextValue | null>(null);
+const WorkspaceFileNavigationContext = React.createContext<Readonly<{ canOpen: boolean; phone: boolean }>>({ canOpen: false, phone: false });
+
+/** Stable navigation capability facts for frequently mounted file-link consumers. */
+export function WorkspaceNavigationProvider(props: React.PropsWithChildren<{ value: WorkspaceNavigationContextValue }>) {
+    const canOpen = props.value.active || props.value.ownsRoute === true || Boolean(props.value.phone);
+    const phone = Boolean(props.value.phone);
+    const capabilities = React.useMemo(() => ({ canOpen, phone }), [canOpen, phone]);
+    return <WorkspaceNavigationContext.Provider value={props.value}>
+        <WorkspaceFileNavigationContext.Provider value={capabilities}>{props.children}</WorkspaceFileNavigationContext.Provider>
+    </WorkspaceNavigationContext.Provider>;
+}
+
+export function useWorkspaceFileNavigationCapabilities() {
+    return React.useContext(WorkspaceFileNavigationContext);
+}
 
 export function useOptionalWorkspaceNavigation(): WorkspaceNavigationContextValue | null {
     return React.useContext(WorkspaceNavigationContext);

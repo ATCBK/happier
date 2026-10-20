@@ -124,9 +124,10 @@ describe('shouldOpenFullCompanionAfterShow', () => {
 
     it('lets a fitting cold rail measure in place before choosing the full destination', () => {
         const geometry: Omit<SessionCompanionPlacementInput, 'preference'> = {
-            paneLayout: { containerWidthPx: 1920, containerHeightPx: 900, mainRegionHeightPx: 800,
+            paneLayout: { arrangement: 'session', mainHidden: false, mainDrawerOpen: false, effectiveDetailsOpen: false, detailsAvailable: true,
+                containerWidthPx: 1920, containerHeightPx: 900, mainRegionHeightPx: 800,
                 mainRegionWidthPx: 1330, multiPaneEnabled: true, deviceType: 'tablet',
-                layout: { kind: 'single', right: 'hidden', details: 'hidden' }, bottomPresentation: 'docked' },
+                layout: { main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }, bottomPresentation: 'docked' },
             hostHeightPx: 800, bottomObstructionPx: 0, mainVisible: true,
             accessibilityModalPaneActive: false, fontScale: 1, cardBounds: null,
         };

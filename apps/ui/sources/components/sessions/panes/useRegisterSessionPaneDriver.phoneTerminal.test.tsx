@@ -22,6 +22,7 @@ vi.mock('@/utils/platform/responsive', () => ({
 // The pane scope as the desktop left it: its bottom pane is open on the Terminal.
 vi.mock('@/components/appShell/panes/AppPaneProvider', () => {
   const scope = {
+    mainHidden: false,
     right: { isOpen: false, activeTabId: null },
     details: { isOpen: false, tabs: [], activeTabKey: null },
     bottom: {
@@ -36,7 +37,6 @@ vi.mock('@/components/appShell/panes/AppPaneProvider', () => {
     state: {
       scopes: new Proxy({}, { get: () => scope }),
       activeScopeId: null,
-      focusMode: null,
     },
     registerDriver: (driver: any) => {
       registeredDriver = driver;
