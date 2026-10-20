@@ -15122,6 +15122,12 @@ const ru = translated(workflowValueReferenceTranslations.ru, {
         completedCount: ({ count }) =>
             count === 1 ? 'Единственный шаг завершён.' : `Все шаги (${count}) завершены.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `Завершено шагов: ${completed} из ${total}.`,
+        stoppedBy: {
+            you: 'Остановлено вами',
+            anotherPerson: 'Остановлено другим человеком',
+            agent: 'Остановлено агентом',
+            automation: 'Остановлено автоматизацией',
+        },
         notAnswered: 'Без ответа',
         waitContinued: 'Продолжено',
         answeredBy: ({ name }) => `Ответ от ${name}`,

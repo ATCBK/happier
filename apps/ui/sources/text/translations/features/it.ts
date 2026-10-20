@@ -15090,6 +15090,12 @@ const it = translated(workflowValueReferenceTranslations.it, {
         machineUnavailableBody: 'Le opzioni per riprendere compariranno quando lo stato attuale sarà noto.',
         completedCount: ({ count }) => count === 1 ? 'Il suo unico passo è terminato.' : `Tutti i ${count} passi sono terminati.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${completed} di ${total} ${total === 1 ? 'passaggio completato' : 'passaggi completati'}.`,
+        stoppedBy: {
+            you: 'Fermato da te',
+            anotherPerson: 'Fermato da un’altra persona',
+            agent: 'Fermato da un agente',
+            automation: 'Fermato da un’automazione',
+        },
         notAnswered: 'Nessuna risposta',
         waitContinued: 'Continuato',
         answeredBy: ({ name }) => `Risposta di ${name}`,

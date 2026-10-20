@@ -15073,6 +15073,12 @@ const zhHans = translated(workflowValueReferenceTranslations.zh, {
         machineUnavailableBody: '弄清当前状态后，会显示可选的恢复方式。',
         completedCount: ({ count }) => count === 1 ? '唯一的步骤已完成。' : `全部 ${count} 个步骤已完成。`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `已完成 ${completed}/${total} 个步骤。`,
+        stoppedBy: {
+            you: '已由你停止',
+            anotherPerson: '已由其他人停止',
+            agent: '已由代理停止',
+            automation: '已由自动化停止',
+        },
         notAnswered: '未回答',
         waitContinued: '已继续',
         answeredBy: ({ name }) => `由${name}回答`,

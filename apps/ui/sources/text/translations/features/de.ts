@@ -14583,6 +14583,12 @@ const de = translated(workflowValueReferenceTranslations.de, {
         machineUnavailableBody: 'Möglichkeiten zum Fortsetzen erscheinen, sobald der aktuelle Stand bekannt ist.',
         completedCount: ({ count }) => count === 1 ? 'Der einzige Schritt ist fertig.' : `Alle ${count} Schritte sind fertig.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${completed} von ${total} ${total === 1 ? 'Schritt' : 'Schritten'} fertig.`,
+        stoppedBy: {
+            you: 'Von dir gestoppt',
+            anotherPerson: 'Von einer anderen Person gestoppt',
+            agent: 'Von einem Agenten gestoppt',
+            automation: 'Von einer Automatisierung gestoppt',
+        },
         notAnswered: 'Nicht beantwortet',
         waitContinued: 'Fortgesetzt',
         answeredBy: ({ name }) => `Beantwortet von ${name}`,
