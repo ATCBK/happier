@@ -150,15 +150,47 @@ Choose **Search more conversations** when offered to continue from that page.
 **Stop** leaves coverage incomplete. A very large conversation may remain
 incomplete on repeated attempts; continuation does not guarantee a full scan.
 
-Standard search supports Claude Code, Codex, Pi, OhMyPi, Antigravity and
-OpenCode in this development channel. File-based sources search decoded
+Standard search supports Claude Code, Codex, Pi, OhMyPi, Antigravity,
+OpenCode, Copilot's event-v1 history, Droid's schema-2 history,
+CodeBuddy's CLI 2.170.0 JSONL history, Kilo's CLI 1.0.25 JSON-file history,
+Auggie's CLI 0.36.0 native
+session format, FX's CLI v0.0.14 schema-4 history and Kimi Code's protocol 1.4
+history (characterized from CLI 0.18.0) in this development channel.
+File-based sources search decoded
 transcript text; OpenCode reads messages through its native client. Codex
 app-server-only threads without a searchable local transcript remain a
 coverage gap. Indexed search uses the selected Agents' existing transcript
-readers, including those six where their configured source can be read; an
+readers, including these sources where their configured history can be read; an
 Agent being installed does not guarantee readable history. Older daemons show
 an update hint. Partial coverage or an unsupported source is not a claim that
 no conversation matched. A standard scan creates no persistent content index.
+
+This development channel also reads Grok's local paired session files,
+Cursor CLI's JSONL transcripts with v1 chat metadata, and Kiro's v1 CLI
+chat store. These sources need no export. Unknown formats report incomplete
+or unsupported coverage. Kiro's separate ACP V3 history is outside the v1
+reader; native CLI version coverage still needs release validation.
+
+Kilo reads its existing local history without starting a vendor server or
+requiring an export. Other Kilo history formats report incomplete or
+unsupported coverage; installing a different CLI version does not establish
+that its history uses the supported format.
+
+Kimi reads existing local Kimi Code history without an export or a running
+Agent. Other wire versions report unsupported coverage; unknown records and
+unreadable ranges keep coverage incomplete.
+
+Auggie reads saved local conversations without an export or a running vendor
+process. Backups and temporary snapshots are excluded; unreadable or unknown
+formats remain incomplete or unsupported. A rewritten or summarized native
+history replaces the indexed content rather than preserving abandoned text.
+
+FX reads committed local turns and referenced tool results without an export
+or vendor process. Model-context checkpoints do not hide earlier archived
+messages. Legacy formats, opt-in sessions-v2 and unknown frames remain incomplete
+or unsupported.
+Devin and custom ACP do not currently advertise native conversation search.
+Their list/resume support alone is not transcript coverage.
 
 In this development channel, the **Browse Existing Sessions** conversation view
 also reads eligible indexes as you type. Choose **Search** to include an explicit
