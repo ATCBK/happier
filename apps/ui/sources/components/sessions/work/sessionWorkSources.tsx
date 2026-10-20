@@ -23,7 +23,8 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { readSessionWorkStalled, readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
-import { getSessionName, getSessionWorkContext } from '@/utils/sessions/sessionUtils';
+import { getSessionWorkContext } from '@/utils/sessions/sessionUtils';
+import { sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { describeActionOperationStatusLabel, resolveActionOperationStatus } from '@/components/inbox/actionOperations/actionOperationPresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { useSessionActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
@@ -88,7 +89,9 @@ export function toWorkReportSessionSource(session: Session, nowMs: number): Work
     return {
         sessionId: session.id,
         managerSessionId: normalizeId(readSessionManagerSessionIdV1(session)),
-        title: getSessionName(session, session.serverId ?? null),
+        // The one display-title owner: a row whose content is still undecided names itself like the sidebar does
+        // ("Encrypted session"), not "Untitled session", until hydration settles it.
+        title: sessionDisplayTitle(session),
         agentId,
         facts: context ? [context] : [],
         statusFacts: readSessionWorkStatusFacts(session, nowMs),
