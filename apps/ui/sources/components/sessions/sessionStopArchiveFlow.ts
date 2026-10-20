@@ -3,6 +3,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import type { SessionStopRecovery } from '@/sync/ops/sessionStopContract';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { readSessionArchivePending } from '@/sync/domains/session/listing/sessionArchiveState';
 
 type SessionMutationResult = Readonly<{
     success: boolean;
@@ -57,50 +58,35 @@ export function resolveSessionStopFailureMessage(
     return result.message || fallbackMessage;
 }
 
-export function keepSessionVisibleWhenInactive(address: SessionAddress): void {
-    const state = storage.getState();
-    state.applyServerScopedSessionListRowPatches(address.serverId, [
-        {
-            sessionId: address.sessionId,
-            patch: { keepVisibleWhenInactive: true },
-        },
-    ]);
+export function isSessionArchivePending(address: SessionAddress): boolean {
+    return readSessionArchivePending(storage.getState(), address);
 }
 
-export function clearSessionVisibleWhenInactive(address: SessionAddress): void {
-    const state = storage.getState();
-    state.applyServerScopedSessionListRowPatches(address.serverId, [
-        {
-            sessionId: address.sessionId,
-            patch: { keepVisibleWhenInactive: false },
-        },
-    ]);
-}
-
-export async function stopSessionAndMaybeArchive(params: StopSessionAndMaybeArchiveParams): Promise<void> {
-    const keepVisibleWhenStopping = params.archiveAfterStop === 'always';
-
-    if (keepVisibleWhenStopping) {
-        keepSessionVisibleWhenInactive(params.address);
-    }
-
-    const stopResult = await params.stopSession();
-    // A preceding Stop may already have retired the runtime while this UI target still looks active.
-    // The Home remains authoritative about whether Archive is now allowed.
-    const canAttemptArchiveWithoutRuntime = params.archiveAfterStop === 'always'
-        && stopResult.code === 'session_stop_not_found';
-    if (!stopResult.success && !isAcceptedPendingSessionStop(stopResult) && !canAttemptArchiveWithoutRuntime) {
-        if (keepVisibleWhenStopping) {
-            clearSessionVisibleWhenInactive(params.address);
-        }
-        throw new HappyError(resolveSessionStopFailureMessage(stopResult, params.stopErrorMessage), false);
-    }
-
-    if (params.archiveAfterStop === 'never') {
-        return;
-    }
-
+/** Call after confirmation; every archive entry point shares synchronous admission. */
+export async function archiveSessionWithPendingState<T>(
+    address: SessionAddress,
+    archiveSession: () => Promise<T>,
+): Promise<T | false> {
+    const operation = storage.getState().beginSessionArchive(address);
+    if (!operation) return false;
     try {
+        return await archiveSession();
+    } finally {
+        storage.getState().finishSessionArchive(operation);
+    }
+}
+
+export async function stopSessionAndMaybeArchive(params: StopSessionAndMaybeArchiveParams): Promise<void | false> {
+    const run = async () => {
+        const stopResult = await params.stopSession();
+        // A missing runner permits one authoritative Archive attempt. Accepted
+        // Stop or disconnect alone does not establish process termination.
+        const canAttemptArchiveWithoutRuntime = params.archiveAfterStop === 'always'
+            && stopResult.code === 'session_stop_not_found';
+        if (!stopResult.success && !isAcceptedPendingSessionStop(stopResult) && !canAttemptArchiveWithoutRuntime) {
+            throw new HappyError(resolveSessionStopFailureMessage(stopResult, params.stopErrorMessage), false);
+        }
+        if (params.archiveAfterStop === 'never') return;
         const archiveResult = await params.archiveSession();
         if (!archiveResult.success) {
             const message = isSessionActiveArchiveResult(archiveResult)
@@ -108,9 +94,8 @@ export async function stopSessionAndMaybeArchive(params: StopSessionAndMaybeArch
                 : archiveResult.message || params.archiveErrorMessage;
             throw new HappyError(message, false, { code: archiveResult.code });
         }
-    } finally {
-        if (keepVisibleWhenStopping) {
-            clearSessionVisibleWhenInactive(params.address);
-        }
-    }
+    };
+    return params.archiveAfterStop === 'always'
+        ? archiveSessionWithPendingState(params.address, run)
+        : run();
 }

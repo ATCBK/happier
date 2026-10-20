@@ -1,3 +1,4 @@
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
 import { confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import * as React from 'react';
@@ -369,6 +370,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     () => normalizeSessionAddress(sessionServerId, props.sessionId),
     [props.sessionId, sessionServerId],
   );
+  const archivePending = useSessionArchivePending(companionAddress);
   const companionRevealPort = useSessionCompanionRevealPort(companionAddress);
   const openCompanionFullSurface = React.useCallback(() => {
     companionRevealPort?.openFullSurface();
@@ -669,6 +671,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
         target: sessionActionTarget,
         iconColor: theme.colors.chrome.header.foreground,
         accountShowToolCalls,
+        archivePending,
       });
       if (item) push(getSessionActionMetadata(actionId)?.group ?? 'session', item);
     }
@@ -711,6 +714,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     // Grouped by what each row does; destructive operations close the menu, after everything else.
     return composeSessionHeaderMenu(out);
   }, [
+    archivePending,
     collaborationHeaderState.attentionLabel,
     collaborationHeaderState.overflow,
     props.collaborationHeader,

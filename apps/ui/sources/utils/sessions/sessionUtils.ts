@@ -1,3 +1,5 @@
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { resolveSessionAwarenessContentLabel } from '@/sync/domains/session/awareness/sessionAwarenessContentLabels';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
@@ -48,7 +50,7 @@ import { formatSessionPath } from './formatPathRelativeToHome';
 import { useUnistyles } from 'react-native-unistyles';
 export { formatPathRelativeToHome } from './formatPathRelativeToHome';
 
-export type SessionState = 'unknown' | 'stale' | 'locked' | 'preparing' | 'repair_needed' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'ready' | 'pending_input' | 'disconnected' | 'recoverable_unservable' | 'resuming' | 'thinking' | 'background_active' | 'waiting' | 'permission_required' | 'action_required';
+export type SessionState = 'archiving' | 'unknown' | 'stale' | 'locked' | 'preparing' | 'repair_needed' | 'access_pending' | 'setup_required' | 'content_unavailable' | 'failed' | 'ready' | 'pending_input' | 'disconnected' | 'recoverable_unservable' | 'resuming' | 'thinking' | 'background_active' | 'waiting' | 'permission_required' | 'action_required';
 
 /**
  * The canonical presented answer for one Session's awareness: which state it is in, how that
@@ -108,6 +110,7 @@ type SessionStatusColors = Readonly<{
 }>;
 export type SessionWorkingTextMode = 'animated' | 'static';
 type GetSessionStatusOptions = Readonly<{
+    archiving?: boolean;
     includeTitle?: boolean;
     /** Work rows already carry an age, while Session-list rows can retain Last seen. */
     disconnectedTextMode?: 'lastSeen' | 'offline';
@@ -198,6 +201,7 @@ const SESSION_STATE_STATUS_CHROME: Readonly<Record<SessionState, Readonly<{
     pulse: boolean;
     disconnected?: boolean;
 }>>> = Object.freeze({
+    archiving: { color: 'connecting', pulse: true },
     waiting: { color: 'connected', pulse: false },
     unknown: { color: 'default', pulse: false },
     stale: { color: 'default', pulse: false },
@@ -482,6 +486,14 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
         pendingRequestObservedAt: latestPendingRequestObservedAt(session),
     });
     const connected = awareness.runtime !== 'offline' && awareness.runtime !== 'unknown';
+    const archiving = resolvedOptions.archiving ?? ('archiving' in session && session.archiving === true);
+    if (archiving) {
+        return {
+            awareness, state: 'archiving', statusText: t('status.archiving'), isConnected: connected,
+            shouldShowStatus: true, statusColor: statusColors.connecting, statusDotColor: statusColors.connecting,
+            isPulsing: true,
+        };
+    }
     const contentReadable = isSessionAwarenessContentReadableV1(awareness.encryption);
     const canAnimate = awareness.freshness === 'live' && contentReadable;
     const idx = typeof vibingIndex === 'number' ? vibingIndex : Math.floor(Math.random() * vibingMessages.length);
@@ -520,6 +532,9 @@ export function useSessionStatus(session: SessionStatusSource | null, options?: 
 export function useSessionStatus(session: SessionStatusSource | null, options: UseSessionStatusOptions = {}): SessionStatus | null {
     const { theme } = useUnistyles();
     const sessionId = typeof session?.id === 'string' ? session.id : '';
+    const scopedAddress = session && 'serverId' in session && typeof session.serverId === 'string'
+        ? normalizeSessionAddress(session.serverId, sessionId) : null;
+    const archivePending = useSessionArchivePending(scopedAddress);
     const shouldSubscribeToSession = options.subscribeToSession !== false && sessionId.length > 0;
     const rawSession = useSession(shouldSubscribeToSession ? sessionId : '');
     const sessionListWorkingStatusAnimatedTextEnabled = useSetting('sessionListWorkingStatusAnimatedTextEnabled');
@@ -574,6 +589,7 @@ export function useSessionStatus(session: SessionStatusSource | null, options: U
 
     if (!session && !rawSession) return null;
     return getSessionStatus(resolvedSession, now, {
+        archiving: archivePending || Boolean(session && 'archiving' in session && session.archiving === true),
         vibingIndex,
         workingTextMode: options.workingTextMode ?? (sessionListWorkingStatusAnimatedTextEnabled === false ? 'static' : 'animated'),
         statusColors: theme.colors.status as SessionStatusColors,

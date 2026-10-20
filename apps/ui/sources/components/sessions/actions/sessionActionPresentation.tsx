@@ -38,6 +38,10 @@ export function resolveSessionDeleteWarning(input: Readonly<{
         : input.defaultWarning;
 }
 
+function isArchiveMutationPending(actionId: SessionActionId, archivePending: boolean | undefined): boolean {
+    return archivePending === true && (actionId === SESSION_ACTION_ARCHIVE_ID || actionId === SESSION_ACTION_STOP_ID);
+}
+
 const MENU_SUBTITLE_ACTION_IDS: ReadonlySet<SessionActionId> = new Set([SESSION_ACTION_MAKE_BOT_ID, SESSION_ACTION_MAKE_REGULAR_ID,
     SESSION_ACTION_COORDINATOR_EDIT_ID, SESSION_ACTION_COORDINATOR_ANSWERS_ID, SESSION_ACTION_COORDINATOR_STOP_ID]);
 
@@ -48,11 +52,13 @@ export function createSessionActionDropdownItem(params: Readonly<{
     target?: SessionActionTarget;
     /** The Account's Show tool calls default, so the tool-call rows state what the transcript does. */
     accountShowToolCalls?: boolean | null;
+    archivePending?: boolean;
 }>): DropdownMenuItem | null {
     const metadata = getSessionActionMetadata(params.actionId);
     if (!metadata) return null;
     const item: DropdownMenuItem = {
         id: params.actionId,
+        ...(isArchiveMutationPending(params.actionId, params.archivePending) ? { disabled: true } : {}),
         title: resolveSessionActionTitle(metadata, params.target),
         // Menus stay one line per row except where the row's consequence is the point of the choice.
         ...(metadata.subtitleKey && MENU_SUBTITLE_ACTION_IDS.has(params.actionId) ? { subtitle: t(metadata.subtitleKey) } : {}),
@@ -88,8 +94,10 @@ export function createSessionActionDropdownItem(params: Readonly<{
 export function createSessionActionInfoItemProps(params: Readonly<{
     actionId: SessionActionId;
     target?: SessionActionTarget;
+    archivePending?: boolean;
 }>): {
     testID: string;
+    disabled?: boolean;
     title: string;
     subtitle?: string;
 } | null {
@@ -109,6 +117,7 @@ export function createSessionActionInfoItemProps(params: Readonly<{
                 : `session-info-${stableActionId.replaceAll('.', '-')}`;
     return {
         testID,
+        ...(isArchiveMutationPending(params.actionId, params.archivePending) ? { disabled: true } : {}),
         title: resolveSessionActionTitle(metadata, params.target),
         subtitle: metadata.subtitleKey ? t(metadata.subtitleKey) : undefined,
     };

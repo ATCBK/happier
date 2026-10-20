@@ -1,29 +1,17 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit';
 import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
-import { createPartialStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { storage } from '@/sync/domains/state/storage';
+import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { stopSessionAndMaybeArchive } from './sessionStopArchiveFlow';
 
-const applyServerScopedSessionListRowPatchesSpy = vi.fn();
 const modalConfirmSpy = vi.fn(async () => true);
 
 function address(sessionId: string, serverId = 'server-a') {
     return { serverId, sessionId } as const;
 }
-
-vi.mock('@/sync/domains/state/storage', async (importOriginal) =>
-    createPartialStorageModuleMock(importOriginal, {
-        storage: {
-            getState: () => ({
-                applyServerScopedSessionListRowPatches: applyServerScopedSessionListRowPatchesSpy,
-                ordinarySessionListMembershipByServerId: {
-                    'server-a': ['same-session'],
-                    'server-b': ['same-session'],
-                },
-            }),
-        },
-    }),
-);
 
 vi.mock('@/modal', () => createModalModuleMock({
     spies: {
@@ -39,6 +27,7 @@ vi.mock('@/text', async () => {
 });
 
 describe('stopSessionAndMaybeArchive', () => {
+    beforeEach(() => { storage.setState(storage.getInitialState(), true); });
     it('asks the Home to archive when a preceding Stop already retired the captured active target', async () => {
         const archiveSession = vi.fn(async () => ({ success: true }));
         const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
@@ -85,12 +74,17 @@ describe('stopSessionAndMaybeArchive', () => {
     });
 
     afterEach(() => {
+        expect(storage.getState().sessionArchiveOperations).toEqual({});
         standardCleanup();
-        applyServerScopedSessionListRowPatchesSpy.mockClear();
         modalConfirmSpy.mockClear();
     });
 
-    it('uses the exact Home for temporary retention and archive-success cleanup when two Homes share a Session id', async () => {
+    it('preserves independent attention retention in both Homes when an archive settles', async () => {
+        for (const serverId of ['server-a', 'server-b']) {
+            storage.getState().applyServerScopedSessionListRows(serverId, [
+                createSessionListRenderableSessionFixture({ id: 'same-session', keepVisibleWhenInactive: true }),
+            ], { source: 'ordinary', mode: 'replace' });
+        }
         const stopSpy = vi.fn(async () => ({ success: true }));
         const archiveSpy = vi.fn(async () => ({ success: true }));
 
@@ -106,20 +100,9 @@ describe('stopSessionAndMaybeArchive', () => {
             stopErrorMessage: 'stop failed',
             archiveErrorMessage: 'archive failed',
         });
-
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(1, 'server-b', [
-            {
-                sessionId: 'same-session',
-                patch: { keepVisibleWhenInactive: true },
-            },
-        ]);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(2, 'server-b', [
-            {
-                sessionId: 'same-session',
-                patch: { keepVisibleWhenInactive: false },
-            },
-        ]);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenCalledTimes(2);
+        for (const serverId of ['server-a', 'server-b']) {
+            expect(storage.getState().sessionListRowsByServerId[serverId]?.['same-session']?.keepVisibleWhenInactive).toBe(true);
+        }
     });
 
     it('stops without archiving when stop-only behavior is requested', async () => {
@@ -142,10 +125,9 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(stopSpy).toHaveBeenCalledTimes(1);
         expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(archiveSpy).not.toHaveBeenCalled();
-        expect(applyServerScopedSessionListRowPatchesSpy).not.toHaveBeenCalled();
     });
 
-    it('clears the visibility override when stopping fails', async () => {
+    it('settles archive progress when stopping fails', async () => {
         const stopSpy = vi.fn(async () => ({ success: false, message: 'boom' }));
         const archiveSpy = vi.fn(async () => ({ success: true }));
 
@@ -164,18 +146,6 @@ describe('stopSessionAndMaybeArchive', () => {
             }),
         ).rejects.toMatchObject({ message: 'boom' });
 
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(1, 'server-a', [
-            {
-                sessionId: 'session_2',
-                patch: { keepVisibleWhenInactive: true },
-            },
-        ]);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(2, 'server-a', [
-            {
-                sessionId: 'session_2',
-                patch: { keepVisibleWhenInactive: false },
-            },
-        ]);
         expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(archiveSpy).not.toHaveBeenCalled();
     });
@@ -270,7 +240,6 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(stopSpy).toHaveBeenCalledTimes(1);
         expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(archiveSpy).not.toHaveBeenCalled();
-        expect(applyServerScopedSessionListRowPatchesSpy).not.toHaveBeenCalled();
     });
 
     it('archives immediately after stopping when explicitly requested', async () => {
@@ -293,18 +262,6 @@ describe('stopSessionAndMaybeArchive', () => {
         expect(stopSpy).toHaveBeenCalledTimes(1);
         expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(archiveSpy).toHaveBeenCalledTimes(1);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(1, 'server-a', [
-            {
-                sessionId: 'session_4',
-                patch: { keepVisibleWhenInactive: true },
-            },
-        ]);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(2, 'server-a', [
-            {
-                sessionId: 'session_4',
-                patch: { keepVisibleWhenInactive: false },
-            },
-        ]);
     });
 
     it('uses the archive fallback message when a confirmed Stop has not settled at the Home', async () => {
@@ -332,15 +289,9 @@ describe('stopSessionAndMaybeArchive', () => {
         ).rejects.toMatchObject({ message: 'archive failed' });
 
         expect(archiveSpy).toHaveBeenCalledTimes(1);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(2, 'server-a', [
-            {
-                sessionId: 'session_timeout',
-                patch: { keepVisibleWhenInactive: false },
-            },
-        ]);
     });
 
-    it('clears the visibility override when archive fails after stopping', async () => {
+    it('settles archive progress when archive fails after stopping', async () => {
         const stopSpy = vi.fn(async () => ({ success: true }));
         const archiveSpy = vi.fn(async () => ({ success: false, message: 'archive boom' }));
 
@@ -359,52 +310,32 @@ describe('stopSessionAndMaybeArchive', () => {
             }),
         ).rejects.toMatchObject({ message: 'archive boom' });
 
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(1, 'server-a', [
-            {
-                sessionId: 'session_5',
-                patch: { keepVisibleWhenInactive: true },
-            },
-        ]);
-        expect(applyServerScopedSessionListRowPatchesSpy).toHaveBeenNthCalledWith(2, 'server-a', [
-            {
-                sessionId: 'session_5',
-                patch: { keepVisibleWhenInactive: false },
-            },
-        ]);
     });
 });
 
 
 describe('shared archive admission across Home identity discovery', () => {
-    beforeAll(async () => {
-        vi.doUnmock('@/sync/domains/state/storage');
-        vi.resetModules();
-    });
-
     it('admits one public stop-and-archive operation when its Home learns a stable identity', async () => {
-        const { storage } = await import('@/sync/domains/state/storage');
-        const { upsertServerProfile, setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
-        const { stopSessionAndMaybeArchive } = await import('./sessionStopArchiveFlow');
         storage.setState(storage.getInitialState(), true);
         const home = await upsertServerProfile({ serverUrl: 'https://archive-discovery.example' });
         let releaseStop!: () => void;
         const stopped = new Promise<void>(resolve => { releaseStop = resolve; });
         let stopCount = 0;
         let archiveCount = 0;
-        // These callbacks are the public owner's effect adapters. Admission and
-        // the real SessionsDomain remain inside the process under test.
+        // Public effect adapters are controlled; the orchestration and real
+        // SessionsDomain remain inside the process under test.
         const adapters = {
             hideInactiveSessions: true, isPinned: false, archiveAfterStop: 'always' as const,
             stopSession: async () => { stopCount += 1; await stopped; return { success: true }; },
             archiveSession: async () => { archiveCount += 1; return { success: true }; },
             stopErrorMessage: 'stop failed', archiveErrorMessage: 'archive failed',
         };
-        const first = stopSessionAndMaybeArchive({ ...adapters, address: address('same-session', home.id) });
+        const first = stopSessionAndMaybeArchive({ ...adapters, address: { serverId: home.id, sessionId: 'same-session' } });
         let second: ReturnType<typeof stopSessionAndMaybeArchive> | undefined;
         try {
             expect(stopCount).toBe(1);
             await setServerProfileIdentityForUrl(home.serverUrl, 'srv_archive_discovered');
-            second = stopSessionAndMaybeArchive({ ...adapters, address: address('same-session', 'srv_archive_discovered') });
+            second = stopSessionAndMaybeArchive({ ...adapters, address: { serverId: 'srv_archive_discovered', sessionId: 'same-session' } });
             expect(stopCount).toBe(1);
         } finally {
             releaseStop();

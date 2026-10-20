@@ -105,7 +105,6 @@ import {
 } from '@/sync/ops';
 import { executeSessionLifecycleAction } from '../actions/sessionActionExecution';
 import {
-    clearSessionVisibleWhenInactive,
     stopSessionAndMaybeArchive,
 } from '../sessionStopArchiveFlow';
 import {
@@ -1904,14 +1903,7 @@ export function useSessionListViewStateFromPaneState(
         stopErrorMessage: t('sessionInfo.failedToStopSession'),
         archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
         stopSession: async (target) => await executeSessionLifecycleAction('session.stop', target.sessionId, { serverId: target.serverId ?? null }),
-        archiveSession: async (target) => {
-            const result = await executeSessionLifecycleAction('session.archive', target.sessionId, { serverId: target.serverId ?? null });
-            if (result.success) {
-                const address = normalizeSessionAddress(target.serverId, target.sessionId);
-                if (address) clearSessionVisibleWhenInactive(address);
-            }
-            return result;
-        },
+        archiveSession: async (target) => await executeSessionLifecycleAction('session.archive', target.sessionId, { serverId: target.serverId ?? null }),
         unarchiveSession: async (target) => await executeSessionLifecycleAction('session.unarchive', target.sessionId, { serverId: target.serverId ?? null }),
         setManualReadState: async (target, readState) => await sessionSetManualReadStateWithServerScope(
             target.sessionId,
@@ -1919,7 +1911,7 @@ export function useSessionListViewStateFromPaneState(
             { serverId: target.serverId ?? null },
         ),
         stopSessionAndMaybeArchive: async (params) => {
-            await stopSessionAndMaybeArchive({
+            return await stopSessionAndMaybeArchive({
                 address: params.address,
                 hideInactiveSessions: params.hideInactiveSessions,
                 isPinned: params.isPinned,

@@ -222,7 +222,7 @@ describe('AuthContext.login', () => {
         }
     });
 
-    it('keeps login persistence and archive retirement on the initiating Home when focus changes during a credential read', async () => {
+    it('keeps login persistence and archive retirement on the initiating Home when focus changes during a credential guard read', async () => {
         const homeA = { id: 'home-a', serverUrl: 'https://home-a.example.test', name: 'Home A', serverIdentityId: 'srv_archive_home_a' };
         const homeB = { id: 'home-b', serverUrl: 'https://home-b.example.test', name: 'Home B', serverIdentityId: 'srv_archive_home_b' };
         serverProfilesState.profiles = [homeA, homeB];
@@ -236,8 +236,6 @@ describe('AuthContext.login', () => {
         const newCredentials = { token: buildTokenWithSub('account-new') };
         await TokenStorage.setCredentialsForServerUrl(homeA.serverUrl, { serverId: homeA.serverIdentityId }, homeACredentials);
         await TokenStorage.setCredentialsForServerUrl(homeB.serverUrl, { serverId: homeB.serverIdentityId }, homeBCredentials);
-        const credentialKey = [...secureStore.keys()].find((key) => secureStore.get(key) === JSON.stringify(homeACredentials));
-        if (!credentialKey) throw new Error('Expected a persisted Home A credential');
         const archivesB = { session: { serverId: homeB.serverIdentityId, sessionId: 'session' } };
         storage.setState({ sessionArchiveOperations: {
             [homeA.serverIdentityId]: { session: { serverId: homeA.serverIdentityId, sessionId: 'session' } },
@@ -250,8 +248,10 @@ describe('AuthContext.login', () => {
         let releaseRead!: () => void;
         const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
         const readStarted = vi.fn();
+        // Home credentials are already cached by their fixture writes. Hold the
+        // uncached native custody read before login can persist either Home.
         secureStoreRead.beforeRead = async (key) => {
-            if (key !== credentialKey || readStarted.mock.calls.length > 0) return;
+            if (!key.includes('pending_external_auth') || readStarted.mock.calls.length > 0) return;
             readStarted();
             await readGate;
         };

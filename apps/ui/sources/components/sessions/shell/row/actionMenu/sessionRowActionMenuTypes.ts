@@ -8,6 +8,7 @@ export const SESSION_ROW_ACTION_SELECT_ID = 'selection.select';
 export const SESSION_ROW_ACTION_OPEN_ID = 'row.open';
 
 export type SessionRowMoreMenuBuildParams = Readonly<{
+    archivePending?: boolean;
     target: SessionActionTarget;
     iconColor: string;
     /** Which menu this row carries: the ordinary list menu, or the Bots roster's compact one. */

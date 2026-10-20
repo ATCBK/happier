@@ -106,7 +106,15 @@ export async function resolveActionCurrentSessionScopeFailure(
     ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}`, details: { cause },
   });
   const targetSessionId = inputRecord.sessionId.trim();
-  if (targetSessionId === defaultSessionId && defaultSessionId) return null;
+  if (targetSessionId === defaultSessionId && defaultSessionId) {
+    // Own-Session scope needs no subtree lookup, but Stop still classifies
+    // the verified author, including when Archive delegates an active Stop.
+    if (ledLifecycleAction && context.actionCaller?.kind === 'session') {
+      const resolved = await resolveActionAgentStartContextV1(deps, context, undefined, { purpose: 'session_scope' });
+      if (resolved?.caller.kind === 'session' && resolved.caller.sessionId === defaultSessionId) retainCallerContext?.(resolved);
+    }
+    return null;
+  }
   if (context.actionCaller?.kind === 'workflowRun') {
     // Accepted admission witnesses and the exact invocation frame own this
     // corpus. A typed field alone, including one in a sibling, grants nothing.

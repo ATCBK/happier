@@ -95,6 +95,7 @@ export type WorkStatusInput =
     | Readonly<{ kind: 'workflow_step'; facts: WorkflowFacts & Readonly<{ lifecycle: WorkStatusStepLifecycle; runStopPending?: boolean }> }>
     | Readonly<{ kind: 'session'; facts: Readonly<{
         word: string;
+        archiving?: boolean;
         awareness: SessionAwarenessPresentationFactsV1;
         /** Settlement is supplied by the Session owner, not inferred from a word. */
         settled?: boolean;
@@ -256,6 +257,7 @@ export function resolveWorkStatusTone(input: WorkStatusInput): WorkStatusPresent
             return presentWorkflow(STEP_STATUS[facts.lifecycle], facts);
         }
         case 'session': {
+            if (input.facts.archiving) return { bucket: 'working', tone: 'neutral', word: input.facts.word };
             const { awareness, settled, word } = input.facts;
             return { ...readSessionAwarenessWorkStatusV1({ awareness, settled }), word };
         }

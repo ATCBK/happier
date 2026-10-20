@@ -1,7 +1,8 @@
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { describe, expect, it, vi } from 'vitest';
 
-import { HappyError } from '@/utils/errors/errors';
+import { storage } from '@/sync/domains/state/storage';
+import { readSessionArchivePending } from '@/sync/domains/session/listing/sessionArchiveState';
 import { t } from '@/text';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
@@ -58,7 +59,6 @@ describe('executeSessionAction', () => {
         await executeSessionAction({ actionId: SESSION_ACTION_ARCHIVE_ID, target: createTarget(),
             input: { alsoArchiveReports: true }, context: { operations: {
                 archiveSession: async (sessionId, options) => { requests.push({ sessionId, options }); return { success: true }; },
-                clearSessionVisibleWhenInactive: () => {},
             } } });
         expect(requests).toEqual([{ sessionId: 'session_1', options: { serverId: 'server_1', alsoArchiveReports: true } }]);
     });
@@ -127,86 +127,49 @@ describe('executeSessionAction', () => {
         expect(opened).toEqual([{ address: { serverId: 'home_b', sessionId: 'session_1' }, archived: true }]);
     });
     it('archives an active session through the stop/archive flow', async () => {
-        const stopArchiveFlow = vi.fn(async () => undefined);
-        const archiveSession = vi.fn(async () => ({ success: true as const }));
-
+        const effects: string[] = [];
         await executeSessionAction({
             actionId: SESSION_ACTION_ARCHIVE_ID,
             target: createTarget({ active: true }),
-            context: {
-                hideInactiveSessions: true,
-                operations: {
-                    stopArchiveFlow,
-                    stopSession: vi.fn(async () => ({ success: true as const })),
-                    archiveSession,
-                    clearSessionVisibleWhenInactive: vi.fn(),
-                },
-            },
+            context: { hideInactiveSessions: true, operations: {
+                stopSession: async () => { effects.push('stop'); return { success: true }; },
+                archiveSession: async () => { effects.push('archive'); return { success: true }; },
+            } },
         });
-
-        expect(stopArchiveFlow).toHaveBeenCalledWith(expect.objectContaining({
-            address: { serverId: 'server_1', sessionId: 'session_1' },
-            archiveAfterStop: 'always',
-            hideInactiveSessions: true,
-            isPinned: true,
-        }));
-        expect(archiveSession).not.toHaveBeenCalled();
+        expect(effects).toEqual(['stop', 'archive']);
+        expect(readSessionArchivePending(storage.getState(), { serverId: 'server_1', sessionId: 'session_1' })).toBe(false);
     });
 
-    it('keeps stop/archive retention and archive cleanup qualified to the selected Home when Session ids collide', async () => {
-        const stopArchiveFlow = vi.fn(async () => undefined);
-        const clearSessionVisibleWhenInactive = vi.fn();
-        const archiveSession = vi.fn(async () => ({ success: true as const }));
-        const otherHomeTarget = { ...createTarget(), serverId: 'home_a', sessionId: 'shared_session' };
-        const selectedHomeTarget = { ...otherHomeTarget, serverId: 'home_b' };
-
-        await executeSessionAction({
-            actionId: SESSION_ACTION_STOP_ID,
-            target: { ...selectedHomeTarget, isActive: true },
-            context: {
-                hideInactiveSessions: true,
-                operations: {
-                    stopArchiveFlow,
-                    stopSession: vi.fn(async () => ({ success: true as const })),
-                    archiveSession,
-                    clearSessionVisibleWhenInactive,
+    it('keeps stop/archive progress qualified to the selected Home when Session ids collide', async () => {
+        const other = { serverId: 'home_a', sessionId: 'shared_session' };
+        const operation = storage.getState().beginSessionArchive(other);
+        expect(operation).not.toBeNull();
+        const effects: unknown[] = [];
+        try {
+            const target = { ...createTarget(), serverId: 'home_b', sessionId: other.sessionId };
+            const context = { hideInactiveSessions: true, operations: {
+                stopSession: async (id: string, options?: { serverId?: string | null }) => {
+                    effects.push({ effect: 'stop', id, serverId: options?.serverId }); return { success: true };
                 },
-            },
-        });
-        await executeSessionAction({
-            actionId: SESSION_ACTION_ARCHIVE_ID,
-            target: { ...selectedHomeTarget, isActive: false },
-            context: {
-                hideInactiveSessions: true,
-                operations: {
-                    stopArchiveFlow,
-                    stopSession: vi.fn(async () => ({ success: true as const })),
-                    archiveSession,
-                    clearSessionVisibleWhenInactive,
+                archiveSession: async (id: string, options?: { serverId?: string | null }) => {
+                    effects.push({ effect: 'archive', id, serverId: options?.serverId }); return { success: true };
                 },
-            },
-        });
-
-        expect(stopArchiveFlow).toHaveBeenCalledWith(expect.objectContaining({
-            address: { serverId: 'home_b', sessionId: 'shared_session' },
-        }));
-        expect(clearSessionVisibleWhenInactive).toHaveBeenCalledWith({
-            serverId: 'home_b',
-            sessionId: 'shared_session',
-        });
-        expect(stopArchiveFlow).not.toHaveBeenCalledWith(expect.objectContaining({
-            address: { serverId: 'home_a', sessionId: 'shared_session' },
-        }));
-        expect(clearSessionVisibleWhenInactive).not.toHaveBeenCalledWith({
-            serverId: 'home_a',
-            sessionId: 'shared_session',
-        });
+            } };
+            await executeSessionAction({ actionId: SESSION_ACTION_STOP_ID, target: { ...target, isActive: true }, context });
+            await executeSessionAction({ actionId: SESSION_ACTION_ARCHIVE_ID, target: { ...target, isActive: false }, context });
+            expect(effects).toEqual([
+                { effect: 'stop', id: other.sessionId, serverId: 'home_b' },
+                { effect: 'archive', id: other.sessionId, serverId: 'home_b' },
+            ]);
+            expect(readSessionArchivePending(storage.getState(), other)).toBe(true);
+            expect(readSessionArchivePending(storage.getState(), { ...other, serverId: 'home_b' })).toBe(false);
+        } finally {
+            if (operation) storage.getState().finishSessionArchive(operation);
+        }
     });
 
     it('stops a recoverable preserved host before archiving an inactive session', async () => {
-        const stopArchiveFlow = vi.fn(async () => undefined);
-        const archiveSession = vi.fn(async () => ({ success: true as const }));
-
+        const effects: string[] = [];
         await executeSessionAction({
             actionId: SESSION_ACTION_ARCHIVE_ID,
             target: createTarget({
@@ -223,46 +186,32 @@ describe('executeSessionAction', () => {
             }),
             context: {
                 operations: {
-                    stopArchiveFlow,
-                    stopSession: vi.fn(async () => ({ success: true as const })),
-                    archiveSession,
+                    stopSession: async () => { effects.push('stop'); return { success: true }; },
+                    archiveSession: async () => { effects.push('archive'); return { success: true }; },
                 },
             },
         });
 
-        expect(stopArchiveFlow).toHaveBeenCalledWith(expect.objectContaining({
-            address: { serverId: 'server_1', sessionId: 'session_1' },
-            archiveAfterStop: 'always',
-        }));
-        expect(archiveSession).not.toHaveBeenCalled();
+        expect(effects).toEqual(['stop', 'archive']);
     });
 
     it('falls back to the active-session stop/archive flow when direct archive returns a session-active conflict', async () => {
-        const stopArchiveFlow = vi.fn(async () => undefined);
-        const archiveSession = vi.fn(async () => ({
-            success: false as const,
-            code: 'session_active',
-            message: 'Cannot archive an active session',
-        }));
-
+        const effects: string[] = [];
         await executeSessionAction({
             actionId: SESSION_ACTION_ARCHIVE_ID,
             target: createTarget({ active: false }),
-            context: {
-                operations: {
-                    stopArchiveFlow,
-                    stopSession: vi.fn(async () => ({ success: true as const })),
-                    archiveSession,
-                    clearSessionVisibleWhenInactive: vi.fn(),
+            context: { operations: {
+                stopSession: async () => { effects.push('stop'); return { success: true }; },
+                archiveSession: async () => {
+                    effects.push('archive');
+                    return effects.length === 1
+                        ? { success: false, code: 'session_active', message: 'Cannot archive an active session' }
+                        : { success: true };
                 },
-            },
+            } },
         });
-
-        expect(archiveSession).toHaveBeenCalledWith('session_1', { serverId: 'server_1' });
-        expect(stopArchiveFlow).toHaveBeenCalledWith(expect.objectContaining({
-            address: { serverId: 'server_1', sessionId: 'session_1' },
-            archiveAfterStop: 'always',
-        }));
+        expect(effects).toEqual(['archive', 'stop', 'archive']);
+        expect(readSessionArchivePending(storage.getState(), { serverId: 'server_1', sessionId: 'session_1' })).toBe(false);
     });
 
     it('marks read and renames through the injected operation seam', async () => {
@@ -311,9 +260,6 @@ describe('executeSessionAction', () => {
             target: createTarget({ active: true }),
             context: {
                 operations: {
-                    stopArchiveFlow: vi.fn(async () => {
-                        throw new HappyError('stop failed', false);
-                    }),
                     stopSession: vi.fn(async () => ({ success: false as const, message: 'stop failed' })),
                     archiveSession: vi.fn(async () => ({ success: true as const })),
                 },

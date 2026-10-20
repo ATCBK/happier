@@ -2716,6 +2716,7 @@ const zhHansValues = {
     error: "错误",
     online: "在线",
     working: "正在工作...",
+    archiving: "正在归档…",
     workingRetained: "工作中，等待更新…",
         backgroundActive: '后台工作中',
         workingExternally: '正在外部工作',

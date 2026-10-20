@@ -129,7 +129,7 @@ export type SessionActionExecutionOperations = Readonly<{
         archiveSession: () => Promise<SessionActionOperationResult>;
         stopErrorMessage: string;
         archiveErrorMessage: string;
-    }) => Promise<void>;
+    }) => Promise<void | false>;
     stopSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
     archiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null; alsoArchiveReports?: boolean }>) => Promise<SessionActionOperationResult>;
     unarchiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
@@ -165,7 +165,6 @@ export type SessionActionExecutionOperations = Readonly<{
         readState: 'read' | 'unread',
         opts?: Readonly<{ serverId?: string | null }>,
     ) => Promise<SessionActionOperationResult>;
-    clearSessionVisibleWhenInactive?: (address: SessionAddress) => void;
 }>;
 
 export type SessionActionExecutionContext = Readonly<{

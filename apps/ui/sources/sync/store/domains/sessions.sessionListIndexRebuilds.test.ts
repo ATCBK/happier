@@ -3471,12 +3471,12 @@ describe('sessions domain: three-Home ingestion and index rebuild cost', () => {
 describe('shared archive admission', () => {
     it('admits uncached exact-Home operations once without notifying duplicate callers', () => {
         const { domain, get, getSetCalls } = createHarness();
-        const first = domain.beginSessionArchive('same', 'home-a');
+        const first = domain.beginSessionArchive({ sessionId: 'same', serverId: 'home-a' });
         expect(first).toEqual({ sessionId: 'same', serverId: 'home-a' });
         const notifications = getSetCalls();
-        expect(domain.beginSessionArchive('same', 'home-a')).toBeNull();
+        expect(domain.beginSessionArchive({ sessionId: 'same', serverId: 'home-a' })).toBeNull();
         expect(getSetCalls()).toBe(notifications);
-        const other = domain.beginSessionArchive('same', 'home-b');
+        const other = domain.beginSessionArchive({ sessionId: 'same', serverId: 'home-b' });
         expect(other).not.toBeNull();
         domain.finishSessionArchive(first!);
         expect(get().sessionArchiveOperations['home-a']).toBeUndefined();
@@ -3485,11 +3485,11 @@ describe('shared archive admission', () => {
 
     it('preserves operations on Home focus changes and ignores stale completion after account retirement', () => {
         const { domain, get, set } = createHarness();
-        const original = domain.beginSessionArchive('same', 'home-a');
+        const original = domain.beginSessionArchive({ sessionId: 'same', serverId: 'home-a' });
         domain.activateSessionLocalStateScope({ serverId: 'home-b', accountId: 'account-b' });
         expect(get().sessionArchiveOperations['home-a']?.same).toBe(original);
         set({ sessionArchiveOperations: {} });
-        const replacement = domain.beginSessionArchive('same', 'home-a');
+        const replacement = domain.beginSessionArchive({ sessionId: 'same', serverId: 'home-a' });
         domain.finishSessionArchive(original!);
         expect(get().sessionArchiveOperations['home-a']?.same).toBe(replacement);
         domain.finishSessionArchive(replacement!);

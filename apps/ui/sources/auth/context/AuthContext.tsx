@@ -15,6 +15,7 @@ import {
     areServerProfileIdentifiersEquivalent,
     listServerProfiles,
     resolveServerProfileScopeId,
+    resolveUniqueServerProfileByUrl,
 } from '@/sync/domains/server/serverProfiles';
 import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
 import {
@@ -178,7 +179,14 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         newCredentials: AuthCredentials,
         options?: AuthCredentialPersistenceOptions,
     ): Promise<AuthCredentialLifecycleResult> => {
-        const target = options?.target ?? null;
+        const requestedTarget = options?.target;
+        const initiatingHome = requestedTarget ?? getActiveServerSnapshot();
+        const targetProfile = initiatingHome.serverId ? null : resolveUniqueServerProfileByUrl(initiatingHome.serverUrl, { includeCanonicalServerUrl: true });
+        const archiveServerId = initiatingHome.serverId || (targetProfile ? resolveServerProfileScopeId(targetProfile) : null);
+        const target: HomeCredentialTarget = {
+            serverUrl: initiatingHome.serverUrl,
+            ...(archiveServerId ? { serverId: archiveServerId } : {}),
+        };
         if (
             !isAccountEncryptionFirstKeyCredentialPersistenceAuthorized(
                 options,
@@ -187,7 +195,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         ) {
             const guard =
                 await guardAccountEncryptionFirstKeyCredentialMutation(
-                    target
+                    requestedTarget
                         ? {
                             serverUrl: target.serverUrl,
                             ...(target.serverId
@@ -200,29 +208,36 @@ export function AuthProvider({ children, initialCredentials }: { children: React
                 return guard;
             }
         }
-        // An explicit target writes through the endpoint-scoped setter, which
-        // fails closed when the stable identity no longer owns that URL. Only a
-        // caller with no exact target left (legacy focused-Home login) resolves
-        // the focused server at write time.
-        const success = target
-            ? await TokenStorage.setCredentialsForServerUrl(
-                target.serverUrl,
-                {
-                    ...(target.serverId ? { serverId: target.serverId } : {}),
-                    ...(options?.expectedCredentials ? { expectedCredentials: options.expectedCredentials } : {}),
-                    preserveHistoricalEncryption: options?.discardHistoricalEncryption !== true,
-                },
-                newCredentials,
-            )
-            : await TokenStorage.setCredentials(newCredentials, { preserveHistoricalEncryption: options?.discardHistoricalEncryption !== true });
+        const previousCredentials = await TokenStorage.getCredentialsForServerUrl(target.serverUrl, { serverId: target.serverId });
+        let retirePendingArchives = false;
+        if (previousCredentials) {
+            try {
+                retirePendingArchives = parseToken(previousCredentials.token) !== parseToken(newCredentials.token);
+            } catch {
+                console.warn('AuthContext.loginWithCredentials: invalid token while comparing account identities');
+                retirePendingArchives = true;
+            }
+        }
+        // Bind persistence to the initiating Home before any guard/storage await.
+        // The scoped setter fails closed if its identity no longer owns this URL.
+        const success = await TokenStorage.setCredentialsForServerUrl(
+            target.serverUrl,
+            {
+                ...(target.serverId ? { serverId: target.serverId } : {}),
+                ...(options?.expectedCredentials ? { expectedCredentials: options.expectedCredentials } : {}),
+                preserveHistoricalEncryption: options?.discardHistoricalEncryption !== true,
+            },
+            newCredentials,
+        );
         if (!success) {
             throw new Error('Failed to save credentials');
         }
-        const effectiveCredentials = target
-            ? await TokenStorage.getCredentialsForServerUrl(target.serverUrl, { serverId: target.serverId })
-            : await TokenStorage.getCredentials();
+        const effectiveCredentials = await TokenStorage.getCredentialsForServerUrl(target.serverUrl, { serverId: target.serverId });
         if (!effectiveCredentials || effectiveCredentials.token !== newCredentials.token) {
             throw new Error('Stored credential changed during authentication');
+        }
+        if (retirePendingArchives && archiveServerId) {
+            getStorage().getState().clearSessionArchiveOperations(archiveServerId);
         }
         // Mark this device as one where the user has authenticated at least once.
         // We persist this through the store (not raw saveLocalSettings) so the
@@ -233,23 +248,17 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         if (!loadLocalSettings().hasCompletedAuthOnce) {
             getStorage().getState().applyLocalSettings({ hasCompletedAuthOnce: true }, { source: 'ui' });
         }
-        if (target && !isSameServerTarget(target, getActiveServerSnapshot())) {
+        if (!isSameServerTarget(target, getActiveServerSnapshot())) {
             // The credential belongs to a Home that is no longer focused. It is
             // persisted there; publishing it as the focused runtime's auth state
             // would attribute one Home's bearer to another.
             return { kind: 'completed' };
         }
-        if (target) {
-            // Focused-Home persistence clears auth auto-redirect suppression;
-            // the endpoint-scoped setter deliberately leaves that active-scoped
-            // fact alone because it also serves non-focused Homes.
-            await TokenStorage.setAuthAutoRedirectSuppressedUntil(0);
-            // Focus can change while suppression persistence is in flight. Do
-            // not publish this Home's credentials into the newly focused
-            // runtime after that await.
-            if (!isSameServerTarget(target, getActiveServerSnapshot())) {
-                return { kind: 'completed' };
-            }
+        // The scoped setter also serves non-focused Homes, so suppression is
+        // cleared only after verifying that this Home remains focused.
+        await TokenStorage.setAuthAutoRedirectSuppressedUntil(0);
+        if (!isSameServerTarget(target, getActiveServerSnapshot())) {
+            return { kind: 'completed' };
         }
         setCredentials(effectiveCredentials);
         setIsAuthenticated(true);
@@ -352,6 +361,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
             ) {
                 throw new Error('Failed to remove all local credentials');
             }
+            getStorage().getState().clearSessionArchiveOperations();
 
             trackLogout();
             if (forgottenScope) {
@@ -410,6 +420,8 @@ export function AuthProvider({ children, initialCredentials }: { children: React
                 throw new Error('Failed to remove active Home credentials');
             }
         }
+        const archiveServerId = targetProfile ? resolveServerProfileScopeId(targetProfile) : activeServerId;
+        if (archiveServerId) getStorage().getState().clearSessionArchiveOperations(archiveServerId);
         const focusedCredentials = getCurrentAuth()?.credentials;
         const shouldClearFocusedAuth = (
             (!activeServerId && !activeServerUrl)

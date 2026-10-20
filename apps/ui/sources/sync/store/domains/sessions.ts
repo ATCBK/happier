@@ -9,7 +9,8 @@ import type {
 } from '../../domains/state/storageTypes';
 import type { NormalizedMessage } from "@happier-dev/session-core/raw";
 import type { ConcurrentSessionListCacheByServerId } from '../../domains/session/listing/concurrentSessionListCache';
-import { readSessionListRowForServerId } from '../../domains/session/listing/sessionListRowStateLookup';
+import { readSessionListRowForServerId, resolveSessionListHomeKey } from '../../domains/session/listing/sessionListRowStateLookup';
+import { readSessionArchivePending, resolveSessionArchiveAddress, type SessionArchiveOperation, type SessionArchiveOperations } from '../../domains/session/listing/sessionArchiveState';
 import type { SessionListQueryMembership } from '../../domains/session/listing/sessionListQueryController';
 import { readStoredSessionMessagesFromStateLike } from "@happier-dev/session-core/messages";
 import {
@@ -295,6 +296,11 @@ function readLoadedStoredSessionMessagesForRenderable(sessionMessages: unknown) 
 }
 
 export type SessionsDomain = {
+    /** Client-local archive admission, independent of Home focus and row hydration. */
+    sessionArchiveOperations: SessionArchiveOperations;
+    beginSessionArchive: (address: SessionAddress) => SessionArchiveOperation | null;
+    finishSessionArchive: (operation: SessionArchiveOperation) => void;
+    clearSessionArchiveOperations: (serverId?: string) => void;
     sessions: Record<string, Session>;
     projectAuthoringSessions: ProjectAuthoringSessionInputs;
     /**
@@ -969,6 +975,40 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
     });
 
     return {
+        sessionArchiveOperations: {},
+        beginSessionArchive: (address) => {
+            const captured = resolveSessionArchiveAddress(address);
+            if (!captured) return null;
+            let operation: SessionArchiveOperation | null = null;
+            set((state) => {
+                if (readSessionArchivePending(state, captured)) return state;
+                operation = captured;
+                return { ...state, sessionArchiveOperations: {
+                    ...state.sessionArchiveOperations,
+                    [captured.serverId]: { ...state.sessionArchiveOperations[captured.serverId], [captured.sessionId]: captured },
+                } };
+            });
+            return operation;
+        },
+        finishSessionArchive: (operation) => set((state) => {
+            const bucket = state.sessionArchiveOperations[operation.serverId];
+            if (bucket?.[operation.sessionId] !== operation) return state;
+            const { [operation.sessionId]: _finished, ...remaining } = bucket;
+            const next = { ...state.sessionArchiveOperations };
+            if (Object.keys(remaining).length > 0) next[operation.serverId] = remaining;
+            else delete next[operation.serverId];
+            return { ...state, sessionArchiveOperations: next };
+        }),
+        clearSessionArchiveOperations: (serverId) => set((state) => {
+            const keys = Object.keys(state.sessionArchiveOperations);
+            if (keys.length === 0) return state;
+            if (serverId === undefined) return { ...state, sessionArchiveOperations: {} };
+            const retired = keys.filter(key => areServerProfileIdentifiersEquivalent(key, serverId));
+            if (retired.length === 0) return state;
+            const next = { ...state.sessionArchiveOperations };
+            for (const key of retired) delete next[key];
+            return { ...state, sessionArchiveOperations: next };
+        }),
         sessions: {},
         projectAuthoringSessions: EMPTY_PROJECT_AUTHORING_SESSION_INPUTS,
         deletedSessionIds: {},
@@ -2041,10 +2081,11 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         applyServerScopedSessionListRowPatches: (serverIdRaw, patches) => set((state) => {
             const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
             const trimmedServerId = serverIdRaw.trim();
-            const serverId = activeServerId
-                && areServerProfileIdentifiersEquivalent(trimmedServerId, activeServerId)
-                ? activeServerId
-                : trimmedServerId;
+            // A pending request may have captured the profile's pre-discovery id.
+            // Patch the existing equivalent corpus and its membership together.
+            const serverId = resolveSessionListHomeKey(state.sessionListRowsByServerId, trimmedServerId)
+                ?? (activeServerId && areServerProfileIdentifiersEquivalent(trimmedServerId, activeServerId)
+                    ? activeServerId : trimmedServerId);
             if (!serverId || patches.length === 0) return state;
             const previousRowsByServerId = state.sessionListRowsByServerId ?? {};
             const previousRows = previousRowsByServerId[serverId] ?? {};

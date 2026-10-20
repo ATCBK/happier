@@ -46,6 +46,7 @@ import type { SessionOrganizationDomain } from './domains/sessionOrganization';
 import type { SessionListRenderableDelta } from './domains/sessionListIndexFinalization';
 import type { TranscriptLoadingDomain } from './domains/transcriptLoading';
 import type { ProjectAuthoringSessionInputs } from './domains/projectAuthoringSessions';
+import type { SessionsDomain } from './domains/sessions';
 
 export type KnownEntitlements = 'voice' | 'pro';
 export type SessionModelMode = NonNullable<Session['modelMode']>;
@@ -74,7 +75,8 @@ export interface ProfileDomainSlice {
     applyProfileForScope: (scope: ServerAccountScope, profile: Profile) => void;
 }
 
-export interface SessionsDomainSlice {
+export interface SessionsDomainSlice extends Pick<SessionsDomain,
+    'sessionArchiveOperations' | 'beginSessionArchive' | 'finishSessionArchive' | 'clearSessionArchiveOperations'> {
     sessions: Record<string, Session>;
     projectAuthoringSessions: ProjectAuthoringSessionInputs;
     /**

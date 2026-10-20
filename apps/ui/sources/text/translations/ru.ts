@@ -7937,6 +7937,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
     error: "Ошибка",
     online: "В сети",
     working: "Работаю...",
+    archiving: "Архивация…",
     workingRetained: "Работает, ожидание обновлений…",
         backgroundActive: 'Работает в фоне',
         workingExternally: 'Работает во внешнем агенте',

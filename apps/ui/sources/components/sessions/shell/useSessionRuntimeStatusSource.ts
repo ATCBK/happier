@@ -1,3 +1,6 @@
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -71,6 +74,8 @@ export function useSessionRuntimeStatusSource(session: null): null;
 export function useSessionRuntimeStatusSource(session: Session | null): Session | null;
 export function useSessionRuntimeStatusSource(session: Session | null): Session | null {
     const sessionId = session?.id ?? '';
+    const activeServerId = useActiveServerSnapshot().serverId;
+    const archiving = useSessionArchivePending(normalizeSessionAddress(session?.serverId ?? activeServerId, sessionId));
     const runtimeFields = storage(
         useShallow((state) => {
             const liveSession = sessionId.length > 0 ? state.sessions[sessionId] ?? null : null;
@@ -82,10 +87,11 @@ export function useSessionRuntimeStatusSource(session: Session | null): Session 
     );
 
     return React.useMemo(() => {
-        if (!session || !runtimeFields) return session;
+        if (!session) return session;
         return {
             ...session,
             ...runtimeFields,
+            archiving,
         };
-    }, [runtimeFields, session]);
+    }, [archiving, runtimeFields, session]);
 }

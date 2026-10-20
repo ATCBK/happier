@@ -1,3 +1,4 @@
+import { resolveSessionArchiveAddress } from '@/sync/domains/session/listing/sessionArchiveState';
 import { roleActions } from '@/sync/ops/roles/roleActions';
 import { readSessionAnswersWorkerQuestionsV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { showPutUnderSessionModal } from '@/components/sessions/work/PutUnderSessionModal';
@@ -30,7 +31,8 @@ import {
 import { sessionSetAttentionStandingWithServerScope } from '@/sync/ops/sessionOrganization';
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import {
-    clearSessionVisibleWhenInactive,
+    archiveSessionWithPendingState,
+    isSessionArchivePending,
     isSessionActiveArchiveResult,
     stopSessionAndMaybeArchive,
 } from '@/components/sessions/sessionStopArchiveFlow';
@@ -252,10 +254,6 @@ function resolveMoveToFolder(context: SessionActionExecutionContext | undefined)
     return context?.operations?.moveToFolder;
 }
 
-function resolveClearSessionVisibleWhenInactive(context: SessionActionExecutionContext | undefined) {
-    return context?.operations?.clearSessionVisibleWhenInactive ?? clearSessionVisibleWhenInactive;
-}
-
 function throwIfFailed(result: SessionActionOperationResult | void, fallbackMessage: string): void {
     if (!result || result.success) return;
     throw new HappyError(result.message || fallbackMessage, false, { code: result.code, details: result.details });
@@ -271,11 +269,11 @@ async function runStopArchiveFlow(params: Readonly<{
     context?: SessionActionExecutionContext;
     archiveAfterStop: 'always' | 'never';
     alsoArchiveReports?: boolean;
-}>): Promise<void> {
+}>): Promise<void | false> {
     const stopArchiveFlow = resolveStopArchiveFlow(params.context);
     const stopSession = resolveStopSession(params.context);
     const archiveSession = resolveArchiveSession(params.context);
-    await stopArchiveFlow({
+    return await stopArchiveFlow({
         address: params.address,
         hideInactiveSessions: params.context?.hideInactiveSessions === true,
         isPinned: params.target.isPinned,
@@ -297,27 +295,28 @@ async function runStopArchiveFlow(params: Readonly<{
 
 async function executeArchiveAction(
     target: SessionActionTarget,
-    address: SessionAddress,
+    targetAddress: SessionAddress,
     context?: SessionActionExecutionContext,
     alsoArchiveReports?: boolean,
-): Promise<void> {
+): Promise<void | false> {
+    const address = resolveSessionArchiveAddress(targetAddress);
+    if (!address) throwUnsupportedSingleTargetAction();
+    if (isSessionArchivePending(address)) return false;
     const archiveSession = resolveArchiveSession(context);
-
     if (target.isActive || target.hasRecoverableTerminalHost) {
-        await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
-        return;
+        return await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
     }
-
-    const result = await archiveSession(address.sessionId, { serverId: address.serverId,
-        ...(alsoArchiveReports !== undefined ? { alsoArchiveReports } : {}) });
+    const result = await archiveSessionWithPendingState(address, () => archiveSession(address.sessionId, {
+        serverId: address.serverId,
+        ...(alsoArchiveReports !== undefined ? { alsoArchiveReports } : {}),
+    }));
+    if (result === false) return false;
     if (!result.success) {
         if (isSessionActiveArchiveResult(result)) {
-            await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
-            return;
+            return await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
         }
         throw new HappyError(result.message || t('sessionInfo.failedToArchiveSession'), false);
     }
-    resolveClearSessionVisibleWhenInactive(context)(address);
 }
 
 export async function executeSessionAction(params: Readonly<{
@@ -325,7 +324,7 @@ export async function executeSessionAction(params: Readonly<{
     target: SessionActionTarget;
     input?: SessionActionExecutionInput;
     context?: SessionActionExecutionContext;
-}>): Promise<void> {
+}>): Promise<void | false> {
     const targetAddress = normalizeSessionAddress(params.target.serverId, params.target.sessionId);
     switch (params.actionId) {
         case SESSION_ACTION_TALK_ID: {
@@ -454,8 +453,7 @@ export async function executeSessionAction(params: Readonly<{
             return;
         case SESSION_ACTION_ARCHIVE_ID:
             if (!targetAddress) throwUnsupportedSingleTargetAction();
-            await executeArchiveAction(params.target, targetAddress, params.context, params.input?.alsoArchiveReports);
-            return;
+            return await executeArchiveAction(params.target, targetAddress, params.context, params.input?.alsoArchiveReports);
         case SESSION_ACTION_UNARCHIVE_ID:
             throwIfFailed(
                 await resolveUnarchiveSession(params.context)(params.target.sessionId, { serverId: params.target.serverId }),

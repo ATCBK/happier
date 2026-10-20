@@ -14,6 +14,7 @@ import {
 import { storage } from '@/sync/domains/state/storageStore';
 import {
     useSessionListRenderableWithServerScope,
+    useSessionListRowsByServerId,
     useSessionListRuntimePriorityRowKeysForItems,
 } from './hooks';
 
@@ -46,6 +47,43 @@ afterEach(() => {
 });
 
 describe('useSessionListRenderableWithServerScope row projection', () => {
+    it('projects shared archive progress locally without changing unrelated Home rows or attention flags', async () => {
+        const previous = storage.getState();
+        const address = { serverId: 'archive-projection-home', sessionId: 'archive-projection-session' };
+        const unrelated = buildActiveRenderable({ id: 'unrelated-row', keepVisibleWhenInactive: true });
+        const row = buildActiveRenderable({ id: address.sessionId, active: false, thinking: false });
+        storage.setState({ sessionArchiveOperations: {}, sessionListRowsByServerId: {
+            [address.serverId]: { [row.id]: row, [unrelated.id]: unrelated },
+            'other-home': { [row.id]: row },
+        } });
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useSessionListRowsByServerId([address.serverId]);
+        });
+        let operation: ReturnType<ReturnType<typeof storage.getState>['beginSessionArchive']> = null;
+        try {
+            await act(async () => { operation = storage.getState().beginSessionArchive(address); });
+            const projected = hook.getCurrent();
+            expect(projected[address.serverId]?.[row.id]).toMatchObject({ archiving: true, keepVisibleWhenInactive: true });
+            expect(projected[address.serverId]?.[unrelated.id]).toBe(unrelated);
+            expect(storage.getState().sessionListRowsByServerId[address.serverId]?.[row.id]).toBe(row);
+            const count = renders;
+            await act(async () => {
+                const other = storage.getState().beginSessionArchive({ ...address, serverId: 'other-home' });
+                if (other) storage.getState().finishSessionArchive(other);
+            });
+            expect(renders).toBe(count);
+            expect(hook.getCurrent()).toBe(projected);
+            await act(async () => { if (operation) storage.getState().finishSessionArchive(operation); });
+            expect(hook.getCurrent()[address.serverId]?.[row.id]).toBe(row);
+            expect(hook.getCurrent()[address.serverId]?.[unrelated.id]).toBe(unrelated);
+        } finally {
+            await hook.unmount();
+            storage.setState(previous);
+        }
+    });
+
     it('keeps the projected renderable stable when fresh progress also advances active heartbeat', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-05-30T12:00:00.000Z'));

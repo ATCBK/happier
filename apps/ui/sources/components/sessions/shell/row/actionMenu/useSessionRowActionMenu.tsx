@@ -1,3 +1,5 @@
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
 import * as React from 'react';
 import type { View } from 'react-native';
@@ -151,6 +153,7 @@ export function useSessionRowActionMenu(params: Readonly<{
     reminder?: SessionReminderPresentation | null;
 }>): SessionRowActionMenuState {
     const target = params.target;
+    const archivePending = useSessionArchivePending(normalizeSessionAddress(target.serverId, target.sessionId));
     const [reminderPresets] = useSettingMutable('sessionReminderPresetsV1');
     const applyReminderPresetIntent = useApplySessionReminderPresetIntent();
     const applyTagToggle = React.useCallback((tagId: string) => {
@@ -288,10 +291,11 @@ export function useSessionRowActionMenu(params: Readonly<{
             }]
             : [];
         if (params.surface === 'botsRoster') {
-            return buildSessionRowMoreMenuItems({ target, iconColor: params.iconColor, surface: 'botsRoster' });
+            return buildSessionRowMoreMenuItems({ target, iconColor: params.iconColor, surface: 'botsRoster', archivePending });
         }
         return buildSessionRowMoreMenuItems({
             target,
+            archivePending,
             iconColor: params.iconColor,
             leadingItems: [
                 ...selectItem,
@@ -303,6 +307,7 @@ export function useSessionRowActionMenu(params: Readonly<{
             reminderNowMs: Date.now(),
         });
     }, [
+        archivePending,
         params.iconColor,
         params.isNativeMobile,
         params.leadingMenuItems,
@@ -504,6 +509,6 @@ export function useSessionRowActionMenu(params: Readonly<{
         handleMoreMenuSelect,
         contextMenuItems,
         handleContextMenuSelect,
-        mutatingSession: stoppingSession || archivingSession,
+        mutatingSession: stoppingSession || archivingSession || archivePending,
     };
 }

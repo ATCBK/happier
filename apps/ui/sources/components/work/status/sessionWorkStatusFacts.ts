@@ -51,11 +51,13 @@ export function readSessionWorkStatusFacts(
  */
 export function sessionWorkStatusFactsFromStatus(
     session: SessionReportCounts,
-    status: Pick<SessionStatus, 'awareness' | 'statusText'>,
+    status: Pick<SessionStatus, 'awareness' | 'statusText' | 'state'>,
 ): SessionWorkStatusFacts {
     return withOutstandingReports({
         awareness: status.awareness,
-        word: readSessionAwarenessPresentationV1(status.awareness) === 'unknown' ? t('status.unknownState') : status.statusText,
+        archiving: status.state === 'archiving',
+        word: status.state === 'archiving' ? status.statusText
+            : readSessionAwarenessPresentationV1(status.awareness) === 'unknown' ? t('status.unknownState') : status.statusText,
         // Settled is the Session's own statement — its latest turn completed and it reads Ready — not
         // merely "no turn in flight": a quiet Session with nothing to show is idle, not finished.
         settled: status.awareness.operational.primary === 'ready',

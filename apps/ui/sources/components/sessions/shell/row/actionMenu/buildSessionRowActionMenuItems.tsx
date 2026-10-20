@@ -93,7 +93,7 @@ function buildBotsRosterRowMenuItems(params: SessionRowMoreMenuBuildParams): Dro
         icon: <Icon name="arrow-right" size={16} color={params.iconColor} />,
     }];
     for (const actionId of listVisibleSessionActionIds({ target: params.target, surface: 'botsRoster' })) {
-        const item = createSessionActionDropdownItem({ actionId, target: params.target, iconColor: params.iconColor });
+        const item = createSessionActionDropdownItem({ actionId, target: params.target, iconColor: params.iconColor, archivePending: params.archivePending });
         if (!item) continue;
         items.push(actionId === SESSION_ACTION_RAIL_PIN_ID || actionId === SESSION_ACTION_RAIL_UNPIN_ID
             ? { ...item, subtitle: t('bots.roster.pinHint') }
@@ -132,6 +132,7 @@ export function buildSessionRowMoreMenuItems(params: SessionRowMoreMenuBuildPara
         const item = createSessionActionDropdownItem({
             actionId,
             target: params.target,
+            archivePending: params.archivePending,
             iconColor: params.iconColor,
         });
         if (item) {

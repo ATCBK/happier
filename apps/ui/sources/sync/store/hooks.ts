@@ -1,3 +1,4 @@
+import { readSessionArchivePending, readSessionArchiveOperationsForServers, projectSessionArchiveRow, projectSessionArchiveRowsByServerId } from '../domains/session/listing/sessionArchiveState';
 import React from 'react';
 import { useSetting, useLocalSetting } from './settingsReadHooks';
 export {
@@ -742,7 +743,7 @@ export function useSessionListRenderableWithServerScope(
   const normalizedServerId = normalizeTrimmedString(serverId);
   const activeServerId = normalizeTrimmedString(useActiveServerSnapshot().serverId);
 
-  return getStorage()(useShallow((state) => {
+  const row = getStorage()(useShallow((state) => {
     if (!normalizedSessionId) {
       return null;
     }
@@ -766,16 +767,18 @@ export function useSessionListRenderableWithServerScope(
         : JSON.stringify(['legacy_unscoped_session', normalizedSessionId]),
     );
   }));
+  const targetServerId = normalizedServerId ?? activeServerId;
+  const pending = getStorage()(state => Boolean(targetServerId && normalizedSessionId
+    && readSessionArchivePending(state, { serverId: targetServerId, sessionId: normalizedSessionId })));
+  return projectSessionArchiveRow(row, pending);
 }
 
 const EMPTY_SESSION_LIST_RENDERABLES_BY_ID: Record<string, SessionListRenderableSession> = {};
 
 export function useSessionListRenderablesById(): Record<string, SessionListRenderableSession> {
   const activeServerId = normalizeTrimmedString(useActiveServerSnapshot().serverId);
-  return getStorage()(useShallow((state) => (
-    readSessionListRowsForServerId(state.sessionListRowsByServerId, activeServerId)
-    ?? EMPTY_SESSION_LIST_RENDERABLES_BY_ID
-  )));
+  const rows = useSessionListRowsByServerId(activeServerId ? [activeServerId] : []);
+  return activeServerId ? rows[activeServerId] ?? EMPTY_SESSION_LIST_RENDERABLES_BY_ID : EMPTY_SESSION_LIST_RENDERABLES_BY_ID;
 }
 
 export type SessionListAttentionRow = Readonly<{
@@ -802,7 +805,7 @@ export function useSessionListRowsByServerId(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the selection's identity
     [serverIdsKey],
   );
-  return getStorage()(useShallow((state) => {
+  const rows = getStorage()(useShallow((state) => {
     if (!selectedServerIds) return state.sessionListRowsByServerId;
     if (selectedServerIds.length === 0) return EMPTY_SESSION_LIST_ROWS_BY_SERVER_ID;
     const selected: Record<string, SessionsDomainSlice['sessionListRowsByServerId'][string]> = {};
@@ -812,6 +815,8 @@ export function useSessionListRowsByServerId(
     }
     return selected;
   }));
+  const operations = getStorage()(useShallow(state => readSessionArchiveOperationsForServers(state, selectedServerIds)));
+  return React.useMemo(() => projectSessionArchiveRowsByServerId(rows, operations), [rows, operations]);
 }
 
 export function useOrdinarySessionListMembershipByServerId(): SessionsDomainSlice['ordinarySessionListMembershipByServerId'] {
@@ -1034,7 +1039,8 @@ export function useSessionListRowRenderablesForItems(
         itemKey.serverId,
         itemKey.sessionId,
       );
-      const projected = projectSessionListRowRenderable(row, itemKey.key);
+      const projected = projectSessionArchiveRow(projectSessionListRowRenderable(row, itemKey.key),
+        readSessionArchivePending(state, { serverId: itemKey.serverId, sessionId: itemKey.sessionId }));
       if (!projected) continue;
       next.set(itemKey.key, projected);
     }

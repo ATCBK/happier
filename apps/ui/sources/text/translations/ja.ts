@@ -3264,6 +3264,7 @@ const jaValues = {
     error: "エラー",
     online: "オンライン",
     working: "作業中...",
+    archiving: "アーカイブ中…",
     workingRetained: "作業中、更新待ち…",
         backgroundActive: 'バックグラウンドで作業中',
         workingExternally: '外部で作業中',

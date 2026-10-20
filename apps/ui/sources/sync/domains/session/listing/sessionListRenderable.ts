@@ -194,6 +194,8 @@ export interface SessionListRenderableSession {
     hasPendingUserActionRequests?: boolean;
     pendingRequestObservedAt?: number | null;
     hasUnreadMessages?: boolean;
+    /** Derived client operation presentation; never persisted as runtime authority. */
+    archiving?: boolean;
     keepVisibleWhenInactive?: boolean;
     metadataUnavailable?: boolean;
 }

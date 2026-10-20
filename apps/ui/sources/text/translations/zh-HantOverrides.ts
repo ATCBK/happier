@@ -3217,6 +3217,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
         error: '錯誤',
         online: '線上',
         working: '正在工作...',
+        archiving: '正在封存…',
         workingRetained: '工作中，等待更新…',
         backgroundActive: '背景工作中',
         workingExternally: '正在外部工作',

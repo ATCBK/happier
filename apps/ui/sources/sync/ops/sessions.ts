@@ -1,3 +1,5 @@
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { resolveSessionArchiveAddress } from '@/sync/domains/session/listing/sessionArchiveState';
 /**
  * Session operations for remote procedure calls
  */
@@ -1426,10 +1428,13 @@ async function archiveRequestWithContext(params: Readonly<{
     sessionId: string;
     serverId?: string | null;
     action: 'archive' | 'unarchive';
-}>): Promise<Readonly<{ response: Response; release: () => Promise<void> }>> {
-    const context = await resolveServerAccountRequestContext({
-        serverId: params.serverId ?? resolvePreferredServerIdForSessionId(params.sessionId) ?? null,
+}>): Promise<Readonly<{ response: Response; address: SessionAddress; release: () => Promise<void> }>> {
+    const address = resolveSessionArchiveAddress({
+        serverId: params.serverId ?? resolvePreferredServerIdForSessionId(params.sessionId) ?? getActiveServerSnapshot().serverId,
+        sessionId: params.sessionId,
     });
+    if (!address) throw new Error('Archive requires an exact Home-qualified Session');
+    const context = await resolveServerAccountRequestContext({ serverId: address.serverId });
     const path = `/v2/sessions/${params.sessionId}/${params.action}`;
 
     try {
@@ -1439,6 +1444,7 @@ async function archiveRequestWithContext(params: Readonly<{
         })(path, { method: 'POST' });
         return {
             response,
+            address,
             release: context.scope === 'scoped' ? (context.release ?? (async () => undefined)) : async () => undefined,
         };
     } catch (error) {
@@ -1447,16 +1453,18 @@ async function archiveRequestWithContext(params: Readonly<{
     }
 }
 
-async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: number | null): Promise<void> {
-    const session = storage.getState().sessions[sessionId];
-    if (!session) return;
-    storage.getState().applySessions([
-        {
-            ...session,
-            archivedAt,
-            updatedAt: nowServerMs(),
-        },
+async function applyArchivedAtToLocalSession(capturedAddress: SessionAddress, archivedAt: number | null): Promise<void> {
+    const address = resolveSessionArchiveAddress(capturedAddress);
+    if (!address) return;
+    const updatedAt = nowServerMs();
+    storage.getState().applyServerScopedSessionListRowPatches(address.serverId, [
+        { sessionId: address.sessionId, patch: { archivedAt, updatedAt } },
     ]);
+    const state = storage.getState();
+    const session = state.sessions[address.sessionId];
+    if (!session || !areServerProfileIdentifiersEquivalent(address.serverId, getActiveServerSnapshot().serverId)
+        || (session.serverId && !areServerProfileIdentifiersEquivalent(session.serverId, address.serverId))) return;
+    state.applySessions([{ ...session, archivedAt, updatedAt }]);
 }
 
 export async function sessionArchiveWithServerScope(
@@ -1476,7 +1484,7 @@ export async function sessionArchiveWithServerScope(
         }
         const json = await response.json().catch(() => ({}));
         const archivedAt = typeof (json as any)?.archivedAt === 'number' ? (json as any).archivedAt : null;
-        await applyArchivedAtToLocalSession(sessionId, archivedAt);
+        await applyArchivedAtToLocalSession(request.address, archivedAt);
         return { success: true, archivedAt };
         } finally {
             await request.release();
@@ -1499,7 +1507,7 @@ export async function sessionUnarchiveWithServerScope(
             return { success: false, message: message || 'Failed to unarchive session' };
         }
         await response.json().catch(() => null);
-        await applyArchivedAtToLocalSession(sessionId, null);
+        await applyArchivedAtToLocalSession(request.address, null);
         return { success: true, archivedAt: null };
         } finally {
             await request.release();

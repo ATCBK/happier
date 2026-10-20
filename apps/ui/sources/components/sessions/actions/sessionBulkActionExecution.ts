@@ -1,3 +1,6 @@
+import { archiveSessionWithPendingState } from '../sessionStopArchiveFlow';
+import { resolveSessionArchiveAddress } from '@/sync/domains/session/listing/sessionArchiveState';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { runTasksWithLimit } from '@/sync/runtime/orchestration/runTasksWithLimit';
 import { resolveSessionListItemOrganizationEligibility } from '@/sync/domains/sessionList/sessionListIndex';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -364,13 +367,20 @@ async function executeArchiveAction(params: Readonly<{
     targets: readonly SessionBulkActionTarget[];
     context: SessionBulkActionExecutionContext;
 }>): Promise<SessionBulkActionExecutionResult> {
+    // Capture every Home before runTasksWithLimit can await an earlier target.
+    const activeServerId = getActiveServerSnapshot().serverId;
+    const targets = params.targets.map(target => {
+        const address = normalizeSessionAddress(target.serverId === undefined ? activeServerId : target.serverId, target.sessionId);
+        const captured = address ? resolveSessionArchiveAddress(address) : null;
+        return captured ? { ...target, serverId: captured.serverId } : target;
+    });
     const archiveSession = requireOperation(params.context.archiveSession, 'archiveSession');
     const stopSession = params.context.stopSession;
     const stopSessionAndMaybeArchive = params.context.stopSessionAndMaybeArchive;
 
     return executeNetworkTargets({
         actionId: SESSION_BULK_ACTION_IDS.archive,
-        targets: params.targets,
+        targets,
         context: params.context,
         runTarget: async (target) => {
             if (target.archived === true) {
@@ -399,7 +409,7 @@ async function executeArchiveAction(params: Readonly<{
                     });
                 }
 
-                await stopSessionAndMaybeArchive({
+                const completed = await stopSessionAndMaybeArchive({
                     target,
                     address,
                     hideInactiveSessions: params.context.hideInactiveSessions === true,
@@ -410,14 +420,16 @@ async function executeArchiveAction(params: Readonly<{
                     stopErrorMessage: params.context.stopErrorMessage ?? DEFAULT_STOP_ERROR_MESSAGE,
                     archiveErrorMessage: params.context.archiveErrorMessage ?? DEFAULT_ARCHIVE_ERROR_MESSAGE,
                 });
-                return createTargetResult(target, 'succeeded');
+                return createTargetResult(target, completed === false ? 'skipped' : 'succeeded',
+                    completed === false ? { reasonCode: 'archive_pending' } : undefined);
             }
 
-            return resultFromMutation(
-                target,
-                await archiveSession(target),
-                DEFAULT_ARCHIVE_ERROR_MESSAGE,
-            );
+            const address = normalizeSessionAddress(target.serverId, target.sessionId);
+            if (!address) return createTargetResult(target, 'failed', { reasonCode: 'missing_session_address' });
+            const result = await archiveSessionWithPendingState(address, () => archiveSession(target));
+            return result === false
+                ? createTargetResult(target, 'skipped', { reasonCode: 'archive_pending' })
+                : resultFromMutation(target, result, DEFAULT_ARCHIVE_ERROR_MESSAGE);
         },
     });
 }

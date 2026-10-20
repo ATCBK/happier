@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { storage } from '@/sync/domains/state/storage';
+import { stopSessionAndMaybeArchive } from '../sessionStopArchiveFlow';
+import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+
 import type { SessionFolderWorkspaceRefV1 } from '@/sync/domains/session/folders';
 
 import {
@@ -177,10 +181,7 @@ describe('executeSessionBulkAction', () => {
     });
 
     it('archives active sessions through the stop-and-archive flow and archives inactive sessions directly', async () => {
-        const stopSessionAndMaybeArchive = vi.fn(async () => undefined);
-        const archiveSession = vi.fn(async () => ({ success: true }));
-        const stopSession = vi.fn(async () => ({ success: true }));
-
+        const effects: Array<{ sessionId: string; effect: string }> = [];
         const result = await executeSessionBulkAction({
             action: { id: SESSION_BULK_ACTION_IDS.archive },
             targets: [
@@ -188,28 +189,53 @@ describe('executeSessionBulkAction', () => {
                 target({ key: 'server-a:inactive', sessionId: 'inactive', active: false }),
             ],
             context: {
-                archiveSession,
-                stopSession,
+                concurrencyLimit: 1,
+                archiveSession: async entry => { effects.push({ sessionId: entry.sessionId, effect: 'archive' }); return { success: true }; },
+                stopSession: async entry => { effects.push({ sessionId: entry.sessionId, effect: 'stop' }); return { success: true }; },
                 stopSessionAndMaybeArchive,
             },
         });
-
-        expect(stopSessionAndMaybeArchive).toHaveBeenCalledTimes(1);
-        expect(stopSessionAndMaybeArchive).toHaveBeenCalledWith(expect.objectContaining({
-            target: expect.objectContaining({ sessionId: 'active' }),
-            address: { serverId: 'server-a', sessionId: 'active' },
-            archiveAfterStop: 'always',
-            hideInactiveSessions: false,
-            isPinned: true,
-        }));
-        expect(archiveSession).toHaveBeenCalledTimes(1);
-        expect(archiveSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'inactive' }));
+        expect(effects).toEqual([
+            { sessionId: 'active', effect: 'stop' },
+            { sessionId: 'active', effect: 'archive' },
+            { sessionId: 'inactive', effect: 'archive' },
+        ]);
         expect(result.failed).toEqual([]);
-        expect(result.succeeded.map((entry) => entry.target.sessionId)).toEqual(['active', 'inactive']);
+        expect(result.succeeded.map(entry => entry.target.sessionId)).toEqual(['active', 'inactive']);
+    });
+
+    it('captures all optional Homes before queued archive effects can change focus and rejects repeated targets', async () => {
+        const home = await upsertServerProfile({ serverUrl: 'https://bulk-archive-owner.example', name: 'Bulk owner' });
+        const other = await upsertServerProfile({ serverUrl: 'https://bulk-archive-other.example', name: 'Bulk other' });
+        await setActiveServerId(home.id);
+        let release!: () => void;
+        let issued!: () => void;
+        const blocked = new Promise<void>(resolve => { release = resolve; });
+        const entered = new Promise<void>(resolve => { issued = resolve; });
+        const effects: Array<{ sessionId: string; serverId: string | null | undefined }> = [];
+        const pending = executeSessionBulkAction({ action: { id: SESSION_BULK_ACTION_IDS.archive },
+            targets: ['first', 'queued'].map(sessionId => target({ key: sessionId, sessionId, serverId: undefined })),
+            context: { concurrencyLimit: 1, archiveSession: async entry => {
+                effects.push({ sessionId: entry.sessionId, serverId: entry.serverId });
+                if (entry.sessionId === 'first') { issued(); await blocked; }
+                return { success: true };
+            } },
+        });
+        try {
+            await entered;
+            await setActiveServerId(other.id);
+            const repeated = await executeSessionBulkAction({ action: { id: SESSION_BULK_ACTION_IDS.archive },
+                targets: [target({ key: 'repeat', sessionId: 'first', serverId: home.id })],
+                context: { archiveSession: async () => { throw new Error('Repeated archive reached network'); } },
+            });
+            expect(repeated.skipped.map(entry => entry.reasonCode)).toEqual(['archive_pending']);
+        } finally { release(); }
+        expect((await pending).failed).toEqual([]);
+        expect(effects).toEqual([{ sessionId: 'first', serverId: home.id }, { sessionId: 'queued', serverId: home.id }]);
+        expect(storage.getState().sessionArchiveOperations).toEqual({});
     });
 
     it('fails an active archive before effects when its exact Home-qualified address is unavailable', async () => {
-        const stopSessionAndMaybeArchive = vi.fn(async () => undefined);
         const archiveSession = vi.fn(async () => ({ success: true }));
         const stopSession = vi.fn(async () => ({ success: true }));
 
@@ -225,7 +251,6 @@ describe('executeSessionBulkAction', () => {
 
         expect(stopSession).not.toHaveBeenCalled();
         expect(archiveSession).not.toHaveBeenCalled();
-        expect(stopSessionAndMaybeArchive).not.toHaveBeenCalled();
         expect(result.failed).toHaveLength(1);
         expect(result.failed[0]?.reasonCode).toBe('missing_session_address');
     });
