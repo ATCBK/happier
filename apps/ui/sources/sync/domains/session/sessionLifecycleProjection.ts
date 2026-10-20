@@ -9,7 +9,7 @@ type SessionLifecycleProjection = Pick<Session,
     | 'pendingVersion' | 'pendingCount' | 'pendingBlockedCount' | 'pendingActivationAuthorization'
     | 'latestReadyEventSeq' | 'latestReadyEventAt'
     | 'runtimeActivityState' | 'runtimeActivityActiveCount' | 'runtimeActivityObservedAt' | 'runtimeActivityRevision'
->;
+> & Partial<Pick<Session, 'presence'>>;
 
 export function normalizeSessionOrderingNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value)
@@ -91,7 +91,7 @@ export function reconcileSessionLifecycleProjection<T extends SessionLifecyclePr
         }
     }
     if (isOlder(incoming.activeAt, previous.activeAt)) {
-        applyPatch({ active: previous.active, activeAt: previous.activeAt });
+        applyPatch({ active: previous.active, activeAt: previous.activeAt, presence: resolveSessionPresence(previous) });
     }
     if (isOlder(incoming.thinkingAt, previous.thinkingAt)) {
         applyPatch({ thinking: previous.thinking, thinkingAt: previous.thinkingAt });
