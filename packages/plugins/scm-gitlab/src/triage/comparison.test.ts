@@ -53,7 +53,7 @@ describe('merge request comparison evidence', () => {
     expect(captured).toMatchObject({ state: 'incomplete', files: [{ path: 'prefix.ts' }] });
     expect(captured.reasons).toContain('Duplicate pull-request path: prefix.ts');
   });
-  it('opens the shared host comparison through the source Get and paged Changes Actions', async () => {
+  it('opens the shared host comparison through evidence Actions but refuses metadata-only subtraction', async () => {
     const stub = transport();
     const entry = await getGitlabSourceEntryAction({ v: 1, instance: input.instance, localRef,
       lastKnownLocator: { v: 1, routingToken: repository } }, stub.context);
@@ -68,6 +68,11 @@ describe('merge request comparison evidence', () => {
     expect(captured).toMatchObject({ state: 'complete', freshness: 'current', before: beforeOid, after: headOid });
     expect(captured.files.map(row => row.path)).toEqual(['first.ts', 'second.ts']);
     expect(captured.files[1]?.unifiedDiff).toContain(patch);
+    const withoutEvidenceMode = await readPullRequestComparison({ source, readPage: ({ sourceAction }) => {
+      const displayInput = { ...sourceAction.input, comparison: undefined };
+      return listGitlabChanges(displayInput, stub.context);
+    } });
+    expect(withoutEvidenceMode).toMatchObject({ state: 'unavailable', files: [] });
   });
 
   it('keeps same-named merge requests on separate deployments in separate comparison scopes', async () => {
