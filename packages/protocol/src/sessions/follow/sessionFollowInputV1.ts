@@ -17,6 +17,18 @@ export const WorkflowRunFollowOriginalV1Schema = lazyZodSchema(() => z.strictObj
   source: z.strictObject({ kind: z.literal('workflow_run'), runId: z.string().check(z.minLength(1)) }),
   revision: z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)),
 }));
+export const ExecutionRunFollowEventV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }));
+/** Workflow revisions retain live attention and committed progress as well as terminal outcomes. */
+export const WorkflowRunFollowEventV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped', 'update_posted']) }),
+  z.strictObject({ kind: z.literal('needs_you'), type: z.enum(['decision', 'approval', 'blocked']) }),
+]));
+export type WorkflowRunFollowEventV1 = z.infer<typeof WorkflowRunFollowEventV1Schema>;
+/** Shared source hint/notice shape. Neither transport can widen the original's source contract. */
+export const RunFollowOccurrenceV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ original: ExecutionRunFollowOriginalV1Schema, event: ExecutionRunFollowEventV1Schema }),
+  z.strictObject({ original: WorkflowRunFollowOriginalV1Schema, event: WorkflowRunFollowEventV1Schema }),
+]));
 /** Public notice-only intent. Private rule identity and match proof stay in server admission custody. */
 export const SessionFollowInputV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ ...publicFields,
@@ -40,11 +52,11 @@ export const SessionFollowInputV1Schema = lazyZodSchema(() => z.union([
   })),
   z.strictObject({ ...publicFields,
     original: ExecutionRunFollowOriginalV1Schema,
-    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
+    event: ExecutionRunFollowEventV1Schema,
   }),
   z.strictObject({ ...publicFields,
     original: WorkflowRunFollowOriginalV1Schema,
-    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
+    event: WorkflowRunFollowEventV1Schema,
   }),
 ]));
 export type SessionFollowInputV1 = z.infer<typeof SessionFollowInputV1Schema>;

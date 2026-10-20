@@ -2,6 +2,7 @@ import axios from 'axios';
 import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/protocol/plugins/installations/manifests';
 import { isWorkflowRunExecutorStorageOperationV1 } from '@happier-dev/protocol/workflows/workflowRunStorageV1';
 import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { resolveWorkflowRunFollowEventV1 } from '@happier-dev/protocol/workflows/composeWorkflowRunWorkerUpdateV1';
 import { notifyDaemonSessionActivityChanged } from '@/daemon/controlClient';
 import { logger } from '@/ui/logger';
 
@@ -34,7 +35,7 @@ export function createWorkflowRunStorageClient(params: Readonly<{
 }>) {
   const baseUrl = params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
   const createPublisherHeader = params.createPublisherHeader ?? createDefaultPluginInstallationPublisherHeader;
-  return {
+  const client = {
     observeChanges: (runId: string, onChange: () => void, onError: (error: unknown) => void) =>
       observeAccountChanges({ token: params.token, serverUrl: baseUrl, entityId: `workflow-run:${runId}` }, { onChange, onError }),
     execute: async (operation: WorkflowRunStorageOperation, options: Readonly<{ signal?: AbortSignal; publisherMachineId?: string }> = {}): Promise<unknown> => {
@@ -79,12 +80,25 @@ export function createWorkflowRunStorageClient(params: Readonly<{
           return await request();
         });
         if (operation.operation === 'transition') {
-          const run = WorkflowRunSummaryV1Schema.safeParse(response.data);
-          if (run.success && run.data.revision > 0 && run.data.workflowCustodyState !== null
-            && ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(run.data.state)) {
+          let run = WorkflowRunSummaryV1Schema.safeParse(response.data);
+          if (run.success && run.data.state === 'running' && run.data.attentionRequired === undefined) {
+            // Mutation summaries need not include attention membership. Read it
+            // from the existing authorized source instead of inventing progress
+            // over a live hold. Failure leaves delivery to Account-change repair.
+            try {
+              const runId = run.data.id;
+              const current = await client.execute({ operation: 'get', runId }, { signal: options.signal });
+              const projected = WorkflowRunSummaryV1Schema.safeParse(current && typeof current === 'object' && 'run' in current ? current.run : null);
+              run = projected.success && projected.data.id === runId ? projected : WorkflowRunSummaryV1Schema.safeParse(null);
+            } catch {
+              logger.debug('[workflowRunStorage] Follow occurrence awaits current source projection');
+            }
+          }
+          const event = run.success ? resolveWorkflowRunFollowEventV1(run.data) : null;
+          if (run.success && run.data.revision > 0 && run.data.workflowCustodyState !== null && event) {
             void notifyDaemonSessionActivityChanged(run.data.origin.originSessionId ?? null, {
               original: { source: { kind: 'workflow_run', runId: run.data.id }, revision: run.data.revision },
-              event: { kind: run.data.state === 'succeeded' ? 'finished' : 'failed_or_stopped' },
+              event,
             }).catch(error => logger.debug('[workflowRunStorage] Follow occurrence remains in Run custody', error));
           }
         }
@@ -96,4 +110,5 @@ export function createWorkflowRunStorageClient(params: Readonly<{
       }
     },
   };
+  return client;
 }

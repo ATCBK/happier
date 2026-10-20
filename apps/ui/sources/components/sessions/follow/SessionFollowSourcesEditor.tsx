@@ -24,7 +24,6 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { useIsTablet } from '@/utils/platform/responsive';
 import {
-    listSessionFollowSources,
     removeSessionFollowSource,
     setSessionFollowSource,
 } from '@/sync/api/session/sessionFollowSourcesApi';
@@ -42,8 +41,6 @@ import {
     isServerReachabilityNetworkAllowed,
     subscribeServerReachabilityNetworkAllowed,
 } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 import {
     refineSessionFollowSourceStateWithPreparationReason,
@@ -54,6 +51,7 @@ import { FollowEditorPanel } from './FollowEditorPanel';
 import { FollowPolicyEditorBinding, FollowPolicySection } from './FollowPolicyEditorBinding';
 import { FollowSessionMark } from './FollowSessionMark';
 import { describeSessionFollowLevel } from './sessionFollowLevelCopy';
+import { useSessionFollowing } from './useSessionFollowing';
 import { openSessionFollowSourcePicker } from './openSessionFollowDestinationPicker';
 import {
     prepareSessionFollowSourceKey,
@@ -73,6 +71,8 @@ type SessionFollowSourceMutationRequest = Readonly<{
     targetKey: string;
     sourceKey: string;
 }>;
+
+const EMPTY_SOURCES: readonly FollowSourceRelationV1[] = Object.freeze([]);
 
 /**
  * One row's identity across every source kind: a Session source keeps its id (the phone route's `source` and the
@@ -183,11 +183,12 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const { binding } = useServerCredentialAccountScopeBinding(currentScope ? null : props.serverId);
     const accountScope = currentScope ?? (binding?.isCurrent() ? binding.scope : null);
     const reachabilityRevision = useMachineReachabilityRevision();
-    const [sources, setSources] = React.useState<readonly FollowSourceRelationV1[]>([]);
-    const [loading, setLoading] = React.useState(false);
+    const following = useSessionFollowing(props.serverId ? { serverId: props.serverId, sessionId: props.destination.id } : null, enabled);
+    const sources = following.projection?.sources ?? EMPTY_SOURCES;
+    const { loading, refresh } = following;
     const [savingId, setSavingId] = React.useState<string | null>(null);
     const [openSourceId, setOpenSourceId] = React.useState<string | null>(null);
-    const [failed, setFailed] = React.useState(false);
+    const failed = following.error !== null;
     const [mutation, dispatchMutation] = React.useReducer(
         reduceSourceMutation,
         createIdleSessionFollowMutationIntent<SessionFollowSourceIntent>(),
@@ -198,7 +199,6 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const addSourceRef = React.useRef<React.ComponentRef<typeof Pressable>>(null);
     // The pane's "+" is an IconButton, which hands out its control through a callback ref.
     const paneAddRef = React.useRef<Readonly<{ focus: () => void }> | null>(null);
-    const readFlightRef = React.useRef<{ readonly targetKey: string; settled: Promise<void>; dirty: boolean } | null>(null);
     const targetKey = `${props.serverId ?? ''}\u0000${accountScope?.accountId ?? ''}\u0000${props.destination.id}`;
     const preparationTargetKey = `${targetKey}\u0000${props.destinationMachineId ?? ''}`;
     const targetKeyRef = React.useRef(targetKey);
@@ -208,13 +208,10 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const committedSourceIdsRef = React.useRef<ReadonlySet<string>>(new Set());
     const edgeVersionBySourceIdRef = React.useRef(new Map<string, number>());
 
-    const readSources = React.useCallback(async (serverId: string) => {
-        setLoading(true);
-        const result = await listSessionFollowSources({ serverId, sessionId: props.destination.id });
-        if (targetKeyRef.current !== targetKey) return;
-        if (result.kind === 'ok') {
+    React.useEffect(() => {
+        if (following.projection) {
             // Every source kind is a row; source-key preparation and wake filtering concern Session sources only.
-            const sessionSources = result.value.sources.filter(isSessionSource);
+            const sessionSources = following.projection.sources.filter(isSessionSource);
             const committedSourceIds = new Set(sessionSources.map((source) => source.sourceSessionId));
             const previousCommittedSourceIds = committedSourceIdsRef.current;
             for (const sourceSessionId of new Set([
@@ -239,7 +236,6 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             const committedPreparationKeys = new Set([...committedSourceIds].map((sourceSessionId) => (
                 sourcePreparationKey(preparationTargetKeyRef.current, sourceSessionId)
             )));
-            setSources(result.value.sources);
             setPreparedSourceKeys((current) => {
                 const next = new Set([...current].filter((key) => committedPreparationKeys.has(key)));
                 return next.size === current.size ? current : next;
@@ -248,45 +244,13 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 const next = new Map([...current].filter(([key]) => committedPreparationKeys.has(key)));
                 return next.size === current.size ? current : next;
             });
-            setFailed(false);
             dispatchMutation({ kind: 'refreshed' });
-        } else {
-            setFailed(true);
         }
-        setLoading(false);
-    }, [props.destination.id, targetKey]);
-
-    // One read per destination at a time. A Home wake or a finished write that arrives while a read is in
-    // flight marks it dirty and earns one follow-up read; it never discards the read in progress, so a busy
-    // Home that wakes faster than it answers cannot leave the list loading forever.
-    const refresh = React.useCallback((): Promise<void> => {
-        const serverId = props.serverId;
-        if (!enabled || !serverId) return Promise.resolve();
-        const running = readFlightRef.current;
-        if (running && running.targetKey === targetKey) {
-            running.dirty = true;
-            return running.settled;
-        }
-        const flight: NonNullable<typeof readFlightRef.current> = { targetKey, dirty: false, settled: Promise.resolve() };
-        flight.settled = (async () => {
-            try {
-                do {
-                    flight.dirty = false;
-                    await readSources(serverId);
-                } while (flight.dirty && targetKeyRef.current === targetKey);
-            } finally {
-                if (readFlightRef.current === flight) readFlightRef.current = null;
-            }
-        })();
-        readFlightRef.current = flight;
-        return flight.settled;
-    }, [enabled, props.serverId, readSources, targetKey]);
+    }, [following.projection]);
 
     React.useEffect(() => {
         if (targetKeyRef.current !== targetKey) {
             targetKeyRef.current = targetKey;
-            setSources([]);
-            setFailed(false);
             dispatchMutation({ kind: 'abandoned' });
             setSavingId(null);
             activeMutationRequestRef.current = null;
@@ -296,8 +260,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             committedSourceIdsRef.current = new Set();
             edgeVersionBySourceIdRef.current = new Map();
         }
-        void refresh();
-    }, [refresh, targetKey]);
+    }, [targetKey]);
 
     React.useEffect(() => () => {
         activeMutationRequestRef.current = null;
@@ -317,20 +280,6 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         for (const request of preparationInFlightRef.current.values()) request.controller.abort();
         preparationInFlightRef.current.clear();
     }, [preparationTargetKey]);
-
-    React.useEffect(() => {
-        const serverId = props.serverId;
-        if (!enabled || !serverId) return;
-        return subscribeHomeAccountChange((event) => {
-            if (!areServerProfileIdentifiersEquivalent(event.serverId, serverId)) return;
-            if (
-                event.entityIds
-                && !event.entityIds.includes(props.destination.id)
-                && !event.entityIds.some((sessionId) => committedSourceIdsRef.current.has(sessionId))
-            ) return;
-            void refresh();
-        });
-    }, [enabled, props.destination.id, props.serverId, refresh]);
 
     const remove = React.useCallback(async (source: FollowSourceRefV1) => {
         if (!online || !props.serverId || savingId) return;

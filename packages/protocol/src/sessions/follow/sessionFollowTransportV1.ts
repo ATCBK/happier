@@ -9,7 +9,7 @@ import { DiscussionMessageRefV1Schema } from '../../discussions/messageRefs.js';
 import { SessionInputMachineTargetV1Schema } from '../messages/sessionInputAdmission.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
-import { ExecutionRunFollowOriginalV1Schema, SessionFollowInputV1Schema, WorkflowRunFollowOriginalV1Schema } from './sessionFollowInputV1.js';
+import { ExecutionRunFollowOriginalV1Schema, ExecutionRunFollowEventV1Schema, SessionFollowInputV1Schema, WorkflowRunFollowOriginalV1Schema, WorkflowRunFollowEventV1Schema } from './sessionFollowInputV1.js';
 import { FollowEventV1Schema, FollowPolicyV1Schema, serializeFollowPolicyV1 } from './sessionFollowPolicyV1.js';
 import { SessionFollowPublisherGenerationV1Schema, SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from './sessionFollowSourceOccurrenceV1.js';
 import { SessionMetadataPublisherPreconditionV1Schema } from '../metadata/sessionMetadataSchemasV1.js';
@@ -153,12 +153,12 @@ const runRouteFields = { destinationSessionId: SessionIdZodSchema, relation: z.l
   attachedAt: z.number().check(z.int(), z.nonnegative()), policy: FollowPolicyV1Schema };
 export const SessionFollowRunOccurrenceRoutesResponseV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ ok: z.literal(true), v: z.literal(1), original: ExecutionRunFollowOriginalV1Schema,
-    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
+    event: ExecutionRunFollowEventV1Schema,
     personal: z.optional(z.strictObject({ policy: FollowPolicyV1Schema, alreadyRepresented: z.boolean() })),
     routes: z.array(z.strictObject({ ...runRouteFields,
       expectedTerminalEventId: z.nullable(z.string().check(z.minLength(1))) })) }),
   z.strictObject({ ok: z.literal(true), v: z.literal(1), original: WorkflowRunFollowOriginalV1Schema,
-    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
+    event: WorkflowRunFollowEventV1Schema,
     personal: z.optional(z.strictObject({ policy: FollowPolicyV1Schema, alreadyRepresented: z.boolean() })),
     routes: z.array(z.strictObject({ ...runRouteFields,
       expectedRevision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)) })) }),

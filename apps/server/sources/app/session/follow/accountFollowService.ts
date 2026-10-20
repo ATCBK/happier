@@ -18,7 +18,7 @@ import { hasCanonicalFollowProviderInputAcceptanceInTx } from "./providerInputAc
 import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { matchesPersonalFollowOnceOccurrenceV1, parsePersistedPersonalFollowOnceV1, projectPersonalFollowCustodyV1, resolveAccountFollowVoiceSelectionV1, type PersonalFollowOnceOccurrenceV1, type PersistedPersonalFollowOnceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { FollowPolicyV1Schema, isFollowPolicyEqualV1, serializeFollowPolicyV1, resolveFollowDeliveryV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
-import type { RunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { RunFollowOriginalV1, SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { sourceForSessionFollowEdgeV1, sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { canReadFollowSourceInTx } from './followSourceAdmission';
@@ -188,7 +188,7 @@ export async function readAccountOtherFollowInTx(tx: Tx, input: Readonly<{
 /** Own-Account Run delivery uses the same explicit Follow, source admission and mute owners. */
 export async function readAccountRunFollowDeliveryInTx(tx: Tx, input: Readonly<{
     accountId: string; authentication: SessionAccessAuthentication; original: RunFollowOriginalV1;
-    event: { kind: 'finished' | 'failed_or_stopped' };
+    event: Extract<SessionFollowInputV1, { original: RunFollowOriginalV1 }>['event'];
 }>) {
     const source = input.original.source;
     const row = await readAccountOtherFollowInTx(tx, { ...input, source });

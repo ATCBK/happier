@@ -15,13 +15,16 @@ export function listSessionFollowers(source: SessionAddress, signal?: AbortSigna
     }, source.serverId, signal, expectedAccountId);
 }
 
-export async function listSessionFollowSources(destination: SessionAddress) {
+export async function listSessionFollowSources(destination: SessionAddress, signal?: AbortSignal, expectedAccountId?: string) {
     const result = await executeSessionFollowAction('follow.list', {
         direction: 'following',
         receiver: { kind: 'session', sessionId: destination.sessionId },
-    }, destination.serverId);
+    }, destination.serverId, signal, expectedAccountId);
     return result.kind === 'ok'
-        ? { kind: 'ok' as const, value: { sources: result.value.sources, coverage: result.value.coverage } }
+        ? { kind: 'ok' as const, value: { sources: result.value.sources, rules: result.value.rules,
+            coverage: result.value.coverage,
+            ...(result.value.continuation ? { continuation: result.value.continuation } : {}),
+        } }
         : result;
 }
 

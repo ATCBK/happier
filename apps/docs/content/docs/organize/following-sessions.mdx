@@ -22,13 +22,26 @@ sets `HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED` to a false value.
 ## Follow one session
 
 Open the session and choose **Follow**. The editor — **Follow this session** —
-carries one choice, how much you want to hear:
+carries one choice, how much you want to hear. The same levels apply when another
+session is the receiver:
 
-| Level | What reaches you |
-| --- | --- |
-| **No notifications** | The session is followed, but it does not notify you. |
-| **Important updates** | The activity Happier classifies as worth interrupting you for. |
-| **Every new message** | Each new message in the session. |
+| Level | Interrupts: push for you, wake for a session | Arrives quietly: Inbox for you, next turn for a session |
+| --- | --- | --- |
+| **Everything** | Needs you, finished, failed or stopped, stalled, update posted, person wrote and goal changed. | Every new message. |
+| **Important** | Needs you, failed or stopped, and stalled. | Finished, update posted, person wrote and goal changed. |
+| **Quiet** | Nothing. | The same events as Important. |
+| **Custom** | The events you select to interrupt. | The events you select for quiet delivery; other events are off. |
+
+Custom lets you choose decision, approval and blocked requests separately.
+A question whose agent keeps working with an assumption is quiet under Important;
+Everything can interrupt for it. A question a manager is handling stays quiet for
+you until it is passed up. You can still open it in Needs you and answer.
+
+Quiet keeps the follow active. **Unfollow** removes your ongoing subscription and
+suppresses automatic rules for that source. When several follows or rules apply,
+their selections combine: a quiet route does not cancel another route's push or
+wake selection. Quiet hours suppress pushes while retaining Inbox items, without
+a burst of delayed pushes afterward.
 
 **Include in Voice** is separate and optional: it lets Voice keep the session in
 context. An encrypted session has to be unlocked on this device before Voice can
@@ -41,11 +54,12 @@ opt-out still apply; ownership does not force every update to interrupt you.
 ## Sessions you follow without asking
 
 Some relationships imply attention, so Happier can follow on your behalf. In
-**Settings → Notifications**, **Automatically follow** has four switches:
+**Settings → Coordination**, **Automatically follow** lets you choose Important
+or Off for four default rules:
 
-| Switch | Default |
+| Default rule | Default |
 | --- | --- |
-| **Sessions assigned to me** | On |
+| **Sessions assigned to me** | Important |
 | **Sessions shared directly** | Off |
 | **Sessions shared through Teams** | Off |
 | **Sessions shared through Groups** | Off |
@@ -53,7 +67,7 @@ Some relationships imply attention, so Happier can follow on your behalf. In
 The defaults are deliberate. Being handed a session personally is a request for
 your attention; being inside the audience of a Team share usually is not — a Team
 of forty would otherwise generate forty subscriptions every time anybody shared
-anything. Turn the Team and Group switches on if your Team is small enough that
+anything. Choose Important for Team and Group shares if your Team is small enough that
 you do want all of it.
 
 In current 0.3 development, these preferences are default Follow rules for future
@@ -61,6 +75,11 @@ matching activity. Assignment and sharing do not create an individual Follow
 subscription or read-state baseline. Your explicit Follow choices, opt-outs and
 existing read state stay unchanged when defaults change. These preferences are
 set per Home.
+
+Coordination also holds the defaults for new manager attachments, run reports,
+Discussion participants and coordinators. Changing a creation default does not
+rewrite an existing follow's chosen policy. Coordinators themselves are ordinary
+sessions; **Show coordinators** opens the filtered session list.
 
 ## Follow, read state, and assignment
 
@@ -119,6 +138,20 @@ That is **Session updates** in the same editor — **Follow in another Session�
 and it is about what the agent reads, not about what you are notified of. It is
 described under [Session-to-Session Follow
 context](/accounts/session-sharing#session-to-session-follow-context-03-development).
+
+In current 0.3 development, the Follow source model also covers Discussions,
+Execution Runs, Workflow Runs and filter rules. Source support and controls are
+still being completed; this does not mean every source has every event or a
+finished editor. Rules select qualifying activity without adding every matching
+session as an individual follow. A preview marked partial or unavailable is not
+a complete list of matches.
+
+Follows stay within one Home and require existing source access. Encrypted source
+material must be readable by the authorized device or machine doing the work.
+Following grants no access or keys. For a session receiver, quiet delivery waits
+for its next turn; a wake still respects busy work, an explicit Stop, archive,
+machine availability and the autonomous check-in. Updates can wait while its
+machine is offline. A follow never steers a running turn.
 
 ## Related
 

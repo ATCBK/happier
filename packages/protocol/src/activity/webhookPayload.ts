@@ -14,7 +14,7 @@ import { getActionSpec } from '../actions/actionSpecs.js';
 import { MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS } from '../actions/specs/machineTerminal.js';
 import { FollowEventV1Schema } from '../sessions/follow/sessionFollowPolicyV1.js';
 import { SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from '../sessions/follow/sessionFollowSourceOccurrenceV1.js';
-import { ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema } from '../sessions/follow/sessionFollowInputV1.js';
+import { ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema, RunFollowOccurrenceV1Schema } from '../sessions/follow/sessionFollowInputV1.js';
 import { DiscussionMessageRefV1Schema } from '../discussions/messageRefs.js';
 
 const followUpdateFields = { event: z.lazy(() => FollowEventV1Schema) };
@@ -29,10 +29,7 @@ export const SessionFollowUpdateNotificationV1Schema = lazyZodSchema(() => z.str
 export type SessionFollowUpdateNotificationV1 = z.infer<typeof SessionFollowUpdateNotificationV1Schema>;
 /** Run notices carry their own retained original, never a parent Session occurrence. */
 export const RunFollowUpdateNotificationV1Schema = lazyZodSchema(() => z.strictObject({
-  topic: z.literal('follow_update'), follow: z.strictObject({
-    original: z.union([ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema]),
-    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
-  }),
+  topic: z.literal('follow_update'), follow: RunFollowOccurrenceV1Schema,
 }));
 export type RunFollowUpdateNotificationV1 = z.infer<typeof RunFollowUpdateNotificationV1Schema>;
 export const DiscussionFollowUpdateNotificationV1Schema = lazyZodSchema(() => z.strictObject({

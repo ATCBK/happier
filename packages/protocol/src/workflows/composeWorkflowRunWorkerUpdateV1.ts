@@ -1,6 +1,20 @@
 import { classifyWorkerUpdateEventV1, resolveWorkerUpdateWakeV1, WorkerUpdateV1Schema, type WorkerUpdateV1 } from '../sessions/relations/workerUpdateV1.js';
 import type { WorkflowFinalResultV1, WorkflowProgressEnvelopeV1, WorkflowReviewV1, WorkflowRunSummaryV1 } from './workflowProgressV1.js';
 import { EXECUTION_RUN_COMPLETION_SUMMARY_MAX_LENGTH } from '../execution/runs/completionInputV1.js';
+import type { WorkflowRunFollowEventV1 } from '../sessions/follow/sessionFollowInputV1.js';
+
+/** One projection of the current retained revision; hints and admission use the same source facts. */
+export function resolveWorkflowRunFollowEventV1(run: Pick<WorkflowRunSummaryV1, 'state' | 'attentionRequired'>): WorkflowRunFollowEventV1 | null {
+  if (run.state === 'succeeded') return { kind: 'finished' };
+  const kind = classifyWorkerUpdateEventV1({ workerKind: 'workflow_run', ownerState: run.state,
+    ...(run.attentionRequired ? { wake: 'needs_you' } : {}) });
+  if (kind === 'finished' || kind === 'failed_or_stopped') return { kind };
+  if (run.state === 'interrupted') return { kind: 'failed_or_stopped' };
+  // This is the source's ordinary human-attention projection. Only a real
+  // permission request may produce approval; summary attention never fabricates one.
+  if (kind === 'needs_you' || run.state === 'waiting_for_review') return { kind: 'needs_you', type: 'decision' };
+  return run.state === 'running' && run.attentionRequired === false ? { kind: 'update_posted' } : null;
+}
 
 /** One current-state projection; delivery transports never reconstruct a history of holds. */
 export function composeWorkflowRunWorkerUpdateV1(input: Readonly<{

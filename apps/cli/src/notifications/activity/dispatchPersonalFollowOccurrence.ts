@@ -59,15 +59,16 @@ export function createPersonalFollowOccurrenceDispatcher(params: Readonly<{
     }
     if (input.sourceSessionId !== input.occurrence.sourceSessionId) throw new Error('personal_follow_source_mismatch');
     const occurrence = input.occurrence;
+    const sourceSessionId = occurrence.sourceSessionId;
     // Requests and successful terminal updates already have an original rich
     // notification owner. Return the selected contribution to that owner before
     // its one send; the daemon must not race it with a second outward effect.
     if ('sourceRequests' in occurrence) {
-      return { attemptedChannels: 0, deliveredChannels: 0, personalFollow: { sourceSessionId: input.sourceSessionId,
+      return { attemptedChannels: 0, deliveredChannels: 0, personalFollow: { sourceSessionId,
         requests: occurrence.sourceRequests.requests.map(request => ({ requestId: request.requestId, policies: [...input.policies] })) } };
     }
     if (occurrence.evidence.event.kind === 'finished') {
-      return { attemptedChannels: 0, deliveredChannels: 0, personalFollow: { sourceSessionId: input.sourceSessionId,
+      return { attemptedChannels: 0, deliveredChannels: 0, personalFollow: { sourceSessionId,
         sourceMessage: { ...occurrence.sourceMessage, policies: [...input.policies] } } };
     }
     await assertCurrent();
@@ -78,7 +79,7 @@ export function createPersonalFollowOccurrenceDispatcher(params: Readonly<{
         sessionId, signal: input.signal,
       })),
       admittedRulePolicies: input.policies,
-      event: SessionFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', sessionId: input.sourceSessionId,
+      event: SessionFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', sessionId: sourceSessionId,
         follow: { event: occurrence.evidence.event, sourceMessage: occurrence.sourceMessage } }),
     });
     return { attemptedChannels: result.attemptedChannels, deliveredChannels: result.deliveredChannels };

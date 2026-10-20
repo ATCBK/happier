@@ -319,10 +319,40 @@ describe('Follow exact Home Action transport', () => {
         const env = await setup();
         const { listSessionFollowSources } = await import('./sessionFollowSourcesApi');
         const result = await listSessionFollowSources({ serverId: env.target.id, sessionId: 'same/id' });
-        expect(result).toEqual({ kind: 'ok', value: { sources: [], coverage: 'complete' } });
+        expect(result).toEqual({ kind: 'ok', value: { sources: [], rules: [], coverage: 'complete' } });
         const call = env.request.mock.calls.find(([url]) => url.includes('/follows/sessions'));
         expect(call?.[0]).toBe('https://target.example/v2/sessions/same%2Fid/follows/sessions');
         expect(new Headers(call?.[1]?.headers).get('Authorization')).toBe(`Bearer ${env.token('target-account')}`);
+    });
+
+    it('retains a rule-only census in the reusable Following projection', async () => {
+        const env = await setup();
+        const { useSessionFollowing } = await import('@/components/sessions/follow/useSessionFollowing');
+        const receiver = { kind: 'session' as const, sessionId: 'coordinator' };
+        const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'important' as const } };
+        const rule = { ruleId: 'payments', receiver, version: 4, content: { t: 'plain' as const, v: definition } };
+        env.request.mockImplementation(async url => Response.json(url.endsWith('/session-follow-rules')
+            ? { rules: [rule, { ...rule, ruleId: 'other', receiver: { kind: 'session', sessionId: 'other' } }] }
+            : { sources: [] }));
+        const address = { serverId: env.target.id, sessionId: receiver.sessionId };
+        const hook = await renderHook(() => useSessionFollowing(address, true));
+        try {
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().projection).not.toBeNull()); });
+            expect(hook.getCurrent().projection).toEqual({ sources: [], coverage: 'complete', rules: [{
+                ruleId: rule.ruleId, receiver, version: rule.version, definition,
+            }] });
+            expect(hook.getCurrent().loading).toBe(false);
+            expect(hook.getCurrent().error).toBeNull();
+            const committed = hook.getCurrent().projection;
+            env.request.mockResolvedValue(Response.json({ error: 'service_unavailable' }, { status: 503 }));
+            await act(async () => { await hook.getCurrent().refresh(); });
+            expect(hook.getCurrent().projection).toBe(committed);
+            expect(hook.getCurrent().error).toBe('unavailable');
+            env.request.mockResolvedValue(Response.json({ error: 'session_not_found' }, { status: 404 }));
+            await act(async () => { await hook.getCurrent().refresh(); });
+            expect(hook.getCurrent().projection).toBeNull();
+            expect(hook.getCurrent().error).toBe('session_not_found');
+        } finally { await hook.unmount(); }
     });
 
     it('executes Account preferences and source mutations through their strict domain resources', async () => {

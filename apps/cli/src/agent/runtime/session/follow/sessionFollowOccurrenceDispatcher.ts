@@ -7,7 +7,7 @@ import { SessionFollowSourceOccurrenceRoutesResponseV1Schema } from '@happier-de
 import { DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
 import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1, ListSessionFollowSourcesResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import type { RunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
-import { deriveSessionFollowInputLocalIdV1, type SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { deriveSessionFollowInputLocalIdV1, RunFollowOccurrenceV1Schema, type SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import type { SessionFollowRunOccurrence } from '@/daemon/sessions/sessionActivityChangedContract';
 import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -81,7 +81,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     const parsed = response.status === 200 ? SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse(response.data) : null;
     if (!parsed?.success || !parsed.data.ok || 'original' in request && !sameStrictJsonValue(parsed.data.original, request.original)
       || !await current()) return;
-    const occurrence = { original: parsed.data.original, event: parsed.data.event };
+    const occurrence = RunFollowOccurrenceV1Schema.parse({ original: parsed.data.original, event: parsed.data.event });
     if (!receiverSessionId && parsed.data.personal && !parsed.data.personal.alreadyRepresented && await input.isPersonalCurrent() && await current()) {
       const policies = [parsed.data.personal.policy];
       await input.dispatchPersonal({ occurrence, policies, signal: input.signal, acceptDelivery: async () => {
@@ -121,7 +121,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => sendSessionMessage({ credentials: input.credentials,
         idOrPrefix: route.destinationSessionId, wait: false,
         localId: deriveSessionFollowInputLocalIdV1({ destinationSessionId: route.destinationSessionId, original: delivery.original }),
-        timeoutMs: resolveSessionMessageAdmissionTimeoutMs(), message: `Followed Run ${occurrence.event.kind}: ${JSON.stringify(source)}. Read this Run's retained result.`,
+        timeoutMs: resolveSessionMessageAdmissionTimeoutMs(), message: `Followed Run ${occurrence.event.kind}: ${JSON.stringify(source)}. Read this Run's current source.`,
         inputAdmission: { provenance: admission.provenance,
           request: SessionInputRequestV1Schema.parse({ ...admission.request, followDeliveryV1: delivery }) },
         followRelations: SessionFollowRelationWitnessesV1Schema.parse([relation]), informationDelivery: 'session_follow', executionAuthority: 'account_automation',

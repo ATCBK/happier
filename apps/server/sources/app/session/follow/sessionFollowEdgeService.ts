@@ -73,6 +73,8 @@ import { projectSessionFollowDefaultRelationshipsV1 } from '@happier-dev/protoco
 import { resolveSessionFollowFactsInTx } from '@/app/session/personal/followFacts';
 import { readOtherPersonalFollowerCensusInTx, readSessionPersonalFollowerCensusInTx, readAccountRunFollowDeliveryInTx } from './accountFollowService';
 import type { SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
+import { resolveWorkflowRunFollowEventV1 } from '@happier-dev/protocol/workflows/composeWorkflowRunWorkerUpdateV1';
+import { workflowRunAttentionWhere } from '@/app/workflows/workflowRunAttention';
 export { attachDiscussionFollowSourceInTx, detachDiscussionFollowSourceInTx, invalidateDiscussionFollowDestinationsInTx,
     admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputInTx } from './discussionFollowSource';
 import {
@@ -1445,7 +1447,7 @@ async function observePendingSessionFollowEdgesInTx(tx: Tx, input: Readonly<{
 export async function readRunFollowOccurrenceInTx(tx: Tx, input: Readonly<{
     source: RunFollowOriginalV1['source']; original?: RunFollowOriginalV1;
     executionRunFrontier?: ExecutionRunFollowFrontierWitness;
-}>): Promise<Readonly<{ original: RunFollowOriginalV1; event: { kind: 'finished' | 'failed_or_stopped' } }> | null> {
+}>): Promise<Readonly<{ original: RunFollowOriginalV1; event: Extract<SessionFollowInputV1, { original: RunFollowOriginalV1 }>['event'] }> | null> {
     const { source } = input;
     const requested = input.original;
     if (source.kind === 'execution_run') {
@@ -1462,9 +1464,12 @@ export async function readRunFollowOccurrenceInTx(tx: Tx, input: Readonly<{
     if (!run || run.revision < 1 || requested && (!('revision' in requested) || run.revision !== requested.revision)
         || run.workflowCustodyState === null) return null;
     const original = { source, revision: run.revision };
-    return run.state === 'succeeded' ? { original, event: { kind: 'finished' } }
-        : run.state === 'failed' || run.state === 'cancelled' || run.state === 'interrupted'
-            ? { original, event: { kind: 'failed_or_stopped' } } : null;
+    const terminal = resolveWorkflowRunFollowEventV1({ state: run.state });
+    if (terminal) return { original, event: terminal };
+    const attentionRequired = await tx.automationRun.findFirst({ where: { id: source.runId,
+        AND: [workflowRunAttentionWhere()] }, select: { id: true } }) !== null;
+    const event = resolveWorkflowRunFollowEventV1({ state: run.state, attentionRequired });
+    return event ? { original, event } : null;
 }
 
 /** The shared non-Session route read delegates facts to each existing source lifecycle. */
@@ -1623,20 +1628,9 @@ async function admitRunFollowRelationsForInputInTx(tx: Tx, input: Readonly<{
         userMessageSeq: accepted.seq, requireProviderAccepted: true,
     }) : false;
     if (!nativeAccepted && !input.admittedOriginal) {
-        if ('terminalEventId' in original) {
-            const frontier = input.executionRunFrontier;
-            if (!frontier || !isDeepStrictEqual(frontier.source, source)
-                || frontier.terminalEventId !== original.terminalEventId
-                || !await isExecutionRunFollowFrontierWitnessCurrentInTx(tx, frontier)
-                || (frontier.status === 'succeeded' ? 'finished' : frontier.status === 'failed' || frontier.status === 'cancelled'
-                    ? 'failed_or_stopped' : null) !== input.delivery.event.kind) return null;
-        } else {
-            const run = await tx.automationRun.findUnique({ where: { id: source.runId },
-                select: { revision: true, state: true, workflowCustodyState: true } });
-            if (!run || run.revision !== original.revision || run.workflowCustodyState === null
-                || (run.state === 'succeeded' ? 'finished' : run.state === 'failed' || run.state === 'cancelled'
-                    || run.state === 'interrupted' ? 'failed_or_stopped' : null) !== input.delivery.event.kind) return null;
-        }
+        const occurrence = await readRunFollowOccurrenceInTx(tx, { source, original,
+            executionRunFrontier: input.executionRunFrontier });
+        if (!occurrence || !isDeepStrictEqual(occurrence.event, input.delivery.event)) return null;
     }
     const relations: SessionFollowInputRelation[] = [];
     for (const reason of input.relations) {
