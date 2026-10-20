@@ -41,7 +41,7 @@ function loadMetroConfig(uiDir: string, envOverrides: Record<string, string | nu
 }
 
 describe('metro.config.js (web)', () => {
-    it.each(['ios', 'android', 'web'])('resolves workspace UI sources and React runtime peers on %s despite nested copies', (platform) => {
+    it.each(['ios', 'android', 'web'])('resolves workspace sources, canonical runtime peers and private ESM dependencies on %s', (platform) => {
         const uiDir = getUiDir();
         const config = loadMetroConfig(uiDir);
         const fixture = realpathSync(mkdtempSync(join(tmpdir(), 'happier-metro-peers-')));
@@ -126,6 +126,44 @@ describe('metro.config.js (web)', () => {
             expect(config.resolver.resolveRequest(context, 'unrelated-peer', platform)).toEqual({
                 type: 'sourceFile', filePath: join(fixture, 'node_modules', 'unrelated-peer', 'index.js'),
             });
+            if (platform === 'web') {
+                const pierreRoot = join(uiDir, 'node_modules/@pierre/diffs');
+                const themingRoot = join(pierreRoot, 'node_modules/@pierre/theming');
+                const theming = JSON.parse(readFileSync(join(themingRoot, 'package.json'), 'utf8'));
+                const expected = resolve(themingRoot, theming.exports['./themes'].import);
+                for (const dev of [true, false]) {
+                    const modeConfig = loadMetroConfig(uiDir, {
+                        CI: dev ? null : '1',
+                        EXPO_NO_METRO_WORKSPACE_ROOT: dev ? null : '1',
+                        HAPPIER_UI_METRO_NARROW_WATCH_FOLDERS: dev ? null : '1',
+                    });
+                    const blockList = [modeConfig.resolver.blockList].flat();
+                    const isBlocked = (file: string) => blockList.some(
+                        (pattern: unknown) => pattern instanceof RegExp && pattern.test(file),
+                    );
+                    // Model the real crawl boundary on the filesystem adapter;
+                    // a direct filesystem fallback must not hide excluded files.
+                    const pierreContext: ResolutionContext = {
+                        ...context, ...modeConfig.resolver,
+                        assetExts: context.assetExts, dev, isESMImport: true,
+                        resolveRequest: resolveMetro,
+                        nodeModulesPaths: modeConfig.resolver.nodeModulesPaths ?? [],
+                        originModulePath: join(pierreRoot, 'dist/highlighter/shared_highlighter.js'),
+                        fileSystemLookup: (file) => isBlocked(file) ? { exists: false } : context.fileSystemLookup(file),
+                    };
+                    expect(modeConfig.resolver.resolveRequest(pierreContext, '@pierre/theming/themes', 'web')).toEqual({
+                        type: 'sourceFile', filePath: expected,
+                    });
+                    expect(() => modeConfig.resolver.resolveRequest(
+                        { ...pierreContext, isESMImport: false }, '@pierre/theming/themes', 'web',
+                    )).toThrow();
+                    expect(isBlocked(expected)).toBe(false);
+                    expect(isBlocked(join(themingRoot, '../theming-other/dist/themes.js'))).toBe(true);
+                    expect(isBlocked(join(themingRoot, 'node_modules/react/index.js'))).toBe(true);
+                    expect(isBlocked(String.raw`C:\repo\apps\ui\node_modules\@pierre\diffs\node_modules\@pierre\theming\dist\themes.js`)).toBe(false);
+                    expect(isBlocked(String.raw`C:\repo\apps\ui\node_modules\@pierre\diffs\node_modules\@pierre\theming-other\dist\themes.js`)).toBe(true);
+                }
+            }
         } finally {
             rmSync(fixture, { recursive: true, force: true });
         }
