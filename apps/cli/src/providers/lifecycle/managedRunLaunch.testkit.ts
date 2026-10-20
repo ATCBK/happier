@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1, type ConnectedAccountPurposeDeclarationV1 } from '@happier-dev/protocol';
 import { writeCommittedLocalPathPluginFixture } from '@/plugins/store/state.testkit';
 import { createLocalPathPluginDistributionIdentity, createPluginTrustRecord } from '@/plugins/store/install/trustIdentity';
@@ -56,7 +56,11 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify({
     schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Managed Run fixture',
     engines: { happier: '^0.2.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.mjs' },
+    hostAccess: { required: [{ id: 'agent-process', capability: 'process',
+      reason: 'Admit the external Agent Provider environment through the real host boundary',
+      scope: { envKeys: ['RUN_PROVIDER_TOKEN'], executables: [{ kind: 'systemTool', id: 'fixture-runtime' }] } }], optional: [] },
     contributes: {
+      systemTools: [{ id: 'fixture-runtime', title: 'Fixture runtime', executableNames: [basename(process.execPath)] }],
       agents: [{ id: 'agent', title: 'Run Agent', runtime: { kind: 'custom' }, primary: 'sessions',
         ...(input.connectedAccounts ? { connectedAccounts: input.connectedAccounts } : {}),
         ...(input.signedOutAgentCli ? { cli: {
