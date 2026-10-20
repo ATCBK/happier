@@ -3629,7 +3629,7 @@ describe('executionRuns session RPC handlers', () => {
     expect(started.sidechainId).toBe(started.callId);
   });
 
-  it('returns execution_run_budget_exceeded when max concurrent runs is reached', async () => {
+  it('shares the fallback registry across concurrent mixed-intent starts and releases it on Stop', async () => {
     const client = createEncryptedRpcTestClient({
       scopePrefix: 'sess_1',
       registerHandlers: (rpc) => {
@@ -3644,7 +3644,7 @@ describe('executionRuns session RPC handlers', () => {
       },
     });
 
-    const first = await client.call<any, any>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+    const request = {
       intent: 'review',
       modelSelection: null,
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
@@ -3653,22 +3653,23 @@ describe('executionRuns session RPC handlers', () => {
       retentionPolicy: 'ephemeral',
       runClass: 'bounded',
       ioMode: 'request_response',
-    });
-    expect(first.runId).toMatch(/^run_/);
-
-    const second = await client.call<any, any>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
-      intent: 'review',
-      modelSelection: null,
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      instructions: 'Review again.',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'bounded',
-      ioMode: 'request_response',
-    });
-
-    expect(second.ok).toBe(false);
-    expect(second.errorCode).toBe('execution_run_budget_exceeded');
+    } as const;
+    const results = await Promise.all([
+      client.call<ExecutionRunStartResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_START, request),
+      client.call<ExecutionRunStartResponse, unknown>(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+        ...request, intent: 'delegate', instructions: 'Delegate the task.',
+      }),
+    ]);
+    const started = results.find(result => 'runId' in result);
+    expect(started).toMatchObject({ runId: expect.stringMatching(/^run_/) });
+    expect(results.filter(result => 'errorCode' in result)).toEqual([
+      expect.objectContaining({ ok: false, errorCode: 'execution_run_budget_exceeded' }),
+    ]);
+    if (!started || !('runId' in started)) throw new Error('Missing admitted Run');
+    await expect(client.call(SESSION_RPC_METHODS.EXECUTION_RUN_STOP, { runId: started.runId }))
+      .resolves.toMatchObject({ ok: true });
+    await expect(client.call(SESSION_RPC_METHODS.EXECUTION_RUN_START, { ...request, intent: 'delegate' }))
+      .resolves.toMatchObject({ runId: expect.stringMatching(/^run_/) });
   });
 
   it('does not enforce a fallback concurrent-run cap when maxConcurrentRuns is unset', async () => {
