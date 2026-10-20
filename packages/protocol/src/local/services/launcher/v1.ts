@@ -7,6 +7,10 @@ import { ProjectExecutionChoiceV1Schema } from '../../../workspaces/projectWorke
 import { ProjectServiceDeclarationRefV1Schema, LocalServiceManagedServiceActionTargetV1Schema } from '../actions/v1.js';
 import { WorkspaceRefV1WriteSchema, WorkspaceAddressV1Schema } from '../../../workspaces/workspaceRefV1.js';
 import { StrictJsonValueSchema } from '../../../json/strictJsonValue.js';
+import { QualifiedProjectTrustProjectV1Schema } from '../../../workspaces/projectSetup/projectTrustRowV1.js';
+import { ProjectSetupReviewV1Schema } from '../../../actions/projectSetupConsentFailure.js';
+import { ActionSurfaceSchema } from '../../../actions/metadata.js';
+import { ActionExecuteFailureSchema } from '../../../actions/actionExecutionResult.js';
 
 export const LocalServiceLaunchTargetSourceV1Schema = lazyZodSchema(() => z.enum([
   'package_script',
@@ -199,6 +203,9 @@ export const DaemonLocalServiceLauncherSnapshotRequestV1Schema = lazyZodSchema((
     scope: z.optional(z.enum(['workspace', 'machine'])),
     // Session-less project scoping: a project surface can scope by its repo root with no session.
     workspaceRoot: z.optional(WorkspaceRefV1WriteSchema.shape.rootPath),
+    /** Read-only native review for the ordinary Start approval, never execution. */
+    startReview: z.optional(z.strictObject({ request: DaemonLocalServiceLauncherStartRequestV1Schema,
+        surface: z.keyof(ActionSurfaceSchema) })),
   }));
 export type DaemonLocalServiceLauncherSnapshotRequestV1 = z.infer<
   typeof DaemonLocalServiceLauncherSnapshotRequestV1Schema
@@ -207,6 +214,7 @@ export type DaemonLocalServiceLauncherSnapshotRequestV1 = z.infer<
 export const DaemonLocalServiceLauncherSnapshotResponseV1Schema = lazyZodSchema(() => z.strictObject({
     protocolVersion: z.literal(1),
     snapshot: LocalServiceLauncherSnapshotV1Schema,
+    startReview: z.optional(z.union([LocalServiceStartApprovalReviewV1Schema, ActionExecuteFailureSchema])),
   }));
 export type DaemonLocalServiceLauncherSnapshotResponseV1 = z.infer<
   typeof DaemonLocalServiceLauncherSnapshotResponseV1Schema
@@ -225,6 +233,26 @@ export const DaemonLocalServiceLauncherStartRequestV1Schema = lazyZodSchema(() =
 export type DaemonLocalServiceLauncherStartRequestV1 = z.infer<
   typeof DaemonLocalServiceLauncherStartRequestV1Schema
 >;
+
+/** Native-produced approval custody. The signed Start request remains unchanged. */
+export const LocalServiceStartApprovalReviewV1Schema = lazyZodSchema(() => z.strictObject({
+    request: DaemonLocalServiceLauncherStartRequestV1Schema,
+    target: WorkspaceAddressV1Schema,
+    reviewedEffect: StrictJsonValueSchema,
+    reviewedEffectDigest: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+    setup: z.strictObject({
+        required: z.boolean(),
+        project: QualifiedProjectTrustProjectV1Schema,
+        ...ProjectSetupReviewV1Schema.shape,
+    }),
+}).check(z.superRefine((review, ctx) => {
+    if (!review.request.workspace || !review.request.declaration
+        || review.request.machineId !== review.target.machineId
+        || review.request.workspace.serverId !== review.target.serverId) {
+        ctx.addIssue({ code: 'custom', message: 'Native review must bind the declared Start and exact target.' });
+    }
+})));
+export type LocalServiceStartApprovalReviewV1 = z.infer<typeof LocalServiceStartApprovalReviewV1Schema>;
 
 /** Content-free native prerequisite; private CLI output never travels with it. */
 export const LocalServiceNativePrerequisiteV1Schema = lazyZodSchema(() => z.strictObject({

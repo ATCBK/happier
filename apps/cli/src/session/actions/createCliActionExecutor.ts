@@ -48,6 +48,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
   & CliTranscriptActionExecutorOptions
   & Readonly<{
     runtimeActionExecute?: RuntimeActionExecute;
+    prepareLocalServiceStartApproval?: ActionExecutorDeps['prepareLocalServiceStartApproval'];
     clientActionExecute?: ActionExecutorDeps['clientActionExecute'];
     confidentialSecretFill?: ActionExecutorDeps['confidentialSecretFill'];
     /** Bound by the live Session/Run host; private and deferred operations retain Artifact custody. */
@@ -165,6 +166,7 @@ export function createCliActionExecutor(
       ...(params.runtimeActionExecute
         ? { runtimeActionExecute: params.runtimeActionExecute }
         : {}),
+      ...(params.prepareLocalServiceStartApproval ? { prepareLocalServiceStartApproval: params.prepareLocalServiceStartApproval } : {}),
       ...(invokeContributedAction
         ? { invokeContributedAction }
         : {}),

@@ -116,6 +116,89 @@ describe('accepted Project Service declaration starter', () => {
     const cleanups: Array<() => Promise<void>> = [];
     afterEach(async () => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); });
 
+    it.each([false, true])('prepares native Service approval custody without copying or launching (setup=%s)', async setup => {
+        const h = await fixture(setup);
+        const reviewed = await h.starter.prepareStartApproval(h.request, h.ingress, h.context);
+        expect(reviewed).toMatchObject({ request: h.request, target: { machineId: h.targetWorkspace.machineId,
+            rootPath: h.targetRoot }, reviewedEffectDigest: expect.any(String) });
+        if (setup) expect(reviewed).toMatchObject({ setup: { project: { projectId: 'project' },
+            reviewedEffectDigest: expect.any(String), reviewedEffect: { commands: expect.any(Array) } } });
+        expect(h.copies()).toBe(0);
+        expect(h.setupProcesses).toEqual([]);
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
+    it.each([false, true])('binds Auto Service approval to the native worker before publication (withdrawn=%s)', async withdrawn => {
+        const h = await fixture(false, undefined, false, 'portable');
+        await cp(h.root, h.targetRoot, { recursive: true });
+        const poolId = '99d55938-f860-4af8-8023-01fecec86f35';
+        let connected = true;
+        vi.spyOn(axios, 'request').mockImplementation(async config => {
+            if (config.url === 'https://home.example/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+            expect(config.url).toBe('https://home.example/v1/machines/pools/get');
+            return { status: 200, data: { pool: { id: poolId, name: 'Workers', description: null, revision: 1,
+                createdAt: 1, updatedAt: 1, members: connected ? [{ machineId: h.targetWorkspace.machineId,
+                    priorityTier: 0, enabled: true, state: 'connected' }] : [] },
+                availability: { state: 'known', connectedCount: connected ? 1 : 0, enabledCount: connected ? 1 : 0 } } };
+        });
+        const request = { ...h.request, choice: { kind: 'workers' as const,
+            destination: { kind: 'pool' as const, poolId, selection: 'automatic' as const } } };
+        h.savePlacement({ runsOn: request.choice, unavailable: 'fail' });
+        let artifact: ReturnType<typeof ApprovalRequestV2Schema.parse> | undefined;
+        const executor = createActionExecutor({ ...createCliActionDeps({ token: h.runtime.credentials!.token,
+            credentials: h.runtime.credentials!, serverId: 'home', serverHttpBaseUrl: 'https://home.example',
+            sessionId: '', mode: 'plain', ctx: null }),
+            machinePoolAction: createAccountServerActionDeps({ token: h.runtime.credentials!.token,
+                credentials: h.runtime.credentials!, serverId: 'home', serverHttpBaseUrl: 'https://home.example' }).machinePoolAction,
+            prepareLocalServiceStartApproval: ({ input, context, executeCanonicalAction }) =>
+                h.starter.prepareStartApproval(input, h.ingress, context, executeCanonicalAction),
+            runtimeActionExecute: await h.createRuntimeActionExecutor(),
+            // Artifact storage is the system boundary; native and approval owners stay real.
+            approvalsCreate: async ({ request }) => { artifact = ApprovalRequestV2Schema.parse(request); return { artifactId: 'auto-service' }; },
+            approvalsGet: async () => artifact ?? null,
+            approvalsUpdate: async ({ request }) => { artifact = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+            isApprovalExecutionOriginCurrent: async () => true,
+        });
+        const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home',
+            runtimeAccountId: 'owner', actionRequestId: 'auto-service-review' };
+        const proposal = await executor.execute('localServices.launcher.start', request, context);
+        expect(proposal, JSON.stringify(proposal)).toMatchObject({ ok: true,
+            result: { kind: 'approval_request_created' } });
+        expect(artifact).toMatchObject({ actionArgs: request, preview: { serviceStartReview: { request,
+            target: { machineId: h.targetWorkspace.machineId, rootPath: h.targetRoot } } } });
+        expect(h.copies()).toBe(0);
+        expect(h.owner.listProjectServices()).toEqual([]);
+        connected = !withdrawn;
+        expect(await executor.execute('approval.request.decide', { artifactId: 'auto-service', decision: 'approve' }, context))
+            .toMatchObject({ ok: true });
+        expect(artifact?.execution).toMatchObject({ ok: true, result: withdrawn
+            ? { status: 'denied', reasonCode: 'target_not_local' } : { status: 'succeeded' } });
+        expect(h.copies()).toBe(withdrawn ? 0 : 1);
+        expect(h.owner.listProjectServices()).toHaveLength(withdrawn ? 0 : 1);
+        await h.owner.listProjectServices()[0]?.stop();
+    });
+
+    it('refuses native worker approval without target review bytes before any copy', async () => {
+        const h = await fixture(false, { kind: 'native', tool: 'package_script', file: 'package.json', target: 'dev' }, true, 'portable');
+        await writeFile(join(h.root, 'package.json'), JSON.stringify({ scripts: { dev: 'serve web' } }));
+        const reviewed = await h.starter.prepareStartApproval(h.request, h.ingress, h.context);
+        expect(reviewed).toMatchObject({ ok: false, errorCode: 'project_service_effect_changed' });
+        expect(h.copies()).toBe(0);
+        expect(h.setupProcesses).toEqual([]);
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
+    it('preserves native process uncertainty during approval review instead of publishing a settled refusal', async () => {
+        const h = await fixture(false, { kind: 'native', tool: 'compose', file: 'compose.yaml', target: 'worker' });
+        await writeFile(join(h.root, 'compose.yaml'), 'services:\n  worker:\n    image: alpine:3.22\n');
+        h.setNativeTool({ executablePath: '/installed/docker' });
+        const uncertain = Object.assign(new Error('Native tool process termination is unconfirmed'), { code: 'plugin_exec_termination_incomplete' });
+        // Docker probe execution is native process IO; review and custody remain real.
+        Object.assign(h.runtime, { environmentIo: { ...h.runtime.environmentIo, run: async () => { throw uncertain; } } });
+        await expect(h.starter.prepareStartApproval(h.request, h.ingress, h.context)).rejects.toBe(uncertain);
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
     function serviceWorkerAction(f: Awaited<ReturnType<typeof fixture>>, machineId: string) {
         return createProjectWorkerAction({ machineId, serverId: 'home', serverHttpBaseUrl: 'https://home.example',
             credentials: f.runtime.credentials!, accountId: 'owner',

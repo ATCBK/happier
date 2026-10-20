@@ -4,6 +4,8 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { ProjectSetupReviewV1Schema, type ProjectSetupReviewV1 } from '@happier-dev/protocol/actions/projectSetupConsentFailure';
 import { ProjectExecutionChoiceV1Schema } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
+import { LocalServiceStartApprovalReviewV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
@@ -58,6 +60,8 @@ export type ProjectCommandApprovalPresentation =
       sourceMachineId: string;
       command: string | null;
       destination: Destination;
+      workspace?: WorkspaceAddressV1;
+      setupReview?: ProjectSetupReviewV1;
     }>;
 type Destination =
   | Readonly<{ kind: 'primary' }>
@@ -72,6 +76,18 @@ type Destination =
 export function readProjectCommandApproval(
   approval: Pick<ApprovalRequest, 'actionId' | 'actionArgs'> & Partial<Pick<ApprovalRequest, 'preview'>>,
 ): ProjectCommandApprovalPresentation | null {
+  if (approval.actionId === 'localServices.launcher.start') {
+    const review = LocalServiceStartApprovalReviewV1Schema.safeParse(isRecord(approval.preview) ? approval.preview.serviceStartReview : undefined);
+    if (!review.success || !sameStrictJsonValue(review.data.request, approval.actionArgs)) return null;
+    const source = review.data.request.workspace!;
+    const target = review.data.target;
+    return { ...readProjectServiceEffectApproval({ serverId: review.data.target.serverId,
+      sourceMachineId: source.machineId, reviewedEffect: review.data.reviewedEffect }),
+      kind: 'service', serverId: target.serverId, sourceMachineId: source.machineId,
+      workspace: target, destination: sameStrictJsonValue(source, target) ? { kind: 'primary' }
+        : { kind: 'machine', machineId: target.machineId },
+      ...(review.data.setup?.required ? { setupReview: review.data.setup } : {}) };
+  }
   if (approval.actionId === 'projects.compute.exec') {
     const input = PROJECT_ACTION_INPUT_SCHEMAS_V1[
       'projects.compute.exec'
@@ -134,7 +150,7 @@ export function readProjectServiceEffectApproval(input: Readonly<{
   serverId: string;
   sourceMachineId: string;
   reviewedEffect: unknown;
-}>): ProjectCommandApprovalPresentation {
+}>): Extract<ProjectCommandApprovalPresentation, { kind: 'service' }> {
   const effect = isRecord(input.reviewedEffect) ? input.reviewedEffect : {};
   const serviceEffect = isRecord(effect.serviceEffect) ? effect.serviceEffect : null;
   const command = listReviewedSetupCommands({ commands: [effect.command ?? serviceEffect?.command].filter(Boolean) })?.[0] ?? null;
@@ -246,9 +262,9 @@ export const ProjectCommandApprovalFacts = React.memo(
           : t('projects.scripts.adhocAsYou', { machine: where });
     const rows: ReadonlyArray<readonly [string, string, string]> = [
       ['where', t('projects.scripts.adhocWhere'), where],
-      ...(presentation.kind === 'service'
+      ...(presentation.kind === 'service' && !presentation.workspace
         ? []
-        : [['checkout', t('common.path'), presentation.workspace.rootPath] as const]),
+        : [['checkout', t('common.path'), presentation.workspace!.rootPath] as const]),
       [
         'files',
         t('projects.scripts.adhocFiles'),
@@ -286,6 +302,10 @@ export const ProjectCommandApprovalFacts = React.memo(
               {t('projects.scripts.setup.stepsUnavailable')}
             </Text>
           )
+        ) : null}
+        {presentation.kind === 'service' && presentation.setupReview ? (
+          <ProjectSetupReviewFacts testID={`${props.testID}.review`} reviewedEffect={presentation.setupReview.reviewedEffect}
+            machineName={where} sharedRunAs={null} />
         ) : null}
         <View style={styles.rows}>
           {rows.map(([key, label, value]) => (

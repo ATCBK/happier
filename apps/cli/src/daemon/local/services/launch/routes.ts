@@ -1,4 +1,5 @@
 import type { LocalServiceLauncherSnapshotV1 } from '@happier-dev/protocol';
+import type { createProjectServiceDeclarationStarter } from './projectDeclarations';
 
 import type { LocalServiceLauncherFeed, LocalServiceLauncherFeedSnapshotRequest } from './feed';
 import type { LocalServiceLauncherLeafRoutes } from './leaves';
@@ -11,6 +12,7 @@ import {
 export type LocalServiceLauncherRoutes = Readonly<{
     getSnapshot(request?: LocalServiceLauncherFeedSnapshotRequest): Promise<LocalServiceLauncherSnapshotV1>;
     startTarget?: LocalServiceLauncherStartTarget;
+    prepareStartApproval?: ReturnType<typeof createProjectServiceDeclarationStarter>['prepareStartApproval'];
     leaves?: LocalServiceLauncherLeafRoutes;
 }>;
 
@@ -18,6 +20,7 @@ export function createLocalServiceLauncherRoutes<TDeclaration = unknown>(input: 
     feed: LocalServiceLauncherFeed;
     history?: CreateLocalServiceLauncherStartTargetInput<TDeclaration>['history'];
     startTarget?: LocalServiceLauncherStartTarget;
+    prepareStartApproval?: ReturnType<typeof createProjectServiceDeclarationStarter>['prepareStartApproval'];
     resolveStartTarget?: CreateLocalServiceLauncherStartTargetInput<TDeclaration>['resolveStartTarget'];
     startManagedDeclaration?: CreateLocalServiceLauncherStartTargetInput<TDeclaration>['startManagedDeclaration'];
     leaves?: LocalServiceLauncherLeafRoutes;
@@ -35,6 +38,7 @@ export function createLocalServiceLauncherRoutes<TDeclaration = unknown>(input: 
             return await input.feed.getSnapshot(request);
         },
         startTarget,
+        ...(input.prepareStartApproval ? { prepareStartApproval: input.prepareStartApproval } : {}),
         ...(input.leaves ? { leaves: input.leaves } : {}),
     };
 }

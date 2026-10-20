@@ -103,6 +103,7 @@ import { createCliProviderActionExecuteV1 } from './cliActionDeps/createCliProvi
 import { createUsageSourceActionPort } from '@happier-dev/protocol/actions/executor/usageSourceActions';
 import { createCliRemoteHostActionExecuteV1 } from './cliActionDeps/createCliRemoteHostActionDeps';
 import { randomUUID } from 'node:crypto';
+import { DaemonLocalServiceLauncherSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { createFoundSkillBundleReader } from '@/cli/actions/foundSkillBundleReader';
 import { admitScmRemotePolicy } from '@happier-dev/protocol/scm/remotePolicy';
 import { admitScmCommitPolicy, admitScmCommitUndoLast } from '@happier-dev/protocol/scm/capabilities';
@@ -3664,6 +3665,18 @@ export function createCliActionDeps(params: Readonly<{
     },
     ...(approvalsStore?.promptLibraryStore.organization ? { artifactFolders: approvalsStore.promptLibraryStore.organization,
       promptStacks: approvalsStore.promptLibraryStore.organization, skillRules: approvalsStore.skillRules } : {}),
+    prepareLocalServiceStartApproval: async ({ input, context }) => {
+      const unavailable = { ok: false as const, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable' };
+      const denied = await projectHomeAdmission(input.workspace?.serverId, context);
+      if (denied) return denied;
+      if (!context.surface) return unavailable;
+      const raw = await withProjectHome(() => callMachineAction({ machineId: input.machineId, serverId: projectHomeId,
+        method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
+        request: { machineId: input.machineId, startReview: { request: input, surface: context.surface } },
+        context, exactMachine: true, ...(context.signal ? { signal: context.signal } : {}) }));
+      const response = DaemonLocalServiceLauncherSnapshotResponseV1Schema.safeParse(raw);
+      return response.success && response.data.startReview ? response.data.startReview : unavailable;
+    },
     runtimeActionExecute: async (args) => {
       const isStart = args.actionId === 'localServices.launcher.start';
       const controlKind = resolveLocalServiceActionKindForRuntimeActionId(args.actionId);

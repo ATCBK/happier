@@ -1,4 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import type { RuntimeActionExecuteArgs } from './executor/types.js';
+import { DaemonLocalServiceLauncherStartRequestV1Schema, LocalServiceStartApprovalReviewV1Schema } from '../local/services/launcher/v1.js';
 import { actionInputValidationFailure } from './executor/actionInputValidation.js';
 import { CodeIntelligenceActionInputSchema, CodeIntelligenceFileActionInputSchema, CodeIntelligenceRestartActionInputSchema } from './codeIntelligenceActionFamily.js';
 import { DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema, type DaemonLspQueryRequest } from '../machines/languageIntelligence.js';
@@ -1343,14 +1345,21 @@ async function prepareApprovalRequest(params: Readonly<{
   context: ActionExecutorContext;
   computerApprovalDisplay?: ComputerApprovalDisplayV1;
   widgetSurfaceRead?: ReturnType<typeof WidgetSurfaceReadV1Schema.parse>;
+  executeCanonicalAction?: RuntimeActionExecuteArgs['executeCanonicalAction'];
 }>): Promise<Readonly<{ actionArgs: unknown; preview: unknown }> | ActionExecuteFailure | null> {
   const spec = getActionSpec(params.actionId);
-  // A declared Service's native owner must select and review its exact target,
-  // copy/setup and Start effect. The generic SOURCE/input preview cannot carry
-  // that compound consent, even when the caller supplies an effect digest.
-  // Until that owner supplies pre-approval custody, refuse before publication.
-  if (params.actionId === 'localServices.launcher.start'
-    && readRecord(params.input).declaration !== undefined) return null;
+  if (params.actionId === 'localServices.launcher.start' && readRecord(params.input).declaration !== undefined) {
+    const input = DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(params.input);
+    if (!input.success || !params.deps.prepareLocalServiceStartApproval) return null;
+    const prepared = await params.deps.prepareLocalServiceStartApproval({ input: input.data, context: params.context,
+      ...(params.executeCanonicalAction ? { executeCanonicalAction: params.executeCanonicalAction } : {}) });
+    const failure = readActionFailureEnvelope(prepared);
+    if (failure) return failure;
+    const review = LocalServiceStartApprovalReviewV1Schema.safeParse(prepared);
+    if (!review.success || !sameStrictJsonValue(review.data.request, input.data)) return null;
+    return { actionArgs: params.actionArgs, preview: { actionId: params.actionId, actionArgs: params.input,
+      summary: buildApprovalPreviewSummary(spec, params.input), serviceStartReview: review.data } };
+  }
   let computerApprovalDisplay = params.computerApprovalDisplay;
   if (!computerApprovalDisplay && (params.actionId === 'computer.target.select'
     || params.actionId === 'computer.capture' || params.actionId === 'computer.query' || params.actionId === 'computer.input')) {
@@ -3171,6 +3180,15 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // original live invocation. Durable approval state cannot restore either
     // the private input or the lost result recipient.
     const custodyReplayActionId = ActionIdSchema.safeParse(args.request.actionId);
+    const serviceStartReview = args.request.actionId === 'localServices.launcher.start'
+      && readRecord(args.request.actionArgs).declaration !== undefined
+      ? LocalServiceStartApprovalReviewV1Schema.safeParse(readRecord(args.request.preview).serviceStartReview) : null;
+    if (serviceStartReview && (!serviceStartReview.success
+      || !sameStrictJsonValue(serviceStartReview.data.request, args.request.actionArgs))) {
+      return await persistPreExecutionFailure(args.request, {
+        ok: false, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable',
+      });
+    }
     const custodySpec = custodyReplayActionId.success ? getActionSpec(custodyReplayActionId.data) : null;
     if (
       (custodySpec?.approvalInputCustody === 'live_only'
@@ -3385,6 +3403,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         })) } : {}) }
       : reviewedSessionTargets;
     let executionContext: ActionExecutorContext = {
+      ...(serviceStartReview?.success ? { nativeServiceStartApproval: serviceStartReview.data } : {}),
       ...(args.ctx.signal ? { signal: args.ctx.signal } : {}),
       ...(retainsHostOperation ? {
         operationAcceptance: args.ctx.operationAcceptance,
@@ -4771,6 +4790,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           input: admittedInput,
           actionArgs: initialApprovalActionArgs,
           context: ctx,
+          executeCanonicalAction: (id, input) => executeInvocation(id, input, ctx),
           ...(widgetSourceRead ? { widgetSurfaceRead: widgetSourceRead } : {}),
           ...(computerSelection ? { computerApprovalDisplay: computerSelection.approvalDisplay } : {}),
         });
@@ -10920,6 +10940,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           input: targetArgs,
           actionArgs: initialApprovalActionArgs,
           context: ctx,
+          executeCanonicalAction: (id, input) => executeInvocation(id, input, ctx),
         });
         if (!preparedApproval) {
           const errorCode = ctx.signal?.aborted ? 'cancelled' : 'approval_context_unavailable';

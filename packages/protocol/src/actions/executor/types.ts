@@ -1,4 +1,5 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { DaemonLocalServiceLauncherStartRequestV1, LocalServiceStartApprovalReviewV1 } from '../../local/services/launcher/v1.js';
 import type { DaemonLspQueryRequest, DaemonLspQueryResponse, DaemonLspRestartRequest, DaemonLspRestartResponse } from '../../machines/languageIntelligence.js';
 import type { WorkspaceFilesReplacePreviewActionInput, WorkspaceFilesReplaceActionInput } from '../actionSpecs.js';
 import type { DaemonWorkspaceFileReplacePreviewResponse, DaemonWorkspaceFileReplaceApplyResponse } from '../../machines/workspaceFiles.js';
@@ -568,6 +569,8 @@ export type SessionPermissionRemoteActionArgs =
     }>;
 
 export type ActionExecutorContext = Readonly<{
+  /** Host-private custody restored only from a validated, human-approved native review. */
+  nativeServiceStartApproval?: LocalServiceStartApprovalReviewV1;
   /** Host-only, exact-invocation observer of actual credential admission. Never parsed from input. */
   recordOperationCredentialUse?: (use: import('../actionExecutionResult.js').ActionOperationCredentialUseV1) => void;
   /** Host-prepared target snapshot, retained by the existing approval origin. Never caller input. */
@@ -1109,6 +1112,12 @@ export type PluginSettingsAdministrationActionRequest = Readonly<{
 }>;
 
 export type ActionExecutorDeps = Readonly<{
+  /** The receiving native Service owner reviews without copying, setup or Start. */
+  prepareLocalServiceStartApproval?: (args: Readonly<{
+    input: DaemonLocalServiceLauncherStartRequestV1;
+    context: ActionExecutorContext;
+    executeCanonicalAction?: RuntimeActionExecuteArgs['executeCanonicalAction'];
+  }>) => Promise<LocalServiceStartApprovalReviewV1 | ActionExecuteFailure>;
   /** Existing host profile bindings; unresolved identifiers never authorize another Home. */
   resolveServerProfileScopeId?: import('../../features/payload/capabilities/serverIdentityCapabilities.js').ServerProfileScopeResolver;
   /** Authenticated source ownership, independent of the Machine executing a persisted read. */

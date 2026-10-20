@@ -18,6 +18,7 @@ import type { LocalServicePublicPreviewRoutes } from '@/daemon/local/services/pu
 import { registerDaemonLocalServicePreviewSnapshotHandler, type DaemonLocalServicePreviewSnapshotHandlerOptions } from './daemonLocalServicePreviewSnapshot';
 import { registerActionSpecRpcHandlers, type RegisterActionSpecRpcHandlersParams } from './registerActionSpecRpcHandlers';
 import { assertLocalServiceCredentialAdmission } from '@/daemon/local/services/credentialAdmission';
+import { buildActionExecutorContextForRpc } from './_actionDispatchAdapter';
 
 export type DaemonLocalServicesMachineRpcRoutes = Pick<DaemonLocalServicePreviewSnapshotHandlerOptions,
     'projectManagedServices' | 'machineId' | 'serverId'> & Readonly<{
@@ -27,7 +28,7 @@ export type DaemonLocalServicesMachineRpcRoutes = Pick<DaemonLocalServicePreview
         & Pick<LocalServiceInventoryRoutes, 'getSnapshot' | 'refreshSnapshot'>
         & Partial<Pick<LocalServiceInventoryRoutes, 'watchSnapshot'>>
         | null;
-    localServicesLauncher?: Pick<LocalServiceLauncherRoutes, 'getSnapshot'> & Partial<Pick<LocalServiceLauncherRoutes, 'startTarget' | 'leaves'>> | null;
+    localServicesLauncher?: Pick<LocalServiceLauncherRoutes, 'getSnapshot'> & Partial<Pick<LocalServiceLauncherRoutes, 'startTarget' | 'leaves' | 'prepareStartApproval'>> | null;
     localServicesPreview?: LocalServicePreviewRoutes | null;
     localServicesActions?: Pick<LocalServiceActionRoutes, 'execute'> | null;
     localServicesPublicPreview?: LocalServicePublicPreviewRoutes | null;
@@ -143,6 +144,26 @@ export function registerDaemonLocalServicesMachineRpcHandlers(
             async (raw: unknown, context): Promise<DaemonLocalServiceLauncherSnapshotResponseV1> => {
                 const request = DaemonLocalServiceLauncherSnapshotRequestV1Schema.parse(raw);
                 await assertRequesterRead(context);
+                const review = request.startReview;
+                const prepare = options.localServicesLauncher?.prepareStartApproval;
+                let startReview: DaemonLocalServiceLauncherSnapshotResponseV1['startReview'];
+                if (review) {
+                    if (request.machineId !== review.request.machineId || request.machineId !== options.machineId
+                        || !prepare || !context || !options.resolveLauncherActionExecutor) startReview = {
+                        ok: false, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable',
+                    };
+                    else {
+                        const actionContext = { ...buildActionExecutorContextForRpc({ ...context, serverId: options.serverId,
+                            actionId: 'localServices.launcher.start', runtimeAccountId: context.machineAdmission?.actorAccountId,
+                            ...(context.callerInputAuthorization ? { externalActionExecutionAuthorization: context.callerInputAuthorization } : {}) }),
+                            surface: review.surface };
+                        const executor = await options.resolveLauncherActionExecutor({ actionId: 'localServices.launcher.start',
+                            method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT, isAlias: false, input: raw, ingress: context });
+                        startReview = await prepare(review.request, context, actionContext,
+                            (actionId, input) => executor.execute(actionId, input, actionContext));
+                        await assertRequesterRead(context);
+                    }
+                }
                 const routes = requireLauncherRoutes(options);
                 // Forward sessionId + explicit scope/workspaceRoot so the feed scopes to the
                 // session's workspace PATH (D1), the requested machine view, or a session-less
@@ -161,6 +182,7 @@ export function registerDaemonLocalServicesMachineRpcHandlers(
                 return DaemonLocalServiceLauncherSnapshotResponseV1Schema.parse({
                     protocolVersion: 1,
                     snapshot,
+                    ...(startReview ? { startReview } : {}),
                 });
             },
         );

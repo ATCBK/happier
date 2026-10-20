@@ -716,6 +716,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   revalidatePluginActionCallerMaterialization?: RevalidatePluginActionCallerMaterialization;
   revalidatePluginActionCallerOccurrence?: RevalidatePluginActionCallerOccurrence;
   runtimeActionExecute?: RuntimeActionExecute;
+  prepareLocalServiceStartApproval?: ActionExecutorDeps['prepareLocalServiceStartApproval'];
   clientActionExecute?: ActionExecutorDeps['clientActionExecute'];
   confidentialSecretFill?: ActionExecutorDeps['confidentialSecretFill'];
   workflowAction?: ActionExecutorDeps['workflowAction'];
@@ -1208,6 +1209,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.prepareApprovalExecutionAuthorization
         ? { prepareApprovalExecutionAuthorization: params.prepareApprovalExecutionAuthorization }
         : {}),
+      ...(params.prepareLocalServiceStartApproval ? { prepareLocalServiceStartApproval: params.prepareLocalServiceStartApproval } : {}),
       ...(params.bindApprovedApiTokenExecution && accountServerActionDeps.accountApiTokensCreateAction
         ? { prepareApprovedApiTokenExecution: params.bindApprovedApiTokenExecution(accountServerActionDeps.accountApiTokensCreateAction) } : {}),
       ...(params.listContributedActionDefinitions

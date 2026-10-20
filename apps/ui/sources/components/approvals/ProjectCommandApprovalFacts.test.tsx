@@ -36,6 +36,30 @@ const workspace = {
 };
 
 describe('Project command approval facts', () => {
+  it('renders the native declared Service review with its exact target and setup before approval', async () => {
+    const request = { machineId: 'worker', targetId: 'web', workspace,
+      declaration: { workspaceRefId: workspace.workspaceId, selection: { kind: 'manifest', name: 'web' } },
+      choice: { kind: 'workers', destination: { kind: 'pool', poolId: '11111111-1111-4111-8111-111111111111', selection: 'automatic' } } };
+    const target = { ...workspace, machineId: 'worker', workspaceId: 'worker-checkout', rootPath: '/copies/happier' };
+    const review = { request, target, reviewedEffectDigest: 'a'.repeat(64),
+      reviewedEffect: { command: { source: { kind: 'command', command: 'serve web' } } },
+      setup: { required: true, project: { serverId: workspace.serverId, projectId: 'project' },
+        reviewedEffectDigest: 'b'.repeat(64), reviewedEffect: { commands: [{ kind: 'command', command: 'install dependencies' }] } } };
+    const presentation = readProjectCommandApproval({ actionId: 'localServices.launcher.start', actionArgs: request,
+      preview: { serviceStartReview: review } });
+    expect(presentation).toMatchObject({ kind: 'service', destination: { kind: 'machine', machineId: 'worker' }, workspace: target });
+    if (!presentation) throw new Error('Missing qualified Service review');
+    const screen = await renderScreen(<ProjectCommandApprovalFacts presentation={presentation} testID="facts" />);
+    expect(screen.getTextContent()).toContain('serve web');
+    expect(screen.getTextContent()).toContain('install dependencies');
+    expect(screen.findHostByTestId('facts.checkout')?.props.children).toBe(target.rootPath);
+    expect(readProjectCommandApproval({ actionId: 'localServices.launcher.start', actionArgs: { ...request, machineId: 'other' },
+      preview: { serviceStartReview: review } })).toBeNull();
+    const local = { ...request, machineId: workspace.machineId, choice: { kind: 'primary' } };
+    expect(readProjectCommandApproval({ actionId: 'localServices.launcher.start', actionArgs: local,
+      preview: { serviceStartReview: { ...review, request: local, target: workspace } } }))
+      .toMatchObject({ destination: { kind: 'primary' } });
+  });
   it.each(['projects.script.run', 'projects.prepare'] as const)('renders distinct checkout identities for %s on the same Machine', async actionId => {
     const read = (selected: typeof workspace) => readProjectCommandApproval({ actionId,
       actionArgs: actionId === 'projects.prepare' ? { workspace: selected, phase: 'setup' }

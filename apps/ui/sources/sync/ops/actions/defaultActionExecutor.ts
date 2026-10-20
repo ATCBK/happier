@@ -424,6 +424,7 @@ import { invokeScopeAction } from './scopeActionFamily';
 import { invokeDiagnosticAction } from '@/components/settings/diagnosis/diagnosticsActionRuntime';
 import { signOutEverywhere } from '@/sync/api/account/signOutEverywhere';
 import {
+import { DaemonLocalServiceLauncherSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
     createCurrentAccountApiToken,
     listCurrentAccountApiTokens,
     revokeAllCurrentAccountApiTokens,
@@ -1629,6 +1630,18 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     resolveSessionSpawnAgentInventorySelection: args => resolveSessionSpawnAgentInventorySelectionForActions({ ...args,
       signal: accountContext?.invocationSignal, accountLifetime: accountContext?.accountLifetime }),
     runtimeActionExecute: async (args) => {
+    prepareLocalServiceStartApproval: async ({ input, context }) => {
+      const unavailable = { ok: false as const, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable' };
+      if (!accountContext || !context.surface) return unavailable;
+      accountContext.assertCurrent();
+      const raw = await actionMachineRpc<unknown, unknown>({ serverId: accountContext.serverId, accountId: accountContext.accountId,
+        machineId: input.machineId, method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
+        payload: { machineId: input.machineId, startReview: { request: input, surface: context.surface } },
+        ...(context.signal ? { signal: context.signal } : {}) });
+      accountContext.assertCurrent();
+      const response = DaemonLocalServiceLauncherSnapshotResponseV1Schema.safeParse(raw);
+      return response.success && response.data.startReview ? response.data.startReview : unavailable;
+    },
       const featureId = getActionRequiredServerFeatureId(args.actionId, args.context);
       if (featureId === 'browser.automation') {
         const snapshot = await getServerFeaturesSnapshot({ serverId: accountContext?.serverId ?? args.context.serverId ?? undefined });
