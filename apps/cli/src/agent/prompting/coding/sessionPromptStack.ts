@@ -13,7 +13,7 @@ import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifet
   readAccountPromptStackSources,
   isActiveAccountSettingsSnapshotLifetimeCurrent,
   type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { resolveSessionProjectPromptStack } from './sessionProjectPromptStack';
+import { resolveSessionProjectPromptStack, type SessionProjectPromptStackPreparation } from './sessionProjectPromptStack';
 import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { logger } from '@/ui/logger';
@@ -73,6 +73,8 @@ export type SessionPromptStackInput = Readonly<{
   refreshCatalogs?: boolean;
   /** Preserve the caller's original Account admission across asynchronous preparation. */
   accountContext?: SessionPromptStackAccountContext;
+  /** Finite admission may share one fresh Project inventory across its Sessions. */
+  projectPreparation?: SessionProjectPromptStackPreparation;
   operationContext?: SavedSecretOperationContextV1;
 }>;
 
@@ -194,10 +196,15 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
       return unavailable(accountSources.reason, accountInventory?.status === 'ready' ? 'profile_prompt_inventory' : 'account_prompt_inventory');
     }
     if (!input.credentials && (workspaceId !== undefined || projectId !== undefined)) return unavailable(undefined, 'project_association');
-    const projectEntries = input.credentials ? await resolveSessionProjectPromptStack({
-      credentials: input.credentials, metadata, signal: input.signal, machineId: input.machineId, directory: input.directory, serverId,
+    const projectInput = {
+      metadata, signal: input.signal, machineId: input.machineId, directory: input.directory, serverId,
       operationContext: input.operationContext,
-    }).then(project => project.entries) : [];
+    };
+    const projectEntries = input.credentials ? await (input.projectPreparation
+      ? input.projectPreparation.resolve({ metadata, machineId: input.machineId, directory: input.directory })
+      : resolveSessionProjectPromptStack({
+        credentials: input.credentials, ...projectInput,
+      })).then(project => project.entries) : [];
     await assertOperationCurrent();
     return {
       credentials: input.credentials, operationContext: input.operationContext, serverId, scope, settings, profileId,

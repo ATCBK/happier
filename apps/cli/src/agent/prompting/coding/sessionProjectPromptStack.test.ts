@@ -2,7 +2,7 @@ import axios from 'axios';
 import { afterEach, expect, it, vi } from 'vitest';
 import { configuration } from '@/configuration';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
-import { resolveSessionProjectPromptStack } from './sessionProjectPromptStack';
+import { createSessionProjectPromptStackPreparation, resolveSessionProjectPromptStack } from './sessionProjectPromptStack';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 
 const endpointReleases: Array<() => void> = [];
@@ -25,7 +25,7 @@ it('resolves Project association on the supplied exact Home rather than the acti
 
 afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot();
   for (const release of endpointReleases.splice(0)) release(); });
-it('keeps the Source read on the captured Home endpoint when runtime publication changes during Project discovery', async () => {
+it.each([false, true])('keeps the Source read on the captured Home endpoint during Project discovery (shared=%s)', async shared => {
   const serverId = configuration.activeServerId;
   endpointReleases.push(publishServerHttpRuntimeOrigin('http://captured-home.invalid', 'https'));
   const workspaceKey = { kind: 'workspace-ref', serverId, id: 'checkout' };
@@ -40,9 +40,11 @@ it('keeps the Source read on the captured Home endpoint when runtime publication
   });
   const sourceRead = vi.spyOn(axios, 'request').mockResolvedValue({ status: 503,
     data: { ok: false, error: 'source_backend_unavailable' } });
-  await expect(resolveSessionProjectPromptStack({ credentials: { token: 'project-token', encryption: null },
-    metadata: { workspaceId: 'checkout', projectId: 'project', path: '/repo' }, machineId: 'machine', directory: '/repo',
-  })).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_source_unavailable' });
+  const input = { credentials: { token: 'project-token', encryption: null },
+    metadata: { workspaceId: 'checkout', projectId: 'project', path: '/repo' }, machineId: 'machine', directory: '/repo' };
+  const preparation = shared ? createSessionProjectPromptStackPreparation({ credentials: input.credentials, serverId }) : null;
+  await expect(preparation ? preparation.resolve(input) : resolveSessionProjectPromptStack(input))
+    .rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_source_unavailable' });
   expect(sourceRead.mock.calls[0]?.[0]).toMatchObject({
     url: `http://captured-home.invalid/v1/projects/sources/source?serverId=${encodeURIComponent(serverId)}`,
   });
@@ -62,7 +64,7 @@ it('uses only current Source context for a Source-backed Project and retains the
   const source = { id: 'source', revision: 2, name: 'Current Source', createdByAccountId: 'account', audience: [],
     repository: { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
       repository: { nameWithOwner: 'owner/repo', cloneUrl: 'https://github.com/owner/repo.git', visibility: 'public' }, protocol: 'https' } };
-  vi.spyOn(axios, 'request').mockResolvedValueOnce({ status: 200, data: { ok: true, canManage: false, source: {
+  const sourceRead = vi.spyOn(axios, 'request').mockResolvedValueOnce({ status: 200, data: { ok: true, canManage: false, source: {
     ...source, attachments: [{ purpose: 'context', entry: entry('shared') }, { purpose: 'dashboard', ref: { kind: 'doc', artifactId: 'dashboard' } }],
   } } }).mockResolvedValueOnce({ status: 200, data: { ok: true, canManage: false, source: {
     ...source, revision: 3, attachments: [{ purpose: 'context', entry: entry('shared-new') }],
@@ -74,6 +76,23 @@ it('uses only current Source context for a Source-backed Project and retains the
     { id: 'shared', ref: { serverId } },
   ]);
   expect((await resolveSessionProjectPromptStack(input)).entries.map(value => value.id)).toEqual(['shared-new']);
+  sourceRead.mockResolvedValue({ status: 200, data: { ok: true, canManage: false, source: {
+    ...source, revision: 4, attachments: [{ purpose: 'context', entry: entry('shared-current') }],
+  } } });
+  const before = sourceRead.mock.calls.length;
+  const rowsBefore = vi.mocked(axios.post).mock.calls.length;
+  const preparation = createSessionProjectPromptStackPreparation({ credentials: input.credentials, serverId });
+  for (let session = 0; session < 3; session++) {
+    expect((await preparation.resolve(input)).entries.map(value => value.id)).toEqual(['shared-current']);
+  }
+  await preparation.assertCurrent();
+  // Same finite union, one authenticated census and one Source read. A later
+  // preparation must reobserve access rather than borrowing this result.
+  expect(sourceRead.mock.calls.length - before).toBe(1);
+  expect(vi.mocked(axios.post).mock.calls.length - rowsBefore).toBe(1);
+  sourceRead.mockResolvedValue({ status: 403, data: { ok: false, error: 'permission_denied' } });
+  const next = createSessionProjectPromptStackPreparation({ credentials: input.credentials, serverId });
+  await expect(next.resolve(input)).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_source_unavailable' });
 });
 it('reads only the exact current Project association and reports unavailable Source rather than omitting its context', async () => {
   const serverId = configuration.activeServerId;

@@ -8,6 +8,7 @@ import { PromptStackPreparationError, resolvePromptStackSystemAppendBlocksV1 } f
 import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { prepareSessionPromptStackInputs } from '@/agent/prompting/coding/sessionPromptStack';
+import { createSessionProjectPromptStackPreparation } from '@/agent/prompting/coding/sessionProjectPromptStack';
 import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
 import { readRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
@@ -116,6 +117,8 @@ export async function syncMemoryDocuments(params: Readonly<{
         throw new Error('context_source_unavailable');
       }
       const projectContext = project ? await params.readProjectContext!(project, params.signal) : undefined;
+      const projectPreparation = createSessionProjectPromptStackPreparation({ credentials: params.credentials,
+        serverId: home.serverId, signal: params.signal });
       const eligibleSessionIds: string[] = [];
       let partial = false;
       const projections = new Map<string, DeepIndexDocumentIdentity & { entries: readonly DeepIndexDocumentEntry[]; memory: boolean }>();
@@ -169,7 +172,7 @@ export async function syncMemoryDocuments(params: Readonly<{
         // Session does not relabel its Account/Profile/Bot context as Project docs.
         const prepared = project ? null : await prepareSessionPromptStackInputs({ credentials: params.credentials, metadata, sessionId,
           machineId, directory: typeof metadata?.path === 'string' ? metadata.path : undefined,
-          serverId: home.serverId, signal: params.signal, accountContext,
+          serverId: home.serverId, signal: params.signal, accountContext, projectPreparation,
           refreshCatalogs: !accountCatalogRefreshed || (typeof metadata?.profileId === 'string' && !profileCatalogRefreshed) });
         // Currentness assertions and invalidation still run for every Session;
         // a finite admission shares the fresh Account/Profile catalog reads.
@@ -231,6 +234,7 @@ export async function syncMemoryDocuments(params: Readonly<{
         params.signal?.throwIfAborted();
         for (const assert of assertions) assert();
       };
+      await projectPreparation.assertCurrent();
       assertCurrent();
       const eligibleDocuments = [...projections.values()].map(({ ref, revision }) => ({ ref, revision }));
       const eligibleMemoryDocuments = [...projections.values()].filter(document => document.memory)

@@ -19,7 +19,8 @@ export type SessionProjectKeyResolution = Readonly<{ kind: 'none' }>
   | Readonly<{ kind: 'pending'; reason: 'project_association_unavailable' }>;
 
 /** Account association selects an exact checkout; filesystem containment does not select a Project. */
-export async function resolveSessionProjectKey(input: SessionProjectPromptStackInput): Promise<SessionProjectKeyResolution> {
+export async function resolveSessionProjectKey(input: SessionProjectPromptStackInput,
+  readRows: typeof readProjectAccountRows = readProjectAccountRows): Promise<SessionProjectKeyResolution> {
   input.signal?.throwIfAborted();
   const pending = { kind: 'pending', reason: 'project_association_unavailable' } as const;
   const metadata = input.metadata;
@@ -36,7 +37,7 @@ export async function resolveSessionProjectKey(input: SessionProjectPromptStackI
   try {
     const accountId = input.operationContext ? readAccountIdFromToken(input.credentials.token) : null;
     if (input.operationContext && (!accountId || input.operationContext.credentials.token !== input.credentials.token)) return pending;
-    snapshot = await readProjectAccountRows({ credentials: input.credentials, serverId, signal: input.signal,
+    snapshot = await readRows({ credentials: input.credentials, serverId, signal: input.signal,
       ...(input.operationContext && accountId ? { sessionCustody: { serverId, accountId,
         serverHttpBaseUrl: input.operationContext.serverHttpBaseUrl, isCurrent: input.operationContext.isCurrent } } : {}) });
   }

@@ -44,7 +44,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   artifactId: string;
   replaceAccount: () => void;
   credentials: import('@/persistence').StoredCredentials;
-  setSessionWork: (work: Record<string, unknown>) => void;
+  setSessionWork: (work: Record<string, unknown>, index?: number) => void;
   setArtifactState: (state: 'available' | 'unavailable' | 'missing') => void;
   setCurrentnessStatus: (status: number) => void;
   setSessionDetailUnavailable: (unavailable: boolean) => void;
@@ -109,6 +109,15 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   const sessionProjects = new Map<number, string>();
   let sessionSharedContentUnavailable = false;
   let sessionWork: Record<string, unknown> | undefined = memory ? { memoryEnabled: true } : undefined;
+  const sessionWorks = new Map<number, Record<string, unknown>>();
+  const sessionArtifact = (index: number) => ({ ...artifact, id: `session-context-${index}`,
+    header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: `Session context ${index}` }),
+    body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1,
+      markdown: `quartz session-context-${index}`, createdAtMs: 1, updatedAtMs: 1 }) }) });
+  const projectArtifact = (projectKey: string) => projectKey === 'project' ? artifact : { ...artifact,
+    id: `${projectKey}-context`, header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: projectKey }),
+    body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1,
+      markdown: `quartz ${projectKey} context`, createdAtMs: 1, updatedAtMs: 1 }) }) };
   const sessionRecord = (index = 0) => {
     const fields = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain',
       ...(sessionSharedContentUnavailable
@@ -116,7 +125,9 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
         : { storedContentMode: 'plain' } as const),
       agentState: null, metadata: { ...createTestMetadata({ machineId: 'session-machine', path: '/container/checkout',
       sessionWorkspaceLocationV1: { v: 1, machineId: 'session-machine', agentPath: '/container/checkout', machinePath: '/remote/repo' } }),
-      workspaceId: 'checkout', projectId: sessionProjects.get(index) ?? 'project', ...(sessionWork ? { work: sessionWork } : {}) } });
+      workspaceId: sessionProjects.has(index) ? `checkout-${sessionProjects.get(index)}` : 'checkout',
+      projectId: sessionProjects.get(index) ?? 'project',
+      ...((sessionWorks.get(index) ?? sessionWork) ? { work: sessionWorks.get(index) ?? sessionWork } : {}) } });
     return { id: 'remote-session', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 0,
       encryptionMode: sessionSharedContentUnavailable ? 'e2ee' as const : 'plain' as const,
       metadataVersion: 1, dataEncryptionKey: null, share: null,
@@ -153,22 +164,37 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
       sessionAccessProbe: { v: 1, sessionId: 'remote-session', throughCursor: 1, status: 'available' } } };
     if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
     if (path === '/v1/account/entity-rows/prompt-library') return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) } };
-    if (path === '/v1/artifacts') return { status: 200, data: [artifact] };
+    if (path === '/v1/artifacts') return { status: 200, data: [artifact,
+      ...[...new Set(sessionProjects.values())].filter(key => key !== 'project').map(projectArtifact),
+      ...[...sessionWorks.keys()].map(sessionArtifact)] };
+    if (/^\/v1\/artifacts\/session-context-\d+$/.test(path)) return { status: 200,
+      data: sessionArtifact(Number(path.split('-').at(-1))) };
     if (path === `/v1/artifacts/${artifact.id}`) {
       if (artifactState === 'unavailable') throw new Error('Artifact Home unavailable');
       if (artifactState === 'missing') return { status: 404, data: { error: 'artifact_not_found' } };
       return { status: 200, data: artifact };
     }
+    const additionalProject = [...sessionProjects.values()].find(key => path === `/v1/artifacts/${key}-context`);
+    if (additionalProject) return { status: 200, data: projectArtifact(additionalProject) };
     throw new Error(`Unexpected document admission HTTP path: ${path}`);
   });
   // Account rows and Session HTTP are transport boundaries; Project association,
   // four-layer admission, document decoding and SQLite remain real.
-  vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
+  vi.spyOn(axios, 'post').mockImplementation(async () => ({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
     { key: workspaceKey, revision: 1, content: { t: 'plain', v: { key: workspaceKey, value: {
       id: 'checkout', serverId, machineId: 'session-machine', rootPath: '/remote/repo', createdAtMs: 1, projectKey: 'project',
     } } } },
     { key: organizationKey, revision: 1, content: { t: 'plain', v: { key: organizationKey, value: { promptStack: [entry] } } } },
-  ] } });
+    ...[...new Set(sessionProjects.values())].flatMap(projectKey => {
+      const key = { ...workspaceKey, id: `checkout-${projectKey}` };
+      const organization = { ...organizationKey, projectKey };
+      return [{ key, revision: 1, content: { t: 'plain', v: { key, value: {
+        id: key.id, serverId, machineId: 'session-machine', rootPath: '/remote/repo', createdAtMs: 1, projectKey,
+      } } } }, ...(projectKey === 'project' ? [] : [{ key: organization, revision: 1, content: { t: 'plain', v: {
+        key: organization, value: { promptStack: [{ ...entry, ref: { ...entry.ref, artifactId: projectArtifact(projectKey).id } }] },
+      } } }])];
+    }),
+  ] } }));
   admissionPhase = 'fixture_sqlite_and_admission_imports';
   const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
   const { syncMemoryDocuments } = await import('./syncMemoryDocuments');
@@ -192,7 +218,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
       setSessionCount: count => { sessionCount = count; },
       setSessionProject: (index, projectKey) => { sessionProjects.set(index, projectKey); },
       setSessionSharedContentUnavailable: unavailable => { sessionSharedContentUnavailable = unavailable; },
-      setSessionWork: work => { sessionWork = work; }, replaceAccount: () => {
+      setSessionWork: (work, index) => { if (index === undefined) sessionWork = work; else sessionWorks.set(index, work); }, replaceAccount: () => {
       const replacement = { token: `header.${Buffer.from(JSON.stringify({ sub: 'replacement-account' })).toString('base64url')}.signature`, encryption: null };
       setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
         scopeKey: resolveAccountSettingsScopeKey(replacement), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] });
@@ -359,15 +385,29 @@ it.each(['incomplete', 'unreadable'] as const)('retains prior documents without 
   });
 });
 
-it('refreshes shared prompt membership once per fresh global admission, independently of Session count', async () => {
-  await withCurrentDocumentFixture(async ({ prepare, setSessionCount }) => {
+it('reads shared prompt and Project inventories once per fresh global admission, preserving distinct Session documents', async () => {
+  await withCurrentDocumentFixture(async ({ prepare, db, setSessionCount, setSessionWork, setSessionProject }) => {
     setSessionCount(4);
+    setSessionProject(3, 'another-project');
+    for (const index of [1, 2]) setSessionWork({ promptStack: [{ id: 'session.context', enabled: true,
+      placement: 'system_append', ref: { kind: 'doc', artifactId: `session-context-${index}` } }] }, index);
     const requests = () => vi.mocked(axios.get).mock.calls.filter(([url]) =>
       new URL(String(url)).pathname === '/v1/account/entity-rows/prompt-library').length;
     const before = requests();
-    expect((await prepare()).state).toBe('ready');
+    const projectRequests = () => vi.mocked(axios.post).mock.calls.filter(([url]) =>
+      new URL(String(url)).pathname === '/v1/account/project-rows/list').length;
+    const beforeProjects = projectRequests();
+    const admitted = await prepare();
+    expect(admitted.state).toBe('ready');
+    expect(db.searchDocuments({ query: 'quartz', eligibleDocuments: admitted.eligibleDocuments, maxResults: 10 })
+      .map(hit => hit.text).sort()).toEqual(['quartz another-project context', 'quartz remote project context',
+        'quartz session-context-1', 'quartz session-context-2']);
     // Every admission is fresh, while its Sessions share that admitted Account inventory.
     expect(requests() - before).toBe(1);
+    expect(projectRequests() - beforeProjects).toBe(1);
+    const afterProjects = projectRequests();
+    expect((await prepare({ includeArchivedSessions: true })).state).toBe('ready');
+    expect(projectRequests() - afterProjects).toBe(1);
   });
 });
 
@@ -383,6 +423,10 @@ it('admits archived Session records only when requested and retains the index on
     const reason = new Error('Search cancelled');
     controller.abort(reason);
     await expect(prepare({ signal: controller.signal })).rejects.toBe(reason);
+    expect(search()).toHaveLength(1);
+    const duringRead = new AbortController();
+    vi.mocked(axios.post).mockImplementationOnce(async () => { duringRead.abort(reason); throw reason; });
+    await expect(prepare({ includeArchivedSessions: true, signal: duringRead.signal })).rejects.toBe(reason);
     expect(search()).toHaveLength(1);
     expect(await prepare()).toMatchObject({ state: 'ready', eligibleDocuments: [] });
     expect(search()).toHaveLength(0);
