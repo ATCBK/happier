@@ -15082,12 +15082,6 @@ const zhHant = translated(workflowValueReferenceTranslations['zh-Hant'], {
         machineUnavailableBody: '確認目前狀態後，就會顯示可用的繼續方式。',
         completedCount: ({ count }) => count === 1 ? '唯一的步驟已完成。' : `全部 ${count} 個步驟已完成。`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `已完成 ${completed}/${total} 個步驟。`,
-        stoppedBy: {
-            you: '已由你停止',
-            anotherPerson: '已由其他人停止',
-            agent: '已由代理停止',
-            automation: '已由自動化停止',
-        },
         notAnswered: '未回答',
         waitContinued: '已繼續',
         answeredBy: ({ name }) => `由${name}回答`,

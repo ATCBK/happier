@@ -600,12 +600,6 @@ export const en = {
         // Follows the word "Completed —", so it never repeats it.
         completedCount: ({ count }: { count: number }) => (count === 1 ? 'Its one step finished.' : `All ${count} steps finished.`),
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${completed} of ${total} ${total === 1 ? 'step' : 'steps'} finished.`,
-        stoppedBy: {
-            you: 'Stopped by you',
-            anotherPerson: 'Stopped by another person',
-            agent: 'Stopped by an agent',
-            automation: 'Stopped by an Automation',
-        },
         notAnswered: 'Not answered',
         waitContinued: 'Continued',
         answeredBy: ({ name }: { name: string }) => `Answered by ${name}`,

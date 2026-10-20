@@ -15099,12 +15099,6 @@ const pt = translated(workflowValueReferenceTranslations.pt, {
         machineUnavailableBody: 'As opções para retomar vão aparecer quando o estado atual for conhecido.',
         completedCount: ({ count }) => count === 1 ? 'A sua única etapa terminou.' : `Todas as ${count} etapas terminaram.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${completed} de ${total} ${total === 1 ? 'etapa concluída' : 'etapas concluídas'}.`,
-        stoppedBy: {
-            you: 'Parado por você',
-            anotherPerson: 'Parado por outra pessoa',
-            agent: 'Parado por um agente',
-            automation: 'Parado por uma automação',
-        },
         notAnswered: 'Sem resposta',
         waitContinued: 'Continuado',
         answeredBy: ({ name }) => `Respondido por ${name}`,

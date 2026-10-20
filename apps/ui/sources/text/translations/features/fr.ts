@@ -15146,12 +15146,6 @@ const fr = translated(workflowValueReferenceTranslations.fr, {
         machineUnavailableBody: 'Les options de reprise apparaîtront quand l’état actuel sera connu.',
         completedCount: ({ count }) => count === 1 ? 'Son unique étape est terminée.' : `Les ${count} étapes sont toutes terminées.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${completed} sur ${total} ${total === 1 ? 'étape terminée' : 'étapes terminées'}.`,
-        stoppedBy: {
-            you: 'Arrêté par toi',
-            anotherPerson: 'Arrêté par une autre personne',
-            agent: 'Arrêté par un agent',
-            automation: 'Arrêté par une automatisation',
-        },
         notAnswered: 'Sans réponse',
         waitContinued: 'Poursuivi',
         answeredBy: ({ name }) => `Réponse de ${name}`,

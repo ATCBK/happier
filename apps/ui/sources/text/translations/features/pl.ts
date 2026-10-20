@@ -15119,12 +15119,6 @@ const pl = translated(workflowValueReferenceTranslations.pl, {
         completedCount: ({ count }) =>
             count === 1 ? 'Jedyny krok jest gotowy.' : `Wszystkie kroki (${count}) są gotowe.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `Ukończone kroki: ${completed} z ${total}.`,
-        stoppedBy: {
-            you: 'Zatrzymane przez ciebie',
-            anotherPerson: 'Zatrzymane przez inną osobę',
-            agent: 'Zatrzymane przez agenta',
-            automation: 'Zatrzymane przez automatyzację',
-        },
         notAnswered: 'Bez odpowiedzi',
         waitContinued: 'Kontynuowano',
         answeredBy: ({ name }) => `Odpowiedź od: ${name}`,

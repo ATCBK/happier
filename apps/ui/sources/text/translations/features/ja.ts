@@ -15086,12 +15086,6 @@ const ja = translated(workflowValueReferenceTranslations.ja, {
         machineUnavailableBody: '現在の状態がわかると、再開の選択肢が表示されます。',
         completedCount: ({ count }) => count === 1 ? '1つのステップを終えました。' : `すべての ${count} ステップを終えました。`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${total} ステップ中 ${completed} 件が完了。`,
-        stoppedBy: {
-            you: 'あなたが停止しました',
-            anotherPerson: '別の人が停止しました',
-            agent: 'エージェントが停止しました',
-            automation: 'オートメーションが停止しました',
-        },
         notAnswered: '未回答',
         waitContinued: '続行しました',
         answeredBy: ({ name }) => `${name}が回答`,

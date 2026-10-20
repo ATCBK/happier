@@ -15122,12 +15122,6 @@ const ca = translated(workflowValueReferenceTranslations.ca, {
         machineUnavailableBody: 'Les opcions per reprendre apareixeran quan se sàpiga l’estat actual.',
         completedCount: ({ count }) => count === 1 ? 'El seu únic pas ha acabat.' : `Tots els ${count} passos han acabat.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${completed} de ${total} ${total === 1 ? 'pas acabat' : 'passos acabats'}.`,
-        stoppedBy: {
-            you: 'Aturat per tu',
-            anotherPerson: 'Aturat per una altra persona',
-            agent: 'Aturat per un agent',
-            automation: 'Aturat per una automatització',
-        },
         notAnswered: 'Sense resposta',
         waitContinued: 'Continuat',
         answeredBy: ({ name }) => `Respost per ${name}`,

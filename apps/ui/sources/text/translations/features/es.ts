@@ -15149,12 +15149,6 @@ const es = translated(workflowValueReferenceTranslations.es, {
         machineUnavailableBody: 'Las opciones para reanudar aparecerán cuando se conozca el estado actual.',
         completedCount: ({ count }) => count === 1 ? 'Su único paso terminó.' : `Los ${count} pasos terminaron.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${completed} de ${total} ${total === 1 ? 'paso terminado' : 'pasos terminados'}.`,
-        stoppedBy: {
-            you: 'Detenido por ti',
-            anotherPerson: 'Detenido por otra persona',
-            agent: 'Detenido por un agente',
-            automation: 'Detenido por una automatización',
-        },
         notAnswered: 'Sin respuesta',
         waitContinued: 'Continuado',
         answeredBy: ({ name }) => `Respondido por ${name}`,
