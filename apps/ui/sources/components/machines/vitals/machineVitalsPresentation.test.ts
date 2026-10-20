@@ -6,6 +6,7 @@ import type {
   MachinePublishedResourceSummaryV1,
   MachineResourceAttentionV1,
 } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
+import { downsampleMachineVitalsHistory } from '../../../../../cli/src/daemon/vitals/history/downsample';
 
 import {
   buildMachineVitalsTimeline,
@@ -59,6 +60,20 @@ const snapshot = (
 });
 
 describe('history maxima', () => {
+  it.each(['1h', '24h', '7d'] as const)('uses measured traffic duration through the real daemon %s projection', (range) => {
+    const start = Date.UTC(2026, 9, 10, 12);
+    const bucketMs = range === '7d' ? 1_800_000 : range === '24h' ? 300_000 : 60_000;
+    for (const offsets of [[1], [1, 3], Array.from({ length: bucketMs / 60_000 }, (_, i) => i + 1)]) {
+      const records = offsets.map(offset => ({ t: start + offset * 60_000, cpu: null, cpuMax: null,
+        mem: null, memMax: null, lvl: 'not_reported' as const, swp: null, rx: 60_000, tx: 120_000 }));
+      const history = downsampleMachineVitalsHistory({ range, now: start + Math.max(...offsets) * 60_000, records });
+      const timeline = buildMachineVitalsTimeline({ range, history, samples: [] });
+      const measured = timeline?.points.filter(point => point.rxBps !== null);
+      expect(measured?.length).toBeGreaterThan(0);
+      expect(measured?.every(point => point.rxBps === 1000 && point.txBps === 2000)).toBe(true);
+    }
+  });
+
   it.each(['24h', '7d'] as const)('keeps bucket means, maxima and gaps for %s', (range) => {
     const timeline = buildMachineVitalsTimeline({ range, samples: [], history: { range, bucketMs: 300_000,
       points: [{ t: 300_000, cpu: 10, cpuMax: 95, mem: 20 * GIB, memMax: 100 * GIB, lvl: 'calm', swp: null, rx: null, tx: null },
@@ -211,6 +226,7 @@ describe('history the charts draw', () => {
           lvl: 'calm',
           swp: null,
           rx: 300_000,
+          rxObservedMs: 300_000,
           tx: null,
         },
         null,

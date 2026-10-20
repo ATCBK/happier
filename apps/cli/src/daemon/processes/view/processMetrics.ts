@@ -6,7 +6,7 @@ import { processRef } from './processRef';
 export const MACHINE_PROCESS_HISTORY_WINDOW_MS = 60 * 60_000;
 export type ProcessMetricSample = Readonly<{ capturedAtMs: number; memoryBytes: number | null; cpuPercent?: number | null }>;
 export type ProcessMetrics = Readonly<{ ref: string; memoryBytes: number | null; cpuPercent?: number;
-    /** A targeted native observation could not establish this retained generation. */
+    /** A targeted native observation could not validate retained ownership for this generation. */
     identityUnavailable?: true }>;
 
 export function createProcessMetrics() {
@@ -23,11 +23,12 @@ export function createProcessMetrics() {
     }
     return {
         observe(snapshot: Extract<ProcessCensusSnapshot, { status: 'ok' }>, intervalMs: number,
-            owners: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map()): ReadonlyMap<number, ProcessMetrics> {
+            owners: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map(),
+            identityUnavailable: ReadonlyMap<number, string> = new Map()): ReadonlyMap<number, ProcessMetrics> {
             const alive = new Set<string>();
             const result = new Map<number, ProcessMetrics>();
             for (const row of snapshot.rows) {
-                if (result.has(row.pid)) continue;
+                if (result.has(row.pid) || identityUnavailable.has(row.pid)) continue;
                 const ref = processRef(row.pid, row.start);
                 alive.add(ref);
                 const reader = rates.get(ref) ?? createCounterRateReader();
@@ -38,6 +39,12 @@ export function createProcessMetrics() {
                 const metric = { ref, memoryBytes: row.memory?.bytes ?? null, ...(cpuPercent === undefined ? {} : { cpuPercent }) };
                 result.set(row.pid, metric);
                 append(ref, { capturedAtMs: snapshot.capturedAtMs, memoryBytes: metric.memoryBytes, ...(cpuPercent === undefined ? {} : { cpuPercent }) }, intervalMs);
+            }
+            for (const [pid, ref] of identityUnavailable) {
+                alive.add(ref);
+                rates.delete(ref);
+                result.set(pid, { ref, memoryBytes: null, identityUnavailable: true });
+                append(ref, { capturedAtMs: snapshot.capturedAtMs, memoryBytes: null, cpuPercent: null }, intervalMs);
             }
             for (const [key, refs] of owners) {
                 const members = [...refs].map(([pid, ref]) => {

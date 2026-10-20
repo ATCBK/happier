@@ -1,6 +1,7 @@
 import type { MachineVitalsHistoryV1, MachineVitalsHostFactsV1, MachineVitalsMinuteRecordV1, MachineVitalsSampleV1 } from '@happier-dev/protocol';
 import { effectiveMachineMemoryPressureV1 } from '@happier-dev/protocol/machines/vitals/effectiveMachineMemoryPressureV1';
 import type { MachineResourcesPolicyV1 } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
+import type { MachineVitalsHistoryPointV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
 
 import { logger } from '@/ui/logger';
 
@@ -108,7 +109,7 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
     function minuteRecord(t: number, counters: MachineVitalsMinuteCountersV1): MachineVitalsMinuteRecordV1 {
         const validMinute = boundaryAt === t - MINUTE_MS;
         const cpuReading: Record<string, number> = counters.containerCpu
-            ? { [`usage:${counters.containerCpu.quotaCores}`]: counters.containerCpu.usageUsec }
+            ? { [`usage:${counters.containerCpu.effectiveCores}`]: counters.containerCpu.usageUsec }
             : counters.cpu ? { busy: counters.cpu.busy, total: counters.cpu.total } : {};
         const networkIdentity = counters.network?.interfaceIds.slice().sort().join('\0');
         const networkReading: Record<string, number> = counters.network
@@ -119,9 +120,9 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
         let rx: number | null = null;
         let tx: number | null = null;
         if (validMinute) {
-            if (cpuDelta && counters.containerCpu && counters.containerCpu.quotaCores > 0) {
-                cpu = Math.min(100, cpuDelta.deltas[`usage:${counters.containerCpu.quotaCores}`]
-                    / (cpuDelta.elapsedMs * 1000 * counters.containerCpu.quotaCores) * 100);
+            if (cpuDelta && counters.containerCpu && counters.containerCpu.effectiveCores > 0) {
+                cpu = Math.min(100, cpuDelta.deltas[`usage:${counters.containerCpu.effectiveCores}`]
+                    / (cpuDelta.elapsedMs * 1000 * counters.containerCpu.effectiveCores) * 100);
             } else if (cpuDelta && counters.cpu && cpuDelta.deltas.total > 0) {
                 cpu = Math.min(100, cpuDelta.deltas.busy / cpuDelta.deltas.total * 100);
             }
@@ -277,7 +278,7 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
         },
         history: (range: MachineVitalsHistoryV1['range']) => {
             const now = nowMs();
-            const livePoints: MachineVitalsMinuteRecordV1[] = ring.map((point) => ({
+            const livePoints: MachineVitalsHistoryPointV1[] = ring.map((point) => ({
                 t: point.sampledAt, cpu: point.cpu.reported ? point.cpu.busyPct : null,
                 cpuMax: point.cpu.reported ? point.cpu.busyPct : null,
                 mem: point.memory.reported ? point.memory.usedBytes : null,
@@ -286,6 +287,8 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
                 swp: point.memory.reported && point.memory.swap ? point.memory.swap.usedBytes : null,
                 rx: point.network.reported && point.network.rxBps !== null ? point.network.rxBps * point.intervalMs / 1000 : null,
                 tx: point.network.reported && point.network.txBps !== null ? point.network.txBps * point.intervalMs / 1000 : null,
+                ...(point.network.reported && point.network.rxBps !== null ? { rxObservedMs: point.intervalMs } : {}),
+                ...(point.network.reported && point.network.txBps !== null ? { txObservedMs: point.intervalMs } : {}),
             }));
             return downsampleMachineVitalsHistory({ records: input.historyStore.minutes(now - 7 * 24 * HOUR_MS), range, now, livePoints });
         },

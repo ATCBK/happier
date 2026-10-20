@@ -12,7 +12,7 @@ import type { ProcessCustodyExecFile } from '@/subprocess/supervision/processCus
 import { createLinuxVitalsFixture } from './readers/linux.testkit';
 import type { MachineVitalsReader } from './readers/types';
 import { MachineVitalsSampleV1Schema, type MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
-import { MachineVitalsMinuteRecordV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
+import { MachineVitalsHistoryV1Schema, MachineVitalsMinuteRecordV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
 import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 
 interface CounterFixture {
@@ -99,6 +99,27 @@ describe('createMachineVitalsSampler', () => {
         })]);
         release();
         await sampler.stop();
+    });
+
+    it.each([0.5, 1, 2])('uses one effective container CPU capacity for live readings and minute history at quota %s', async (quota) => {
+        const f = await createLinuxVitalsFixture();
+        const historyStore = await createMinuteHistoryStore({ directory: join(directory, 'capacity-history'), nowMs: Date.now });
+        await f.put('/proc/self/cgroup', '0::/child\n');
+        await f.put('/proc/self/mountinfo', '1 0 0:1 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n');
+        await f.put('/sys/fs/cgroup/child/cpu.max', `${quota * 100_000} 100000`);
+        await f.put('/sys/fs/cgroup/child/cpu.stat', 'usage_usec 0\nuser_usec 0\nsystem_usec 0\nnr_throttled 0\n');
+        const sampler = createMachineVitalsSampler({ readers: createLinuxMachineVitalsReader({ root: f.root }),
+            historyStore, monotonicMs: () => Date.now() - initialTime });
+        try {
+            await sampler.start();
+            const effectiveCores = Math.min(1, quota);
+            await f.put('/sys/fs/cgroup/child/cpu.stat', `usage_usec ${effectiveCores * 60_000_000}\nuser_usec ${effectiveCores * 36_000_000}\nsystem_usec ${effectiveCores * 24_000_000}\nnr_throttled 1\n`);
+            await vi.advanceTimersByTimeAsync(60_000);
+            await sampler.start();
+            expect(sampler.host()).toMatchObject({ logicalCores: 1, effectiveCores });
+            expect(sampler.latest()?.cpu).toMatchObject({ busyPct: 100, userPct: 60, systemPct: 40, throttled: true });
+            expect(sampler.minutes(initialTime)).toEqual([expect.objectContaining({ cpu: 100 })]);
+        } finally { await sampler.stop(); await f.cleanup(); }
     });
 
     it('records Windows low-memory and exhausted commit as Critical for the shared sustained rules', async () => {
@@ -536,6 +557,8 @@ describe('createMachineVitalsSampler', () => {
             await sampler.start();
             expect(sampler.latest()?.network).toMatchObject({ rxBps: 1_000, txBps: 2_000 });
             expect(sampler.minutes(initialTime).at(-1)).toMatchObject({ t: initialTime + 60_000, rx: 60_000, tx: 120_000 });
+            const live = MachineVitalsHistoryV1Schema.parse(sampler.history('1h')).points.at(-1);
+            expect(live).toMatchObject({ rx: 60_000, tx: 120_000, rxObservedMs: 60_000, txObservedMs: 60_000 });
             await fixture.put('/proc/net/dev', 'eth0: 121000 0 0 0 0 0 0 0 242000 0 0 0 0 0 0 0\n');
             await vi.advanceTimersByTimeAsync(49_000);
             await sampler.start();

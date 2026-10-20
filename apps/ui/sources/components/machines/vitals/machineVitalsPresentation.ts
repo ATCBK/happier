@@ -378,15 +378,10 @@ export function buildMachineVitalsTimeline(
           points.push(GAP(anchor.t + (index - anchorIndex) * history.bucketMs));
         return;
       }
-      const seconds =
-        (input.range === '1h'
-          ? Math.min(
-              MINUTE_MS,
-              previousT === null
-                ? MINUTE_MS
-                : Math.max(1, record.t - previousT),
-            )
-          : history.bucketMs) / 1000;
+      // Stored minute records describe one measured minute. Projected live/range
+      // points carry their own coverage; an unobserved bucket span is never idle.
+      const rxMs = record.rxObservedMs ?? (input.range === '1h' ? MINUTE_MS : null);
+      const txMs = record.txObservedMs ?? (input.range === '1h' ? MINUTE_MS : null);
       points.push({
         t: record.t,
         cpu: record.cpu,
@@ -394,8 +389,8 @@ export function buildMachineVitalsTimeline(
         usedBytes: record.mem,
         usedBytesMax: record.memMax,
         level: record.lvl,
-        rxBps: record.rx === null ? null : record.rx / seconds,
-        txBps: record.tx === null ? null : record.tx / seconds,
+        rxBps: record.rx === null || rxMs === null ? null : record.rx * 1000 / rxMs,
+        txBps: record.tx === null || txMs === null ? null : record.tx * 1000 / txMs,
       });
       previousT = record.t;
       previousIndex = index;

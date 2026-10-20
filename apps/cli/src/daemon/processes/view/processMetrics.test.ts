@@ -9,6 +9,27 @@ function census(at: number, cpuTimeUs: number | null, native = 'linux-proc:12'):
         memory: { bytes: 200, kind: 'rss' }, cpuTimeUs }] };
 }
 describe('watched process metrics', () => {
+    it('gaps uncertain ownership resources and resets only that generation CPU baseline before recovery', () => {
+        const metrics = createProcessMetrics();
+        const sample = (at: number, cpu: number) => {
+            const snapshot = census(at, cpu);
+            return { ...snapshot, rows: [...snapshot.rows, { ...snapshot.rows[0], pid: 21 }] };
+        };
+        const ref = processRef(20, census(1000, 0).rows[0].start);
+        const owners = new Map([['session:owner', new Map([[20, ref], [21, processRef(21, census(1000, 0).rows[0].start)]])]]);
+        metrics.observe(sample(1000, 0), 2000, owners);
+        expect(metrics.observe(sample(3000, 2_000_000), 2000, owners).get(20)?.cpuPercent).toBe(25);
+        const uncertain = metrics.observe(sample(5000, 20_000_000), 2000, owners, new Map([[20, ref]]));
+        expect(uncertain.get(20)).toMatchObject({ ref, memoryBytes: null, identityUnavailable: true });
+        expect(uncertain.get(20)?.cpuPercent).toBeUndefined();
+        expect(uncertain.get(21)?.cpuPercent).toBe(100);
+        const recovered = metrics.observe(sample(7000, 22_000_000), 2000, owners);
+        expect(recovered.get(20)?.cpuPercent).toBeUndefined();
+        expect(recovered.get(21)?.cpuPercent).toBe(25);
+        expect(metrics.observe(sample(9000, 24_000_000), 2000, owners).get(20)?.cpuPercent).toBe(25);
+        expect(metrics.history()[ref].map(point => point.memoryBytes)).toEqual([200, 200, null, 200, 200]);
+        expect(metrics.history()['session:owner'][2].memoryBytes).toBeNull();
+    });
     it('does not aggregate a replacement generation into retained owner membership', () => {
         const metrics = createProcessMetrics();
         const owners = new Map([['session:old-owner', new Map([[20, processRef(20, census(1000, 0).rows[0].start)]])]]);
