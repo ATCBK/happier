@@ -317,8 +317,13 @@ and a valid note payload before retaining the input for the next actual turn.
 The retained-context owner recognizes that same receipt, so an informational
 note cannot block the following ordinary input or acquire its permission
 identity. Existing 0.2-created inputs without the marker keep their ordinary
-semantics. This evolves the undeployed 0.3 contract in place; the approved
-one-way upgrade does not support sending new notes to a 0.2 Home.
+semantics. This evolves the undeployed 0.3 contract in place. Before publishing
+a note, CLI and UI senders require the existing advertised Pending revision 5;
+older or missing support returns a typed delivery failure without a Pending POST.
+The predecessor's open HTTP body strips unknown operands, so merely sending the
+marker would not establish quiet delivery. The UI's existing wire-version owner
+retains revision 5 through initial admission and replay rather than projecting
+the note onto an older wire. No new capability bit is introduced.
 
 The inspected moving 0.2 predecessor at
 `89868c98f0cddc0a42fc3a97b2b3e311363756ed` advertises revision 2 and ignores

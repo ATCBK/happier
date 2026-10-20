@@ -61,9 +61,17 @@ Returned inverse edits support hash-guarded Undo without server-held pre-images.
 The Universal Search composition owns draft exclusion, selection and preview
 freshness. It must retire a preview whenever query, options or replacement
 change, and apply only loaded, selected matches. Surface composition and loaded
-runtime acceptance are separate from these Machine contracts. Regex candidate
-discovery and partial-file paging remain under plan amendment review; these
-paragraphs do not claim that either unfinished path is released.
+runtime acceptance are separate from these Machine contracts. Regex discovery
+inventories files through ripgrep's existing exclusions/ignore/hidden policy;
+the JavaScript matcher alone decides matches. This includes JavaScript patterns
+that ripgrep cannot compile and avoids differing Unicode boundary semantics.
+Whole-file continuation pages expose only complete selectable files, with
+explicit incomplete coverage for an indivisible result beyond the existing
+transport boundary. Replace apply opts into cooperative cancellation: it sends
+the existing correlated cancel but retains that call's ACK for completed-file
+results and inverse edits. The original deadline and disconnect handling remain
+in force, and other callers keep immediate cancellation by default. These are
+unreleased source contracts, not completed loaded-surface validation.
 
 ## Data flow
 
@@ -479,7 +487,7 @@ transport alone does not prove the composed loaded Search-to-Find journey.
 
 Code navigation reuses workspace content search. Go to definition searches
 language-specific declaration forms for the selected name and ranks candidates
-from the current file before nearby paths. References are word-boundary text
+from the current file before nearby paths. References are whole-identifier text
 matches, labelled as text matches rather than semantic references. Both use the
 same workspace root, exclusions, cancellation and coverage reporting as Text in
 files. A textual occurrence can refer to a different symbol with the same name;
@@ -522,10 +530,13 @@ Review uses `useChangedFilesReviewFind`
 over the existing diff loader/store, including folded context and unloaded
 files in the review's diff corpus. Binary/error files make coverage partial.
 Fold reveal is temporary and offers **Fold again**, without writing folding
-preferences. Code-line landing and decoration remain `CodeLinesViewCore`'s
-responsibility. Pierre selects the Happier renderer while Find is open when
-its virtualizer cannot reveal the target; the saved renderer preference stays
-unchanged.
+preferences. Code-line landing and decoration use the mounted renderer's adapter.
+In 0.3 development, Pierre 1.5.2 keeps its host mounted during Find and range
+selection. Its adapter paints the shared UTF-16 Find ranges through the CSS
+Highlight registry inside its shadow root and reveals offscreen lines through
+the existing virtualizer. A failed worker pool switches affected diffs to the
+Happier renderer without changing the saved renderer preference. Pierre remains
+a rendering and annotation engine; editing uses Happier's editor owners.
 
 Monaco owns its native widget; the host seeds/controls public editor actions
 and never adds a second Find bar or matcher. The mounted registry reports its

@@ -1847,13 +1847,23 @@ write. Keep emits none. Delivery uses the existing receiver's `next_turn`
 intent and never resumes or steers the Agent. Authenticated Pending admission
 stamps the closed, content-free `nextTurnNote: 'file_review_note.v1'` operand
 into its existing receipt. The runtime validates the note and receipt, retains
-it in the existing mode queue, and joins its text to the next actual input
-without adopting the note's permission or primary-input identity. The same
+it in the existing mode queue, and joins its text at final provider preparation
+for the next actual input, leaving primary command grammar untouched,
+without adopting the note's permission or primary-input identity.
+Host-local and provider-native control commands leave notes retained; native
+command bytes and represented input identities exclude them. The next ordinary
+provider prompt carries and settles the retained facts. The same
 receipt authorizes retained-context materialization; ordinary inputs cannot
 claim that status through display metadata. Provider dispatch settles the
 represented note through existing Pending custody. A note-delivery failure
 remains separate from a successful file mutation and must not replay that
-mutation. Composed runtime and presentation validation remain program gates.
+mutation. Publication requires advertised Pending revision 5 at the existing
+sender/wire negotiation owners; unsupported or unknown Homes receive no note POST.
+HEAD discard uses the existing backend's pre-mutation status inventory
+to omit unchanged paths; unavailable status evidence reports note failure without
+blocking the discard itself. Requeued inputs retain note identities without
+rendering already-represented note text again. Composed runtime and presentation
+validation remain program gates.
 
 In 0.3 development, the content-free
 [request attribution projection](../packages/protocol/src/actions/actionRequestAttributionV1.ts)
