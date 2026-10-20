@@ -44,8 +44,6 @@ import { evaluatePendingResetStartAdmissionV1, PendingResetStartWaitingReasonV1S
 import { PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { createServerUrlComparableKey } from '@happier-dev/protocol/server/urls/serverUrlComparableKey';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
-import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
-import { StoredContentPublicSharesListResponseV1Schema } from '@happier-dev/protocol/sharing/storedContentPublicShareV1';
 import { PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS, PROJECT_DEFINITION_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { ProjectWorkerActionInputSchemasV1, ProjectWorkerActionOutputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -3659,12 +3657,13 @@ export function createCliActionDeps(params: Readonly<{
       isSameServerId: isSameActionHomeId,
       store: approvalsStore.promptLibraryStore, randomId: randomUUID,
       readExposure: async (artifactId, context) => {
-        if (!actionDeps.artifactAccessAction || !actionDeps.artifactAction) throw Object.assign(new Error('memory_exposure_unavailable'), { code: 'memory_exposure_unavailable' });
-        const grants = ArtifactAccessGrantsListResponseV1Schema.parse(await actionDeps.artifactAccessAction({
-          actionId: 'artifact.access.grants.list', input: { artifactId }, context, signal: context.signal }));
-        const publicShares = grants.access === 'owner' ? StoredContentPublicSharesListResponseV1Schema.parse(await actionDeps.artifactAction({
-          actionId: 'artifact.public_link.list', input: { artifactId }, context, signal: context.signal })) : null;
-        return { grants, publicShares };
+        if (!roleArtifactStore) throw Object.assign(new Error('memory_exposure_unavailable'), { code: 'memory_exposure_unavailable' });
+        return withProjectHome(() => roleArtifactStore.readExposure(artifactId, { signal: context.signal,
+          authorizationHeaders: async request => {
+            const headers = resolveServerRequestHeaders(context, 'artifact.access.grants.list', request);
+            if (!headers) throw Object.assign(new Error('execution_not_authorized'), { code: 'execution_not_authorized' });
+            return { ...headers };
+          } }));
       },
       readSession: async (ref, context) => {
         if (!params.credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });

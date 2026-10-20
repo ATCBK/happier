@@ -18,7 +18,7 @@ import { ArtifactHeaderMetadataV1Schema, ArtifactPublicAudienceV1ReadSchema, typ
 import { canShareArtifactWriteContentV1, prepareArtifactHeaderForRevisionV1, prepareArtifactHeaderForBodyV1 } from '@happier-dev/protocol/artifacts/artifactHeaderRestorationV1';
 import { withArtifactExcerptV1 } from '@happier-dev/protocol/artifacts/artifactExcerptV1';
 import { artifactKindHasSharedWidgetInputsV1, artifactKindRequiresTextBodyV1, readArtifactSharedAudienceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
-import { createArtifactPublicLinkActionsV1 } from '@happier-dev/protocol/actions/executor/artifactPublicLinkActions';
+import { createArtifactPublicLinkActionsV1, readArtifactPublicLinksV1, type ArtifactPublicLinkRequestV1 } from '@happier-dev/protocol/actions/executor/artifactPublicLinkActions';
 import { ArtifactBodyV1Schema, ArtifactBodyEnvelopeV1StoredSchema, ArtifactPrivateRevisionMetadataV1Schema, ArtifactPrivateRevisionMetadataV1StoredSchema, ArtifactBlobReferenceV1Schema, ArtifactBlobReadResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { frameSessionDataKeyBundleV0, readSessionDataKeyBundleV0 } from '@happier-dev/protocol/crypto/sessionDataKeyBundleV0';
 import { sealAesGcmPayloadWebCrypto, openAesGcmPayloadWebCrypto } from '@happier-dev/protocol/crypto/sessionDataKeyBundleWebCrypto';
@@ -387,6 +387,25 @@ export function createAccountArtifactStore(params: Readonly<{
       : response.status === 404 || response.status === 405 ? 'artifact_access_unavailable' : 'artifact_access_failed';
     throw Object.assign(new HttpStatusError(response.status, code), { code, status: response.status });
   };
+  const readAccessGrants = async (artifactId: string, signal?: AbortSignal, authorizationHeaders?: ArtifactRequestAuthorizationHeaders) =>
+    ArtifactAccessGrantsListResponseV1Schema.parse(requireAccessResponse(await axios.get(accessUrl(artifactId, 'grants'),
+      await authorizedAccessConfig(artifactId, 'grants', 'GET', signal, authorizationHeaders))));
+  const requestPublicLink = async (request: ArtifactPublicLinkRequestV1, authorizationHeaders?: ArtifactRequestAuthorizationHeaders) => {
+    request.signal?.throwIfAborted();
+    const config = { ...accessConfig(request.signal), ...(authorizationHeaders ? { headers: await authorizationHeaders(request) } : {}) };
+    const url = `${resolveServerHttpBaseUrl()}${request.path}`;
+    const response = request.method === 'GET' ? await axios.get(url, config)
+      : request.method === 'DELETE' ? await axios.delete(url, config) : await axios.post(url, request.body, config);
+    if (response.status < 200 || response.status >= 300) {
+      const payload: unknown = response.data;
+      const code = payload !== null && typeof payload === 'object'
+        && Reflect.get(payload, 'error') === 'public_share_isolation_unavailable'
+        ? 'public_share_isolation_unavailable' : 'public_share_request_failed';
+      throw Object.assign(new Error(code), { code });
+    }
+    request.signal?.throwIfAborted();
+    return response.data;
+  };
   const prepare = async (stored: StoredArtifactHeader, codec: Codec, signal?: AbortSignal,
     authorizationHeaders?: ArtifactRequestAuthorizationHeaders) => {
     if (codec.mode === 'plain') return;
@@ -726,6 +745,16 @@ export function createAccountArtifactStore(params: Readonly<{
     createHeaderReader,
     /** Standalone reads are fresh; finite callers share createHeaderReader instead. */
     readHeader: (artifactId: string, options?: Readonly<{ signal?: AbortSignal; prepareRecipients?: boolean }>) => createHeaderReader(options)(artifactId),
+    /** Exposure admission reads existing grants/publications without opening content or repairing keys. */
+    readExposure: async (artifactId: string, options?: Readonly<{ signal?: AbortSignal; authorizationHeaders?: ArtifactRequestAuthorizationHeaders }>) => {
+      options?.signal?.throwIfAborted();
+      const grants = await readAccessGrants(artifactId, options?.signal, options?.authorizationHeaders);
+      options?.signal?.throwIfAborted();
+      const publicShares = grants.access === 'owner' ? await readArtifactPublicLinksV1({ artifactId, signal: options?.signal,
+        request: request => requestPublicLink(request, options?.authorizationHeaders) }) : null;
+      options?.signal?.throwIfAborted();
+      return { grants, publicShares };
+    },
     publicLinks: async (args: Readonly<{ actionId: ArtifactPublicLinkActionIdV1; input: unknown; signal?: AbortSignal }>,
       onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>) => createArtifactPublicLinkActionsV1({
         randomBytes: getRandomBytes, onPublicLinkIssued,
@@ -739,20 +768,7 @@ export function createAccountArtifactStore(params: Readonly<{
             body: decodeBody(codec, stored.body), encryptionMode: codec.mode, dataKey: codec.dataKey,
             revision: { headerVersion: stored.headerVersion, bodyVersion: stored.bodyVersion } };
         },
-        request: async (request) => {
-          const url = `${resolveServerHttpBaseUrl()}${request.path}`;
-          const config = accessConfig(request.signal);
-          const response = request.method === 'GET' ? await axios.get(url, config)
-            : request.method === 'DELETE' ? await axios.delete(url, config) : await axios.post(url, request.body, config);
-          if (response.status < 200 || response.status >= 300) {
-            const payload: unknown = response.data;
-            const code = payload !== null && typeof payload === 'object'
-              && Reflect.get(payload, 'error') === 'public_share_isolation_unavailable'
-              ? 'public_share_isolation_unavailable' : 'public_share_request_failed';
-            throw Object.assign(new Error(code), { code });
-          }
-          return response.data;
-        },
+        request: request => requestPublicLink(request),
       })(args),
     readBinary: async (input: Readonly<{ artifactId: string; body: ArtifactBodyV1; signal?: AbortSignal }>): Promise<Uint8Array> => {
       input.signal?.throwIfAborted();
@@ -781,8 +797,7 @@ export function createAccountArtifactStore(params: Readonly<{
     },
     accessGrants: {
       list: async (input: Readonly<{ artifactId: string }>, signal?: AbortSignal, options?: Readonly<{ authorizationHeaders?: ArtifactRequestAuthorizationHeaders }>) => {
-        const result = ArtifactAccessGrantsListResponseV1Schema.parse(requireAccessResponse(await axios.get(accessUrl(input.artifactId, 'grants'),
-          await authorizedAccessConfig(input.artifactId, 'grants', 'GET', signal, options?.authorizationHeaders))));
+        const result = await readAccessGrants(input.artifactId, signal, options?.authorizationHeaders);
         await prepareCurrent(input.artifactId, signal, options?.authorizationHeaders);
         return result;
       },

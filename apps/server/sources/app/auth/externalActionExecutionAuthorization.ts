@@ -85,6 +85,7 @@ import { ArtifactAccessGrantSetInputV1Schema, ArtifactRecipientKeyEnvelopeCommit
 import { bindDiscussionCandidatePeopleReadV1, projectDiscussionCandidateSessionQueryV1 } from '@happier-dev/protocol/actions/discussionActionFamily';
 import { UsersSearchQueryV1Schema } from '@happier-dev/protocol/social/friends';
 import { SESSION_FOLLOW_RULES_ROUTE_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
+import { isMemoryWriteActionV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
@@ -691,6 +692,12 @@ function isWorkflowDiscussionPreparationEffect(rootActionId: string, effectActio
     return rootActionId === 'workflow.run.start' && effectActionId === 'discussion.read';
 }
 
+/** Memory admission inspects existing exposure before proposing or performing a write. */
+function isMemoryExposureReadEffect(rootActionId: string, effectActionId: string): boolean {
+    return (rootActionId === 'approval.request.create' || isMemoryWriteActionV1(rootActionId))
+        && effectActionId === 'artifact.access.grants.list';
+}
+
 async function verifyCommon(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
@@ -715,6 +722,7 @@ async function verifyCommon(
                 && !isDocReadEffect(binding.actionId, effectActionId.data)
                 && !isSecondOpinionEffect(binding.actionId, effectActionId.data)
                 && !isWorkflowDiscussionPreparationEffect(binding.actionId, effectActionId.data)
+                && !isMemoryExposureReadEffect(binding.actionId, effectActionId.data)
                 && !isDocDecisionPreparationEffect(binding.actionId, effectActionId.data))) return null;
     if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return null;
     const currentnessBody = ExternalActionExecutionAuthorizationVerifyRequestV1Schema.safeParse(proof.body);
@@ -1130,6 +1138,26 @@ function isDiscussionActionHttpPreparation(verified: VerifiedExternalActionExecu
 function isAccountActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
     proof: ExternalActionExecutionRequestProof): boolean {
     const root = verified.binding.actionId;
+    if (isMemoryExposureReadEffect(root, verified.effectActionId)) {
+        if (proof.method.toUpperCase() !== 'GET' || proof.body !== undefined) return false;
+        const url = new URL(proof.path, 'http://home.invalid');
+        if (url.pathname === '/v1/public-shares') {
+            const artifactId = url.searchParams.get('subjectId');
+            return url.hash === '' && url.searchParams.size === 2
+                && url.searchParams.get('subjectKind') === 'artifact'
+                && url.searchParams.getAll('subjectId').length === 1
+                && getActionSpec('artifact.access.grants.list').inputSchema.safeParse({ artifactId }).success
+                && (proof.routeInput === undefined || sameManagedInput(proof.routeInput, { subjectKind: 'artifact', subjectId: artifactId }));
+        }
+        const match = /^\/v1\/artifacts\/([^/?#]+)\/access\/grants$/u.exec(proof.path);
+        if (!match) return false;
+        try {
+            const artifactId = decodeURIComponent(match[1]);
+            return getActionSpec('artifact.access.grants.list').inputSchema.safeParse({ artifactId }).success
+                && match[1] === encodeURIComponent(artifactId)
+                && (proof.routeInput === undefined || sameManagedInput(proof.routeInput, { id: artifactId }));
+        } catch { return false; }
+    }
     if (root === 'doc.read') {
         if (!isDocReadEffect(root, verified.effectActionId)) return false;
         if (proof.method.toUpperCase() === 'GET' && proof.body === undefined && proof.path === '/v1/features/authenticated') return true;
@@ -1691,6 +1719,7 @@ export async function verifyExternalActionDomainExecutionRequest(
     const effect = parseExternalActionEffectAction(verified.binding, verified.effectActionId);
     const credentialAction = isDocDecisionPreparationEffect(verified.binding.actionId, verified.effectActionId)
         || isSecondOpinionEffect(verified.binding.actionId, verified.effectActionId)
+        || isMemoryExposureReadEffect(verified.binding.actionId, verified.effectActionId)
         ? parseExternalActionEffectAction(verified.binding, verified.binding.actionId)
         : isTeamCredentialUsageExportReadEffect(verified.binding.actionId, verified.effectActionId)
         || isDocDiscussionEffect(verified.binding.actionId, verified.effectActionId)

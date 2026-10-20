@@ -1189,6 +1189,13 @@ Qualified references must resolve to the same bound Home through the existing
 profile identity owner; saved profiles never supply another Account's material.
 Invocation currentness is checked even when the reader reuses a cached store.
 
+Memory-write and approval-request exposure admission uses the Account Artifact
+store's read-only grants and public-share census, without opening Doc content or
+preparing recipient keys. Both requests retain the original requester's signed
+authority at the captured Home. Home admits only these exact reads under that
+root; exposure inspection grants no content, key-repair or sharing mutation
+authority.
+
 The host's [skills reapply operation](../apps/cli/src/prompts/skills/runtime/reapplySessionSkills.ts)
 reuses that resolver and folder owner. A declared live-reload Agent acknowledges
 the new delivery before the host publishes its applied plan; a native-root scan

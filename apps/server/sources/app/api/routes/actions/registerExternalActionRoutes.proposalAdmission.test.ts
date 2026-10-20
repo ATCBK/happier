@@ -325,6 +325,42 @@ describe('installed Session proposal admission at the Home mint route', () => {
         } finally { await app.close(); }
     });
 
+    it.each(['approval.request.create', 'memory.remember'] as const)(
+        'admits only signed read-only Artifact exposure preparation for %s', async rootActionId => {
+            const { app, mint } = createApp('account');
+            const artifactId = '11111111-1111-4111-8111-111111111111';
+            try {
+                const actionArgs = { ref: { kind: 'doc' as const, artifactId },
+                    expectedRevision: { headerVersion: 1, bodyVersion: 1 }, text: 'A reviewed memory fact' };
+                const response = await mint(rootActionId, proposal(rootActionId, rootActionId === 'memory.remember' ? actionArgs : {
+                    actionId: 'memory.remember', actionArgs,
+                    summary: 'Remember a fact', createdBy: { surface: 'agent' },
+                }));
+                expect(response.statusCode).toBe(200);
+                const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(response.json());
+                const read = (path: string, effectActionId = 'artifact.access.grants.list', method = 'GET', body?: unknown) =>
+                    verifyExternalActionDomainExecutionRequest(signedRequestProof(authorization, path, body, effectActionId, method));
+                const grants = `/v1/artifacts/${artifactId}/access/grants`;
+                const publications = `/v1/public-shares?subjectKind=artifact&subjectId=${artifactId}`;
+                expect(await read(grants)).not.toBeNull();
+                expect(await read(publications)).not.toBeNull();
+                // Exposure inspection opens no content and grants no repair or mutation authority.
+                for (const path of [`/v1/artifacts/${artifactId}`, '/v1/account/encryption/currentness',
+                    `/v1/artifacts/${artifactId}/access/recipients`, `${grants}?other=1`, `${publications}&other=1`,
+                    `${publications}&subjectId=other`, publications.replace('subjectKind=artifact', 'subjectKind=session')]) {
+                    expect(await read(path)).toBeNull();
+                }
+                expect(await read(`/v1/artifacts/${artifactId}`, 'artifact.update', 'POST', {})).toBeNull();
+                expect(await read(grants, 'artifact.access.grants.set', 'PUT', {})).toBeNull();
+                expect(await read(`/v1/artifacts/${artifactId}/access/key-envelopes`, undefined, 'POST', {})).toBeNull();
+                expect(await read(publications, undefined, 'POST', {})).toBeNull();
+                storage.state.bound = false;
+                expect(await read(grants)).toBeNull();
+                expect(await read(publications)).toBeNull();
+            } finally { await app.close(); }
+        },
+    );
+
     it('authenticates a declared parameterized GET without admitting another operation or caller query shape', async () => {
         const { app, mint } = createApp('terminal');
         const domain = fastify().withTypeProvider<ZodTypeProvider>();
