@@ -22,8 +22,7 @@ const (
 	ConnectedAccountRequestAuthFailurePath      = "/connected-accounts/request-auth/auth-failure"
 	ConnectedAccountRequestAuthQuotaFailurePath = "/connected-accounts/request-auth/quota-failure"
 	ConnectedAccountCapabilityHeader            = "x-happier-connected-account-capability"
-	// Ordinary lookup and quota operations keep the bounded request-auth
-	// transport lifetime.
+	// Quota reports keep their existing request-auth transport lifetime.
 	requestAuthBrokerTransportTimeout = 30 * time.Second
 	// An authentication-failure report may trigger the daemon's canonical
 	// request-auth recovery, which owns a 300-second ceiling (bounded OAuth
@@ -85,7 +84,7 @@ func (b *HTTPBroker) LookupRequestAuth(ctx context.Context, purpose QualifiedPur
 	var lease OAuthBearerLease
 	err := b.post(ctx, ConnectedAccountRequestAuthLookupPath, struct {
 		Purpose QualifiedPurpose `json:"purpose"`
-	}{Purpose: purpose}, &lease, requestAuthBrokerTransportTimeout)
+	}{Purpose: purpose}, &lease, 0)
 	if err != nil {
 		return OAuthBearerLease{}, err
 	}
@@ -140,10 +139,15 @@ func (b *HTTPBroker) post(ctx context.Context, path string, input, output any, o
 		Host:   fmt.Sprintf("127.0.0.1:%d", transport.daemonHTTPPort),
 		Path:   path,
 	}
-	// The deadline is per operation and derives from the caller's context, so
-	// a caller's own cancellation or shorter deadline always wins.
-	operationCtx, cancelOperation := context.WithTimeout(ctx, operationTimeout)
-	defer cancelOperation()
+	// Lookup is subordinate to the native request: Home admission and OAuth
+	// materialization may outlast a transport phase without exhausting that
+	// request. Failure reports retain their own recovery/transport contracts.
+	operationCtx := ctx
+	if operationTimeout > 0 {
+		var cancelOperation context.CancelFunc
+		operationCtx, cancelOperation = context.WithTimeout(ctx, operationTimeout)
+		defer cancelOperation()
+	}
 	request, err := http.NewRequestWithContext(operationCtx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create request-auth broker request: %w", err)
