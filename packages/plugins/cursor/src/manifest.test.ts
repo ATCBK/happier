@@ -10,7 +10,7 @@ describe('Cursor plugin manifest', () => {
       id: 'cursor', runtime: { kind: 'custom' }, primary: 'sessions',
       capabilities: {
         skills: {
-          delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
           nativeRoots: {
             user: [['.agents', 'skills'], ['.cursor', 'skills'], ['.claude', 'skills'], ['.codex', 'skills']],
             project: [['.agents', 'skills'], ['.cursor', 'skills'], ['.claude', 'skills'], ['.codex', 'skills']],

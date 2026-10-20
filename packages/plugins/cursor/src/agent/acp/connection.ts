@@ -7,6 +7,7 @@ import type {
   AgentSessionOpenRequest,
   AgentSessionRuntime,
   AgentSessionRuntimeContext,
+  AgentSessionSkillDelivery,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { withCursorEmptyResponseFailure } from '../runtime/emptyResponse.js';
@@ -40,16 +41,18 @@ function buildCursorPermissionIntentArgs(
 export function buildCursorAcpArgs(
   permissionIntent: AgentPermissionIntent | null,
   apiEndpoint: string,
+  skills?: Pick<AgentSessionSkillDelivery, 'pluginRoot'>,
 ): readonly string[] {
   return Object.freeze([
     ...buildCursorEndpointArgs(apiEndpoint),
     ...buildCursorPermissionIntentArgs(permissionIntent),
+    ...(skills ? ['--plugin-dir', skills.pluginRoot] : []),
     'acp',
   ]);
 }
 
 async function resolveCursorAcpOptions(
-  request: Pick<AgentSessionOpenRequest, 'configuration'>,
+  request: Pick<AgentSessionOpenRequest, 'configuration' | 'skills'>,
   context: Pick<AgentSessionRuntimeContext, 'services'>,
 ) {
   const settings = await readCursorRuntimeSettings(context.services.settings);
@@ -65,7 +68,7 @@ async function resolveCursorAcpOptions(
             : 'cursor-agent-no-fallback',
         }),
         ...(settings.binaryPath ? { preferredPath: settings.binaryPath } : {}),
-        args: buildCursorAcpArgs(request.configuration?.permissionIntent.value ?? null, settings.apiEndpoint),
+        args: buildCursorAcpArgs(request.configuration?.permissionIntent.value ?? null, settings.apiEndpoint, request.skills),
       }),
       definition: CURSOR_ACP_RUNTIME_DEFINITION,
     },
