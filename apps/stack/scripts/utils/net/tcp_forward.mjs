@@ -206,40 +206,27 @@ export async function stopTcpForwarder(server, label = 'tcp-forward') {
   const existingStop = stopPromises.get(server);
   if (existingStop) return existingStop;
 
-  const stopPromise = new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      process.stdout.write(`[${label}] stopped\n`);
-      resolve();
-    };
-
+  const stopPromise = (async () => {
     const closeActive = typeof server.closeConnectionsAfterGrace === 'function'
       ? server.closeConnectionsAfterGrace({ graceMs: 0 })
       : typeof server.closeIdleOrAllConnectionsAfterGrace === 'function'
         ? server.closeIdleOrAllConnectionsAfterGrace({ graceMs: 0 })
         : Promise.resolve();
 
-    closeActive.then(() => {
-      if (!server.listening) finish();
-    }, finish);
-
-    try {
-      server.close(() => {
-        closeActive.finally(finish);
-      });
-    } catch (err) {
-      if (err && typeof err === 'object' && err.code === 'ERR_SERVER_NOT_RUNNING') {
-        closeActive.finally(finish);
-        return;
+    const closed = new Promise((resolve, reject) => {
+      const onClose = (error) => {
+        if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
+        else resolve();
+      };
+      try {
+        server.close(onClose);
+      } catch (error) {
+        onClose(error);
       }
-      throw err;
-    }
-
-    // Force-close after timeout.
-    setTimeout(finish, 2000);
     });
+    await Promise.all([closed, closeActive]);
+    process.stdout.write(`[${label}] stopped\n`);
+  })();
   stopPromises.set(server, stopPromise);
   return stopPromise;
 }
