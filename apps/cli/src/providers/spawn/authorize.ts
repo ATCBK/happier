@@ -1,4 +1,3 @@
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { randomUUID } from 'node:crypto';
 import { assessProviderEndpoint } from '@happier-dev/protocol/providers/safety/url';
 import { createProviderErrorV1, ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
@@ -551,9 +550,9 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
   | { ok: true; attempt: ProviderSpawnAuthorizationAttempt }
   | { ok: false; error: ProviderErrorV1 }
 >> {
-  const admissionLifetime = createProviderOperationLifetime({
-    wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-  });
+  // Session/Run admission must not borrow an endpoint probe's wall cap. The
+  // containing launch and transport owners retain their own lifetime policy.
+  const admissionLifetime = createProviderOperationLifetime({});
   const authorizationId = randomUUID();
   const authorizationStartedAt = performance.now();
   const observePhase = async <T>(phase: 'catalog' | 'agent_activation' | 'dns' | 'purpose_bindings' | 'managed_runtime' | 'model_projection', work: () => Promise<T>): Promise<T> => {
@@ -656,9 +655,7 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
   };
   let managedPurposeBindingSnapshot = input.managedPurposeBindingSnapshot;
   const resolveCurrent = async (
-    lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    }),
+    lifetime = createProviderOperationLifetime({}),
     admitSavedSecret = false,
   ): Promise<ProviderSpawnAuthorizationResult> => {
     let snapshot = getAccountSettingsSnapshot();

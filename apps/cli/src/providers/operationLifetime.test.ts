@@ -1,7 +1,29 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { awaitAbortableWithinProviderOperation, createProviderOperationLifetime } from './operationLifetime';
+
+it.each([false, true])('keeps an uncapped containing operation cancellable after a slow admission (cancel=%s)', async cancelled => {
+  vi.useFakeTimers();
+  const caller = new AbortController();
+  let finish = () => {};
+  const response = new Promise<string>(resolve => { finish = () => resolve('admitted'); });
+  const result = awaitAbortableWithinProviderOperation(async () => response,
+    createProviderOperationLifetime({ signal: caller.signal }));
+  // Install the rejection observer before cancellation can settle the race.
+  const observed = result.then(value => ({ value }), error => ({ reason: error.reason }));
+  try {
+    await vi.advanceTimersByTimeAsync(35_000);
+    if (cancelled) caller.abort();
+    else finish();
+    expect(await observed).toEqual(cancelled ? { reason: 'cancelled' } : { value: 'admitted' });
+  } finally {
+    finish();
+    await observed;
+    vi.useRealTimers();
+  }
+});
 
 it.each(['deadline', 'cancelled'] as const)('settles an already abandoned %s without an unhandled transport rejection', reason => {
   // Observe Node's actual rejection boundary in an isolated process: the daemon

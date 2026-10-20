@@ -1,5 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Server } from 'socket.io';
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
+import codexManifest from '../../../assets/bundled-plugin-manifests/codex.json';
+import gatewayManifest from '../../../assets/bundled-plugin-manifests/cliproxyapi.json';
+import { CODEX_PROVIDER_BINDING_ADAPTER_V1 } from '../../../../../packages/plugins/codex/src/agent/providerBinding/adapter';
+import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
+import { createProviderRuntimeStateStore } from '@/providers/runtimeState';
+import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { registerMachineProviderRpcHandlers } from '@/api/machine/rpcHandlers.providers';
+import { resolveTeamCredentialSourceModelCatalog } from '@/providers/broker/resourceTestCandidate';
+import { projectManagedProviderBrokerApplication, resolveManagedProviderBrokerPurpose } from '@/providers/broker/applicationProjection';
+import { resolveProviderContributionRegistryView } from '@/providers/registry/contributions';
+import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -21,6 +38,8 @@ const input = { machineId, teamId: 'team-1', resourceId: 'resource-1', expectedR
     source: { kind: 'provider_connection' as const, connectionId: 'connection-1',
         connectionSecurityFingerprint: 'fingerprint-1', credentialSlotId: 'slot-1' }, scope: 'source_any' as const };
 const eligible = { status: 'eligible' as const };
+
+afterEach(() => resetActiveAccountSettingsSnapshotForTests());
 
 function createDaemon() {
     let executions = 0;
@@ -55,6 +74,122 @@ function createTransport(manager: RpcHandlerManager, replies: unknown[] = []) {
 }
 
 describe('server-origin Machine reads across the E2EE RPC seam', () => {
+    it('admits a connected Codex source through the real model projector without a saved Provider connection', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'connected-codex-eligibility-'));
+        try {
+            // OPS8/OPS9's source picker selects this qualified Connected Account.
+            // resourceSourceCandidates pins the credential row id as its incarnation.
+            const source = TeamCredentialSourceBindingV1Schema.parse({
+                v: 1, kind: 'connected_account',
+                target: { kind: 'account', account: {
+                    service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
+                    accountId: '97bd5614-8970-4068-87f2-1447de69d604',
+                } },
+                credentialIncarnation: 'cmuwo1t4m000etm32p8ydij7j',
+            });
+            const { catalog } = splitProviderSettingsV1(DEFAULT_PROVIDER_SETTINGS_V1);
+            const snapshot = {
+                source: 'cache' as const, settings: AccountSettingsSchema.parse({}),
+                providerConnectionsCatalog: { status: 'ready' as const, revision: 1, catalog },
+                savedSecretResources: [], savedSecretCatalogState: 'ready' as const,
+                settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'connected-codex-account',
+            };
+            setActiveAccountSettingsSnapshot(snapshot);
+            const agent = codexManifest.contributes.agents.find(candidate => candidate.id === 'codex')!;
+            const gateway = gatewayManifest.contributes.providers[0]!;
+            // Loaded-plugin and OS/storage boundaries only: use the actual bundled
+            // declarations and Codex adapter, with no mocked projector/eligibility.
+            const executable = {
+                generation: 7,
+                contributes: {
+                    agentDefinitionsById: new Map([['codex', { id: 'codex', pluginId: codexManifest.id,
+                        identity: { pluginId: codexManifest.id, localId: 'codex' }, definition: agent }]]),
+                    providersByContributionKey: new Map([[`${gatewayManifest.id}/${gateway.id}`, {
+                        identity: { pluginId: gatewayManifest.id, localId: gateway.id }, pluginId: gatewayManifest.id,
+                        definition: gateway, provenance: 'bundled', source: { kind: 'path' },
+                    }]]),
+                },
+                activateContributionsOnDemand: async () => [],
+                agentRuntimesByAgentId: new Map([['codex', {
+                    pluginId: codexManifest.id, pluginVersion: codexManifest.version, agentId: 'codex',
+                    generation: 'connected-codex-fixture', providerBinding: CODEX_PROVIDER_BINDING_ADAPTER_V1,
+                    isCurrent: () => true, retirementSignal: new AbortController().signal,
+                }]]),
+            } as unknown as ResolvedExecutablePluginRuntimeRegistry;
+            const unused = async (): Promise<never> => { throw new Error('Unexpected effect during eligibility'); };
+            if (source.kind !== 'connected_account') throw new Error('Expected Connected Account source');
+            const connectedAccounts = createConnectedAccountPurposeBindingOwner({
+                store: { read: async () => ({ v: 1, bindings: [] }), update: unused, subscribe: () => ({ dispose() {} }) },
+                selectTarget: unused,
+                resolveTarget: async (target, signal) => {
+                    signal.throwIfAborted();
+                    return target.kind === 'account' && target.account.accountId === source.target.account.accountId
+                        ? { account: source.target.account, displayName: 'Happier Devs' } : null;
+                },
+                materializeAccount: unused, projectTargetAccounts: unused, assertTargetAccountMaterializable: unused,
+            });
+            const runtime = createRuntimeProviderModelManagementServices({ machineId, happyHomeDir: home,
+                featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => snapshot,
+                runtimeStore: createProviderRuntimeStateStore({ happyHomeDir: home, machineId }),
+                acquireRuntimeLease: async () => ({ registry: executable, source: 'active', durableRevision: -1, release: async () => {} }),
+                resolveManagedPurposeBindingIntent: connectedAccounts.resolveBindingIntent,
+                modelSettingsMutation: unused,
+            });
+            const daemon = createDaemon();
+            registerMachineProviderRpcHandlers({ rpcHandlerManager: daemon.manager, machineId,
+                featureGate: { isEnabled: () => true }, services: { ...runtime,
+                    prepareProfileMigrationSource: unused, describeConnections: unused, mutateConnection: unused,
+                    previewProfileMigration: unused, confirmProfileMigration: unused, confirmProfileMigrationConflict: unused,
+                },
+            });
+            const replies: unknown[] = [];
+            const readEligibility = createTeamCredentialPoolSourceEligibilityReader(createServerRpcForwarder({
+                io: createTransport(daemon.manager, replies),
+            }));
+            const result = await readEligibility({ custodianAccountId: accountId, machineIds: [machineId],
+                teamId: input.teamId, resourceId: input.resourceId, resourceRevision: 1, source,
+                scope: 'source_any', signal: new AbortController().signal });
+            const agentTargetKey = `agent:${codexManifest.id}/${agent.id}`;
+            const projection = await runtime.projectModels({ machineId, agentTargetKey,
+                connectedAccountTarget: source.target, refreshPolicy: 'current_only', mode: 'picker' });
+            expect(projection).toMatchObject({ status: 'success', agentTargetKey });
+            const application = projectManagedProviderBrokerApplication({
+                registry: resolveProviderContributionRegistryView(executable.contributes, executable.generation!),
+                implementationIdentity: { pluginId: gatewayManifest.id, localId: gateway.id },
+                agentTargetKey, protocol: 'openai-responses',
+            });
+            expect(application).not.toBeNull();
+            if (!application) throw new Error('Expected admitted managed broker application');
+            const family = resolveManagedProviderBrokerPurpose({
+                registry: resolveProviderContributionRegistryView(executable.contributes, executable.generation!),
+                application, service: source.target.account.service,
+            });
+            if (!family) throw new Error('Expected the declared Connected Account purpose');
+            const selection = await connectedAccounts.resolveBindingIntentSelection({
+                purpose: { consumer: application.implementationIdentity, purpose: family.purpose },
+                target: source.target, serviceRefs: [source.target.account.service], signal: new AbortController().signal,
+            });
+            expect(await selection.isCurrent()).toBe(true);
+            expect(replies).toEqual([eligible]);
+            expect([...result.eligibleMachineIds]).toEqual([machineId]);
+            if (projection.status !== 'success') throw new Error('Expected source model projection');
+            expect(projection.groups.some(group => group.authorization.authorized && group.rows.length > 0)).toBe(true);
+            await expect(runtime.resolveTeamCredentialResourceTestCandidate({ machineId,
+                teamId: input.teamId, resourceId: input.resourceId, expectedResourceRevision: 1,
+                source, refreshPolicy: 'current_only',
+            })).resolves.toMatchObject({ status: 'success' });
+            await expect(runtime.resolveTeamCredentialRequestPolicySupport({ machineId, source,
+                refreshPolicy: 'current_only',
+            })).resolves.toMatchObject({ status: 'success' });
+            await expect(resolveTeamCredentialSourceModelCatalog({ machineId,
+                teamId: input.teamId, resourceId: input.resourceId, resourceRevision: 1,
+                source, application, projectModels: request => runtime.projectModels({ ...request, refreshPolicy: 'current_only' }),
+            })).resolves.not.toBeNull();
+        } finally {
+            await rm(home, { recursive: true, force: true });
+        }
+    });
+
     it('composes the real server eligibility caller and forwarder with the E2EE daemon', async () => {
         const daemon = createDaemon();
         const replies: unknown[] = [];

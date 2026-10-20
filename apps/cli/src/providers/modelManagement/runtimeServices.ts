@@ -361,7 +361,12 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       || request.application || request.includeTeamCredentialRequestPolicySupport);
     const operationLifetime = createProviderOperationLifetime({
       signal: accountContext?.signal ?? signal,
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
+      // Current-only reads serve containing launch/broker admission and never
+      // dispatch a catalog probe. Their caller owns cancellation; borrowing a
+      // probe budget here would cut off that admission on a slow Home read.
+      ...(request.refreshPolicy !== 'current_only'
+        ? { wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs }
+        : {}),
     });
     const isAccountCurrent = async () => !accountContext || (
       !accountContext.signal.aborted

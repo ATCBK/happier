@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS, ProviderConnectionIdSchema, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
+import { PROVIDER_ENDPOINT_SAFETY_LIMITS, ProviderConnectionIdSchema, ProviderSettingsV1Schema, SessionModelSelectionV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { DaemonProviderModelProjectionRequestV1Schema, DaemonProviderModelProjectionResponseV1Schema, DaemonProviderModelsResponseV1Schema, DaemonProviderProbeResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -13,6 +13,8 @@ import { createPluginReloadController } from '@/plugins/runtime/reload/controlle
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { createRuntimeProviderConnectionServices } from '@/providers/connections/runtimeServices';
 import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
+import { createAccountScopedProviderModelProjectionReader } from '@/providers/modelManagement/remoteProjection';
+import { createRuntimeProviderSpawnAuthorizationAttempt } from '@/providers/spawn/authorize';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -60,14 +62,14 @@ it('reports unavailable catalog preparation rather than an endpoint outage when 
 
 it('honours a committed peer grant on the next probe and model read through its selected hub', () =>
   withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-peer-' }, async ({ homeDir }) => {
-    let onTargetRead = () => {};
+    let onTargetRead: () => void | Promise<void> = () => {};
     let pool = { generation: 1, policy: { autoSwitch: false } };
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
       controller: createPluginReloadController(), physicalGateway: true, probeCatalog: true,
       catalogModels: [{ id: 'gateway-model' }],
       resolveAccountTarget: async (target, signal) => {
         signal.throwIfAborted();
-        onTargetRead();
+        await onTargetRead();
         return { account: target.kind === 'account' ? target.account
           : { service: target.service, accountId: 'upstream-account' }, displayName: 'Upstream',
           ...(target.kind === 'group' ? { group: { groupId: target.groupId, generation: pool.generation } } : {}) };
@@ -199,6 +201,54 @@ it('honours a committed peer grant on the next probe and model read through its 
       expect(afterPolicyChange, JSON.stringify(afterPolicyChange)).toMatchObject({ status: 'success', models: [{ id: 'gateway-model' }] });
       onTargetRead = () => {};
       const callHub = transport.call.getMockImplementation()!;
+      // Spawn admission is part of Session creation, not a catalog probe. A
+      // slow exact-Machine transport must not spend an unrelated probe cutoff.
+      // Keep both daemons' projection/authorization owners real beneath it.
+      let hubAnswered = () => {};
+      let releaseReply = () => {};
+      const answered = new Promise<void>(resolve => { hubAnswered = resolve; });
+      const replyReleased = new Promise<void>(resolve => { releaseReply = resolve; });
+      transport.call.mockClear();
+      transport.call.mockImplementationOnce(async input => {
+        // Delay the hub's genuine Home target-read boundary, so the test also
+        // rejects a shorter cutoff hidden inside current-only hub projection.
+        onTargetRead = async () => { hubAnswered(); await replyReleased; };
+        const response = await callHub(input);
+        onTargetRead = () => {};
+        input.signal?.throwIfAborted();
+        return response;
+      });
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+      const admission = createRuntimeProviderSpawnAuthorizationAttempt({
+        selection: SessionModelSelectionV1Schema.parse({ v: 1, updatedAt: 1, ref: {
+          agentTargetKey: fixture.agentTargetKey, providerConnectionId: 'run-gateway', modelId: 'gateway-model',
+        } }),
+        machineId: peerId, agentTargetKey: fixture.agentTargetKey, agentId: fixture.agentId,
+        lease: fixture.lease, getAccountSettingsSnapshot: snapshot,
+        resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
+        readModelProjection: createAccountScopedProviderModelProjectionReader({
+          serverUrl: 'https://home.example.test', readCredentials: async () => credentials,
+          readAccountSettingsSnapshot: async () => snapshot(),
+          isCurrent: () => getActiveAccountSettingsSnapshot()?.scopeKey === snapshot().scopeKey,
+        }),
+        materializationBaseDir: join(homeDir, 'spawn-materialization'),
+      });
+      try {
+        await answered;
+        await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs + 5_000);
+        releaseReply();
+        const admitted = await admission;
+        expect(admitted, JSON.stringify(admitted)).toMatchObject({ ok: true });
+        expect(transport.call).toHaveBeenCalledTimes(1);
+        if (admitted.ok) {
+          expect(admitted.attempt.isAuthorizationCurrent()).toBe(true);
+          admitted.attempt.cleanupOnFailure();
+        }
+      } finally {
+        releaseReply();
+        await admission;
+        vi.useRealTimers();
+      }
       transport.call.mockImplementationOnce(async input => {
         const reply = DaemonProviderProbeResponseV1Schema.parse(await callHub(input));
         return reply.status === 'success' ? { ...reply, requestFingerprint: createProviderProbeRequestFingerprintV1({

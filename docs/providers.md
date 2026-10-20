@@ -227,8 +227,12 @@ Rows carry their source as data; the picker shows "· via <source>" only where a
 heading cannot (a name present under more than one source, or a Provider/Team row
 in Favorites), so identical names are never merged.
 
-Machine model projection uses the existing Provider operation wall budget for
-DNS, managed-purpose lookup and cold catalog demand. Each source resolves
+Machine model projection that can refresh a catalog uses the existing Provider
+operation wall budget for DNS, managed-purpose lookup and cold catalog demand.
+In development, launch authorization and its `current_only` model projection
+do not borrow an endpoint probe's wall cap. A current-only read does not launch
+or refresh a probe; the containing operation and transport retain cancellation
+and setup lifetime ownership. Each source resolves
 independently; a failed source is identified in `refreshFailures` while successful
 sources keep their rows. Refresh reuses the admitted connection facts and reads
 new runtime observations without repeating purpose or parser admission. Provider
