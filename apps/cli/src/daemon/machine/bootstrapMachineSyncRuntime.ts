@@ -1961,7 +1961,7 @@ export async function bootstrapMachineSyncRuntime(
             logger.warn('[DAEMON RUN] Requester pending recovery unavailable; protected custody retained', { reason: discovery.reason });
             return;
           }
-          for (const binding of discovery.bindings) {
+          await Promise.all(discovery.bindings.map(async binding => {
             await connectedApiMachine.requestSessionMessageReplyRecoveryForSession(binding.sessionId)
               .catch(error => logger.warn('[DAEMON RUN] Requester reply recovery remains in original custody', error));
             await reconcileFollowReceiver(binding.sessionId).catch(error => logger.warn('[DAEMON RUN] Requester Follow read remains pending', error));
@@ -1970,7 +1970,7 @@ export async function bootstrapMachineSyncRuntime(
             await activateRequesterSession(binding).catch(error => logger.warn('[DAEMON RUN] Requester pending recovery item failed; custody retained', {
               sessionId: binding.sessionId, error: serializeAxiosErrorForLog(error),
             }));
-          }
+          }));
         },
       });
       connectedApiMachine.onPendingSessionActivationHint(
@@ -2275,16 +2275,17 @@ export async function bootstrapMachineSyncRuntime(
     const handleMachineConnected = async (): Promise<void> => {
       await refreshMachineConnectionPublications();
       if (params.isShuttingDown()) return;
-      await recoverPendingSessionActivationsAfterConnect().catch((error) => {
-        logger.warn('[DAEMON RUN] Pending session activation reconnect scan failed; waiting custody retained', error);
-      });
-      await params.dispatchSessionFollowOccurrence?.({ accountFollowSourcesChanged: {} }).catch(error => {
-        logger.warn('[DAEMON RUN] Personal Run Follow reconnect read remains pending', serializeAxiosErrorForLog(error));
-      });
-      if (params.isShuttingDown()) return;
-      await workflowRecoveryTriggers?.onConnected().catch((error) => {
-        logger.warn('[DAEMON RUN] Workflow custody startup/reconnect recovery failed; pending custody retained', error);
-      });
+      await Promise.all([
+        recoverPendingSessionActivationsAfterConnect().catch((error) => {
+          logger.warn('[DAEMON RUN] Pending session activation reconnect scan failed; waiting custody retained', error);
+        }),
+        params.dispatchSessionFollowOccurrence?.({ accountFollowSourcesChanged: {} }).catch(error => {
+          logger.warn('[DAEMON RUN] Personal Run Follow reconnect read remains pending', serializeAxiosErrorForLog(error));
+        }),
+        workflowRecoveryTriggers?.onConnected().catch((error) => {
+          logger.warn('[DAEMON RUN] Workflow custody startup/reconnect recovery failed; pending custody retained', error);
+        }),
+      ]);
     };
     connectedApiMachine.connect({
       takeover: params.takeoverRequested,
