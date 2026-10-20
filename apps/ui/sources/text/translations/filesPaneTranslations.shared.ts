@@ -1,6 +1,28 @@
 
 
 export type FilesPaneTranslations = Readonly<{
+    menu: Readonly<{
+        openBeside: string;
+        openWithBlame: string;
+        wrap: string;
+        background: string;
+        raw: string;
+        copyContents: string;
+        revealInFiles: string;
+        showBlame: string;
+        hideBlame: string;
+        copyPath: string;
+        copyHappierLink: string;
+        attachToMessage: string;
+        saveAsArtifact: string;
+        openInDefaultApp: string;
+        restoreBeforeTurn: (params: Readonly<{ turn: number }>) => string;
+        restoreBeforeTurnFallback: string;
+        discardAllChanges: string;
+        goToDefinition: string;
+        showInfo: string;
+        restartLanguageServices: string;
+    }>;
     changedOnly: string;
     showAllFiles: string;
     viewOptions: string;
@@ -17,6 +39,28 @@ export type FilesPaneTranslations = Readonly<{
 
 
 export const filesPaneTranslationsEnglish = { en: {
+        menu: {
+            openBeside: "Open beside",
+            openWithBlame: "Open with blame",
+            wrap: "Wrap lines",
+            background: "Background",
+            raw: "Source",
+            copyContents: "Copy contents",
+            revealInFiles: "Reveal in Files",
+            showBlame: "Show blame",
+            hideBlame: "Hide blame",
+            copyPath: "Copy path",
+            copyHappierLink: "Copy Happier link",
+            attachToMessage: "Attach to message",
+            saveAsArtifact: "Save as Artifact…",
+            openInDefaultApp: "Open in default app",
+            restoreBeforeTurn: ({ turn }) => "Restore this file to before turn" + " " + turn,
+            restoreBeforeTurnFallback: 'Restore file',
+            discardAllChanges: "Discard all changes in this file",
+            goToDefinition: "Go to definition at cursor",
+            showInfo: "Info at cursor",
+            restartLanguageServices: "Restart language services",
+        },
         changedOnly: 'Changed only',
         showAllFiles: 'Show all files',
         viewOptions: 'View options',
