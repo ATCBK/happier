@@ -16,7 +16,7 @@ function blankDragImage(): HTMLImageElement {
     return blankImage;
 }
 
-export type EntityDragDomCarry = Pick<EntityDragCarry, 'move' | 'cancel'>;
+export type EntityDragDomCarry = Pick<EntityDragCarry, 'move' | 'cancel'> & Partial<Pick<EntityDragCarry, 'release'>>;
 
 type EntityDragDomBindingInput = Readonly<{
     runtime: EntityDragDropRuntime;
@@ -94,10 +94,17 @@ export function useEntityDragDomBinding(input: EntityDragDomBindingInput): (node
             event.stopPropagation();
         };
         const end = () => {
-            // A successful drop target releases. An unsuccessful dragend only cancels.
-            carry.current?.cancel('gesture-cancelled');
+            const active = carry.current;
             carry.current = null;
             stopMove.current?.();
+            if (!active) return;
+            // The browser delivers a drop only to a place that accepts the carry, so ending over a place the owner
+            // refuses (or is still checking) never arrives as `drop`. That is still a release: it settles with the
+            // owner's reason for the source to keep. Anywhere else, an unsuccessful dragend only cancels.
+            const snapshot = latest.current.runtime.getSnapshot();
+            if (active.release && snapshot.phase === 'carrying' && snapshot.targetId !== null && snapshot.admission?.status === 'refused') {
+                void active.release();
+            } else active.cancel('gesture-cancelled');
         };
         element.addEventListener('dragstart', start);
         element.addEventListener('dragend', end);

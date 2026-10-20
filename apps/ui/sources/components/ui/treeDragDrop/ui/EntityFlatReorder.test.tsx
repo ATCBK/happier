@@ -449,6 +449,41 @@ describe('shared flat reorder UI binding', () => {
         expect(f.model.writes).toEqual([]);
     });
 
+    it('keeps autoscrolling an engaged carry while the pointer is over the scroller\'s trailing space past the last row, and stops once it leaves the viewport', async () => {
+        const scrollNode = document.createElement('div');
+        Object.defineProperty(scrollNode, 'scrollHeight', { value: 1000 });
+        // The viewport is taller than the three 50 px rows: its bottom edge band lies partly past the last row.
+        scrollNode.getBoundingClientRect = () => new DOMRect(0, 0, 300, 200);
+        scrollNode.scrollTop = 100;
+        const scrollRef = { current: {
+            getScrollableNode: () => scrollNode,
+            measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 200),
+        } } as unknown as React.RefObject<ScrollView | null>;
+        const f = fixture(scrollRef);
+        const screen = await mount(f);
+        const pan = gesture(screen, 'a');
+        await act(async () => { pan.__handlers.onStart!({ absoluteX: 10, absoluteY: 10 }); });
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 145 }); });
+        expect(runtime.getSnapshot()).toMatchObject({ targetId: expect.stringContaining('"c"'), admission: { status: 'allowed' } });
+        await screen.update(f.render());
+        const engaged = scrollNode.scrollTop;
+        expect(engaged).toBeGreaterThan(100);
+
+        // Trailing padding or an item after the list is no drop place, yet the edge zone still belongs to this carry.
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 10, absoluteY: 190 }); });
+        expect(runtime.getSnapshot().targetId).toBeNull();
+        await screen.update(f.render());
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBeGreaterThan(engaged);
+
+        const beforeExit = scrollNode.scrollTop;
+        await act(async () => { pan.__handlers.onUpdate!({ absoluteX: 310, absoluteY: 190 }); });
+        await screen.update(f.render());
+        await screen.update(f.render());
+        expect(scrollNode.scrollTop).toBe(beforeExit);
+        await act(async () => { runtime.cancel('pointer-cancel'); });
+    });
+
     it('captures real DOM pointer targets before body gestures without swallowing main-row activation', async () => {
         const f = fixture();
         f.model.ids = ['a'];
