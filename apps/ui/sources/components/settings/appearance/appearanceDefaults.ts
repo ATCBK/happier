@@ -1,5 +1,8 @@
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import { settingsDefaults, type SettingsWriteDelta, type WritableSettingsKey } from '@/sync/domains/settings/settings';
+import type { SettingOperationContext, SettingOperationResult } from '@/components/settings/catalog/settingDeclarations';
+import { clearActiveThemeProfiles } from '@/theme/profiles/themeProfilePersistence';
+import { readReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 /**
  * The preferences the Appearance page shows, split by where each is stored. Theme mode and theme
@@ -59,4 +62,25 @@ export function resolveAppearanceDefaults(): Readonly<{
         Object.assign(account, { [key]: settingsDefaults[key] });
     }
     return { themePreference: localSettingsDefaults.themePreference, local, account };
+}
+
+/** One reversible page operation; Account and device effects share the same admitted invocation. */
+export async function resetAppearanceSettings(context: SettingOperationContext): Promise<SettingOperationResult> {
+    if (context.input !== undefined) return { status: 'unavailable', reason: 'invalid_operation_input' };
+    if (!context.isCurrent() || !context.readLocalSettings || !context.writeLocalSettings) {
+        return { status: 'unavailable', reason: 'setting_not_bound' };
+    }
+    const defaults = resolveAppearanceDefaults();
+    const local = context.readLocalSettings();
+    const { commitThemeSelection } = await import('@/theme/profiles/themeProfileRuntime');
+    await commitThemeSelection({
+        currentPreference: local.themePreference,
+        nextPreference: defaults.themePreference,
+        nextThemeProfiles: clearActiveThemeProfiles(local.themeProfiles),
+        reduceMotion: readReducedMotionPreference(),
+        writeLocal: context.writeLocalSettings,
+    });
+    context.writeLocalSettings(defaults.local);
+    await context.mutateSettings(() => defaults.account);
+    return { status: 'completed' };
 }

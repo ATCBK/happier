@@ -24,7 +24,10 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { useSettingMutable, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { storage, useSettingMutable, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useOpenPersonalize } from '@/components/onboarding/personalize/useOpenPersonalize';
 import * as Localization from 'expo-localization';
@@ -36,18 +39,15 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { ItemDensityChoiceRow } from '@/components/settings/appearance/ItemDensityPreview';
-import { resolveAppearanceDefaults } from '@/components/settings/appearance/appearanceDefaults';
 import { buildThemePresetSourceOptions } from '@/components/settings/appearance/themeProfiles/themeProfilePresetOptions';
 import { Modal } from '@/modal';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
 import { t, getLanguageNativeName, SUPPORTED_LANGUAGES } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { resolveThemeMode, useApplyThemeSelection } from '@/components/settings/appearance/useApplyThemeSelection';
 import {
     DEFAULT_THEME_PROFILES_LOCAL_STATE,
-    clearActiveThemeProfiles,
 } from '@/theme/profiles/themeProfilePersistence';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
@@ -78,8 +78,8 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
     const { theme } = useUnistyles();
     // On a phone the theme counts would be squeezed beside the summary, so they join it instead.
     const narrowWindow = useWindowDimensions().width < PAGE_LIST_METRICS.rowStackBelowWidthPx;
-    const applyLocalSettings = useApplyLocalSettings();
-    const applySettings = useApplySettings();
+    const scope = storage(state => state.settingsScope);
+    const resetAction = useMountedActionExecution(scope, { openOnRequest: true, retainInvocation: true });
     const deviceType = useDeviceType();
     const panelsSupported = Platform.OS === 'web' || deviceType === 'tablet';
     const [avatarStyle, setAvatarStyle] = useSettingMutable('avatarStyle');
@@ -241,18 +241,16 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
     const applyThemeSelection = useApplyThemeSelection();
 
     const resetToDefaults = React.useCallback(async () => {
-        const confirmed = await Modal.confirm(
-            t('settingsAppearance.resetConfirmTitle'),
-            t('settingsAppearance.resetConfirmBody'),
-            { confirmText: t('common.reset') },
-        );
-        if (!confirmed) return;
-        const defaults = resolveAppearanceDefaults();
-        // Custom themes are the user's own content; only which theme each mode uses goes back.
-        if (!await applyThemeSelection(defaults.themePreference, clearActiveThemeProfiles(safeThemeProfiles))) return;
-        applyLocalSettings(defaults.local);
-        applySettings(defaults.account);
-    }, [applyLocalSettings, applySettings, applyThemeSelection, safeThemeProfiles]);
+        try {
+            const result = await resetAction.execute('settings.invoke', { anchor: APPEARANCE_SETTINGS.settings.reset.anchor });
+            if (!resetAction.isCurrent()) return;
+            if (result.ok || isActionApprovalDeclinedErrorCode(result.errorCode)
+                || presentActionTurnedOffNoticeIfOff(result, 'settings.invoke')) return;
+        } catch {
+            if (!resetAction.isCurrent()) return;
+        }
+        Modal.alert(t('common.error'), t('common.unavailable'));
+    }, [resetAction.execute, resetAction.isCurrent]);
 
     // Ensure we have a valid style for display, defaulting to gradient for unknown values
     const displayStyle: KnownAvatarStyle = isKnownAvatarStyle(avatarStyle) ? avatarStyle : 'gradient';
@@ -287,6 +285,7 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
             <SettingsPageHeader
                 description={t('settingsAppearance.pageDescription')}
                 actions={
+                    <SettingAnchor setting={APPEARANCE_SETTINGS.settings.reset}>
                     <RoundButton
                         testID="settings-appearance-reset"
                         size="small"
@@ -296,6 +295,7 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                         textStyle={styles.resetText}
                         onPress={resetToDefaults}
                     />
+                    </SettingAnchor>
                 }
             />
 
@@ -535,8 +535,9 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                     rightElement={<Switch value={showFlavorIcons} onValueChange={setShowFlavorIcons} />}
                     showChevron={false}
                 />
+                <SettingAnchor setting={APPEARANCE_SETTINGS.settings.contextGaugeStyle}>
                 <SegmentedChoiceItem
-                    title={t('settingsAppearance.visualEffects.contextGauge')}
+                    title={t(APPEARANCE_SETTINGS.settings.contextGaugeStyle.titleKey)}
                     subtitle={t('settingsAppearance.visualEffects.contextGaugeDescription')}
                     subtitleLines={0}
                     testID="settings-appearance-contextGaugeStyle-select"
@@ -545,6 +546,7 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                     value={contextGaugeStyle}
                     onChange={setContextGaugeStyle}
                 />
+                </SettingAnchor>
                 <SettingRow
                     setting={APPEARANCE_SETTINGS.settings.alwaysShowContextSize}
                     subtitleLines={0}

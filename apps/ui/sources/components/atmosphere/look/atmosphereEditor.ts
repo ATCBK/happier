@@ -4,8 +4,10 @@ import type {
   ProjectAtmosphere,
 } from '@happier-dev/protocol/account/settings/accountSettings';
 import { useSetting } from '@/sync/store/hooks';
-import { useApplySettings } from '@/sync/store/settingsWriters';
-import { normalizeHomeAtmosphere } from '../atmosphereSettings';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+
+const homeAtmosphereSetting = { anchor: 'appearance.homeAtmosphere' } as const;
 
 /**
  * What the Look panel edits: the value it shows and one write that applies an edit (from
@@ -19,24 +21,24 @@ export type AtmosphereEditor = Readonly<{
   resetToHome?: () => void;
 }>;
 
-/** Home's editor. Edits re-apply to the latest Account snapshot, so concurrent writes are not lost. */
+/** Each edit starts from the latest Account snapshot at invocation; the declaration owns the full value. */
 export function useHomeAtmosphereEditor(): AtmosphereEditor &
   Readonly<{
     value: HomeAtmosphere;
     updateHome(edit: (current: HomeAtmosphere) => HomeAtmosphere): void;
   }> {
   const value = useSetting('homeAtmosphere');
-  const apply = useApplySettings();
+  const { setSetting, isCurrent } = useSettingActionFeedback();
   return React.useMemo(() => {
-    const updateHome = (edit: (current: HomeAtmosphere) => HomeAtmosphere) =>
-      apply((current) => ({
-        homeAtmosphere: normalizeHomeAtmosphere(edit(current.homeAtmosphere)),
-      }));
+    const updateHome = (edit: (current: HomeAtmosphere) => HomeAtmosphere) => {
+      if (!isCurrent(homeAtmosphereSetting)) return;
+      return setSetting(homeAtmosphereSetting, edit(getStorage().getState().settings.homeAtmosphere));
+    };
     return {
       value,
       updateHome,
       update: (edit) =>
         updateHome((current) => ({ ...current, ...edit(current) })),
     };
-  }, [apply, value]);
+  }, [isCurrent, setSetting, value]);
 }

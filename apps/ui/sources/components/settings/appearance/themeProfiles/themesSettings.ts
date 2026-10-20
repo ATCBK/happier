@@ -1,5 +1,6 @@
 import { defineSettingsPage } from '@/components/settings/catalog/settingDeclarations';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
+import { themeProfilesStorageBinding } from './themeProfilesSettingBinding';
 
 /** The searchable settings of Appearance › Themes. Theme names find the mode sections. */
 export const THEMES_SETTINGS = defineSettingsPage({
@@ -21,7 +22,7 @@ export const THEMES_SETTINGS = defineSettingsPage({
         yourThemes: {
             titleKey: 'settingsAppearance.themeProfiles.yourThemes',
             settings: {
-                yourThemes: {},
+                yourThemes: { storage: themeProfilesStorageBinding },
             },
         },
     },

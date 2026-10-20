@@ -2,6 +2,7 @@ import { defineSettingsPage, settingsHosts, type SettingsSubpageDeclaration } fr
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { UI_FONT_SCALE_PRESETS } from '@/components/ui/text/uiFontScale';
 import { themeModeStorageBinding } from './themeModeSettingBinding';
+import { resetAppearanceSettings } from './appearanceDefaults';
 import { glassIntensityStorageBinding, glassPresetStorageBinding, glassSurfaceStorageBinding, glassTintStorageBinding } from './glassSettingBindings';
 import { navigationPlacementStorageBinding } from './navigationPlacementSettingBinding';
 import { surfaceFinishOverrideStorageBinding } from './surfaceFinishSettingBindings';
@@ -22,6 +23,8 @@ export const APPEARANCE_PAGE_SETTINGS = defineSettingsPage({
     sections: {
         personalize: {
             settings: {
+                reset: { operation: { kind: 'invoke', requiresHumanInteraction: false, requiresApproval: false,
+                    invoke: resetAppearanceSettings } },
                 // Opens the guided flow from Appearance (lab personalize R3); the choices it walks
                 // through are each declared on their own page.
                 personalize: {

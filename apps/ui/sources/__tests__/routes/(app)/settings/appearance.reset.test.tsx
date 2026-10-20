@@ -11,6 +11,8 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { createThemeProfileDraft } from '@/theme/profiles/createThemeProfileDraft';
 import { ThemeProfilesLocalStateSchema } from '@/theme/profiles/themeProfilePersistence';
 import { installSessionSettingsEntryModuleMocks, resetSessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
@@ -113,10 +115,11 @@ afterEach(async () => {
 
 const { default: AppearanceSettingsScreen } = await import('@/app/(app)/settings/appearance');
 
-async function pressReset() {
+async function mountReset(actionsSettingsV1: unknown = { v: 1, approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } }) {
     setReducedMotionPreferenceOverride(true);
     const fixture = nonDefaultAppearanceState();
-    account = await createSecretSettingsTestHarness({ settings: settingsParse(fixture), sharedEnabled: false });
+    account = await createSecretSettingsTestHarness({ token: createAccountTokenForTests('account-a', { currentAccount: true }),
+        settings: settingsParse({ ...fixture, actionsSettingsV1 }), sharedEnabled: false });
     storage.setState({ localSettings: localSettingsParse(fixture) });
     const screen = await renderSettingsView(
         <InjectedAuthProvider credentials={account.credentials}>{React.createElement(AppearanceSettingsScreen)}</InjectedAuthProvider>,
@@ -124,16 +127,15 @@ async function pressReset() {
     );
     const reset = screen.findByTestId('settings-appearance-reset');
     if (!reset) throw new Error('Expected the Reset action in the page header');
-    await act(async () => {
-        await reset.props.onPress?.();
-    });
+    return () => { reset.props.onPress?.(); };
 }
 
 describe('Appearance reset', () => {
-    it('after confirmation returns every appearance preference on the page to its default and keeps custom themes', async () => {
-        await pressReset();
+    it('returns every appearance preference to its default without caller confirmation and keeps custom themes', async () => {
+        const reset = await mountReset();
+        await act(async () => { reset(); });
 
-        expect(shared.confirm).toHaveBeenCalledOnce();
+        expect(shared.confirm).not.toHaveBeenCalled();
         await vi.waitFor(() => expect(account?.settingsWrites.length).toBeGreaterThan(0));
         const { sync } = await import('@/sync/sync');
         const queue = Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync;
@@ -164,15 +166,40 @@ describe('Appearance reset', () => {
         expect(account?.persistedSettings.preferredLanguage).toBe('fr');
     });
 
-    it('changes nothing when the confirmation is declined', async () => {
-        shared.confirm.mockImplementation(async () => false);
-
-        await pressReset();
-
+    it('admits the entire reset once: Off changes nothing, Ask rejects or approves both stores together', async () => {
+        const reset = await mountReset({ v: 1, actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } } });
+        await act(async () => { reset(); });
         const fixture = nonDefaultAppearanceState();
         expect(storage.getState().localSettings).toEqual(localSettingsParse(fixture));
-        expect(storage.getState().settings).toEqual(settingsParse(fixture));
-        expect(account?.persistedSettings).toEqual(settingsParse(fixture));
         expect(account?.settingsWrites).toEqual([]);
+        await act(async () => { account!.replaceSettings(settingsParse({ ...account!.persistedSettings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.invoke': { approvalRequiredSurfaces: ['ui'] } } },
+        })); reset(); });
+        await vi.waitFor(() => expect(account!.artifacts.list()).toHaveLength(1));
+        expect(storage.getState().localSettings).toEqual(localSettingsParse(fixture));
+        expect(account!.persistedSettings.visualEffectsLevel).toBe('minimal');
+        await decideApprovalAsInbox(account!.scope.serverId, account!.artifacts.list()[0]!.id, 'reject');
+        expect(storage.getState().localSettings).toEqual(localSettingsParse(fixture));
+        await act(async () => { reset(); });
+        await vi.waitFor(() => expect(account!.artifacts.list()).toHaveLength(2));
+        await decideApprovalAsInbox(account!.scope.serverId, account!.artifacts.list()[1]!.id, 'approve');
+        await vi.waitFor(() => expect(account!.persistedSettings.visualEffectsLevel).toBe('full'));
+        expect(storage.getState().localSettings.themePreference).toBe(localSettingsDefaults.themePreference);
+        expect(storage.getState().localSettings.themeProfiles.profiles).toEqual([CUSTOM_PROFILE]);
+        expect(account!.persistedSettings.preferredLanguage).toBe('fr');
+        expect(account!.artifacts.list()).toHaveLength(2);
+        expect(shared.confirm).not.toHaveBeenCalled();
+    });
+
+    it('runs the same declared reset from the Agent surface without a mounted button callback', async () => {
+        await mountReset({ v: 1, approvalWaivedSurfaces: { 'settings.invoke': ['agent'] } });
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        let result: unknown;
+        await act(async () => { result = await createDefaultActionExecutor().execute('settings.invoke', { anchor: 'appearance.reset' },
+            { serverId: account!.scope.serverId, surface: 'agent', authority: 'account_automation' }); });
+        expect(result).toMatchObject({ ok: true, result: { anchor: 'appearance.reset', status: 'completed' } });
+        expect(storage.getState().localSettings.themePreference).toBe(localSettingsDefaults.themePreference);
+        expect(account!.persistedSettings.visualEffectsLevel).toBe(settingsDefaults.visualEffectsLevel);
+        expect(account!.persistedSettings.preferredLanguage).toBe('fr');
     });
 });

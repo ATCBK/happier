@@ -13,11 +13,12 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { t } from '@/text';
 import { THEME_SURFACE_FINISH_ROLES, type ThemeSurfaceFinish } from '@/theme/themeStyleScales';
 
 import { APPEARANCE_SETTINGS } from './appearanceSettings';
-import { resolveSurfaceFinishOverrideDelta, type SurfaceFinishChoice } from './surfaceFinishSettingBindings';
+import type { SurfaceFinishChoice } from './surfaceFinishSettingBindings';
 
 function finishLabel(finish: ThemeSurfaceFinish): string {
     return t(finish === 'flat' ? 'settingsAppearance.surfaceFinish.flat' : 'settingsAppearance.surfaceFinish.soft');
@@ -41,7 +42,8 @@ const roleSettings = {
 export function SurfaceFinishAppearanceSection() {
     const { theme } = useUnistyles();
     const [storedFinish, setFinish] = useLocalSettingMutable('uiSurfaceFinish');
-    const [storedOverrides, setOverrides] = useLocalSettingMutable('uiSurfaceFinishOverrides');
+    const [storedOverrides] = useLocalSettingMutable('uiSurfaceFinishOverrides');
+    const { setSetting } = useSettingActionFeedback();
     const finish = storedFinish ?? 'soft';
     const overrides = storedOverrides ?? {};
     const [expanded, setExpanded] = React.useState(false);
@@ -71,7 +73,7 @@ export function SurfaceFinishAppearanceSection() {
                         <SegmentedChoiceItem
                             title={t(roleSettings[role].titleKey)} subtitle={finishLabel(overrides[role] ?? finish)}
                             testIDPrefix={`settings-appearance-finish-${role}`} options={roleChoices} value={overrides[role] ?? 'auto'}
-                            onChange={value => setOverrides(resolveSurfaceFinishOverrideDelta({ uiSurfaceFinishOverrides: overrides }, role, value).uiSurfaceFinishOverrides)}
+                            onChange={value => { void setSetting(roleSettings[role], value); }}
                         />
                     </SettingAnchor>)}
                 </ExpandableItem>
