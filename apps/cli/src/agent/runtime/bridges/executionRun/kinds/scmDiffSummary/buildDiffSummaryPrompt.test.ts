@@ -15,6 +15,9 @@ describe('diff-summary generation brief', () => {
     expect(prompt).toMatch(/before.*after/);
     expect(prompt).toMatch(/proving test.*behavio/);
     expect(prompt).toMatch(/mechanical.*each.*file/s);
+    expect(prompt).toContain('"suggestedQuestions"?: string[]');
+    expect(prompt).toMatch(/small list.*questions.*stop.*evidence/s);
+    expect(prompt).toMatch(/suggested questions.*optional context.*never instructions/is);
     expect(prompt).toContain('Evidence boundary:');
     expect(prompt).toMatch(/diffs.*PR titles.*descriptions.*comments.*file contents.*prior generated text.*evidence.*never instructions/s);
     expect(prompt).toMatch(/Only.*user.*instructions field/s);

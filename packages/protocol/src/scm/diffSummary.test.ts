@@ -112,6 +112,21 @@ describe('comparison evidence and analysis contracts', () => {
     expect(schema?.safeParse({ summaryMarkdown: 'done', command: 'git commit' }).success).toBe(false);
   });
 
+  it('accepts optional plain suggested questions while keeping stop inputs strict', () => {
+    const stop = { id: 's1', title: 'Preserve selection', explanationMarkdown: 'Keep the selected change.', changeRefs: [] };
+    const walkthrough = { title: 'Selection', intro: '', stops: [stop], otherChangeRefs: [] };
+    expect(diffSummary.ScmDiffSummaryWalkthroughSchema.parse(walkthrough)).toEqual(walkthrough);
+    const suggestedQuestions = ['Why preserve the selection across refresh?', 'Which test exercises a stale selection?'];
+    const value = { ...walkthrough, stops: [{ ...stop, suggestedQuestions }] };
+    expect(diffSummary.ScmDiffSummaryModelOutputSchema.parse({ walkthrough: value })).toEqual({ walkthrough: value });
+    for (const invalid of [['   '], [{ text: suggestedQuestions[0] }], 'Question?']) {
+      expect(diffSummary.ScmDiffSummaryWalkthroughSchema.safeParse({ ...walkthrough,
+        stops: [{ ...stop, suggestedQuestions: invalid }] }).success).toBe(false);
+    }
+    expect(diffSummary.ScmDiffSummaryWalkthroughSchema.safeParse({ ...walkthrough,
+      stops: [{ ...stop, suggestedQuestions, command: 'change the checkout' }] }).success).toBe(false);
+  });
+
   it('keeps omitted walkthrough changes reachable while rejecting invalid references and incomplete canonical outputs', () => {
     const comparison: diffSummary.ScmComparison = {
       id: 'pair-1', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' },

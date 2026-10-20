@@ -224,6 +224,7 @@ export const ScmDiffSummaryWalkthroughSchema = lazyZodSchema(() => z.strictObjec
     id: z.string().check(z.minLength(1)), title: z.string().check(z.trim(), z.minLength(1)), explanationMarkdown: z.string().check(z.trim(), z.minLength(1)),
     changeRefs: z.array(z.string().check(z.minLength(1))), importance: z.optional(z.enum(['low', 'medium', 'high'])),
     findingRefs: z.optional(z.array(z.string().check(z.minLength(1)))),
+    suggestedQuestions: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
     reviewExplanations: z.optional(z.array(ScmReviewExplanationSchema).check(z.minLength(1))),
   })),
   readingHint: z.optional(z.string()), otherChangeRefs: z.array(z.string().check(z.minLength(1))),
