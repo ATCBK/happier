@@ -26,6 +26,7 @@ import type { ResolvedProviderContribution } from '@/plugins/projection/registry
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { resolveProviderConnectionForMachine, type ProviderContributionRegistryView } from '@/providers/registry';
+import { collectProviderConnectionDnsEvidence } from '@/providers/registry/dnsEvidence';
 import { createProviderConnectionRpcAdapter } from './rpcAdapter';
 import { createProviderConnectionService } from './service';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
@@ -451,6 +452,42 @@ function harness(options: Readonly<{
 }
 
 describe('provider connection service', () => {
+  it.each(['describe', 'setEnabled', 'setEndpointOverride', 'bindSecret'] as const)(
+    'finishes %s after a slow Account read without spending an endpoint probe deadline', async action => {
+      const h = harness();
+      await h.service.create({ action: 'createContribution', machineId: 'machine-a', connectionId: 'pc_slow',
+        contributionKey, displayName: null, savedSecretId: 'secret_api', enable: false });
+      await h.service.setEndpointOverride({ action: 'setEndpointOverride', machineId: 'machine-a',
+        connectionId: 'pc_slow', expectedRevision: 0, scope: 'machine', endpointTemplateId: 'responses',
+        baseUrl: 'http://127.0.0.1:8080/v1' });
+      await h.service.setEnabled({ action: 'setEnabled', machineId: 'machine-a', connectionId: 'pc_slow',
+        enabled: true, scope: 'machine' });
+      // Keep the resolver and DNS admission real; only Account storage and the
+      // OS address lookup are boundaries in this existing in-memory harness.
+      h.collectDnsEvidence.mockImplementation(request => collectProviderConnectionDnsEvidence({ ...request,
+        resolveAddresses: async () => ['127.0.0.1'] }));
+      const readSnapshot = h.loadSnapshot.getMockImplementation()!;
+      let resumeRead!: () => void;
+      const heldRead = new Promise<void>(resolve => { resumeRead = resolve; });
+      h.loadSnapshot.mockImplementationOnce(async projection => { await heldRead; return readSnapshot(projection); });
+      vi.useFakeTimers();
+      const request = { machineId: 'machine-a', connectionId: 'pc_slow' };
+      const pending = action === 'describe' ? h.service.describe(request)
+        : action === 'setEnabled' ? h.service.setEnabled({ ...request, action, enabled: true, scope: 'machine' })
+        : action === 'setEndpointOverride' ? h.service.setEndpointOverride({ ...request, action, expectedRevision: 1,
+            scope: 'machine', endpointTemplateId: 'responses', baseUrl: 'http://127.0.0.1:8080/v1' })
+        : h.service.bindSecret({ ...request, action, credentialSlotId: 'apiKey', savedSecretId: 'secret_api', scope: 'machine' });
+      const observed = pending.then(value => ({ value }), error => ({ error }));
+      try {
+        await vi.advanceTimersByTimeAsync(35_000);
+        resumeRead();
+        expect(await observed).toMatchObject(action === 'describe'
+          ? { value: { status: 'success', connections: [{ authorized: true }] } }
+          : { value: { status: 'success', authorized: true } });
+      } finally { resumeRead(); await observed; vi.useRealTimers(); }
+    },
+  );
+
   it('describes exact managed gateway custody without inferring it from endpoint health or a different placement', async () => {
     const owner = createManagedServicesOwner({
       processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),

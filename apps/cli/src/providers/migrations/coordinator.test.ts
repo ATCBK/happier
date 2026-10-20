@@ -329,7 +329,7 @@ describe('legacy profile migration coordinator', () => {
     expect(allocated?.['__proto__']).toBe('pc-poison-safe');
   });
 
-  it('releases one registry lease exactly once through the real CAS migration helper', async () => {
+  it.each([false, true])('keeps slow migration admission within its containing lifetime (cancel=%s)', async cancelled => {
     const credentials: StoredCredentials = { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
     const fetchSettings = async () => ({ content: { t: 'plain' as const, v: { providerDefaultModelSelectionsByAgentTargetKeyV1: {} } }, version: 1 });
     await installCoordinatorAccountBoundary(credentials, fetchSettings);
@@ -355,13 +355,28 @@ describe('legacy profile migration coordinator', () => {
       }),
       now: () => 1,
     });
-    await expect(coordinator.ensureMigrated({
+    const caller = new AbortController();
+    let resumeRead!: () => void;
+    const heldRead = new Promise<void>(resolve => { resumeRead = resolve; });
+    vi.useFakeTimers();
+    const request = {
       accountKey: 'account-a',
       credentials,
       providersEnabled: true,
       machineId: 'machine-a',
-    })).resolves.toMatchObject({ status: 'complete', version: 1 });
-    expect(releases).toBe(1);
+      signal: caller.signal,
+      readAuthoringMemory: async () => { await heldRead; return { lastUsedProfile: null }; },
+    };
+    const result = coordinator.ensureMigrated(request);
+    try {
+      await vi.advanceTimersByTimeAsync(cancelled ? 1_000 : 35_000);
+      if (cancelled) caller.abort();
+      resumeRead();
+      await expect(result).resolves.toMatchObject(cancelled
+        ? { status: 'deferred', reason: 'Provider operation abandoned: cancelled' }
+        : { status: 'complete', version: 1 });
+      expect(releases).toBe(cancelled ? 0 : 1);
+    } finally { resumeRead(); await result; vi.useRealTimers(); }
   });
 
   it('resolves DNS once and returns a terminal conflict without rebuilding grants against the CAS winner', async () => {

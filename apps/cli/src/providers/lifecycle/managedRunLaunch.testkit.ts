@@ -21,6 +21,8 @@ import { createSharedGatewayRegistryTestkit } from '@/plugins/runtime/sharedGate
 export async function createManagedRunLaunchFixture(input: Readonly<{ directory?: string; happyHomeDir?: string; controller?: PluginReloadController; remote?: boolean; probeCatalog?: boolean; physicalGateway?: boolean; materializationUrl?: string; signedOutAgentCli?: boolean;
   catalogModels?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['catalogModels'];
   holdResponseForInput?: string;
+  upstreamUrl?: string;
+  experimental?: boolean;
   resolveAccountTarget?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['resolveAccountTarget'] }> = {}) {
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-managed-run-'));
   const pluginId = 'acme.managed-run';
@@ -30,13 +32,14 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
     ...(input.happyHomeDir ? { happyHomeDir: input.happyHomeDir } : {}),
     ...(input.catalogModels ? { catalogModels: input.catalogModels } : {}),
     ...(input.holdResponseForInput ? { holdResponseForInput: input.holdResponseForInput } : {}),
+    ...(input.upstreamUrl ? { upstreamUrl: input.upstreamUrl } : {}),
     ...(input.controller ? { controller: input.controller } : {}),
     ...(input.probeCatalog ? { catalog: { source: 'static+probe' as const, manualModelPolicy: 'catalog-only' as const,
       staticModels: [{ id: 'example', name: 'Example' }], sourceRegistryVersion: 'fixture-registry:v1',
       probes: [{ endpointTemplateId: 'api', path: '/v1/models', parser: 'openai-models' as const }] } } : {}),
     credential: { kind: 'apiKey', required: false, slotId: 'apiKey', transports: [{ id: 'bearer',
       protocols: ['openai-responses'], uses: ['runtime'], destination: { kind: 'httpHeader', name: 'authorization', format: 'bearer' } }] },
-    compatibilityOverrides: [{ agentTargetKey, protocol: 'openai-responses', status: 'verified', reason: 'Fixture endpoint contract',
+    compatibilityOverrides: [{ agentTargetKey, protocol: 'openai-responses', status: input.experimental ? 'experimental' : 'verified', reason: 'Fixture endpoint contract',
       evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-09' } }],
     resolveAccountTarget: input.resolveAccountTarget ?? (async (target, signal) => {
       signal.throwIfAborted();
