@@ -89,8 +89,11 @@ function onFenceSignal(signal) {
   // Listening for a signal replaces its default termination; restore it when no other owner handles it.
   // The guard is prepended, so every other handler (including one-time handlers) is still registered here.
   const otherOwnersHandleSignal = process.listenerCount(signal) > 1;
+  // An existing shutdown handler may still await discovery. Keep its ancestry fence
+  // until cleanup resumes normally or the exit guard observes the owner's actual exit.
+  if (otherOwnersHandleSignal) return;
   releaseFencedRoots();
-  if (!otherOwnersHandleSignal) process.kill(process.pid, signal);
+  process.kill(process.pid, signal);
 }
 
 function removeFenceSignalGuards() {
