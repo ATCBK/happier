@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MachineVitalsMinuteRecordV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
+import { MachineVitalsHistoryV1Schema, type MachineVitalsMinuteRecordV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
 
 import { downsampleMachineVitalsHistory } from './downsample';
 
@@ -7,6 +7,24 @@ const minute = (t: number, cpu = 10): MachineVitalsMinuteRecordV1 => ({ t, cpu, 
   mem: cpu * 10, memMax: cpu * 20, lvl: 'calm', swp: null, rx: cpu, tx: cpu * 2 });
 
 describe('machine vitals downsampling', () => {
+  it.each(['24h', '7d'] as const)('preserves measured network coverage in partial, interrupted and complete %s buckets', (range) => {
+    const bucketMs = range === '24h' ? 300_000 : 1_800_000;
+    const start = Date.UTC(2026, 9, 10, 12);
+    for (const offsets of [[1], [1, 3], Array.from({ length: bucketMs / 60_000 }, (_, i) => i + 1)]) {
+      const records = offsets.map(offset => ({ ...minute(start + offset * 60_000), rx: 60_000, tx: 120_000 }));
+      const result = downsampleMachineVitalsHistory({ range, now: start + Math.max(...offsets) * 60_000, records });
+      const point = result.points.at(-1);
+      expect(point).toMatchObject({ rx: records.length * 60_000, tx: records.length * 120_000,
+        rxObservedMs: records.length * 60_000, txObservedMs: records.length * 60_000 });
+      expect(MachineVitalsHistoryV1Schema.safeParse(result).success).toBe(true);
+      expect(result.today).toEqual({ rxBytes: records.length * 60_000, txBytes: records.length * 120_000 });
+    }
+    const unknown = downsampleMachineVitalsHistory({ range, now: start + 60_000,
+      records: [{ ...minute(start + 60_000), rx: null, tx: 0 }] }).points.at(-1);
+    expect(unknown).toMatchObject({ rx: null, tx: 0, txObservedMs: 60_000 });
+    expect(unknown).not.toHaveProperty('rxObservedMs');
+  });
+
   it.each([['24h', 300_000, 288], ['7d', 1_800_000, 336]] as const)
    ('preserves means, spikes and explicit missing buckets in %s', (range, bucketMs, count) => {
       const now = Date.UTC(2026, 9, 10, 12);
@@ -16,7 +34,7 @@ describe('machine vitals downsampling', () => {
       expect(result.points).toHaveLength(count);
       expect(result.points.slice(0, -1).every((point) => point === null)).toBe(true);
       expect(result.points.at(-1)).toEqual({ t: now - bucketMs, cpu: 20, cpuMax: 50, mem: 200,
-        memMax: 600, lvl: 'critical', swp: null, rx: 40, tx: 80 });
+        memMax: 600, lvl: 'critical', swp: null, rx: 40, tx: 80, rxObservedMs: 120_000, txObservedMs: 120_000 });
     });
 
   it('seeds the hour before live samples and computes today totals from UTC minutes only', () => {
@@ -33,7 +51,7 @@ describe('machine vitals downsampling', () => {
     const now = Date.UTC(2026, 9, 10, 12, 3);
     const result = downsampleMachineVitalsHistory({ range: '24h', now,
       records: [minute(now), minute(now + 60_000, 90)] });
-    expect(result.points.at(-1)).toEqual({ ...minute(Date.UTC(2026, 9, 10, 12)), cpu: 10 });
+    expect(result.points.at(-1)).toEqual({ ...minute(Date.UTC(2026, 9, 10, 12)), cpu: 10, rxObservedMs: 60_000, txObservedMs: 60_000 });
   });
 
   it('uses the live sample once when the restored-minute and ring frontiers have the same timestamp', () => {

@@ -1,10 +1,10 @@
-import type { MachineVitalsHistoryV1, MachineVitalsMinuteRecordV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
+import type { MachineVitalsHistoryPointV1, MachineVitalsHistoryV1, MachineVitalsMinuteRecordV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
 
 export function downsampleMachineVitalsHistory(input: Readonly<{
   records: readonly MachineVitalsMinuteRecordV1[];
   range: MachineVitalsHistoryV1['range'];
   now: number;
-  livePoints?: readonly MachineVitalsMinuteRecordV1[];
+  livePoints?: readonly MachineVitalsHistoryPointV1[];
 }>): MachineVitalsHistoryV1 {
   const minuteMs = 60_000;
   const bucketMs = input.range === '7d' ? 30 * minuteMs : input.range === '24h' ? 5 * minuteMs : minuteMs;
@@ -30,14 +30,16 @@ export function downsampleMachineVitalsHistory(input: Readonly<{
     const known = values.filter((value): value is number => value !== null);
     return known.length === 0 ? null : known.reduce((total, value) => total + value, 0);
   };
-  let points: Array<MachineVitalsMinuteRecordV1 | null> = buckets.map((records, index) => {
+  let points: Array<MachineVitalsHistoryPointV1 | null> = buckets.map((records, index) => {
     if (records.length === 0) return null;
     const level = records.reduce((highest, record) => pressure[record.lvl] > pressure[highest] ? record.lvl : highest,
       'not_reported' as MachineVitalsMinuteRecordV1['lvl']);
     return { t: start + index * bucketMs, cpu: mean(records.map((record) => record.cpu)),
       cpuMax: max(records.map((record) => record.cpuMax)), mem: mean(records.map((record) => record.mem)),
       memMax: max(records.map((record) => record.memMax)), lvl: level, swp: max(records.map((record) => record.swp)),
-      rx: sum(records.map((record) => record.rx)), tx: sum(records.map((record) => record.tx)) };
+      rx: sum(records.map((record) => record.rx)), tx: sum(records.map((record) => record.tx)),
+      ...(records.some(record => record.rx !== null) ? { rxObservedMs: records.filter(record => record.rx !== null).length * minuteMs } : {}),
+      ...(records.some(record => record.tx !== null) ? { txObservedMs: records.filter(record => record.tx !== null).length * minuteMs } : {}) };
   });
   if (input.range === '1h') {
     // Minute history seeds the part that predates the live ring; retain native live timestamps.

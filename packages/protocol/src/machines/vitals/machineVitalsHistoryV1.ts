@@ -28,11 +28,18 @@ export const MachineVitalsAlertEpisodeV1Schema = lazyZodSchema(() => z.strictObj
 export type MachineVitalsAlertEpisodeV1 = z.infer<typeof MachineVitalsAlertEpisodeV1Schema>;
 export const MachineVitalsAlertEpisodeV1StoredReadSchema = createStoredReadSchema(MachineVitalsAlertEpisodeV1Schema);
 
-/** Chart buckets use t at the bucket start; network fields remain bytes per bucket. */
+/** Transient history projections carry measured traffic duration; stored minutes remain unchanged. */
+export const MachineVitalsHistoryPointV1Schema = lazyZodSchema(() => z.extend(MachineVitalsMinuteRecordV1Schema, {
+  rxObservedMs: z.optional(z.number().check(z.positive())),
+  txObservedMs: z.optional(z.number().check(z.positive())),
+}));
+export type MachineVitalsHistoryPointV1 = z.infer<typeof MachineVitalsHistoryPointV1Schema>;
+
+/** Chart buckets use t at the bucket start; network bytes cover only the observed duration. */
 export const MachineVitalsHistoryV1Schema = lazyZodSchema(() => z.strictObject({
   range: z.enum(['1h', '24h', '7d']),
   bucketMs: z.number().check(z.int(), z.positive()),
-  points: z.array(z.nullable(MachineVitalsMinuteRecordV1Schema)),
+  points: z.array(z.nullable(MachineVitalsHistoryPointV1Schema)),
   today: z.strictObject({ rxBytes: z.number().check(z.nonnegative()), txBytes: z.number().check(z.nonnegative()) }),
 }));
 export type MachineVitalsHistoryV1 = z.infer<typeof MachineVitalsHistoryV1Schema>;

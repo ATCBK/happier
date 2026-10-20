@@ -360,16 +360,17 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
             const isContainer = group?.memoryLimit !== undefined;
             const containerEnvironment = isContainer || group?.quotaCores !== undefined || await text('/.dockerenv') !== null || await text('/run/.containerenv') !== null;
             const quota = group?.quotaCores;
+            const effectiveCores = Math.min(logicalCores, quota ?? logicalCores);
             const cpuCounters = Object.fromEntries(Object.entries(cpus).flatMap(([id, values]) => Object.entries(values).map(([key, value]) => [`${id}:${key}`, value])));
             const cpuDelta = cpuRates({ monotonicMs: input.monotonicMs, counters: cpuCounters }, input.intervalMs);
             const pct = (id: string, key: string) => cpuDelta && cpuDelta.deltas[`${id}:total`] > 0 ? clampPct(100 * cpuDelta.deltas[`${id}:${key}`] / cpuDelta.deltas[`${id}:total`]) : null;
-            const containerDelta = group?.usageUsec !== undefined ? containerRates({ monotonicMs: input.monotonicMs, counters: { usage: group.usageUsec, ...group.throttles, [`quota:${quota}`]: 0,
+            const containerDelta = group?.usageUsec !== undefined ? containerRates({ monotonicMs: input.monotonicMs, counters: { usage: group.usageUsec, ...group.throttles, [`capacity:${effectiveCores}`]: 0,
                 ...(group.userUsec !== undefined ? { user: group.userUsec } : {}), ...(group.systemUsec !== undefined ? { system: group.systemUsec } : {}) } }, input.intervalMs) : null;
             const loads = loadsRaw?.trim().split(/\s+/u).slice(0, 3).map(Number);
-            const cpu: MachineVitalsSampleV1['cpu'] = { reported: true, busyPct: quota !== undefined ? (containerDelta ? clampPct(containerDelta.deltas.usage / (quota * containerDelta.elapsedMs * 10)) : null) : pct('cpu', 'busy'),
+            const cpu: MachineVitalsSampleV1['cpu'] = { reported: true, busyPct: quota !== undefined ? (containerDelta ? clampPct(containerDelta.deltas.usage / (effectiveCores * containerDelta.elapsedMs * 10)) : null) : pct('cpu', 'busy'),
                 ...(quota !== undefined ? { perCoreNotReportedReason: 'container' as const, ...(Object.keys(group?.throttles ?? {}).length ? { throttled: containerDelta !== null && Object.entries(containerDelta.deltas).some(([key, value]) => key.startsWith('throttle:') && value > 0) } : {}),
-                    userPct: containerDelta && group?.userUsec !== undefined ? clampPct(containerDelta.deltas.user / (quota * containerDelta.elapsedMs * 10)) : null,
-                    systemPct: containerDelta && group?.systemUsec !== undefined ? clampPct(containerDelta.deltas.system / (quota * containerDelta.elapsedMs * 10)) : null } : {
+                    userPct: containerDelta && group?.userUsec !== undefined ? clampPct(containerDelta.deltas.user / (effectiveCores * containerDelta.elapsedMs * 10)) : null,
+                    systemPct: containerDelta && group?.systemUsec !== undefined ? clampPct(containerDelta.deltas.system / (effectiveCores * containerDelta.elapsedMs * 10)) : null } : {
                     perCore: Object.keys(cpus).filter((id) => id !== 'cpu').sort((a, b) => Number(a.slice(3)) - Number(b.slice(3))).map((id) => pct(id, 'busy')),
                     userPct: pct('cpu', 'user'), systemPct: pct('cpu', 'system'), iowaitPct: pct('cpu', 'iowait'), stealPct: pct('cpu', 'steal'),
                 }), ...(loads?.length === 3 && loads.every(Number.isFinite) ? { load1: loads[0] / logicalCores, load5: loads[1] / logicalCores, load15: loads[2] / logicalCores } : {}) };
@@ -411,10 +412,10 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
             const [disk, net, limitFacts, extraFacts, powerFacts] = await Promise.all([volumes(mounts), network(netRaw, input), limits(group, input.overviewExtras), input.overviewExtras ? extras(containerEnvironment) : Promise.resolve({}),
                 readLinuxBatteryFacts({ readText: path => readFile(at(path), 'utf8'), listPowerSupplies: () => readdir(at('/sys/class/power_supply')) }, { powerOnly: true })]);
             const bootedAt = Number(/^btime\s+(\d+)/mu.exec(cpuRaw ?? '')?.[1] ?? 0) * 1000;
-            const host: MachineVitalsHostFactsV1 = { logicalCores, effectiveCores: Math.min(logicalCores, quota ?? logicalCores), memoryTotalBytes: totalBytes, bootedAt, ...Object.fromEntries(Object.entries(topology).filter(([key]) => key !== 'clusters')) };
+            const host: MachineVitalsHostFactsV1 = { logicalCores, effectiveCores, memoryTotalBytes: totalBytes, bootedAt, ...Object.fromEntries(Object.entries(topology).filter(([key]) => key !== 'clusters')) };
             return { state: 'reporting' as const, sample: { v: 1 as const, sampledAt: input.sampledAt, intervalMs: input.intervalMs, cpu, memory, disk, network: net.sample, ...(limitFacts ? { limits: limitFacts } : {}),
                 ...(powerFacts.onAC !== undefined ? { power: { onAC: powerFacts.onAC } } : {}), ...extraFacts }, host,
-                minuteCounters: { monotonicMs: input.monotonicMs, cpu: { busy: cpus.cpu.busy, total: cpus.cpu.total }, ...(quota !== undefined && group?.usageUsec !== undefined ? { containerCpu: { usageUsec: group.usageUsec, quotaCores: quota } } : {}), network: net.counters, swap: { in: events.swapIn, out: events.swapOut } } };
+                minuteCounters: { monotonicMs: input.monotonicMs, cpu: { busy: cpus.cpu.busy, total: cpus.cpu.total }, ...(quota !== undefined && group?.usageUsec !== undefined ? { containerCpu: { usageUsec: group.usageUsec, effectiveCores } } : {}), network: net.counters, swap: { in: events.swapIn, out: events.swapOut } } };
         } catch { return { state: 'unavailable' as const, reason: 'reader_failed' as const }; }
     }
     return { read };

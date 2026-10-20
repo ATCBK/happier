@@ -2,6 +2,7 @@ import type { MachineVitalsAlertsPolicyV1 } from './machineVitalsAlertsV1.js';
 import type { MachineVitalsAlertEpisodeV1, MachineVitalsMinuteRecordV1 } from './machineVitalsHistoryV1.js';
 import type { MachineVitalsSampleV1 } from './machineVitalsSampleV1.js';
 import { isSustainedV1 } from './isSustainedV1.js';
+import { resolveMachineDiskAttentionKindV1 } from './machineVitalsAttentionV1.js';
 
 export type MachineVitalsAlertTransitionV1 = Readonly<{
   episode: MachineVitalsAlertEpisodeV1;
@@ -54,8 +55,7 @@ export function evaluateMachineVitalsAlertsV1(input: Readonly<{
   if (input.policy.disk.enabled && input.disk?.reported) {
     const threshold = input.policy.disk.threshold;
     for (const volume of input.disk.volumes) {
-      const holds = 'freeBytes' in threshold ? volume.availableBytes < threshold.freeBytes
-        : volume.totalBytes > 0 ? volume.availableBytes / volume.totalBytes < threshold.freeFraction : null;
+      const holds = resolveMachineDiskAttentionKindV1(volume, threshold) !== null;
       transition('disk', holds, { freeBytes: volume.availableBytes, totalBytes: volume.totalBytes, threshold }, 60_000,
         undefined, volume.id);
     }

@@ -15,7 +15,7 @@ export interface MachineVitalsReaderInput {
 export interface MachineVitalsMinuteCountersV1 {
     monotonicMs: number;
     cpu: { busy: number; total: number } | null;
-    containerCpu?: { usageUsec: number; quotaCores: number };
+    containerCpu?: { usageUsec: number; effectiveCores: number };
     network: { interfaceIds: string[]; rxBytes: number; txBytes: number } | null;
     swap?: { in: number; out: number };
 }

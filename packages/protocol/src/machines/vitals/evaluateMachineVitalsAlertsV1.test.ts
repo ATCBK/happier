@@ -11,6 +11,25 @@ const policy = MachineVitalsAlertsPolicyV1Schema.parse({ memory: { enabled: true
 const fired: MachineVitalsAlertEpisodeV1 = { kind: 'alert', rule: 'memory', state: 'fired', at: 120_000 };
 
 describe('machine vitals alert evaluation', () => {
+  it.each([{ freeFraction: 0 }, { freeBytes: 0 }])('uses the shared full-disk decision even with threshold %j', (threshold) => {
+    const diskPolicy = MachineVitalsAlertsPolicyV1Schema.parse({ disk: { enabled: true, threshold } });
+    const input = { policy: diskPolicy, records: [], episodes: [], now: 60_000,
+      disk: { reported: true as const, volumes: [{ id: 'a', label: 'A', mount: '/a', totalBytes: 1000,
+        availableBytes: 900, inodesExhausted: true }] } };
+    const started = evaluateMachineVitalsAlertsV1(input);
+    expect(started.map(value => value.episode)).toEqual([
+      { kind: 'alert', rule: 'disk', volumeId: 'a', state: 'fired', at: 60_000 },
+    ]);
+    const episodes = started.map(value => value.episode);
+    expect(evaluateMachineVitalsAlertsV1({ ...input, episodes, now: 120_000 })).toEqual([]);
+    expect(evaluateMachineVitalsAlertsV1({ ...input, episodes, now: 180_000,
+      disk: { ...input.disk, volumes: [{ ...input.disk.volumes[0], inodesExhausted: false }] } })
+      .map(value => value.episode.state)).toEqual(['recovered']);
+    expect(evaluateMachineVitalsAlertsV1({ ...input,
+      disk: { ...input.disk, volumes: [{ ...input.disk.volumes[0], availableBytes: 0, inodesExhausted: false }] } })
+      .map(value => value.episode.state)).toEqual(['fired']);
+  });
+
   it('fires once after covered minute means, never CPU maxima or broken coverage', () => {
     const input = { policy, episodes: [], now: 120_000, records: [minute(1), minute(2)] };
     const transitions = evaluateMachineVitalsAlertsV1(input);
