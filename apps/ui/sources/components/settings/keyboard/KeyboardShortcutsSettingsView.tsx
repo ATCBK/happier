@@ -16,7 +16,7 @@ import { resolveKeyboardPlatform } from '@/keyboard/runtime';
 import type { KeyboardCommandId } from '@/keyboard/types';
 import { Modal } from '@/modal';
 import { useSettingsSelector } from '@/sync/domains/state/storage';
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { t } from '@/text';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
@@ -25,10 +25,8 @@ import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHead
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 
 import {
-    buildKeyboardShortcutResetDelta,
     buildKeyboardShortcutSetDelta,
     buildKeyboardShortcutSettingsModel,
-    buildKeyboardShortcutToggleDelta,
     type KeyboardShortcutSettingsCommandRow,
     type KeyboardShortcutSettingsConflict,
 } from './keyboardShortcutsSettingsModel';
@@ -52,7 +50,7 @@ export const KeyboardShortcutsSettingsView = React.memo(function KeyboardShortcu
         keyboardShortcutDisabledCommandIdsV1: settings.keyboardShortcutDisabledCommandIdsV1,
         keyboardShortcutOverridesV1: settings.keyboardShortcutOverridesV1,
     }));
-    const applySettings = useApplySettings();
+    const { setSetting } = useSettingActionFeedback();
     const reducedMotion = useReducedMotionPreference();
     const platform = React.useMemo(() => resolveKeyboardPlatform(), []);
     const surface = Platform.OS === 'web' ? 'web' : 'native';
@@ -68,24 +66,14 @@ export const KeyboardShortcutsSettingsView = React.memo(function KeyboardShortcu
     ), [model.commandRows]);
 
     const setCommandEnabled = React.useCallback((commandId: KeyboardCommandId, enabled: boolean) => {
-        applySettings(buildKeyboardShortcutToggleDelta(
-            settings.keyboardShortcutDisabledCommandIdsV1,
-            commandId,
-            !enabled,
-        ));
-    }, [applySettings, settings.keyboardShortcutDisabledCommandIdsV1]);
+        const setting = resolveKeyboardCommandSetting(commandId);
+        if (setting) void setSetting(setting, { enabled });
+    }, [setSetting]);
 
     const resetCommand = React.useCallback((commandId: KeyboardCommandId) => {
-        applySettings(buildKeyboardShortcutResetDelta({
-            disabledCommandIds: settings.keyboardShortcutDisabledCommandIdsV1,
-            overrides: settings.keyboardShortcutOverridesV1,
-            commandId,
-        }));
-    }, [
-        applySettings,
-        settings.keyboardShortcutDisabledCommandIdsV1,
-        settings.keyboardShortcutOverridesV1,
-    ]);
+        const setting = resolveKeyboardCommandSetting(commandId);
+        if (setting) void setSetting(setting, { enabled: true, binding: null });
+    }, [setSetting]);
 
     const setCommandShortcut = React.useCallback(async (commandId: KeyboardCommandId, commandTitle: string, currentBinding: string | null) => {
         const nextBinding = await showKeyboardShortcutCapturePrompt({
@@ -109,9 +97,10 @@ export const KeyboardShortcutsSettingsView = React.memo(function KeyboardShortcu
             );
             return;
         }
-        applySettings(delta);
+        const setting = resolveKeyboardCommandSetting(commandId);
+        if (setting) await setSetting(setting, { enabled: true, binding: nextBinding.trim() });
     }, [
-        applySettings,
+        setSetting,
         settings.keyboardShortcutDisabledCommandIdsV1,
         settings.keyboardShortcutOverridesV1,
         platform,
@@ -144,7 +133,7 @@ export const KeyboardShortcutsSettingsView = React.memo(function KeyboardShortcu
                         <Switch
                             testID="settings-keyboard-shortcuts-enabled"
                             value={model.shortcutsEnabled}
-                            onValueChange={(value) => applySettings({ keyboardShortcutsV2Enabled: value })}
+                            onValueChange={(value) => { void setSetting(KEYBOARD_SETTINGS.settings.enableShortcuts, value); }}
                         />
                     )}
                     showChevron={false}
@@ -156,7 +145,7 @@ export const KeyboardShortcutsSettingsView = React.memo(function KeyboardShortcu
                         <Switch
                             testID="settings-keyboard-shortcuts-single-key-enabled"
                             value={model.singleKeyShortcutsEnabled}
-                            onValueChange={(value) => applySettings({ keyboardSingleKeyShortcutsEnabled: value })}
+                            onValueChange={(value) => { void setSetting(KEYBOARD_SETTINGS.settings.singleKey, value); }}
                         />
                     )}
                     showChevron={false}

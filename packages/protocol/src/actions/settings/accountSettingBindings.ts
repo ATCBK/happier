@@ -334,18 +334,21 @@ export const terminalHostStorage: PortableAccountSettingBindingV1 = { ...owner, 
     parse: value => value === 'none' || value === 'tmux' || value === 'zellij' || value === 'herdr' ? { success: true, value } : { success: false },
     mutate: (_settings, value) => value === 'none' || value === 'tmux' || value === 'zellij' || value === 'herdr' ? { sessionTerminalHost: value, sessionUseTmux: value === 'tmux' } : null,
 };
-const commandValueSchema = z.strictObject({ enabled: z.boolean(), binding: z.nullable(z.string().check(z.trim())) });
+const commandValueSchema = z.strictObject({ enabled: z.boolean(), binding: z.optional(z.nullable(z.string().check(z.trim()))) });
 export function commandStorage(commandId: string): PortableAccountSettingBindingV1 { return { ...owner,
     read: settings => ({ enabled: !settings.keyboardShortcutDisabledCommandIdsV1.includes(commandId) && (commandId !== 'commandPalette.open' || settings.commandPaletteEnabled), binding: settings.keyboardShortcutOverridesV1[commandId]?.[0]?.binding ?? null }),
-    parse: value => {
+    parse: (value): ReturnType<PortableAccountSettingBindingV1['parse']> => {
         const parsed = commandValueSchema.safeParse(value);
-        if (!parsed.success || parsed.data.binding !== null && !buildKeyboardShortcutSetDelta({ commandId, binding: parsed.data.binding, disabledCommandIds: [], overrides: {} })) return { success: false };
-        if (parsed.data.binding !== null && !ACCOUNT_SETTING_DEFINITIONS.keyboardShortcutOverridesV1.parseMutationValue({ [commandId]: [{ binding: parsed.data.binding }] }).success) return { success: false };
-        return { success: true, value: parsed.data };
+        if (!parsed.success || parsed.data.binding != null && !buildKeyboardShortcutSetDelta({ commandId, binding: parsed.data.binding, disabledCommandIds: [], overrides: {} })) return { success: false };
+        if (parsed.data.binding != null && !ACCOUNT_SETTING_DEFINITIONS.keyboardShortcutOverridesV1.parseMutationValue({ [commandId]: [{ binding: parsed.data.binding }] }).success) return { success: false };
+        return { success: true, value: parsed.data.binding === undefined
+            ? { enabled: parsed.data.enabled } : { enabled: parsed.data.enabled, binding: parsed.data.binding } };
     },
     mutate: (settings, value) => {
         const parsed = commandValueSchema.safeParse(value);
         if (!parsed.success) return null;
+        // An enabled-only intent preserves every platform-qualified override rule.
+        if (parsed.data.binding === undefined) return buildKeyboardShortcutToggleDelta(settings.keyboardShortcutDisabledCommandIdsV1, commandId, !parsed.data.enabled);
         const current = { commandId, disabledCommandIds: settings.keyboardShortcutDisabledCommandIdsV1, overrides: settings.keyboardShortcutOverridesV1 };
         const bindingDelta = parsed.data.binding === null ? buildKeyboardShortcutResetDelta(current) : buildKeyboardShortcutSetDelta({ ...current, binding: parsed.data.binding });
         if (bindingDelta && !ACCOUNT_SETTING_DEFINITIONS.keyboardShortcutOverridesV1.parseMutationValue(bindingDelta.keyboardShortcutOverridesV1).success) return null;
