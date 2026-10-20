@@ -1,6 +1,8 @@
 import { SettingAnchor, SettingRow, SettingSection } from '@/components/settings/shell/SettingRow';
 import { UI_FONT_SCALE_PRESETS } from '@/components/ui/text/uiFontScale';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { usePaneArrangement } from '@/components/appShell/panes/arrangement/usePaneArrangement';
+import { PaneArrangementPreview } from '@/components/settings/appearance/PaneArrangementPreview';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
@@ -82,6 +84,7 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
     const resetAction = useMountedActionExecution(scope, { openOnRequest: true, retainInvocation: true });
     const deviceType = useDeviceType();
     const panelsSupported = Platform.OS === 'web' || deviceType === 'tablet';
+    const { arrangement: paneArrangement, setArrangement: setPaneArrangement } = usePaneArrangement();
     const [avatarStyle, setAvatarStyle] = useSettingMutable('avatarStyle');
     const [showFlavorIcons, setShowFlavorIcons] = useSettingMutable('showFlavorIcons');
     const [showChatCodeBlockWrapControls, setShowChatCodeBlockWrapControls] = useSettingMutable('showChatCodeBlockWrapControls');
@@ -448,6 +451,32 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                         rightElement={<Switch value={uiMultiPanePanelsEnabled} onValueChange={setUiMultiPanePanelsEnabled} />}
                         showChevron={false}
                     />
+                ) : null}
+                {/* An arrangement only exists where panes sit side by side; a phone never shows it. */}
+                {panelsSupported && deviceType !== 'phone' ? (
+                    <SettingAnchor setting={APPEARANCE_SETTINGS.settings.paneArrangement}>
+                        <Item
+                            title={t(APPEARANCE_SETTINGS.settings.paneArrangement.titleKey)}
+                            subtitle={t('settingsAppearance.paneArrangementDescription')}
+                            subtitleLines={0}
+                            accessoryLayout="stacked"
+                            showChevron={false}
+                            rightElement={
+                                <SelectionTiles
+                                    variant="visual"
+                                    tileSizing="fill"
+                                    accessibilityLabel={t(APPEARANCE_SETTINGS.settings.paneArrangement.titleKey)}
+                                    testIdPrefix="settings-appearance-paneArrangement"
+                                    value={paneArrangement}
+                                    onChange={(next) => { if (next === 'session' || next === 'editor') setPaneArrangement(next); }}
+                                    options={[
+                                        { id: 'session', title: t('settingsAppearance.paneArrangementSession'), subtitle: t('settingsAppearance.paneArrangementSessionCaption'), preview: <PaneArrangementPreview arrangement="session" /> },
+                                        { id: 'editor', title: t('settingsAppearance.paneArrangementEditor'), subtitle: t('settingsAppearance.paneArrangementEditorCaption'), preview: <PaneArrangementPreview arrangement="editor" /> },
+                                    ]}
+                                />
+                            }
+                        />
+                    </SettingAnchor>
                 ) : null}
                 {panelsSupported ? (
                     <SettingAnchor setting={APPEARANCE_SETTINGS.settings.editorTabs}>
