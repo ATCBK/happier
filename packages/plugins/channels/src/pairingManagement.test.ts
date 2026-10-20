@@ -6,7 +6,7 @@ import type {
   TargetedContributionSnapshot,
   TargetedContributionsService,
 } from '@happier-dev/plugin-sdk';
-import { ConversationPairingCreateResultV1Schema } from '@happier-dev/channels-protocol/v1';
+import { compareCanonicalConversationResolutionCandidatesV1, ConversationPairingCreateResultV1Schema, type ConversationResolvedEndpointV1 } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import { classifyConversationCommand } from './commands.js';
@@ -183,11 +183,12 @@ const sharedDestinationEndpoint = {
 } as const;
 
 function endpointSelectionFor(
-  endpoint: typeof directDestinationEndpoint | typeof sharedDestinationEndpoint,
+  endpoint: ConversationResolvedEndpointV1,
 ) {
   return {
-    query: endpoint.label,
-    selected: { kind: endpoint.kind, audience: endpoint.audience, id: endpoint.id },
+    query: endpoint.label ?? endpoint.id,
+    selected: { kind: endpoint.kind, audience: endpoint.audience, id: endpoint.id,
+      ...(endpoint.parentId === undefined ? {} : { parentId: endpoint.parentId }) },
   } as const;
 }
 
@@ -221,7 +222,7 @@ const checkpointedPollEndpointResolve = pairingEndpointResolveAction(
 );
 
 /** The pairing connection's own admitted provider, exposing endpoint resolution. */
-function targetedPairingContribution(): TargetedContributionsService {
+function targetedPairingContribution(readOccurrenceId = () => 'checkpointed-poll-test-occurrence'): TargetedContributionsService {
   return Object.freeze({
     observeForSelf<TContribution>(
       _point: TargetedContributionPointRef<TContribution>,
@@ -237,7 +238,7 @@ function targetedPairingContribution(): TargetedContributionsService {
               contributor: {
                 pluginId: materialization.pluginId,
                 ...pairingConnectionAuthority.providerContributionSelection,
-                occurrenceId: 'checkpointed-poll-test-occurrence',
+                occurrenceId: readOccurrenceId(),
                 sourceCustody: { kind: 'managed', immutableGenerationId: 'checkpointed-poll-test-generation', installSource: 'npm' },
               },
               protocol: { id: 'happier.channels/providers', version: 1 },
@@ -252,7 +253,7 @@ function targetedPairingContribution(): TargetedContributionsService {
 
 /** Resolves whichever destination endpoints a case declares as current. */
 function endpointResolutionExecutor(
-  candidates: readonly (typeof directDestinationEndpoint | typeof sharedDestinationEndpoint)[],
+  candidates: readonly ConversationResolvedEndpointV1[],
 ) {
   return vi.fn(async (
     action: unknown,
@@ -263,7 +264,7 @@ function endpointResolutionExecutor(
       throw new Error('Unexpected provider resolution Action.');
     }
     return {
-      result: { kind: 'resolved' as const, candidates: [...candidates] },
+      result: { kind: 'resolved' as const, candidates: [...candidates].sort(compareCanonicalConversationResolutionCandidatesV1) },
       executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
     };
   });
@@ -279,7 +280,7 @@ function pairingManagementContext(input: Readonly<{
   collection: ReturnType<typeof createCollection>;
   actions?: Readonly<Record<string, unknown>>;
   targetedContributions?: TargetedContributionsService;
-  endpointCandidates?: readonly (typeof directDestinationEndpoint | typeof sharedDestinationEndpoint)[];
+  endpointCandidates?: readonly ConversationResolvedEndpointV1[];
 }>): PluginInvocationContext {
   return {
     invokedAtMs: 1_700_000_000_000,
@@ -417,6 +418,114 @@ function checkpointedPullConnectionRow(): StateRow {
 }
 
 describe('Channels pairing management writer', () => {
+  const proofTopic = { kind: 'thread', audience: 'shared', id: 'group-9:7', parentId: 'group-9', label: 'Proof topic' } as const;
+  const routerTarget = {
+    kind: 'threadRouter',
+    principalGroups: [{ id: 'owner', principalIds: [] }],
+    routes: [{ id: 'owner-route', when: { group: 'owner', forwarded: 'any' }, recipe: { agentId: 'codex' }, policy: target.policy }],
+  } as const;
+
+  it.each([true, false])('finalizes one paused parent router with only the proved principal (shared proof: %s)', async sharedProof => {
+    const collection = createCollection([connectionRow()]);
+    const context = pairingManagementContext({ collection, endpointCandidates: [sharedDestinationEndpoint, proofTopic] });
+    const manager = createConversationPairingManager({ generationId: 'generation-1', now: () => 1_000,
+      randomBytes: () => Uint8Array.from([0, 0, 0, 0, 1]), createId: kind => `${kind}-1` });
+    const handlers = management.createConversationPairingManagementHandlers(manager);
+    const challenge = await handlers.create({ connectionId: 'connection-1', expectedConnectionRevision: 4,
+      pairingRequestId: 'router-pair', endpointSelection: endpointSelectionFor(sharedDestinationEndpoint),
+      ...(sharedProof ? { proofEndpointSelection: endpointSelectionFor(proofTopic) } : {}), target: routerTarget }, context);
+    if (challenge.kind !== 'created') throw new Error('Expected pairing challenge');
+    expect(ConversationPairingCreateResultV1Schema.parse(challenge)).toEqual(challenge);
+    if (sharedProof) expect(challenge).toMatchObject({ proofEndpoint: proofTopic, deepLinkUrl: null });
+    const proposal = completePreBindingMessage(manager, { connectionId: 'connection-1',
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin),
+      endpoint: sharedProof ? proofTopic : directDestinationEndpoint,
+      actor: { principalId: 'actual-human', kind: 'human', isIntegrationSelf: false },
+      contentProvenance: 'original', command: classifyConversationCommand(`/pair ${challenge.manualToken}`) });
+    if (proposal.kind !== 'matched') throw new Error('Expected pairing proposal');
+    const finalizeInput = { generationId: challenge.generationId, proposalId: proposal.proposalId,
+      connectionId: 'connection-1', expectedConnectionRevision: 4, finalizeIdempotencyKey: 'router-finalize' };
+    collection.loseNextUpdatedBatchResponse();
+    await expect(handlers.finalize(finalizeInput, context)).resolves.toEqual({ kind: 'retryableFailure' });
+    const result = await handlers.finalize(finalizeInput, context);
+    expect(result).toMatchObject({ kind: 'rejoined', binding: { endpoint: sharedDestinationEndpoint,
+      target: { ...routerTarget, principalGroups: [{ id: 'owner', principalIds: ['actual-human'] }] },
+      allowedPrincipalIds: ['actual-human'], enabled: false, inputMode: 'directMentionsOnly' } });
+    expect([...collection.rows.values()].filter(row => row.value['record-kind'] === 'binding')).toHaveLength(1);
+    expect(collection.rows.get('binding-1')?.value.payload).toMatchObject({ enabled: false, allowedPrincipalIds: ['actual-human'] });
+  });
+
+  it.each([
+    { principalGroups: [{ id: 'owner', principalIds: ['injected'] }] },
+    { principalGroups: [{ id: 'owner', principalIds: [] }, { id: 'other', principalIds: [] }] },
+  ])('rejects caller-injected members or multiple bootstrap groups: $principalGroups', async ({ principalGroups }) => {
+    const collection = createCollection([connectionRow()]);
+    const context = pairingManagementContext({ collection });
+    const manager = createConversationPairingManager({ generationId: 'generation-1', now: () => 1_000,
+      randomBytes: () => Uint8Array.from([0, 0, 0, 0, 1]), createId: kind => `${kind}-1` });
+    await expect(management.createConversationPairingManagementHandlers(manager).create({
+      connectionId: 'connection-1', expectedConnectionRevision: 4, pairingRequestId: 'injected-router',
+      endpointSelection: directEndpointSelection, target: { ...routerTarget, principalGroups },
+    }, context)).rejects.toMatchObject({ code: 'channels_pairing_router_bootstrap_invalid' });
+    expect(manager.readManagementProjection()).toMatchObject({ challenges: [], proposals: [] });
+    expect(collection.batches).toHaveLength(0);
+  });
+
+  it.each([directDestinationEndpoint, { ...proofTopic, parentId: 'another-parent' }])('refuses a proof selection outside the selected shared destination: %j', async proofEndpoint => {
+    const collection = createCollection([connectionRow()]);
+    const context = pairingManagementContext({ collection, endpointCandidates: [sharedDestinationEndpoint, proofEndpoint] });
+    const manager = createConversationPairingManager({ generationId: 'generation-1', now: () => 1_000,
+      randomBytes: () => Uint8Array.from([0, 0, 0, 0, 1]), createId: kind => `${kind}-1` });
+    await expect(management.createConversationPairingManagementHandlers(manager).create({
+      connectionId: 'connection-1', expectedConnectionRevision: 4, pairingRequestId: 'wrong-proof',
+      endpointSelection: endpointSelectionFor(sharedDestinationEndpoint), proofEndpointSelection: endpointSelectionFor(proofEndpoint),
+      target: routerTarget,
+    }, context)).rejects.toMatchObject({ code: 'channels_pairing_proof_endpoint_mismatch' });
+    expect(manager.readManagementProjection().challenges).toHaveLength(0);
+  });
+
+  it('refuses a shared proof resolved on a replacement provider occurrence without creating a challenge', async () => {
+    const collection = createCollection([connectionRow()]);
+    let providerReads = 0;
+    const context = pairingManagementContext({ collection,
+      endpointCandidates: [sharedDestinationEndpoint, proofTopic],
+      targetedContributions: targetedPairingContribution(() => ++providerReads <= 2 ? 'original' : 'replacement'),
+    });
+    const manager = createConversationPairingManager({ generationId: 'generation-1', now: () => 1_000,
+      randomBytes: () => Uint8Array.from([0, 0, 0, 0, 1]), createId: kind => `${kind}-1` });
+    await expect(management.createConversationPairingManagementHandlers(manager).create({
+      connectionId: 'connection-1', expectedConnectionRevision: 4, pairingRequestId: 'replaced-provider',
+      endpointSelection: endpointSelectionFor(sharedDestinationEndpoint), proofEndpointSelection: endpointSelectionFor(proofTopic), target,
+    }, context)).rejects.toMatchObject({ code: 'channels_pairing_proof_endpoint_unavailable' });
+    expect(manager.readManagementProjection().challenges).toHaveLength(0);
+  });
+
+  it.each([
+    { policy: { ...target.policy, approvals: { kind: 'enabled', maximumScope: 'request', principalIds: ['unproved'] } } },
+    { recipe: { agentId: 'codex', attestedContext: { externalPrincipalId: 'unproved' } } },
+    { when: { group: 'missing', forwarded: 'any' } },
+  ] as const)('revalidates bootstrap route authority and recipes before persistence: %j', async routeOverride => {
+    const collection = createCollection([connectionRow()]);
+    const context = pairingManagementContext({ collection, endpointCandidates: [sharedDestinationEndpoint] });
+    const manager = createConversationPairingManager({ generationId: 'generation-1', now: () => 1_000,
+      randomBytes: () => Uint8Array.from([0, 0, 0, 0, 1]), createId: kind => `${kind}-1` });
+    const handlers = management.createConversationPairingManagementHandlers(manager);
+    const challenge = await handlers.create({ connectionId: 'connection-1', expectedConnectionRevision: 4,
+      pairingRequestId: 'invalid-route', endpointSelection: endpointSelectionFor(sharedDestinationEndpoint),
+      target: { ...routerTarget, routes: [{ ...routerTarget.routes[0], ...routeOverride }] } }, context);
+    if (challenge.kind !== 'created') throw new Error('Expected pairing challenge');
+    const proposal = completePreBindingMessage(manager, { connectionId: 'connection-1',
+      executionOrigin: getPluginMachineExecutionRouting(pairingConnectionAuthority.transportOrigin), endpoint: directDestinationEndpoint,
+      actor: { principalId: 'actual-human', kind: 'human', isIntegrationSelf: false }, contentProvenance: 'original',
+      command: classifyConversationCommand(`/pair ${challenge.manualToken}`) });
+    if (proposal.kind !== 'matched') throw new Error('Expected pairing proposal');
+    const finalization = handlers.finalize({ generationId: challenge.generationId, proposalId: proposal.proposalId,
+      connectionId: 'connection-1', expectedConnectionRevision: 4, finalizeIdempotencyKey: 'invalid-finalize' }, context);
+    if ('when' in routeOverride) await expect(finalization).resolves.toEqual({ kind: 'retryableFailure' });
+    else await expect(finalization).rejects.toMatchObject({ code: 'channels_binding_create_corrupt' });
+    expect([...collection.rows.values()].filter(row => row.value['record-kind'] === 'binding')).toHaveLength(0);
+    expect(manager.readManagementProjection().proposals).toMatchObject([{ state: 'proposed', principalId: 'actual-human' }]);
+  });
   it('returns the strict created handoff from the public pairing create Action', async () => {
     const createHandlers = Reflect.get(management, 'createConversationPairingManagementHandlers');
     expect(createHandlers).toEqual(expect.any(Function));

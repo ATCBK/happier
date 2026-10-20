@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { getPluginMachineExecutionRouting, type PluginMachineExecutionOriginV1, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
 import {
   type ConversationBindingTargetV1,
+  type ConversationResolvedEndpointV1,
 } from '@happier-dev/channels-protocol/v1';
 
 import { classifyConversationCommand } from './commands.js';
@@ -128,6 +129,93 @@ function createMatchedProposal(manager: ReturnType<typeof createConversationPair
 }
 
 describe('Channels pre-binding pairing', () => {
+  const sharedParent = { kind: 'shared', audience: 'shared', id: 'forum-1', label: 'Forum' } as const;
+  const sharedProof = {
+    kind: 'thread', audience: 'shared', id: 'topic-a', parentId: sharedParent.id, label: 'Proof topic',
+  } as const;
+
+  it('confines explicitly shared proof to its exact endpoint and admits only one actual sender', () => {
+    const manager = createManager({ value: 1_000 });
+    const challenge = manager.createChallenge({
+      connectionId: 'connection-1', expectedConnectionRevision: 1, pairingRequestId: 'shared-request',
+      executionOrigin, destinationLabel: 'Forum', endpoint: sharedParent, proofEndpoint: sharedProof,
+      pairingDeepLinkTemplate: 'https://t.me/example?start={token}', target: sessionTarget,
+    });
+    const input = {
+      censusId: 'shared-proof-a', connectionId: 'connection-1', executionOrigin, endpoint: sharedProof,
+      actor: { principalId: 'actual-person-a', kind: 'human' as const, isIntegrationSelf: false },
+      contentProvenance: 'original' as const,
+      command: classifyConversationCommand(`/pair ${challenge.manualToken}`),
+    };
+    const wrongEndpoints: ConversationResolvedEndpointV1[] = [
+      directEndpoint, sharedParent, { ...sharedProof, id: 'topic-b' },
+      { ...sharedProof, parentId: 'forum-2' }, { ...sharedProof, audience: 'direct' },
+      { kind: 'shared', audience: 'shared', id: sharedProof.id, parentId: sharedProof.parentId },
+    ];
+    for (const endpoint of wrongEndpoints) {
+      expect(manager.preparePreBindingMessage({ ...input, endpoint })).toMatchObject({ kind: 'silent' });
+    }
+    expect(manager.preparePreBindingMessage({ ...input, connectionId: 'connection-2' })).toMatchObject({ kind: 'silent' });
+    expect(manager.preparePreBindingMessage({
+      ...input, executionOrigin: { ...executionOrigin, machineId: 'machine-2' },
+    })).toMatchObject({ kind: 'silent' });
+    for (const rejected of [
+      { actor: { ...input.actor, kind: 'bot' as const } },
+      { actor: { ...input.actor, kind: 'integration' as const } },
+      { actor: { ...input.actor, isIntegrationSelf: true } },
+      { actor: { ...input.actor, principalId: null } },
+      { actor: { ...input.actor, kind: 'unknown' as const } },
+      { contentProvenance: 'forwarded' as const }, { contentProvenance: 'viaBot' as const },
+    ]) {
+      expect(manager.preparePreBindingMessage({ ...input, ...rejected })).toEqual({
+        kind: 'silent', ownerReason: 'ineligibleCaller',
+      });
+    }
+    const first = manager.preparePreBindingMessage(input);
+    const second = manager.preparePreBindingMessage({
+      ...input, censusId: 'shared-proof-b', actor: { ...input.actor, principalId: 'actual-person-b' },
+    });
+    expect(first).toMatchObject({ kind: 'reserved' });
+    expect(second).toMatchObject({ kind: 'reserved' });
+    if (first.kind !== 'reserved' || second.kind !== 'reserved') throw new Error('Expected shared proof reservations.');
+    // A reservation must not bypass the frozen endpoint at the post-census commit boundary.
+    if ('endpoint' in first) {
+      for (const endpoint of wrongEndpoints) {
+        expect(manager.commitPreBindingMessage({ ...first, endpoint })).toMatchObject({ kind: 'silent' });
+      }
+    }
+    expect(manager.readChallenge({ generationId: challenge.generationId, challengeId: challenge.challengeId }))
+      .toMatchObject({ kind: 'active', deepLinkUrl: null, proofEndpoint: sharedProof });
+    expect(manager.commitPreBindingMessage(second)).toMatchObject({ kind: 'matched', expiresAt: challenge.expiresAt });
+    expect(manager.commitPreBindingMessage(first)).toMatchObject({ kind: 'silent' });
+    expect(manager.readManagementProjection().proposals).toEqual([expect.objectContaining({
+      principalId: 'actual-person-b', proofEndpoint: sharedProof, endpointLabel: sharedProof.label,
+      expiresAt: challenge.expiresAt,
+    })]);
+  });
+
+  it('freezes shared proof request identity across create retries without replacing the challenge', () => {
+    const manager = createManager({ value: 1_000 });
+    const input = {
+      connectionId: 'connection-1', expectedConnectionRevision: 1, pairingRequestId: 'shared-request',
+      executionOrigin, destinationLabel: 'Forum', endpoint: sharedParent, proofEndpoint: sharedProof,
+      target: sessionTarget,
+    };
+    expect(() => manager.createChallenge({ ...input, proofEndpoint: directEndpoint }))
+      .toThrow('Pairing proof endpoint must have a shared audience.');
+    expect(manager.readManagementProjection().challenges).toEqual([]);
+    const challenge = manager.createChallenge(input);
+    expect(manager.createChallenge(input)).toEqual(challenge);
+    for (const proofEndpoint of [undefined, { ...sharedProof, id: 'topic-b' }, { ...sharedProof, label: 'Changed label' }]) {
+      expect(() => manager.createChallenge({ ...input, proofEndpoint })).toThrow(
+        'A pairing request id must not be reused for a different pairing request.',
+      );
+    }
+    expect(manager.readManagementProjection().challenges).toEqual([expect.objectContaining({
+      challengeId: challenge.challengeId, proofEndpoint: sharedProof,
+    })]);
+  });
+
   it.each([
     sourceExecutionOrigin,
     {
