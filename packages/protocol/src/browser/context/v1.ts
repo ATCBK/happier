@@ -19,6 +19,9 @@ import { BrowserAutomationSecretFillRequestV1Schema } from '../automation/v1.js'
 const IdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
 const NonNegativeIntSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 
+/** Shared egress budget for context summaries and the snapshot's console projection. */
+export const BROWSER_CONTEXT_SUMMARY_MAX_CHARS = 8192;
+
 const CONTEXT_KEY_REJECTION_MESSAGE =
   'Browser context payloads must not contain inline bytes, secrets, storage values, or bodies.';
 
@@ -105,7 +108,7 @@ const SummarySchema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T
     'browserNetworkSummary',
     'browserConsoleSummary',
   ]),
-  summary: z.string().check(z.maxLength(8192)),
+  summary: z.string().check(z.maxLength(BROWSER_CONTEXT_SUMMARY_MAX_CHARS)),
   truncated: z._default(z.optional(z.boolean()), false),
 })));
 
@@ -312,7 +315,7 @@ export const BrowserContextSnapshotV1Schema = lazyZodSchema(() => z.strictObject
     interactiveElements: z
       .array(BrowserContextSnapshotInteractiveElementV1Schema).check(z.maxLength(SNAPSHOT_INTERACTIVE_CAP)),
     interactiveElementsTruncated: z._default(z.optional(z.boolean()), false),
-    consoleSummary: z.optional(z.string().check(z.maxLength(8192))),
+    consoleSummary: z.optional(z.string().check(z.maxLength(BROWSER_CONTEXT_SUMMARY_MAX_CHARS))),
     consoleTruncated: z._default(z.optional(z.boolean()), false),
     focusedCredentialTarget: z.optional(BrowserFocusedCredentialTargetV1Schema),
   }).check(z.superRefine((snapshot, context) => {
