@@ -70,6 +70,7 @@ import type { CliServerFeaturesSnapshot } from '@/features/featureDecisionServic
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import type { RpcHandlerInvoker } from '@/api/rpc/types';
+import type { ApiMachineClient } from '@/api/apiMachine';
 import type { ClientContributedActionExecutor } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import type { ResolveSessionResourceAccess } from '@/plugins/runtime/invocation/services/resources';
 import type { PluginGenerationCustodyRetirementRemoteDependencies } from '@/plugins/store/registry/generationCustodyRetirement';
@@ -84,6 +85,18 @@ const COLD_START_READINESS_STAGE_REASONS = Object.freeze({
   daemonDatabases: 'cold-start daemon database preparation failed',
   primaryAgentRuntime: 'cold-start primary Agent runtime construction failed',
 });
+
+/** Bind plugin file materialization to the current daemon's transfer owner. */
+export function createDaemonPluginTransferRpcResolver(
+  resolveMachine: () => Pick<ApiMachineClient, 'invokeLocalMachineAction'> | null,
+): () => RpcHandlerInvoker | null {
+  return () => {
+    const machine = resolveMachine();
+    // Session/filesystem admission already ran in the plugin service owner.
+    // The peer carrier instead requires a verified remote Account grant.
+    return machine ? { invokeLocal: (method, input, options) => machine.invokeLocalMachineAction(method, input, options) } : null;
+  };
+}
 
 export type DaemonPluginRuntimeOwner = Readonly<{
   changeService: DaemonPluginChangeOwner;

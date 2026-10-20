@@ -14,6 +14,7 @@ import { loadInstalledPlugins } from '@/plugins/discovery/load/installed';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { createMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createActiveDaemonComposerMediaStageStore } from '@/transfers/staging/composerMediaStageStore';
+import { createDaemonPluginTransferRpcResolver } from '@/plugins/daemon/runtimeOwner';
 
 import { resolveExecutablePluginRuntimeRegistry } from './resolveExecutablePluginRuntimeRegistry';
 
@@ -105,7 +106,7 @@ describe('executable plugin Composer content invocation binding', () => {
             const contributes = createMergedContributionRegistry(
                 projectLoadedPluginContributes({
                     loadResult: await loadInstalledPlugins({ happyHomeDir }),
-                    provenance: 'first_party',
+                    provenance: 'external',
                     existingAgentIds: new Set(),
                 }),
                 {},
@@ -114,9 +115,7 @@ describe('executable plugin Composer content invocation binding', () => {
                 happyHomeDir,
                 contributes,
                 resolveCurrentMachineId: () => machineId,
-                resolveComposerMediaStageTransferRpcHandler: () => (
-                    apiMachine?.getPeerMediationMachineRpcHandlerManager() ?? null
-                ),
+                resolveComposerMediaStageTransferRpcHandler: createDaemonPluginTransferRpcResolver(() => apiMachine),
             });
             await expect(runtime.activateContributionsOnDemand([{
                 pluginId,

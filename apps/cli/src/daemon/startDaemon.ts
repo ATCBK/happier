@@ -242,7 +242,7 @@ import {
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import type { DaemonPluginChangeOwner } from '@/plugins/daemon/changeService';
-import { createDaemonPluginRuntimeOwner } from '@/plugins/daemon/runtimeOwner';
+import { createDaemonPluginRuntimeOwner, createDaemonPluginTransferRpcResolver } from '@/plugins/daemon/runtimeOwner';
 import { createDaemonPluginDevelopmentReviewApprovalPublisher } from '@/plugins/daemon/developmentReviewApproval';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { startBackgroundRegistryUpdateCheck } from '@/registries/updates/startBackgroundRegistryUpdateCheck';
@@ -1596,9 +1596,7 @@ export async function startDaemon(
       },
       machineAdmissionTransport,
       executeClientAction: createClientActionMachineRpcExecutor(() => apiMachineForSessions),
-      resolveComposerMediaStageTransferRpcHandler: () => (
-        apiMachineForSessions?.getPeerMediationMachineRpcHandlerManager() ?? null
-      ),
+      resolveComposerMediaStageTransferRpcHandler: createDaemonPluginTransferRpcResolver(() => apiMachineForSessions),
       resolveCurrentMachineExecutionOriginContext,
       resolveSessionResourceAccess: async (input) => {
         const currentApiMachine = apiMachineForSessions;
