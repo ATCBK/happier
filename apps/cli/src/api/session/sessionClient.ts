@@ -853,6 +853,11 @@ export class ApiSessionClient extends EventEmitter {
         );
     }
 
+    subscribeToSessionConnectionState(listener: (state: ManagedConnectionState) => void): () => void {
+        this.on(SESSION_CONNECTION_STATE_EVENT, listener);
+        return () => { this.off(SESSION_CONNECTION_STATE_EVENT, listener); };
+    }
+
     private isSessionSocketOnlineForAckWrite(): boolean {
         return (this.socket as Socket<ServerToClientEvents, ClientToServerEvents> | undefined)?.connected === true
             || this.currentConnectionState.phase === 'online';
@@ -1127,6 +1132,8 @@ export class ApiSessionClient extends EventEmitter {
         // Always register execution-run RPC methods so callers never see "RPC method not available".
         // Feature gating is enforced inside the handler implementations.
         const streamedTranscriptSession = {
+            subscribeToSessionConnectionState: (listener: (state: ManagedConnectionState) => void) =>
+                this.subscribeToSessionConnectionState(listener),
             enqueueAgentMessageCommitted: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown>; provenance: SessionTranscriptObservationProvenanceV1 }) =>
                 this.enqueueAgentMessageCommitted(provider, body, opts),
             sendAgentMessageCommitted: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown> }) =>

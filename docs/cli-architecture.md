@@ -51,8 +51,13 @@ graph TB
 settlement. Closing a segment freezes its completion or interruption intent and
 separates it from subsequent output. A rejected terminal write retains the full
 snapshot for the next flush with the same local id; unresolved delivery is recorded
-in the default file log. This retention is process-local, and does not promise
-automatic reconnect replay or recovery after process exit.
+in the default file log. While closed snapshots remain, the writer subscribes to
+the session's existing connection-state events and retries them when its transport
+comes online, including a reconnect that races an in-flight failed write. Retries
+reuse the same local id and terminal state through the session commit queue, without
+waiting for pending-input readiness or a new prompt. The subscription ends when
+the snapshots settle or the writer is discarded. This retention is process-local;
+it does not provide recovery after process exit or replacement of the session client.
 
 `createKeyedStreamedTranscriptBridge` keeps writers with active, in-flight, or failed
 segments and releases only drained writers. Codex tool boundaries wait for admission
