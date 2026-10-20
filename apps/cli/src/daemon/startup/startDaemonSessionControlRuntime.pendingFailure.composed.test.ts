@@ -192,7 +192,8 @@ it.each([
   }
 }), 120_000);
 
-it.each(['definite', 'transient', 'replaced', 'wrong-target'] as const)(
+it.each(['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'continuation-stale',
+  'continuation-unavailable', 'continuation-replaced', 'continuation-wrong-target'] as const)(
   'settles only the exact current pending activation after a post-webhook %s startup exit', async disposition => {
     const resolveOrigin = createCurrentMachineExecutionOriginContextResolver({ serverUrl: 'https://session-home.test',
       resolveCurrentMachineId: () => 'machine' });
@@ -214,17 +215,24 @@ it.each(['definite', 'transient', 'replaced', 'wrong-target'] as const)(
     // This is the same producer used by host construction failure publication.
     const error = new PromptStackPreparationError('unavailable', { kind: 'doc', artifactId: 'private-reference' });
     if (disposition !== 'transient') Object.assign(error, { cause: new HomeTargetResolutionError('profile_missing', 'private-reference') });
-    const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error, occurredAt: 20 });
-    const pendingActivationAuthorization = { requestId: disposition === 'replaced' ? 'newer-pending' : requestId,
+    const continuation = disposition.startsWith('continuation');
+    const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
+      error: continuation ? Object.assign(new Error('Agent session continuation is unreachable.'), {
+        name: 'AgentSessionContinuationUnreachableError',
+      }) : error, occurredAt: disposition === 'continuation-stale' ? 0 : 20 });
+    const pendingActivationAuthorization = { requestId: disposition.endsWith('replaced') ? 'newer-pending' : requestId,
       requestedAt, status: 'waiting' as const, admittedTarget: { homeId: 'srv_requester_home',
         accountId: 'requester', sessionId: h.sessionId, machineId: 'machine',
-        installationId: disposition === 'wrong-target' ? 'replacement-installation' : h.f.installation.installationId } };
+        installationId: disposition.endsWith('wrong-target') ? 'replacement-installation' : h.f.installation.installationId } };
     const get = vi.mocked(axios.get).getMockImplementation()!;
     vi.mocked(axios.get).mockImplementation(async (url, ...args) => {
-      if (new URL(String(url)).pathname === `/v2/sessions/${h.sessionId}`) return { status: 200, data: {
+      if (new URL(String(url)).pathname === `/v2/sessions/${h.sessionId}`) {
+        if (disposition === 'continuation-unavailable') throw Object.assign(new Error('private-response'), { code: 'ECONNREFUSED' });
+        return { status: 200, data: {
         session: createSessionRecordFixture({ id: h.sessionId, encryptionMode: 'plain', metadata: '{}',
           ownerAccountId: 'requester', origin: { kind: 'none' }, pendingCount: 1,
           pendingActivationAuthorization, latestTurnStatus: 'failed', lastRuntimeIssue: issue }) } };
+      }
       return get(url, ...args);
     });
     const reports: unknown[] = [];
@@ -241,23 +249,31 @@ it.each(['definite', 'transient', 'replaced', 'wrong-target'] as const)(
     });
     // The Home Machine terminal transport is unavailable; that does not invent a publisher or block supervision.
     vi.spyOn(h.machine, 'captureMachineSessionTerminal').mockRejectedValue(new Error('Home terminal transport unavailable'));
-    await h.daemon.onChildExited(h.tracked.pid, { reason: 'process-exit', code: 1, signal: null });
-    if (disposition === 'definite') {
+    await h.daemon.onChildExited(h.tracked.pid, { reason: 'process-exit', code: continuation ? 78 : 1, signal: null });
+    if (disposition === 'definite' || disposition === 'continuation') {
       await expect.poll(() => reports, { timeout: 10_000 }).toEqual([{ body: { requestId, requestedAt,
         failureCode: 'runtime_start_failed' }, details: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' } }]);
-    } else {
-      if (disposition === 'transient') {
-        await expect.poll(() => diagnostics.mock.calls.some(([message]) => String(message)
-          .startsWith(`[DAEMON RUN] Respawning runner for session ${h.sessionId}`)), { timeout: 10_000 }).toBe(true);
-      }
-      expect(reports).toEqual([]);
+    } else if (disposition === 'transient') {
+      await expect.poll(() => diagnostics.mock.calls.some(([message]) => String(message)
+        .startsWith(`[DAEMON RUN] Respawning runner for session ${h.sessionId}`)), { timeout: 10_000 }).toBe(true);
     }
     if (disposition !== 'transient') {
       await expect.poll(() => warnings.mock.calls.some(([message]) => String(message)
-        .includes(`Respawn suppressed for session ${h.sessionId} (startup dependency: profile_missing)`)), { timeout: 10_000 }).toBe(true);
+        .includes(`Respawn suppressed for session ${h.sessionId} (${continuation
+          ? 'continuation unreachable' : 'startup dependency: profile_missing'})`)), { timeout: 10_000 }).toBe(true);
       // The terminal notification queues this same mutation without awaiting
       // it. Join the canonical PID queue before removing the fixture's Home.
       await clearSessionMarkerConnectedServiceRestartIntent(h.tracked.pid);
+    }
+    if (disposition !== 'definite' && disposition !== 'continuation') expect(reports).toEqual([]);
+    if (disposition === 'continuation-unavailable') {
+      expect(diagnostics).toHaveBeenCalledWith('[DAEMON RUN] Continuation failure observation unavailable',
+        expect.objectContaining({ phase: 'pending_activation_failure', exitCode: 78,
+          // The requester owner retires authority after the failed Home read;
+          // its final currentness error has no allowlisted platform code.
+          errorClass: 'Error', errorCode: null }));
+      const projection = diagnostics.mock.calls.filter(([message]) => message === '[DAEMON RUN] Continuation failure observation unavailable');
+      expect(JSON.stringify(projection)).not.toContain('private-response');
     }
     expect(JSON.stringify(reports)).not.toContain('private-reference');
   },

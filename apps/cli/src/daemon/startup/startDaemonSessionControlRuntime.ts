@@ -6368,7 +6368,7 @@ export async function startDaemonSessionControlRuntime(
     ),
     isSessionAlreadyRunning: async (sessionId) =>
       await isSessionRunnerActive(sessionId),
-    readStartupFailure: async ({ sessionId, trackedSession: tracked }) => {
+    readStartupFailure: async ({ sessionId, trackedSession: tracked, runnerExitCode }) => {
       if (typeof tracked.processStartTimeMs !== 'number'
         || !Number.isFinite(tracked.processStartTimeMs)) return null;
       const attribution = tracked.requesterWorkAttributionV1 ?? tracked.spawnOptions?.requesterWorkAttributionV1;
@@ -6383,7 +6383,7 @@ export async function startDaemonSessionControlRuntime(
         const execution = tracked.spawnOptions?.executionAuthorization;
         const pending = rawSession?.pendingActivationAuthorization;
         const target = pending?.admittedTarget;
-        if (isCurrentDefiniteSessionStartupFailure(issue, tracked.processStartTimeMs)
+        if (isCurrentDefiniteSessionStartupFailure(issue, tracked.processStartTimeMs, runnerExitCode)
           && execution?.provenance === 'user_request' && typeof execution.requestedAt === 'number'
           && pending?.status === 'waiting' && pending.requestId === execution.requestId
           && pending.requestedAt === execution.requestedAt && target?.sessionId === sessionId

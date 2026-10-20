@@ -7,6 +7,7 @@
 
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import {
   SESSION_RUNNER_EXIT_CODES,
@@ -165,9 +166,14 @@ export function isSessionRunnerColdResumeSupported(input: Readonly<{
 export function isCurrentDefiniteSessionStartupFailure(
   issue: SessionRuntimeIssueV1 | null | undefined,
   processStartTimeMs: number | undefined,
+  runnerExitCode?: number | null,
 ): issue is SessionRuntimeIssueV1 {
   return issue?.scope === 'primary_session' && issue.status === 'failed'
-    && issue.source === 'dependency_failure'
+    && (issue.source === 'dependency_failure'
+      // Exit 78 is the host's required continuation refusal before native open.
+      // A generic Session error alone must not terminalize retained input.
+      || runnerExitCode === SESSION_RUNNER_EXIT_CODES.CONTINUATION_UNREACHABLE
+        && issue.source === 'agent_session_error')
     && issue.code !== 'preparation_pending'
     && issue.code !== DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
     && typeof processStartTimeMs === 'number' && Number.isFinite(processStartTimeMs)
@@ -187,7 +193,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   maxDelayMs: number;
   jitterMs: number;
   isSessionAlreadyRunning: (sessionId: string) => boolean | Promise<boolean>;
-  readStartupFailure?: (input: Readonly<{ sessionId: string; trackedSession: TrackedSession }>) => Promise<SessionRuntimeIssueV1 | null>;
+  readStartupFailure?: (input: Readonly<{ sessionId: string; trackedSession: TrackedSession; runnerExitCode?: number | null }>) => Promise<SessionRuntimeIssueV1 | null>;
   spawnSession: (opts: SpawnSessionOptions, predecessor: Readonly<{ sessionId: string; previousPid: number; trackedSession: TrackedSession; intended: boolean }>) => Promise<unknown>;
   resolveRespawnOptions?: SessionRunnerRespawnOptionsResolver;
   onRespawnSuccess?: (input: Readonly<{
@@ -601,14 +607,27 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
 
       if (exit.code === SESSION_RUNNER_EXIT_CODES.CONTINUATION_UNREACHABLE) {
         endRespawnCycle(sessionId);
-        params.logWarn(
-          `[DAEMON RUN] Respawn suppressed for session ${sessionId} (continuation unreachable)`,
-        );
-        params.onRespawnTerminal?.({
-          sessionId,
-          previousPid: trackedSession.pid,
-          reason: 'continuation_unreachable',
-        });
+        // Keep requester custody until the existing exact-activation failure
+        // owner has read Home. This terminal exit bypasses the retry preflight.
+        void (async () => {
+          try {
+            await params.readStartupFailure?.({ sessionId, trackedSession, runnerExitCode: exit.code });
+          } catch (error) {
+            params.logDebug('[DAEMON RUN] Continuation failure observation unavailable', {
+              sessionId, phase: 'pending_activation_failure', exitCode: exit.code,
+              ...readUnexpectedActionErrorDiagnosticV1(error),
+            });
+          } finally {
+            params.logWarn(
+              `[DAEMON RUN] Respawn suppressed for session ${sessionId} (continuation unreachable)`,
+            );
+            params.onRespawnTerminal?.({
+              sessionId,
+              previousPid: trackedSession.pid,
+              reason: 'continuation_unreachable',
+            });
+          }
+        })();
         return 'terminal';
       }
 
