@@ -133,7 +133,7 @@ export type AppShellActionResultById = {
     } | {
         status: 'loading';
     } | {
-        status: 'ready';
+        status: 'ready' | 'partial';
         groups: {
             key: string;
             root: {
@@ -346,7 +346,12 @@ export type AppShellActionResultById = {
             } | undefined;
         }[];
         coverage: {
-            discussions: 'unavailable' | 'complete' | 'partial';
+            discussions: 'unavailable' | 'partial' | 'complete';
+            sources?: {
+                source: 'notices' | 'live_items' | 'action_operations' | 'friend_requests';
+                status: 'unavailable' | 'partial' | 'complete';
+                reason?: 'requires_app_projection' | 'device_local' | 'content_unavailable' | undefined;
+            }[] | undefined;
         };
         approvalIds: string[];
         usageNoticeIds: string[];

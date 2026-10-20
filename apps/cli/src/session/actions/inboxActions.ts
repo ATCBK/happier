@@ -8,7 +8,7 @@ import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 /** Finite headless source adapter over the incumbent private Artifact reader, never an Inbox store. */
 export function createCliInboxReadAction(params: Readonly<{
-  store: Pick<ReturnType<typeof createAccountArtifactStore>, 'list'>;
+  store: Pick<ReturnType<typeof createAccountArtifactStore>, 'list' | 'readBodies'>;
   accountId: string; serverId: string; isCurrent?: () => boolean | Promise<boolean>;
 }>): NonNullable<ActionExecutorDeps['appShellAction']> {
   return async ({ actionId, context }) => {
@@ -27,13 +27,20 @@ export function createCliInboxReadAction(params: Readonly<{
     let noticeCoverage: 'complete' | 'partial' = 'complete';
     let cursor: string | undefined;
     do {
-      const page = await params.store.list({ coarseKind: 'other', includeBody: true, ...(cursor ? { cursor } : {}),
+      const page = await params.store.list({ coarseKind: 'other', ...(cursor ? { cursor } : {}),
         ...(context.signal ? { signal: context.signal } : {}) });
       if (!await current()) return { ok: false, errorCode: 'credential_scope_retired', error: 'credential_scope_retired' };
       if (page.coverage !== 'complete') noticeCoverage = 'partial';
-      for (const artifact of page.items) {
-        if (artifact.ownerAccountId !== params.accountId || artifact.access !== 'owner' || artifact.publicAudience !== 'none') continue;
-        if (artifact.header.kind !== 'account_notice.v1' && artifact.header.kind !== 'usage_notice.v1') continue;
+      const selected = page.items.filter(artifact => {
+        if (artifact.header.kind !== 'account_notice.v1' && artifact.header.kind !== 'usage_notice.v1'
+          || artifact.ownerAccountId !== params.accountId || artifact.access !== 'owner') return false;
+        if (artifact.publicAudience !== 'none') { noticeCoverage = 'partial'; return false; }
+        return true;
+      });
+      // Open only admitted notice bodies through the canonical selected-read batch.
+      const opened = await params.store.readBodies(selected, context.signal);
+      if (!await current()) return { ok: false, errorCode: 'credential_scope_retired', error: 'credential_scope_retired' };
+      for (const artifact of opened) {
         const notice = readOwnedNoticeArtifactV1(artifact, params.accountId);
         if (!notice) { noticeCoverage = 'partial'; continue; }
         // The Inbox deep link asks the app's existing detail registry to open the owning page.

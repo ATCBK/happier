@@ -60,21 +60,24 @@ describe('CLI widget Session input scope', () => {
       dataEncryptionKey: null, metadata: JSON.stringify({ v: 1 }),
       ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, workspace: { path: '/repo', host: 'host', machineId: 'machine' } }) });
     const rootActionId = 'widgets.item.add';
-    // Home verifies the signed effect against the root authorization and refuses any other effect.
-    const read = (response: { status: number; data: unknown }) => (url: unknown, config?: { headers?: Record<string, string> }) => {
-      if (config?.headers?.[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] !== rootActionId) return { status: 401, data: { error: 'invalid_connection_credential' } };
-      return response;
+    // Home verifies a signed effect against the root authorization and refuses any other effect; the
+    // daemon's own bearer reads (no effect header) are not signed and stay admitted.
+    const signedOtherEffect = (config?: { headers?: Record<string, string> }) => {
+      const effect = config?.headers?.[EXTERNAL_ACTION_EFFECT_ACTION_HEADER];
+      return effect !== undefined && effect !== rootActionId;
     };
+    const refusedEffect = { status: 401, data: { error: 'invalid_connection_credential' } };
     vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
       const path = String(url);
-      if (path.endsWith('/v1/account/encryption/currentness')) return read({ status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) })(url, config as never);
-      if (path.endsWith(`/v2/sessions/${sessionId}`)) return read({ status: 200, data: { session } })(url, config as never);
+      const headers = config as { headers?: Record<string, string> } | undefined;
+      if (path.endsWith('/v1/account/encryption/currentness')) return signedOtherEffect(headers) ? refusedEffect : { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+      if (path.endsWith(`/v2/sessions/${sessionId}`)) return signedOtherEffect(headers) ? refusedEffect : { status: 200, data: { session } };
       if (path.endsWith('/v2/account/settings')) return { status: 200, data: AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: {} }, version: 1 }) };
       if (path.includes('/v1/artifacts/')) return { status: 404, data: { error: 'not_found' } };
       throw new Error(`Unexpected Home read: ${url}`);
     });
     vi.spyOn(machineRpc, 'callMachineRpc').mockResolvedValue({ protocolVersion: 1, projection: createCounterWidgetFixture().projection });
-    const installation = { installationId: 'installation-1', privateKey: Buffer.alloc(32, 7).toString('base64url') };
+    const installation = { installationId: 'installation-1', privateKey: Buffer.alloc(64, 7).toString('base64url') };
     const deps = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId, mode: 'plain', ctx: null,
       serverId: 'local-profile', serverIdentityId: homeIdentity, serverHttpBaseUrl: home,
       externalActionMachineRequestPrivateKey: installation.privateKey, externalActionMachineInstallationId: installation.installationId });
@@ -86,7 +89,7 @@ describe('CLI widget Session input scope', () => {
       ref: { surface: { serverId: homeIdentity, accountId: 'viewer', owner: { kind: 'home' } }, instanceId: 'summary' },
       instance: { v: 1, id: 'summary', definition: { kind: 'builtin', id: 'session_summary' }, bindings: { session: { kind: 'value', value: picked } } },
       admission: 'configuration',
-      context: { surface: 'agent', authority: 'account_automation', serverId: homeIdentity, serverIdentityId: homeIdentity,
+      context: { surface: 'cli', authority: 'account_automation', serverId: homeIdentity, serverIdentityId: homeIdentity,
         externalActionExecutionAuthorization: authorization, externalActionTarget: { kind: 'machine', machineId: 'machine' } },
     });
     expect(resolved, JSON.stringify(resolved)).toMatchObject({ status: 'unavailable', fields: [{ path: 'session', reasonCode: 'not_authenticated' }] });

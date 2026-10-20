@@ -91,7 +91,7 @@ import type { SessionGoalSetRequestV1 } from '../sessions/work/state/sessionWork
 import { WaitActionInputV1Schema } from './specs/wait.js';
 import { ActionOperationActionIdV1Schema, ActionOperationActionInputSchemasV1 } from './specs/actionOperations.js';
 import { readActionFailureEnvelope, readFailureEnvelopeDetails } from './executor/actionFailureEnvelope.js';
-import { readAccountNoticeArtifactV1, readUsageNoticeArtifactV1, ACCOUNT_NOTICE_ARTIFACT_KIND_V1, USAGE_NOTICE_ARTIFACT_KIND_V1 } from '../activity/usageNoticeArtifactV1.js';
+import { readAccountNoticeArtifactV1, readOwnedNoticeArtifactV1, ACCOUNT_NOTICE_ARTIFACT_KIND_V1, USAGE_NOTICE_ARTIFACT_KIND_V1 } from '../activity/usageNoticeArtifactV1.js';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue, type JsonValue } from '../json/strictJsonValue.js';
 import { readLocalServiceControlActionRequest } from './specs/localServices.js';
 import { resolveActionOriginationPreferenceFailureV1 } from './executor/actionOriginationPreferences.js';
@@ -5589,17 +5589,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const internalKindRefusal = { ok: false as const, errorCode: 'artifact_kind_internal', error: 'artifact_kind_internal' };
         // The incumbent Inbox may read and dismiss its captured Account's private
         // notices. This does not admit ordinary private-document authoring or egress.
-        const noticeAccountId = ctx.expectedAccountId ?? (ctx.surface === 'voice' ? ctx.runtimeAccountId : undefined);
-        const isNoticeInboxCaller = (ctx.surface === 'ui' && ctx.authority === 'present_user'
-          || ctx.surface === 'voice' && ctx.authority === 'account_automation')
-          && (ctx.actionCaller === undefined || ctx.actionCaller.kind === 'host')
-          && Boolean(noticeAccountId) && ctx.externalActionCredential === undefined
-          && ctx.externalActionExecutionAuthorization === undefined && ctx.rpcSessionAuthorization === undefined;
+        const noticeAccountId = readNoticeInboxAccountIdV1(ctx);
+        const isNoticeInboxCaller = noticeAccountId !== null;
         const readOwnedNotice = (artifact: Readonly<{ ownerAccountId: string; access: string;
           publicAudience?: string; header: unknown; body: unknown }>) => {
-          if (!isNoticeInboxCaller || artifact.ownerAccountId !== noticeAccountId
-            || artifact.access !== 'owner' || artifact.publicAudience !== 'none') return null;
-          return readAccountNoticeArtifactV1(artifact) ?? readUsageNoticeArtifactV1(artifact);
+          return readOwnedNoticeArtifactV1(artifact, noticeAccountId);
         };
         const isNoticeUpdateInput = artifactActionId === 'artifact.update'
           && isNoticeInboxCaller && 'header' in artifactInput

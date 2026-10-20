@@ -39,6 +39,7 @@ import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invoc
 import { DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
 import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
+import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), request: vi.fn(), isCancel: () => false }));
 vi.mock('axios', () => ({ default: http }));
@@ -82,6 +83,8 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     const row = { id: artifactId, ownerAccountId: accountId, access: 'owner', publicAudience: 'none', encryptionMode: 'plain',
       header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: JSON.stringify(content) }),
       dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+    const ordinary = { ...row, id: '22222222-2222-4222-8222-222222222222',
+      header: encodePlainArtifactStoredContent({ kind: 'document.v1', title: 'Unrelated document' }) };
     let credentialCurrent = true;
     let retireOnList = false;
     http.get.mockImplementation(async (url: string) => {
@@ -89,10 +92,20 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       if (address.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (address.pathname === '/v1/artifacts') {
         if (retireOnList) credentialCurrent = false;
-        return { status: 200, data: address.searchParams.has('kind') ? { items: [row], hasUnclassified: false } : [row] };
+        const headers = [row, ordinary].map(({ body: _body, ...entry }) => entry);
+        return { status: 200, data: address.searchParams.has('kind') ? { items: headers, hasUnclassified: false } : headers };
       }
       if (address.pathname === `/v1/artifacts/${artifactId}`) return { status: 200, data: row };
       throw new Error(`Unexpected notice read ${address.pathname}`);
+    });
+    http.post.mockImplementation(async (url: string, input: unknown) => {
+      if (new URL(url).pathname !== '/v1/artifacts/read') throw new Error('Unexpected notice write');
+      const { artifactIds } = ArtifactReadBatchInputV1Schema.parse(input);
+      // The genuine transport boundary must not open unrelated document bodies.
+      expect(artifactIds).toEqual([artifactId]);
+      return { status: 200, data: ArtifactReadBatchResponseV1Schema.parse({ items: [
+        { artifactId, ok: true, artifact: row, recipientCensus: null },
+      ] }) };
     });
     const executor = createCliActionExecutor({ token, credentials: { token, encryption: null }, sessionId: '', mode: 'plain', ctx: null,
       serverId: 'notice-home', serverHttpBaseUrl: 'https://notice.test', isCredentialCurrent: () => credentialCurrent });

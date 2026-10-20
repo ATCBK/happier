@@ -12,11 +12,16 @@ import { DocEditProposalDispositionV1Schema } from '../discussions/docEditPropos
 import { SessionQuestionContextV1Schema } from '../sessions/permissions/questionV1.js';
 import type { ActionExecutorContext } from './executor/types.js';
 
-/** One host-only admission for private notice consumption, including headless Inbox reads. */
+/** One host-enforced Account admission for private notices and headless Inbox reads. */
 export function readNoticeInboxAccountIdV1(context: ActionExecutorContext): string | null {
   const accountId = context.expectedAccountId ?? context.runtimeAccountId;
-  if (!accountId || context.externalActionCredential || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization
+  if (!accountId || context.externalActionCredential || context.rpcSessionAuthorization
     || context.runtimeAccountId && context.runtimeAccountId !== accountId) return null;
+  const binding = context.externalActionExecutionAuthorization?.binding;
+  // The receiving host has already verified this proof. An own-Account signed
+  // CLI root is not an API credential or authority over a foreign custodian.
+  if (binding && (!('authentication' in binding) || binding.accountId !== accountId
+    || binding.custodianAccountId !== accountId)) return null;
   const host = context.actionCaller === undefined || context.actionCaller.kind === 'host';
   if (host && (context.surface === 'ui' && context.authority === 'present_user'
     || context.surface === 'voice' && context.authority === 'account_automation')) return accountId;

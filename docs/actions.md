@@ -2837,13 +2837,17 @@ revision list and storage usage are reads. CLI commands and MCP tools project
 from these same catalog rows; the canonical schemas and generated SDK types
 come from [`artifactActionsV1.ts`](../packages/protocol/src/artifacts/artifactActionsV1.ts).
 
-Host Voice also exposes `artifact.get` and `artifact.update`. As with the Inbox,
-its captured Account may read its own private notice and dismiss it through the
-same revision-checked update, or mark an informational update/mention read.
+Host UI/Voice and the Account's own CLI, Agent and MCP callers share notice
+admission for `artifact.get` and `artifact.update`. Their captured Account may
+read its own private notice and dismiss it through the same revision-checked
+update, or mark an informational update/mention read. A verified own-Account
+signed CLI request retains this access; foreign Accounts, API credentials,
+plugin callers and restricted Session RPCs do not. Generic Artifact listing
+still excludes internal notice kinds.
 Notice admission retains the exact stored body and permits only those header
 changes; update still requires ordinary approval by default. Dismissal does not
 resolve a source request. A plugin updates or resolves its own stable notice item
-through its existing `notifications.send` SDK service; consumer Voice does not
+through its existing `notifications.send` SDK service; consumers do not
 gain producer identity or permission to resolve another plugin's item.
 
 List search, kind filtering and sorting operate on decrypted headers at the
@@ -2958,6 +2962,9 @@ Lifecycle scope observation that cannot reach a complete Home result returns
 `target_unavailable` with `details.cause: 'subtree_observation_unavailable'` and
 `details.retryable: true`, without executing the effect. A completed observation
 excluding the target retains `unsupported_action` / `target_outside_led_subtree`.
+An admitted Agent stopping its own Session retains `unsupported_action` with
+`error: 'self_stop_forbidden'`. Archiving an active own Session reaches this
+same Stop refusal; it does not imply that the Session is outside its subtree.
 Relation membership does not replace ordinary Home access or grant other
 mutation rights. Caller identity, turn depth and subtree membership cannot be
 supplied in Action input.
@@ -4155,6 +4162,9 @@ has no shorter POST timeout; standalone callers without an operation lifetime
 retain the existing transport timeout. Cancellation refuses a successful caller
 receipt but cannot undo a server commit. The existing creation key and tag
 continue to own create-or-rejoin identity after an uncertain result.
+The signed root Action observer also follows that creation lifetime rather
+than ending at the generic five-minute HTTP cutoff. An explicit caller deadline
+or cancellation still ends that caller's observation.
 
 `action.options.resolve` for `session.spawn_new`'s `modelSelection` field returns
 an optional strict `modelCatalog`: native choices from the existing Agent
@@ -4485,14 +4495,21 @@ Action cannot silently inherit a Machine route by being added next to one. In 0.
 `client` executes on the answering app through admitted daemon reverse dispatch where that
 host has a machine client; absence is typed unavailable. A client-placed Action with a declared
 CLI command is exposed through that ingress; undeclared client Actions remain closed. A
-standalone CLI without an answering app receives the typed `noClient`/unavailable result.
+standalone CLI without an answering app receives the typed `noClient`/unavailable result
+unless that Action declares a headless source, as `inbox.get` does below.
 
 In 0.3 development, `session.work.get` and `inbox.get` use this same CLI ingress to
-read the answering app's mounted canonical projection for the exact Home and
+prefer the answering app's mounted canonical projection for the exact Home and
 Account. The mounted Work Session or Inbox advertises its own address on the
 existing reverse-RPC channel, so another connected app without that owner cannot
-answer the read. They never mount or load a second projection and return
-`{ status: 'unavailable' }` when their owner is absent. The app-shell siblings
+answer the read. They never mount or load a second app projection. Work returns
+`{ status: 'unavailable' }` when its owner is absent. Inbox instead reads the
+captured Account's private notice Artifacts through the existing mode-aware
+host reader and the same notice-item projection as the app. Its `partial`
+result includes `coverage.sources`: notices report content coverage, while
+app-only live items and friend requests report `requires_app_projection` and
+device-local Action operations report `device_local`. Denied, loading or
+uncertain client reads are not replaced with headless results. The app-shell siblings
 `inbox.mark_all_read`, `session.draft.append`, `session.draft.delete`, and
 `session.draft.directory.set` also expose declared CLI commands through the same
 client placement, retaining their existing authority, approval, and domain
