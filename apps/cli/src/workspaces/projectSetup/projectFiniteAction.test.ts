@@ -272,7 +272,7 @@ describe('authenticated finite Project Action owner', () => {
         };
     }
 
-    it.each([{ commands: [] }, { commands: ['echo must-not-run'] }])('retries the original built-in native environment through public Stop while retaining the same FIFO reservation, setup $commands', async ({ commands }) => {
+    it.for([{ commands: [] }, { commands: ['echo must-not-run'] }])('retries the original built-in native environment through public Stop while retaining the same FIFO reservation, setup $commands', async ({ commands }, { task }) => {
         const h = await harness({ version: 1, environment: { kind: 'toolchain', tool: 'mise', configPath: 'mise.toml' },
             workspace: { setup: commands.map(command => ({ kind: 'command', command })) } }, 1);
         await writeFile(join(h.root, 'mise.toml'), '[env]\nMODE = "native"\n');
@@ -320,8 +320,12 @@ describe('authenticated finite Project Action owner', () => {
             expect(h.spawned).toEqual([]);
             allowTermination = true;
             expect(await h.operationRuntime.handlers.cancel({ operationId: 'operation' })).toEqual({ kind: 'requested' });
-            await expect.poll(() => { try { process.kill(helperPid!, 0); return false; } catch { return true; } }).toBe(true);
-            await expect.poll(() => h.operationRuntime.store.get(scope, 'operation')?.state).toBe('cancelled');
+            // Stop acknowledges a request; native census, signaling and exit
+            // reconciliation finish asynchronously without a phase deadline.
+            // Use the containing test's budget, then require OS absence as soon
+            // as the owning operation claims cancellation.
+            await expect.poll(() => h.operationRuntime.store.get(scope, 'operation')?.state, { timeout: task.timeout }).toBe('cancelled');
+            expect(() => process.kill(helperPid!, 0)).toThrowError(expect.objectContaining({ code: 'ESRCH' }));
             // The next entry may enter native preparation only after the first
             // operation's actual tree proof, never while it remains unknown.
             await expect.poll(() => h.runtime.workerAdmission.dependencies()[0]?.operationId).toBe('operation-2');
