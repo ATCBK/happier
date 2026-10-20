@@ -30,6 +30,32 @@ function facetOf(
 }
 
 describe('the filter rail facet plan', () => {
+  it('offers configured units and an all placeholder before any source items load', () => {
+    const plan = planTriageFilterFacetsV1({
+      configuredSources: [
+        { ...configured(GITHUB, 'instance-1', 'Work account'), scope: {
+          unit: { singularLabel: 'Repository', pluralLabel: 'repositories' },
+          projection: { kind: 'page', status: 'complete', selection: { kind: 'selected', unitIds: ['repo-1', 'repo-2'] },
+            units: [{ id: 'repo-1', label: 'acme/widgets', collisionScope: 'github:1' }, { id: 'repo-2', label: 'acme/api' }] },
+        } },
+        { ...configured(GITHUB, 'instance-2', 'Personal account'), scope: {
+          unit: { singularLabel: 'Repository', pluralLabel: 'repositories' },
+          projection: { kind: 'page', status: 'complete', selection: { kind: 'all' }, units: [] },
+        } },
+      ],
+      filters: TRIAGE_LIST_NO_FILTERS_V1,
+    });
+    const options = facetOf(plan, 'scopes').options;
+    expect(options.map((option) => option.label)).toEqual([
+      'acme/widgets — Work account', 'acme/api — Work account', 'All repositories — Personal account',
+    ]);
+    expect(options.map((option) => option.selection.value)).toEqual([
+      { source: GITHUB, sourceInstanceId: 'instance-1', unitId: 'repo-1', collisionScope: 'github:1' },
+      { source: GITHUB, sourceInstanceId: 'instance-1', unitId: 'repo-2' },
+      { source: GITHUB, sourceInstanceId: 'instance-2' },
+    ]);
+  });
+
   it('offers one option per configured connection under the reader own name for it', () => {
     const plan = planTriageFilterFacetsV1({
       configuredSources: [

@@ -55,6 +55,7 @@ function present(input: Readonly<{
     collisionScope?: string;
     source?: typeof TRIAGE_TESTKIT_SOURCE;
     involvement?: readonly string[];
+    scopeUnitId?: string;
 }>): CorpusQualifiedObservationV1 {
     return {
         entryRef: testkitEntryRef({
@@ -70,6 +71,7 @@ function present(input: Readonly<{
                 ...(input.displayPath === undefined ? {} : { displayPath: input.displayPath }),
             }),
             snapshot: testkitSnapshot({
+                ...(input.scopeUnitId === undefined ? {} : { scopeUnitId: input.scopeUnitId }),
                 ...(input.title === undefined ? {} : { title: input.title }),
                 ...(input.createdAtMs === undefined ? {} : { createdAtMs: input.createdAtMs }),
                 state: {
@@ -113,6 +115,23 @@ function fold(input: Readonly<{
 }
 
 describe('the content winner of one folded entry', () => {
+    it('filters source-owned unit ids within a deployment-wide collision scope', () => {
+        const observations = [
+            present({ sourceInstanceId: INSTANCE[0], entryId: 'project-a', scopeUnitId: 'a' }),
+            present({ sourceInstanceId: INSTANCE[0], entryId: 'project-b', scopeUnitId: 'b' }),
+            present({ sourceInstanceId: INSTANCE[1], entryId: 'other-account', scopeUnitId: 'a' }),
+        ];
+        const window = fold({ observations, lens: { filters: {
+            ...TRIAGE_LIST_NO_FILTERS_V1,
+            scopes: [{ source: TRIAGE_TESTKIT_SOURCE, sourceInstanceId: INSTANCE[0], unitId: 'a' }],
+        } } });
+        expect(window.rows.map((row) => row.entryRef.entryId)).toEqual(['project-a']);
+        expect(window.facetCensus.scopes).toEqual(expect.arrayContaining([
+            { source: TRIAGE_TESTKIT_SOURCE, sourceInstanceId: INSTANCE[0], unitId: 'a' },
+            { source: TRIAGE_TESTKIT_SOURCE, sourceInstanceId: INSTANCE[0], unitId: 'b' },
+        ]));
+    });
+
     it('filters by the observing configured instance without losing a shared entry or scanning a different set', () => {
         const observations = [
             present({ sourceInstanceId: INSTANCE[0], entryId: 'first-only' }),
