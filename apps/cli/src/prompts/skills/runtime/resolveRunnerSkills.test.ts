@@ -12,7 +12,7 @@ import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolv
 import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { createDaemonControlApp } from '@/daemon/controlServer';
 import { ensureSkillSessionDirHttp } from '@/daemon/controlClient';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -20,6 +20,11 @@ import { createSkillStore } from '../store/skillStore';
 import { resolveRunnerSkills, type ResolveRunnerSkillsInput } from './resolveRunnerSkills';
 import { prepareSessionSkillPlan } from './prepareSessionSkillPlan';
 import { publishRunnerSkillNotice } from './publishRunnerSkillNotice';
+import { createSkillActionExecuteV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
+import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import type { PromptLibraryArtifactStore, PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { createRegistryHostV1, computeGitBlobShaV1, computeGitTreeShaV1,
+  type RegistryHttpV1, type RegistrySourceDescriptorV1 } from '@happier-dev/protocol/registries';
 import type { SkillArtifactStore } from '../library/readSkillLibraryContent';
 import type { AccountArtifact, AccountArtifactHeader } from '@/api/artifacts/accountArtifactStore';
 import {
@@ -74,6 +79,100 @@ async function fixture() {
   return { home, directory, input, artifacts, store, readIds };
 }
 describe('runner skill resolution', () => {
+  it.each([
+    ['upload', 'source-b', false], ['upload', 'declared-b', false], ['upload', 'declared-b', true],
+    ['link', 'source-b', false], ['link', 'declared-b', false], ['registry', 'declared-b', false], ['folder-link', 'declared-b', false],
+  ] as const)('delivers %s sibling source folders (declared %s, renamed %s) through Add and runner wiring', async (kind, declaredName, rename) => {
+    const f = await fixture();
+    const md = (name: string, body = '') => `---\nname: ${name}\n---\n${body}`;
+    const prefix = kind === 'folder-link' ? 'skills/' : '';
+    const sourceFiles = [
+      { path: `${prefix}a/SKILL.md`, unixMode: 0o644 as const, bytes: Buffer.from(md('a', 'Read [setup](../source-b/SKILL.md) and [README](../README.md).')) },
+      { path: `${prefix}source-b/SKILL.md`, unixMode: 0o644 as const, bytes: Buffer.from(md(declaredName)) },
+    ];
+    const directories = [...new Set(sourceFiles.flatMap(file => file.path.split('/').slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join('/'))))];
+    const commit = '1'.repeat(40);
+    let head = commit;
+    const source: RegistrySourceDescriptorV1 = { id: 'pack', title: 'Pack', format: 'git', kinds: ['skill'],
+      url: 'https://github.com/o/pack', enabled: true, addedAt: 1, origin: { kind: 'user' }, removable: true };
+    const bytesAt = (url: string) => sourceFiles.find(file => url.endsWith('/' + file.path))!.bytes;
+    // GitHub HTTP and independent Artifact persistence are the substituted system boundaries.
+    const http: RegistryHttpV1 = {
+      getJson: async url => url.includes('marketplace.json') ? { ok: false, status: { state: 'unreachable' } }
+        : { ok: true, fetchedAt: 1, value: url.includes('/commits/') ? { sha: url.endsWith('/HEAD') ? head : decodeURIComponent(url.split('/').at(-1)!) } : {
+          sha: computeGitTreeShaV1(sourceFiles), tree: [
+            ...directories.map(path => ({ path, mode: '040000', type: 'tree', sha: computeGitTreeShaV1(sourceFiles
+              .filter(file => file.path.startsWith(path + '/')).map(file => ({ ...file, path: file.path.slice(path.length + 1) }))) })),
+            ...sourceFiles.map(file => ({ path: file.path, mode: '100644', type: 'blob', sha: computeGitBlobShaV1(file.bytes), size: file.bytes.length })),
+          ],
+        } },
+      getText: async url => {
+        expect(url).toContain(`/${commit}/`);
+        if (kind === 'folder-link') head = '2'.repeat(40);
+        return { ok: true, fetchedAt: 1, value: bytesAt(url).toString('utf8') };
+      },
+      getBytes: async url => { expect(url).toContain(`/${commit}/`); return { ok: true, fetchedAt: 1, value: bytesAt(url) }; },
+    };
+    const registry = createRegistryHostV1({ host: 'node', http, readSources: async () => [source] });
+    const persisted = new Map<string, PromptLibraryStoredArtifact>();
+    const store: PromptLibraryArtifactStore = {
+      list: async () => ({ coverage: 'complete', items: [...persisted.values()].map(item => ({ id: item.id, header: item.header, updatedAtMs: 1, owned: true })) }),
+      read: async id => persisted.get(id) ?? null,
+      create: async input => { const id = `import-${persisted.size}`;
+        persisted.set(id, { id, ...input, owned: true, revision: { headerVersion: 1, bodyVersion: 1 } }); return id; },
+      update: async input => { const item = persisted.get(input.artifactId)!;
+        const revision = { headerVersion: item.revision.headerVersion + 1, bodyVersion: item.revision.bodyVersion + 1 };
+        persisted.set(item.id, { ...item, header: input.header, body: input.body, revision }); return { revision }; },
+    };
+    const actions = createSkillActionExecuteV1({ store, randomId: () => 'unused', nowMs: () => 1,
+      skillRules: { serverId: 'home', assertCurrent() {}, listSkills: async () => [],
+        ruleWriteContext: () => ({ nowMs: 1, newId: () => 'unused' }),
+        readCatalog: async () => ({ catalog: f.input.accountSnapshot!.promptLibraryCatalog! }),
+        writeRecord: async () => { throw new Error('No reach write requested'); } },
+      readRegistryItem: registry.readRegistryItem, readRegistrySource: registry.readRegistrySource,
+      fetchRegistrySkillFiles: registry.filesForPointer, readLinkSkills: registry.readLinkSkills, fetchLinkSkillFiles: registry.fetchLinkSkillFiles,
+      includeInSession: async () => ({ ok: true }) });
+    const imported = kind === 'upload' ? { kind, files: sourceFiles.map(file => ({ path: file.path, contentKind: 'utf8', contentBase64: file.bytes.toString('base64') })) }
+      : kind === 'link' || kind === 'folder-link' ? { kind: 'link', url: kind === 'folder-link' ? `${source.url}/tree/${commit}/skills/a` : source.url }
+        : { kind, sourceId: source.id, itemId: 'a', version: commit };
+    const preview = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(await actions('skills.install', { source: imported, dryRun: true }, { surface: 'ui' }));
+    expect(preview).toMatchObject({ items: [{ path: `${prefix}a`, outsideReferences: ['../source-b/SKILL.md', '../README.md'],
+      siblingSkills: [{ path: `${prefix}source-b` }] }, { path: `${prefix}source-b`, name: declaredName }] });
+    if (kind === 'folder-link') {
+      const unticked = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(await actions('skills.install', {
+        source: imported, dryRun: true, selectPaths: [`${prefix}a`],
+      }, { surface: 'ui' }));
+      if (!('items' in unticked)) throw new Error('Expected preview');
+      expect(unticked.items.map(item => item.path)).toEqual([`${prefix}a`]);
+      expect(unticked.items[0]).not.toHaveProperty('siblingSkills');
+      expect(unticked.items[0]!.outsideReferences).toContain('../README.md');
+    }
+    const added = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(await actions('skills.install', {
+      source: imported, where: { kind: 'replace', rules: [] }, selectPaths: [`${prefix}a`, `${prefix}source-b`],
+    }, { surface: 'ui' }));
+    if (!('skillIds' in added)) throw new Error('Expected Add acknowledgement');
+    expect(added.skillIds).toHaveLength(2);
+    if (kind === 'folder-link') {
+      const held = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(await actions('skills.install', { source: imported, dryRun: true }, { surface: 'ui' }));
+      if (!('items' in held)) throw new Error('Expected held preview');
+      expect(held.items.map(item => item.inLibrary)).toEqual(added.skillIds);
+      expect(held.items[0]).not.toHaveProperty('siblingSkills');
+      expect(await actions('skills.install', { source: imported }, { surface: 'ui' })).toMatchObject({ skillIds: added.skillIds });
+      expect(persisted.size).toBe(2);
+    }
+    if (rename) expect(await actions('skills.update', { skillId: added.skillIds[1], expectedRevision: '1:1', name: 'renamed-b' }, { surface: 'ui' }))
+      .toMatchObject({ revision: '2:2' });
+    const artifacts: SkillArtifactStore = { list: async () => { throw new Error('Runner reads selected ids'); },
+      read: async id => { const item = persisted.get(id); if (!item) return null;
+        if (!item.header) throw new Error('Expected stored header');
+        return { ...bundle(id, 'unused'), header: item.header, body: item.body, revision: item.revision }; } };
+    const input = { ...f.input, sessionMetadata: { skillSelectionV1: { v: 1, forceIncludeSkillIds: added.skillIds, forceExcludeSkillIds: ['library'] } } };
+    const delivered = await resolveRunnerSkills(input, { artifacts, ensureSessionDir: value => f.store.ensureSkillSessionDir(value) });
+    expect(delivered.unavailable).toBeUndefined();
+    expect(delivered.delivery?.items.map(item => item.name)).toEqual(['a', rename ? 'renamed-b' : declaredName]);
+    expect(await readdir(delivered.delivery!.skillsRoot)).toEqual(['a', 'source-b']);
+    expect(await readFile(`${delivered.delivery!.skillsRoot}/a/../source-b/SKILL.md`, 'utf8')).toContain(`name: ${rename ? 'renamed-b' : declaredName}`);
+  });
   it('composes the registered Claude launch settings with masking and fails closed after registration retirement', async () => {
     const f = await fixture();
     const extra = join(f.home, 'extra');

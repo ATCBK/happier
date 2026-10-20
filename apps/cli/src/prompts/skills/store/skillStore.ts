@@ -153,7 +153,7 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 const materialized = new Map<string, string>();
                 for (const item of admitted.items) {
                     try {
-                        materialized.set(item.skillId, await materialize(item));
+                        materialized.set(item.name, await materialize(item));
                         items.push({ skillId: item.skillId, name: item.name, digest: item.digest,
                             ...(item.sourceFolderName ? { sourceFolderName: item.sourceFolderName } : {}) });
                     } catch (error) { failed.push({ skillId: item.skillId, reason: 'materialize_failed', detail: errorCode(error) }); }
@@ -171,7 +171,7 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                     const destination = join(skillsRoot, item.sourceFolderName ?? item.name);
                     const temporary = join(skillsRoot, `.staging-${randomUUID()}`);
                     try {
-                        const source = materialized.get(item.skillId)!;
+                        const source = materialized.get(item.name)!;
                         // A real folder under the source name (or declared name without a source tree), so sibling paths resolve even where the
                         // platform follows links before `..`; on POSIX its children link to the immutable cache entry.
                         if (platform === 'win32') await cp(source, temporary, { recursive: true });

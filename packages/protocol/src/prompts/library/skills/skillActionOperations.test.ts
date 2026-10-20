@@ -557,6 +557,7 @@ describe('skill library Actions', () => {
     expect(h.creates()).toBe(0);
     expect(await h.execute('skills.install', { source, dryRun: true }, { surface: 'ui' })).toMatchObject({ items: [{ trust: 'runs_scripts', provenance: { kind: 'upload' } }] }); expect(h.creates()).toBe(0);
     expect(await h.execute('skills.install', { source, where: { kind: 'replace', rules: [] } }, { surface: 'ui' })).toMatchObject({ skillIds: ['skill-1'] }); expect(h.rules()).toEqual([]);
+    expect(readSkillLockV1(h.artifacts.get('skill-1')!.header)).not.toHaveProperty('sourceFolderName');
   });
 });
 

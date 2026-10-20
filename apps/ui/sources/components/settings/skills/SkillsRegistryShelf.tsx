@@ -5,16 +5,17 @@ import { findHeldSkillV1, type SkillListItemV1 } from '@happier-dev/protocol/pro
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useRegistrySources } from '@/registries/useRegistrySources';
 import type { SkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
-import { installSkills } from './add/skillInstall';
+import { installSkills, retrySkillInstallRules, type SkillInstallAcknowledgment } from './add/skillInstall';
 import { useOpenSkillAddModal } from './add/useOpenSkillAddModal';
 import { t } from '@/text';
 
 const SHELF_SIZE = 3;
 
 type ShelfCard = RegistryItemSummaryV1;
-type AddState = Readonly<{ status: 'adding' | 'added' | 'failed' }>;
+type AddState = Readonly<{ status: 'adding' | 'added' | 'failed' | 'partial'; outcome?: SkillInstallAcknowledgment }>;
 
 const cardKey = registryShelfCardKey;
 
@@ -69,6 +70,15 @@ export const SkillsRegistryShelf = React.memo(function SkillsRegistryShelf(
   const add = React.useCallback(
     async (card: ShelfCard) => {
       const key = cardKey(card);
+      const previous = adds.get(key);
+      if (previous?.status === 'adding') return;
+      if (previous?.outcome) {
+        setAdds((states) => new Map(states).set(key, { ...previous, status: 'adding' }));
+        const outcome = await retrySkillInstallRules(execute, previous.outcome);
+        setAdds((states) => new Map(states).set(key, { outcome, status: outcome.incomplete.length > 0 ? 'partial' : 'added' }));
+        retry();
+        return;
+      }
       setAdds((previous) => new Map(previous).set(key, { status: 'adding' }));
       // The row's Add reads the item first and installs exactly that pinned version, with no Where (P6 §4.4).
       const read = await execute('registries.items.read', { kind: 'skill', sourceId: card.sourceId, itemId: card.itemId })
@@ -79,11 +89,13 @@ export const SkillsRegistryShelf = React.memo(function SkillsRegistryShelf(
           .catch(() => ({ ok: false as const, error: 'skill_install_failed' }))
         : { ok: false as const, error: 'registry_version_unavailable' };
       setAdds((previous) =>
-        new Map(previous).set(key, { status: result.ok ? 'added' : 'failed' }),
+        new Map(previous).set(key, result.ok
+          ? { outcome: result, status: result.incomplete.length > 0 ? 'partial' : 'added' }
+          : { status: 'failed' }),
       );
       if (result.ok) retry();
     },
-    [execute, retry],
+    [adds, execute, retry],
   );
 
   const where = React.useCallback(
@@ -97,6 +109,11 @@ export const SkillsRegistryShelf = React.memo(function SkillsRegistryShelf(
   const action = React.useCallback(
     (card: ShelfCard) => {
       const state = adds.get(cardKey(card));
+      if (state?.outcome && state.outcome.incomplete.length > 0) return (
+        <SurfaceStateCard testID={`skills.home.shelf.${card.itemId}.partial`} kind="error" size="line"
+          title={t('capabilities.skillAdd.partial.rules')}
+          action={{ label: t('capabilities.skillAdd.partial.tryAgain'), onPress: () => add(card), busy: state.status === 'adding' }} />
+      );
       if (state?.status === 'added' || inLibrary(library.items, card))
         return (
           <RoundButton

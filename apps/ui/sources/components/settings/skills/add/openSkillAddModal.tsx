@@ -12,7 +12,6 @@ import { deriveSkillTrustV1 } from '@happier-dev/protocol/prompts/library/skills
 import { estimateSkillCostV1 } from '@happier-dev/protocol/prompts/library/skills/skillCostV1';
 import { readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
 import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
-import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import {
@@ -36,6 +35,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { BareSectionContent } from '@/components/ui/lists/BareSectionContent';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Typography } from '@/constants/Typography';
 import type { CustomModalInjectedProps } from '@/modal/types';
 import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
@@ -53,7 +53,7 @@ import { t } from '@/text';
 
 import { remainingOutsideReferences, SkillAlsoAddsNote, SkillOutsideReferencesItem } from '../outsideReferences';
 import { useSkillPlaces } from '../useSkillPlaces';
-import { installSkills, previewSkillInstall, retrySkillRules } from './skillInstall';
+import { installSkills, previewSkillInstall, retrySkillInstallRules, type SkillInstallAcknowledgment } from './skillInstall';
 import { SkillLinkInput } from './SkillLinkInput';
 import { SkillUploadInput } from './SkillUploadInput';
 import { heldSkillRowProps, SkillInLibraryMark } from './SkillPreviewRows';
@@ -117,8 +117,7 @@ type AddState =
   | Readonly<{ status: 'adding' }>
   | Readonly<{
       status: 'added';
-      skillId: string;
-      rulesMissing: boolean;
+      outcome: SkillInstallAcknowledgment;
       where?: ReachRulesChangeV1;
     }>
   | Readonly<{ status: 'failed'; error: string }>;
@@ -219,6 +218,13 @@ export function SkillAddModal(
       selectPaths?: readonly string[],
     ) => {
       const key = rowKey(row);
+      const previous = adds.get(key);
+      if (previous?.status === 'added') {
+        const outcome = await retrySkillInstallRules(execute, previous.outcome, previous.where);
+        setAdd(key, { ...previous, outcome });
+        library.retry();
+        return outcome;
+      }
       setAdd(key, { status: 'adding' });
       const outcome = await installSkills(execute, {
         source: {
@@ -234,23 +240,26 @@ export function SkillAddModal(
         setAdd(key, { status: 'failed', error: outcome.error });
         throw new Error(outcome.status ? describeRegistrySourceStatus(outcome.status) : t('capabilities.add.addFailed'));
       }
-      const skillId = outcome.skillIds[0]!;
       setAdd(key, {
         status: 'added',
-        skillId,
-        rulesMissing: outcome.rulesMissing.includes(skillId),
+        outcome,
         ...(where ? { where } : {}),
       });
       library.retry();
-      return { skillId, rulesMissing: outcome.rulesMissing.includes(skillId) };
+      return outcome;
     },
-    [execute, library, setAdd],
+    [adds, execute, library, setAdd],
   );
 
   // The row's quick Add reads the item first (the same pinned version) and sends no Where.
   const quickAdd = React.useCallback(
     async (row: Row) => {
       const key = rowKey(row);
+      const previous = adds.get(key);
+      if (previous?.status === 'added') {
+        await install(row, '', previous.where);
+        return;
+      }
       setAdd(key, { status: 'adding' });
       const read = await execute('registries.items.read', {
         kind: 'skill',
@@ -270,7 +279,7 @@ export function SkillAddModal(
       }
       await install(row, version, undefined).catch(() => undefined);
     },
-    [execute, install, setAdd],
+    [adds, execute, install, setAdd],
   );
 
   const items = catalog.items;
@@ -343,6 +352,11 @@ export function SkillAddModal(
         action: (row) => {
           const key = rowKey(row);
           const state = adds.get(key);
+          if (state?.status === 'added' && state.outcome.incomplete.length > 0) return (
+            <SurfaceStateCard kind="error" size="line" title={t('capabilities.skillAdd.partial.rules')}
+              action={{ label: t('capabilities.skillAdd.partial.tryAgain'), onPress: () => quickAdd(row) }}
+              testID={`${TEST_ID}.row.${row.itemId}.partial`} />
+          );
           if (
             state?.status === 'added' ||
             libraryMatch(library.items, row) !== null ||
@@ -455,7 +469,6 @@ export function SkillAddModal(
         <SkillAddDetail
           row={row}
           sourceTitle={sourceTitle(row.sourceId)}
-          state={adds.get(rowKey(row)) ?? null}
           onRead={onRead}
           onHeld={onHeld}
           onOpenHeld={(skillId) => {
@@ -468,19 +481,6 @@ export function SkillAddModal(
           }}
           onSelectionChange={(key, selectPaths) => {
             selections.current.set(key, selectPaths);
-          }}
-          onRetryRules={async (skillId, where) => {
-            const ok = await retrySkillRules(execute, {
-              skillId,
-              change: where,
-            });
-            if (ok)
-              setAdd(rowKey(row), {
-                status: 'added',
-                skillId,
-                rulesMissing: false,
-              });
-            return ok;
           }}
         />
       ),
@@ -510,6 +510,20 @@ export function SkillAddModal(
             },
           };
         }
+        if (state?.status === 'added') {
+          const partial = state.outcome.incomplete.length > 0;
+          return {
+            provenance: partial ? <Text variant="meta" style={{ color: theme.colors.status.error }}>{t('capabilities.skillAdd.partial.rules')}</Text> : provenance,
+            primary: {
+              label: t(partial ? 'capabilities.skillAdd.partial.tryAgain' : 'capabilities.skillAdd.open'),
+              onPress: async () => {
+                const outcome = partial ? await install(row, version ?? '', state.where) : state.outcome;
+                if (outcome.incomplete.length > 0) throw new Error(t('capabilities.skillAdd.partial.rules'));
+                return { itemId: outcome.skillIds[0]!, then: 'stay' as const };
+              },
+            },
+          };
+        }
         const problem = read?.summary.problem ?? row.problem;
         return {
           ...(provenance ? { provenance } : {}),
@@ -532,10 +546,8 @@ export function SkillAddModal(
                 wheres.current.get(key),
                 selections.current.get(key),
               );
-              // A partial add stays open on the item, so its Try again is right there (IR-70).
-              return result.rulesMissing
-                ? { itemId: result.skillId, then: 'stay' as const }
-                : { itemId: result.skillId };
+              if (result.incomplete.length > 0) throw new Error(t('capabilities.skillAdd.partial.rules'));
+              return { itemId: result.skillIds[0]! };
             },
           },
         };
@@ -562,6 +574,7 @@ export function SkillAddModal(
       setAdd,
       slot.sources,
       sourceTitle,
+      theme.colors.status.error,
       theme.colors.text.secondary,
     ],
   );
@@ -600,17 +613,12 @@ function SkillAddDetail(
   props: Readonly<{
     row: Row;
     sourceTitle: string;
-    state: AddState | null;
     execute: MountedAuthoringActionExecute;
     onRead: (key: string, item: RegistryItemV1) => void;
     onHeld: (key: string, held: string | null | undefined) => void;
     onOpenHeld: (skillId: string) => void;
     onWhereChange: (key: string, where: ReachRulesChangeV1 | undefined) => void;
     onSelectionChange: (key: string, selectPaths: readonly string[] | undefined) => void;
-    onRetryRules: (
-      skillId: string,
-      where: ReachRulesChangeV1,
-    ) => Promise<boolean>;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -639,7 +647,6 @@ function SkillAddDetail(
       ),
     [draftReach.rules, places.machines, places.workspaceRefs],
   );
-  const [retrying, setRetrying] = React.useState(false);
 
   const skill =
     read.item?.payload.kind === 'skill' ? read.item.payload.skill : null;
@@ -733,7 +740,6 @@ function SkillAddDetail(
   const problem = read.item?.summary.problem ?? props.row.problem;
   const tokens = (count: number) =>
     count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
-  const added = props.state?.status === 'added' ? props.state : null;
   const purpose = (read.item ? rowDescription(read.item.summary) : null) ?? rowDescription(props.row);
 
   return (
@@ -788,37 +794,6 @@ function SkillAddDetail(
             </Text>
             <RoundButton size="small" display="secondary" title={t('capabilities.skillAdd.partial.tryAgain')}
               onPress={() => void read.refresh()} testID={`${TEST_ID}.detail.retry`} />
-          </View>
-        ) : null}
-        {added?.rulesMissing ? (
-          <View style={styles.partial} testID={`${TEST_ID}.partial`}>
-            <Text
-              variant="meta"
-              style={{ color: theme.colors.state.warning.textForeground, flexShrink: 1 }}
-            >
-              {t('capabilities.skillAdd.partial.rules')}
-            </Text>
-            <RoundButton
-              size="small"
-              display="secondary"
-              title={
-                retrying
-                  ? t('capabilities.skillAdd.partial.retrying')
-                  : t('capabilities.skillAdd.partial.tryAgain')
-              }
-              loading={retrying}
-              onPress={() => {
-                setRetrying(true);
-                const change = added.where ?? {
-                  kind: 'replace' as const,
-                  rules: reachRulesToDraftsV1(draftReach.rules),
-                };
-                void props
-                  .onRetryRules(added.skillId, change)
-                  .finally(() => setRetrying(false));
-              }}
-              testID={`${TEST_ID}.partial.retry`}
-            />
           </View>
         ) : null}
         </View>

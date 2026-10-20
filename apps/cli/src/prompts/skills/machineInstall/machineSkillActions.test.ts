@@ -40,7 +40,7 @@ vi.mock('node:os', async importOriginal => {
 async function fixture(run: (fixture: Readonly<{
   service: ReturnType<typeof createMachineSkillActions>; home: string;
   credentials: persistence.StoredCredentials; base: string;
-  state: { text: string; homeIdentity: string; conflict: boolean; retireOnRead: boolean; retireOnWrite: boolean; unavailable: boolean; missingArtifact: boolean; malformedSkillHeader: boolean; unreadableNeighbour: boolean; writes: number };
+  state: { text: string; homeIdentity: string; conflict: boolean; retireOnRead: boolean; retireOnWrite: boolean; unavailable: boolean; missingArtifact: boolean; malformedSkillHeader: boolean; unreadableNeighbour: boolean; writes: number; artifactListKinds: Array<string | null> };
   readLinks(): Extract<ReturnType<typeof PromptLibraryRecordV1Schema.parse>, { key: 'external-links' }>;
 }>) => Promise<void>) {
   const home = mkdtempSync(join(tmpdir(), 'happier-machine-actions-'));
@@ -50,7 +50,7 @@ async function fixture(run: (fixture: Readonly<{
     machineId: 'machine', serverIdentityId: 'srv_elsewhere', externalRef: { skillName: 'foreign' }, lastExternalDigest: 'untouched' };
   for (const key of PromptLibraryCatalogKeyV1Schema.options) database.prepare('INSERT INTO rows VALUES (?, 1, ?)')
     .run(key, JSON.stringify(key === 'external-links' ? { key, value: { v: 1, links: [foreign] } } : emptyPromptLibraryRecordV1(key)));
-  const state = { text: 'initial', homeIdentity: 'srv_home', conflict: false, retireOnRead: false, retireOnWrite: false, unavailable: false, missingArtifact: false, malformedSkillHeader: false, unreadableNeighbour: false, writes: 0 };
+  const state = { text: 'initial', homeIdentity: 'srv_home', conflict: false, retireOnRead: false, retireOnWrite: false, unavailable: false, missingArtifact: false, malformedSkillHeader: false, unreadableNeighbour: false, writes: 0, artifactListKinds: [] as Array<string | null> };
   const artifact = () => ({ id: 'skill', ownerAccountId: 'fixture-account', access: 'owner', encryptionMode: 'plain',
     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
     header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', ...(state.malformedSkillHeader ? {} : { title: 'example' }), bundleSchemaId: 'skills.skill_md_v1' }),
@@ -59,7 +59,8 @@ async function fixture(run: (fixture: Readonly<{
   // Only the remote Home boundary is a fixture; real CLI codecs, catalog reads and CAS transport run beneath the service.
   const server = createServer(async (request, response) => {
     try {
-      const path = new URL(request.url ?? '/', 'http://fixture').pathname;
+      const url = new URL(request.url ?? '/', 'http://fixture');
+      const path = url.pathname;
       let result: unknown;
       if (path === '/v1/account/entity-rows/prompt-library') {
         if (state.unavailable) { response.statusCode = 503; result = { error: 'unreachable' }; }
@@ -79,7 +80,12 @@ async function fixture(run: (fixture: Readonly<{
         if (state.retireOnWrite) setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'retired-account' });
       } else if (path === '/v1/features') result = FeaturesResponseSchema.parse({ features: {}, capabilities: { serverIdentity: { serverIdentityId: state.homeIdentity } } });
       else if (path === '/v1/plugins/availability/materializations/read') result = { availabilityCursor: 0, inventoryComplete: true, snapshots: [], releases: [] };
-      else if (path === '/v1/artifacts') result = [artifact(), ...(state.unreadableNeighbour ? [{ ...artifact(), id: 'broken' }] : [])];
+      else if (path === '/v1/artifacts') {
+        const kind = url.searchParams.get('kind'); state.artifactListKinds.push(kind);
+        const skills = [artifact(), ...(state.unreadableNeighbour ? [{ ...artifact(), id: 'broken' }] : [])];
+        const unrelated = { ...artifact(), id: 'unrelated', header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_doc.v2', title: 'Unrelated prompt' }) };
+        result = kind === 'skill' ? { items: skills, hasUnclassified: false } : [...skills, unrelated];
+      }
       else if (path === '/v1/artifacts/broken') result = { ...artifact(), id: 'broken', body: encodePlainArtifactStoredContent({ body: '{malformed' }) };
       else if (path === '/v1/artifacts/skill') {
         if (state.retireOnRead) setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'retired-account' });
@@ -272,6 +278,7 @@ describe('machine skill service through real Account HTTP and SQLite CAS', () =>
     const hidden = join(home, '.agents/skills/hidden'); mkdirSync(hidden, { recursive: true });
     writeFileSync(join(hidden, 'SKILL.md'), '---\nname: hidden\ndescription: Native\nuser-invocable: false\n---\nBody');
     const result = SkillFoundListResultV1Schema.parse(await service.found());
+    expect(state.artifactListKinds).toEqual(['skill']);
     expect(result.items.find(item => item.name === 'hidden')).toMatchObject({ userInvocable: false, inLibrary: null });
     expect(result.items.find(item => item.scope === 'user')).toMatchObject({ inLibrary: 'skill', masksLibrary: true, happierInstalled: true, pluginOwned: null });
     expect(result.items.find(item => item.scope === 'plugin')).toMatchObject({ inLibrary: 'skill', masksLibrary: false, happierInstalled: false, pluginOwned: { pluginName: 'fixture' } });

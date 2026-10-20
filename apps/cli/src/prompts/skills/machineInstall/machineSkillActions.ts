@@ -109,9 +109,9 @@ export function createMachineSkillActions(input: MachineSkillActionsInput) {
   async function libraryContents(signal?: AbortSignal): Promise<readonly MachineSkillInstallContent[]> {
     if (!input.store.list) return fail('library_unavailable', 'inventory_unavailable');
     const list = input.store.list;
-    const inventory = await readCompleteSkillLibraryInventoryV1({ list: async ({ limit, cursor, signal }) => {
+    const inventory = await readCompleteSkillLibraryInventoryV1({ list: async ({ limit, cursor, coarseKind, signal }) => {
       current(signal);
-      const page = await list({ limit, cursor, signal });
+      const page = await list({ limit, cursor, coarseKind, signal });
       current(signal);
       if (page.coverage !== 'complete') return fail('library_unavailable', 'inventory_incomplete');
       return { ...page, coverage: 'complete' as const, items: page.items.map(item => {
