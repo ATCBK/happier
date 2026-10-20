@@ -1,0 +1,71 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+    clampPan, dismissPresentation, focalZoom, galleryDirection, panBounds,
+    projectRelease, resizeZoom, resolveZoomBounds, rubberBandPan, rubberBandScale,
+    shouldDismiss, wheelZoomFactor,
+} from './zoomGeometry';
+
+describe('media zoom geometry', () => {
+    it('derives fit, natural size and zoom targets from image pixels and DPR', () => {
+        expect(resolveZoomBounds({ width: 2000, height: 1000 }, { width: 500, height: 500 }, 2))
+            .toEqual({ min: 0.25, max: 1, natural: 0.5, doubleTap: 0.5 });
+        expect(resolveZoomBounds({ width: 20, height: 20 }, { width: 500, height: 500 }, 1))
+            .toEqual({ min: 1, max: 4, natural: 1, doubleTap: 2 });
+    });
+
+    it('clamps only the overflowing image axes', () => {
+        const bounds = panBounds({ width: 1000, height: 500 }, { width: 500, height: 500 }, 1);
+        expect(bounds).toEqual({ x: 250, y: 0 });
+        expect(clampPan({ x: -300, y: 20 }, bounds)).toEqual({ x: -250, y: 0 });
+        expect(clampPan({ x: 120, y: 0 }, bounds)).toEqual({ x: 120, y: 0 });
+    });
+
+    it('keeps the content under a moving pinch focal point attached to the fingers', () => {
+        expect(focalZoom({ scale: 1, x: 20, y: -10 }, 2, { x: 100, y: 50 }, { x: 120, y: 60 }))
+            .toEqual({ scale: 2, x: -40, y: -60 });
+    });
+
+    it('applies asymmetric elastic scale and monotonic progressive pan resistance', () => {
+        expect(rubberBandScale(0, { min: 1, max: 4 })).toBeCloseTo(0.85);
+        expect(rubberBandScale(6, { min: 1, max: 4 })).toBeCloseTo(4.1);
+        expect(rubberBandScale(2, { min: 1, max: 4 })).toBe(2);
+        const values = [0, 10, 100, 1000].map((x) => rubberBandPan(x, 0, 500));
+        expect(values).toEqual([...values].sort((a, b) => a - b));
+        expect(values[3]).toBeLessThan(1000);
+        expect(rubberBandPan(-100, 0, 500)).toBe(-values[2]);
+    });
+
+    it('uses projected release position for dismiss and gallery decisions', () => {
+        expect(projectRelease(10, 1000)).toBeCloseTo(509);
+        expect(shouldDismiss({ x: 0, y: 299 }, { x: 0, y: 0 }, 1000)).toBe(false);
+        expect(shouldDismiss({ x: 0, y: 300 }, { x: 0, y: 1 }, 1000)).toBe(true);
+        expect(shouldDismiss({ x: 0, y: 350 }, { x: 0, y: 0 }, 1000)).toBe(true);
+        expect(galleryDirection(-200, -200, 500)).toBe(1);
+        expect(galleryDirection(200, 200, 500)).toBe(-1);
+        expect(galleryDirection(100, 0, 500)).toBe(0);
+        expect(galleryDirection(-300, 500, 500)).toBe(1);
+    });
+
+    it('tracks dismiss directly and saturates scale/backdrop at the declared endpoints', () => {
+        expect(dismissPresentation(0, 1000)).toEqual({ progress: 0, scale: 1, backdrop: 1 });
+        expect(dismissPresentation(-330, 1000)).toEqual({ progress: 1, scale: 0.82, backdrop: 0 });
+        expect(dismissPresentation(660, 1000)).toEqual({ progress: 1, scale: 0.82, backdrop: 0 });
+    });
+
+    it('preserves the centre content point on resize and ignores toolbar-only changes mid-gesture', () => {
+        const state = { scale: 1, x: 100, y: 50 };
+        expect(resizeZoom(state, { width: 1000, height: 1000 }, { width: 500, height: 500 }, { width: 600, height: 600 }, 1, false))
+            .toEqual(state);
+        expect(resizeZoom(state, { width: 1000, height: 1000 }, { width: 500, height: 500 }, { width: 500, height: 900 }, 1, true))
+            .toBe(state);
+        expect(resizeZoom(state, { width: 1000, height: 1000 }, { width: 500, height: 500 }, { width: 1000, height: 1000 }, 1, false))
+            .toEqual({ scale: 1, x: 0, y: 0 });
+    });
+
+    it('uses the bounded exponential wheel factor for wheel and keyboard steps', () => {
+        expect(wheelZoomFactor(0)).toBe(1);
+        expect(wheelZoomFactor(-1000)).toBeCloseTo(Math.exp(100 / 150));
+        expect(wheelZoomFactor(1000)).toBeCloseTo(Math.exp(-100 / 150));
+    });
+});
