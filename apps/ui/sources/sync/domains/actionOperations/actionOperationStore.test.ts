@@ -43,6 +43,21 @@ function operation(overrides: Partial<ActionOperationSnapshotV1> = {}): ActionOp
 }
 
 describe('action operation store', () => {
+    it('selects the latest Delete success over an older failure and retains a genuinely later failure', () => {
+        const store = createActionOperationStore();
+        const selectors = createActionOperationSelectors();
+        const query = { serverId: SERVER_ID, accountId: 'account-a', machineId: 'controller', managedId: 'managed' };
+        const failed = operation({ operationId: 'earlier-failure', actionId: 'machines.managed.power.set',
+            scope: { accountId: 'account-a', machineId: 'controller' },
+            domainRef: { kind: 'managedMachine', id: 'managed' }, state: 'failed', createdAt: 100, settledAt: 300,
+            error: { errorCode: 'managed_controller_request_failed', error: 'managed_controller_request_failed' } });
+        const deleted = { ...failed, operationId: 'successful-delete', actionId: 'machines.managed.delete' as const,
+            state: 'succeeded' as const, createdAt: 200, settledAt: 250, error: undefined };
+        merge(store, [failed, deleted]);
+        expect(selectors.selectForManagedMachine(store.getSnapshot(), query)?.snapshot).toEqual(deleted);
+        merge(store, [{ ...failed, operationId: 'later-failure', createdAt: 350, settledAt: 400 }]);
+        expect(selectors.selectForManagedMachine(store.getSnapshot(), query)?.snapshot.operationId).toBe('later-failure');
+    });
     it.each([{ actionId: 'machines.environment.apply', scopeMachineId: 'joined-guest' },
         { actionId: 'machines.managed.acquire', scopeMachineId: 'controller' }] as const)(
         'selects retained $actionId output only for the same Account, joined machine and managed row', ({ actionId, scopeMachineId }) => {

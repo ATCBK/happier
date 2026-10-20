@@ -10,8 +10,10 @@ import {
   decodePlainArtifactStoredContent,
   encodePlainArtifactStoredContent,
   type ActionExecutorDeps,
+  type ActionExecutorContext,
   type ApprovalRequest,
 } from '@happier-dev/protocol';
+import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 
 import { createCliApprovalsArtifactStore } from './artifactStore';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
@@ -181,6 +183,119 @@ function storedBody(artifactId: string): string {
 }
 
 describe('approval settlement through the real CLI Artifact store', () => {
+  it.each(['succeeded', 'failed_after_admission', 'materialization_failed', 'rejected'] as const)(
+    'retains the admitted requester and actual personal and Team credential uses when the effect is %s',
+    async outcome => {
+      const store = createStore();
+      const personalService = { pluginId: 'example.credentials', localId: 'personal' };
+      const teamService = { pluginId: 'example.credentials', localId: 'team' };
+      const consumer = { pluginId: 'example.worker', localId: 'publish' };
+      const personalPurpose = { consumer, purpose: 'personal-write' };
+      const teamPurpose = { consumer, purpose: 'team-write' };
+      const personalAccount = { service: personalService, accountId: 'personal-profile' };
+      const teamAccount = { service: teamService, accountId: 'team-source-member' };
+      const materialized: string[] = [];
+      const owner = createConnectedAccountPurposeBindingOwner({
+        credentialOwnerAccountId: 'account-1',
+        // The persisted catalog is empty: only this exact operation's admitted
+        // bindings may select material. The real binding owner enforces them.
+        store: {
+          read: async () => ({ v: 1, bindings: [] }),
+          update: async () => { throw new Error('An operation cannot change saved credential selection'); },
+          subscribe: () => ({ dispose() {} }),
+        },
+        selectTarget: async () => { throw new Error('An approval cannot prompt for another credential'); },
+        resolveTarget: async target => target.kind === 'account'
+          ? { account: target.account, displayName: target.account.accountId === personalAccount.accountId
+              ? 'Personal release account' : 'Disclosed Team member' }
+          : null,
+        materializeAccount: async ({ account }) => {
+          materialized.push(account.accountId);
+          if (outcome === 'materialization_failed') throw new Error('Credential unavailable');
+          return { kind: 'environment', env: { PERSONAL_TOKEN: 'private-personal-material' } };
+        },
+        materializeTeamDirect: async ({ account, captureAdmittedResource }) => {
+          materialized.push(account.accountId);
+          captureAdmittedResource?.({ teamId: 'release-team', displayName: 'Team release account', resourceRevision: 7 });
+          return { kind: 'environment', env: { TEAM_TOKEN: 'private-team-material' } };
+        },
+        projectTargetAccounts: async () => { throw new Error('No credential listing is requested'); },
+        assertTargetAccountMaterializable: async () => { throw new Error('No listed-account selection is requested'); },
+      });
+      const input = { sessionId: 'release-bot', message: 'Publish the approved release' };
+      const attribution = { requestRef: 'original-input', requester: { serverId: 'home-1', accountId: 'account-1' },
+        persona: { serverId: 'home-1', sessionId: input.sessionId }, origin: null };
+      const context: ActionExecutorContext = { ...uiContext, defaultSessionId: input.sessionId,
+        actionRequestAttributionV1: attribution };
+      let effects = 0;
+      const executor = createExecutor(store, {
+        isActionApprovalRequired: id => id === 'session.message.send',
+        // Session transport is the external effect boundary. Credential choice,
+        // exact lease admission and receipt production all run their real owners.
+        sessionSendMessage: async ({ context: admitted }) => {
+          const lease = owner.activatePurposeBindings({
+            subject: { kind: 'operation', operationId: 'credential-effect-1', consumer,
+              sessionId: input.sessionId, isCurrent: () => true },
+            purposes: [personalPurpose, teamPurpose],
+            bindings: [{ purpose: personalPurpose, target: { kind: 'account', account: personalAccount } },
+              { purpose: teamPurpose, target: { kind: 'account', account: teamAccount } }],
+            directMaterialOrigins: [{ purpose: teamPurpose, resourceId: 'private-resource-id', disclosedMember: teamAccount }],
+            recordOperationCredentialUse: admitted.recordOperationCredentialUse,
+          });
+          try {
+            for (const [purpose, service, key] of [[personalPurpose, personalService, 'PERSONAL_TOKEN'],
+              [teamPurpose, teamService, 'TEAM_TOKEN']] as const) {
+              await owner.materialize({ purpose, serviceRefs: [service], exactPurposeBindingSubjectId: lease.subjectId,
+                signal: new AbortController().signal,
+                request: { kind: 'environment', keys: [key] } });
+            }
+            expect(admitted.runtimeAccountId).toBe('account-1');
+            expect(admitted.actionRequestAttributionV1).toEqual(attribution);
+            effects += 1;
+            if (outcome === 'failed_after_admission') throw Object.assign(new Error('Remote outcome unavailable'), { code: 'ECONNRESET' });
+            return { status: 'accepted', localId: 'effect-result' };
+          } finally {
+            lease.dispose();
+          }
+        },
+      });
+      const created = await executor.execute('session.message.send', input, context);
+      expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const artifactId = String((created as { result: { artifactId: string } }).result.artifactId);
+      const decided = await executor.execute('approval.request.decide', {
+        artifactId, decision: outcome === 'rejected' ? 'reject' : 'approve',
+      }, uiContext);
+      const persisted = await store.approvalsGet({ artifactId, serverId: null });
+      expect(persisted).toMatchObject({ status: outcome === 'succeeded' ? 'executed' : outcome === 'rejected' ? 'rejected' : 'failed',
+        executionOriginV1: { actionRequestAttributionV1: attribution },
+      });
+      expect(decided).toMatchObject({ ok: true });
+      const uses = [
+        { v: 1, kind: 'connected_account', label: 'Personal release account', owner: { kind: 'account', accountId: 'account-1' },
+          service: personalService, why: { kind: 'purpose_binding', purpose: personalPurpose, target: 'account' },
+          currentness: { kind: 'current_at_materialization' } },
+        { v: 1, kind: 'team_resource', label: 'Team release account', owner: { kind: 'team', teamId: 'release-team' },
+          service: teamService, why: { kind: 'purpose_binding', purpose: teamPurpose, target: 'account' },
+          currentness: { kind: 'current_at_materialization', resourceRevision: 7 } },
+      ];
+      if (outcome === 'succeeded' || outcome === 'failed_after_admission') {
+        expect(materialized).toEqual(['personal-profile', 'team-source-member']);
+        expect(effects).toBe(1);
+        expect(persisted?.execution).toMatchObject({ operationCredentialUses: uses });
+        expect(decided).toMatchObject({ result: { execution: { operationCredentialUses: uses } } });
+      } else {
+        expect(materialized).toEqual(outcome === 'rejected' ? [] : ['personal-profile']);
+        expect(effects).toBe(0);
+        expect(persisted?.execution && 'operationCredentialUses' in persisted.execution).toBeFalsy();
+        expect(JSON.stringify(decided)).not.toContain('operationCredentialUses');
+      }
+      for (const privateValue of ['private-personal-material', 'private-team-material', 'private-resource-id']) {
+        expect(storedBody(artifactId)).not.toContain(privateValue);
+        expect(JSON.stringify(decided)).not.toContain(privateValue);
+      }
+    },
+  );
+
   it.each(['saved', 'unavailable'] as const)('settles an unavailable Home recheck after the execution claim with its receipt %s', async receipt => {
     const store = createStore();
     let artifactId = '';

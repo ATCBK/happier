@@ -45,14 +45,20 @@ export function projectApprovalExecutionForObservation(request: ApprovalRequest 
   if (!execution) return undefined;
   const actionId = ActionIdSchema.safeParse('actionId' in request ? request.actionId : undefined);
   const project = actionId.success ? getActionSpec(actionId.data).projectObservationOutput : undefined;
+  // Legacy generic V1 records preserve unknown fields; even a claimed target kind
+  // cannot make their annotations trusted current receipt metadata.
+  const target = request.v === 1 ? TargetActionApprovalRequestV1Schema.safeParse(request) : null;
+  const currentExecution = request.v === 2 ? request.execution : target?.success ? target.data.execution : undefined;
+  const operationCredentialUses = currentExecution?.operationCredentialUses;
   return {
     executedAtMs: execution.executedAtMs, ok: execution.ok,
-    ...(request.v === 2 && execution.effectAttempted !== undefined
-      ? { effectAttempted: execution.effectAttempted } : {}),
+    ...(currentExecution?.effectAttempted !== undefined
+      ? { effectAttempted: currentExecution.effectAttempted } : {}),
     ...(execution.ok && execution.result !== undefined ? { result: project ? project(execution.result) : execution.result } : {}),
     ...(execution.errorCode === undefined ? {} : { errorCode: execution.errorCode }),
     ...(execution.error === undefined ? {} : { error: execution.error }),
-    ...(request.v === 2 && execution.details !== undefined ? { details: execution.details } : {}),
+    ...(request.v === 2 && request.execution?.details !== undefined ? { details: request.execution.details } : {}),
+    ...(operationCredentialUses?.length ? { operationCredentialUses } : {}),
   };
 }
 
@@ -163,7 +169,8 @@ export type ApprovalActionReference =
 
 // These are declared Action field keys, not a guess from an opaque value or suffix.
 const SESSION_REFERENCE_KEYS = new Set([
-  'sessionId', 'leadSessionId', 'expectedLeadSessionId', 'sourceSessionId', 'targetSessionId',
+  'sessionId', 'managerSessionId', 'expectedManagerSessionId', 'leadSessionId', 'expectedLeadSessionId',
+  'sourceSessionId', 'targetSessionId',
   'underSessionId', 'parentSessionId', 'originSessionId',
 ]);
 
