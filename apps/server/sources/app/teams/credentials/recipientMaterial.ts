@@ -686,6 +686,7 @@ export async function readCurrentTeamCredentialRecipientMaterialInTx(
     });
     return {
         ok: true as const,
+        admittedResource: { displayName: resource.displayName, teamId: resource.teamId },
         resourceId: material.resourceId,
         resourceRevision: resource.revision,
         sourceMemberKey: material.sourceMemberKey,

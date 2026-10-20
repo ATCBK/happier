@@ -648,6 +648,7 @@ export function registerTeamCredentialResourceRoutes(
         return reply.send(TeamCredentialDirectMaterialMineResponseV1Schema.parse({
             status: "ready",
             recipientMode: result.recipientMode,
+            admittedResource: result.admittedResource,
             stored: result.stored,
             expected: {
                 homeServerIdentityId: await getOrCreateServerIdentityId(env),

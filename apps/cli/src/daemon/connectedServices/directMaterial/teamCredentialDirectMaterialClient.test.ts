@@ -53,6 +53,34 @@ const use = {
 };
 
 describe('TeamCredentialDirectMaterialClient', () => {
+  it.each(['team-1', 'other-team'])('carries only metadata for the admitted Team (%s)', async (teamId) => {
+    const admittedResource = { displayName: 'Acme service', teamId };
+    vi.mocked(fetchTeamCredentialDirectMaterial).mockResolvedValueOnce({
+      status: 'ready',
+      recipientMode: 'plain',
+      stored: createTeamCredentialDirectMaterialStoredV1({ payload, recipientMode: 'plain' }),
+      expected: {
+        homeServerIdentityId: payload.homeServerIdentityId,
+        teamId: payload.teamId,
+        resourceId: payload.resourceId,
+        resourceRevision: payload.resourceRevision,
+        recipientAccountId: payload.recipientAccountId,
+        sourceMemberKey: computeTeamCredentialSourceMemberKeyV1(payload.sourceMember),
+        sourceVersion: payload.sourceVersion,
+      },
+      admittedResource,
+    });
+    const client = createHttpTeamCredentialDirectMaterialClient({
+      token: 'token', teamId: payload.teamId,
+      readRecipientEncryptionMaterial: async () => ({ mode: 'plain' }),
+    });
+    await expect(client.open({ resourceId: payload.resourceId, ...use })).resolves.toEqual(
+      teamId === payload.teamId
+        ? { ok: true, payload, admittedResource }
+        : { ok: false, reason: 'invalid_material' },
+    );
+  });
+
   it('opens current plain material from the recipient-authorized response', async () => {
     const fetchCurrent = vi.fn(async () => ({
       ok: true as const,
@@ -89,6 +117,7 @@ describe('TeamCredentialDirectMaterialClient', () => {
       fetchCurrent: async () => ({
         ok: true,
         recipientMode: 'e2ee',
+        admittedResource: { displayName: 'Acme service', teamId: payload.teamId },
         stored,
         expected: {
           homeServerIdentityId: 'home-1',
@@ -103,7 +132,9 @@ describe('TeamCredentialDirectMaterialClient', () => {
       readRecipientEncryptionMaterial: async () => ({ mode: 'e2ee', secretKeyOrSeed: recipientSecretKey }),
     });
 
-    await expect(client.open({ resourceId: 'resource-1', ...use })).resolves.toEqual({ ok: true, payload });
+    await expect(client.open({ resourceId: 'resource-1', ...use })).resolves.toEqual({
+      ok: true, payload, admittedResource: { displayName: 'Acme service', teamId: payload.teamId },
+    });
   });
 
   it('fails closed before disclosure when currentness changes or E2EE material is unavailable', async () => {
