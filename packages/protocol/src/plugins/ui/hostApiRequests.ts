@@ -290,6 +290,14 @@ export const PluginUiSessionStateV1Schema = lazyZodSchema(() => z.strictObject({
   }),
   workspace: zMini.optional(SessionAwarenessWorkspaceV1Schema),
   pendingPermissions: z.array(PluginUiSessionPendingPermissionV1Schema),
+  /** Absent on older mounted hosts; absence never means read or empty. */
+  hasUnreadMessages: z.optional(z.boolean()),
+  latestActivity: z.optional(z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('ready'), text: z.string(), createdAt: z.number().check(z.int(), z.nonnegative()) }),
+    z.strictObject({ kind: z.literal('empty') }),
+    z.strictObject({ kind: z.literal('hidden') }),
+    z.strictObject({ kind: z.literal('unavailable') }),
+  ])),
 }));
 export type PluginUiSessionStateV1 = z.infer<typeof PluginUiSessionStateV1Schema>;
 

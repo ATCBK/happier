@@ -36,12 +36,12 @@ const { projectSessionSummaryCard } = await import('@/components/sessions/compan
 const { projectUiSessionAwareness } = await import('@/sync/domains/session/awareness/sessionAwareness');
 const { createCanonicalPluginReactNativeHostApiAdapter } = await import('@/components/plugins/reactNative/hostApi');
 const { createPluginSurfaceContextFixture } = await import('@/dev/testkit/fixtures/pluginSurfaceContextFixture');
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionAccessFixture, createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 const { storage } = await import('@/sync/domains/state/storage');
 const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { buildSessionListRenderableFromSession, deriveSessionListRenderableHasUnreadMessagesFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 const { createBoundPluginSurfaceController } = await import('./boundPluginSurfaceController');
 
@@ -122,6 +122,65 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
         mockSessionRpcWithPreferredSessionScope.mockResolvedValue(undefined);
         clearDaemonMergedProjectionCacheForTests();
         mockMachineRpcWithServerScope.mockReset();
+    });
+
+    it.each(['ready', 'empty', 'hidden', 'unavailable', 'paged', 'missingWitness', 'modeMismatch'] as const)('publishes %s external-shareable activity through the real bound controller without marking read', async (outcome) => {
+        const serverId = await homes.addHome({ name: 'Activity Home', serverUrl: 'https://activity.test', accountId: 'account-a' });
+        const session = installSessionActionFixture({ homes, storage, serverId, session: waitingSession({
+            id: 'activity-session', seq: 7, lastViewedSessionSeq: 1, agentState: null,
+            viewer: createSessionViewerFixture({ readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: 2000 },
+                attention: { needsAttention: true, reasons: ['unread'], primary: 'unread', presentation: 'full' } }),
+            ...(outcome === 'hidden' ? { access: createSessionAccessFixture('owner', { readTranscript: false }) } : {}),
+        }) });
+        const row = (seq: number, role: string, text: string) => ({ id: `item-${seq}`, seq, localId: `local-${seq}`,
+            messageRole: role, createdAt: seq * 1000, updatedAt: seq * 1000,
+            content: { t: 'plain', v: { role, content: { type: 'text', text } } } });
+        homes.answer(serverId, `GET /v1/sessions/${session.id}/messages`, { select: (_input, request) => {
+            const query = new URL(request.url).searchParams;
+            expect(query.get('projection')).toBe('externalShareableV1');
+            if (outcome === 'paged' && !query.has('beforeSeq')) return { body: {
+                messages: [row(7, 'agent', 'private draft')], hasMore: true, nextBeforeSeq: 7,
+                publicationBlocked: false, externalShareableSnapshot: { turns: [] },
+            } };
+            const tool = { ...row(8, 'agent', ''), content: { t: 'plain', v: { role: 'agent', content: {
+                type: 'codex', data: { type: 'tool-call', callId: 'tool-1', name: 'Bash', input: { command: 'private tool command' } },
+            } } } };
+            return outcome === 'unavailable' ? { status: 503, body: {} } : { body: {
+                messages: outcome === 'empty' ? [] : outcome === 'modeMismatch'
+                    ? [{ ...row(6, 'agent', ''), content: { t: 'encrypted', c: 'unopenable' } }]
+                    : [tool, row(7, 'agent', 'private draft'), row(6, 'agent', 'safe final'), row(5, 'user', 'private prompt')]
+                        .filter(item => !query.has('beforeSeq') || item.seq < Number(query.get('beforeSeq'))),
+                hasMore: false, nextBeforeSeq: null, publicationBlocked: false,
+                ...(outcome === 'missingWitness' ? {} : { externalShareableSnapshot: { turns: [{ turnId: 'completed', status: 'completed', startedAt: 1, updatedAt: 6,
+                    transcriptAnchors: { startSeqInclusive: 6, endSeqInclusive: 6, userMessageSeqs: [], finalAssistantMessageSeq: 6 } }] } }),
+            } };
+        } });
+        const mounted = mountSurface({ serverId, accountId: 'account-a' });
+        try {
+            const state = await mounted.api.readSession(session.id);
+            const kind = outcome === 'paged' ? 'ready' : outcome === 'missingWitness' || outcome === 'modeMismatch' ? 'unavailable' : outcome;
+            expect(state).toMatchObject({ hasUnreadMessages: deriveSessionListRenderableHasUnreadMessagesFromSession(session),
+                latestActivity: kind === 'ready' ? { kind: 'ready', text: 'safe final', createdAt: 6000 } : { kind } });
+            expect(JSON.stringify(state)).not.toContain('private draft');
+            expect(JSON.stringify(state)).not.toContain('private prompt');
+            expect(JSON.stringify(state)).not.toContain('private tool command');
+            expect(storage.getState().sessions[session.id]?.lastViewedSessionSeq).toBe(1);
+            expect(homes.requests.filter(request => request.path.includes('/read-state'))).toHaveLength(0);
+            if (outcome === 'ready') {
+                expect(state?.hasUnreadMessages).toBe(true);
+                const events: ResourceSubscriptionEvent[] = [];
+                const watch = await mounted.api.watchSession(session.id, event => events.push(event));
+                try {
+                    storage.getState().applySessions([{ ...storage.getState().sessions[session.id]!,
+                        viewer: createSessionViewerFixture() }]);
+                    await vi.waitFor(() => expect(events.some(event => event.kind === 'invalidated')).toBe(true));
+                    await expect(mounted.api.readSession(session.id)).resolves.toMatchObject({ hasUnreadMessages: false });
+                    const count = events.length;
+                    storage.getState().applySessions([{ ...storage.getState().sessions[session.id]!, seq: 8 }]);
+                    await vi.waitFor(() => expect(events.length).toBeGreaterThan(count));
+                } finally { watch.dispose(); }
+            }
+        } finally { mounted.dispose(); }
     });
 
     it('reads what a waiting Session wants to run, where, and which answers the viewer may give', async () => {

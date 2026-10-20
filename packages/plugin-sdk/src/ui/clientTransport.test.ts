@@ -20,6 +20,30 @@ const surface: SurfaceContext = createSurfaceContextFixture();
 
 const identity = { instanceId: 'mount-1', mountNonce: 'nonce-1' } as const;
 
+describe('linked Session activity over the hosted transport', () => {
+    it('carries activity and unread and rejects an unrecognized nested disclosure', async () => {
+        let receive: ((message: unknown) => void) | undefined;
+        let extra: Record<string, unknown> = {};
+        const api = await createPluginUiHostApiClientFromTransport({ identity, transport: {
+            subscribe(listener) { receive = listener; return { dispose() {} }; },
+            send(message) {
+                if (message.kind === 'negotiate') receive?.({ wireVersion: 1, kind: 'negotiated', identity,
+                    apiVersion: '1.0.0', methods: ['readSession'], surface });
+                if (message.kind === 'request') receive?.({ wireVersion: 1, kind: 'result', identity,
+                    requestId: message.requestId, method: message.method, result: {
+                        sessionId: 'linked', lifecycle: 'active', runtime: 'idle', operational: 'none',
+                        workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' }, pendingPermissions: [],
+                        hasUnreadMessages: true, latestActivity: { kind: 'ready', text: 'Shared final', createdAt: 4000, ...extra },
+                    } });
+            },
+        } });
+        await expect(api.readSession('linked')).resolves.toMatchObject({ hasUnreadMessages: true,
+            latestActivity: { kind: 'ready', text: 'Shared final', createdAt: 4000 } });
+        extra = { privateTool: 'must not pass the strict consumer' };
+        await expect(api.readSession('linked')).rejects.toMatchObject({ code: 'invalid_payload' });
+    });
+});
+
 describe('caller-owned Action admission over the hosted transport', () => {
     it.each([true, false, 'invalid'] as const)('settles the strict host admission result: %s', async (answer) => {
         let receive: ((message: unknown) => void) | undefined;

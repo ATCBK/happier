@@ -37,6 +37,8 @@ import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { getSessionName, getSessionStatus } from '@/utils/sessions/sessionUtils';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { deriveSessionListRenderableHasUnreadMessagesFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { readSessionLatestExternalShareableActivity } from '@/sync/api/session/sessionLatestExternalShareableActivity';
 
 import {
     createPluginSurfaceHostApiError,
@@ -129,6 +131,8 @@ function projectSession(session: Session, accountScope: ServerAccountScope | nul
         workStatus,
         ...(awareness.workspace ? { workspace: awareness.workspace } : {}),
         pendingPermissions,
+        hasUnreadMessages: deriveSessionListRenderableHasUnreadMessagesFromSession(session),
+        latestActivity: { kind: session.access?.capabilities.readTranscript === true ? 'unavailable' : 'hidden' },
     });
     return { state, requests };
 }
@@ -230,7 +234,23 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
             const retired = refusal(options);
             if (retired) return retired;
         }
-        return readProjectedSession(parsed.data.sessionId, input.accountScope)?.state ?? null;
+        const projected = readProjectedSession(parsed.data.sessionId, input.accountScope);
+        if (!projected) return null;
+        if (!input.accountScope || projected.state.latestActivity?.kind === 'hidden') return projected.state;
+        const cancellation = mergeAbortSignals([lifetime.signal, options?.signal]);
+        try {
+            const latestActivity = await readSessionLatestExternalShareableActivity({
+                scope: input.accountScope, sessionId: parsed.data.sessionId, signal: cancellation.signal,
+                isCurrent: () => refusal(options) === null,
+            });
+            const retired = refusal(options);
+            if (retired) return retired;
+            // Reproject after the read so concurrent Work/read-state changes are current too.
+            const current = readProjectedSession(parsed.data.sessionId, input.accountScope);
+            return current ? PluginUiSessionStateV1Schema.parse({ ...current.state,
+                latestActivity: current.state.latestActivity?.kind === 'hidden' ? { kind: 'hidden' } : latestActivity,
+            }) : null;
+        } finally { cancellation.dispose(); }
     };
 
     const watchSession = async (
@@ -287,6 +307,12 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
         let lastInputs = readInputs(storage.getState());
         const unsubscribe = storage.subscribe((state) => {
             const nextInputs = readInputs(state);
+            const transcriptChanged = nextInputs.messages !== lastInputs.messages
+                || nextInputs.session?.seq !== lastInputs.session?.seq
+                || nextInputs.session?.sessionTurns !== lastInputs.session?.sessionTurns
+                || nextInputs.session?.latestTurnStatusObservedAt !== lastInputs.session?.latestTurnStatusObservedAt
+                || nextInputs.session?.publishedThroughServerSeq !== lastInputs.session?.publishedThroughServerSeq
+                || nextInputs.session?.currentStorageState !== lastInputs.session?.currentStorageState;
             if (nextInputs.session === lastInputs.session && nextInputs.messages === lastInputs.messages
                 && nextInputs.displayRow === lastInputs.displayRow
                 && nextInputs.locale === lastInputs.locale) return;
@@ -306,7 +332,7 @@ export function createPluginSurfaceSessionHandlers(input: Readonly<{
             const projected = projectSession(nextInputs.session, input.accountScope).state;
             bindCatalog(projected);
             const digest = digestSessionState(projected);
-            if (digest === lastDigest) return;
+            if (digest === lastDigest && !transcriptChanged) return;
             lastDigest = digest;
             input.deliver({ version: 1, subscriptionId, kind: 'invalidated', digest });
         });
