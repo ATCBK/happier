@@ -37,7 +37,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { createSessionStartupReadinessHandler } from './sessionStartupReadiness';
-import { createSharedManagedProviderSessionAccess } from './sharedManagedProviderSessionAccess';
+import { createSharedManagedProviderSessionAccess, createSharedManagedProviderSessionStart } from './sharedManagedProviderSessionAccess';
 import { createRemoteManagedProviderSessionProjection } from './remoteManagedProviderSession';
 import type { ActionOperationRpcContext } from '../actionOperations/actionOperationRpcHandlers';
 import type { ConnectedServicePoolSelectionRead } from '@/api/machine/rpcHandlers.connectedAccounts';
@@ -8413,13 +8413,20 @@ export async function startDaemonSessionControlRuntime(
               });
             }
             const deployment = basis.deployment;
-            const launchScope = createProviderLaunchResourceScope();
-            launchScope.register(created.cleanup);
-            managedProviderCleanup.current = () => launchScope.release();
+            const lifetimeScope = createProviderLaunchResourceScope();
+            lifetimeScope.register(created.cleanup);
+            let currentLaunchScope: ReturnType<typeof createProviderLaunchResourceScope> | null = null;
+            lifetimeScope.register(async () => await currentLaunchScope?.retire());
+            managedProviderCleanup.current = () => lifetimeScope.release();
             let captured: Pick<Parameters<NonNullable<typeof created.materializeManagedProviderAgentBinding>>[0], 'service' | 'projection'> | null = null;
-            let startPromise: Promise<void> | null = null;
-            const start = () => {
-              startPromise ??= (async () => {
+            const start = createSharedManagedProviderSessionStart({
+              readProjection: () => captured,
+              start: async () => {
+                // Failure retires only this establishment attempt. The
+                // Session's admitted invocation remains available to retry.
+                await currentLaunchScope?.retire();
+                const launchScope = createProviderLaunchResourceScope();
+                currentLaunchScope = launchScope;
                 const started = await startPublicManagedProviderRuntime({
                   identity: created.bootstrap.identity,
                   request: {
@@ -8452,9 +8459,9 @@ export async function startDaemonSessionControlRuntime(
                   code: started.code,
                   message: 'Managed gateway Session runtime start failed',
                 });
-              })();
-              return startPromise;
-            };
+                launchScope.transfer();
+              },
+            });
             return Object.freeze({
               start,
               readSharedGatewayAccess: createSharedManagedProviderSessionAccess({
