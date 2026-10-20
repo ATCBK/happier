@@ -36,6 +36,8 @@ export async function raceSocketIoAckTimeout<T>(promise: Promise<T>, timeoutMs?:
 }
 export function issueSocketRpcCallWithCancellation<T>(params: Readonly<{
   signal?: AbortSignal; requestId?: string; onIssued?: () => void;
+  /** Cooperative cancellation retains this issued request's acknowledgement. */
+  waitForResultOnCancel?: boolean;
   issue: () => Promise<T>; emitCancel?: (requestId: string) => void;
 }>): Promise<T> {
   if (params.signal?.aborted) return Promise.reject(createSocketRpcAbortError());
@@ -48,7 +50,10 @@ export function issueSocketRpcCallWithCancellation<T>(params: Readonly<{
     const onAbort = () => {
       if (settled) return;
       if (issued && params.requestId) {
-        try { params.emitCancel?.(params.requestId); } catch { /* Local cancellation still rejects while disconnected. */ }
+        try {
+          params.emitCancel?.(params.requestId);
+          if (params.waitForResultOnCancel && params.emitCancel) return;
+        } catch { /* Failed cancellation delivery retains the existing local rejection. */ }
       }
       rejectOnce(createSocketRpcAbortError());
     };

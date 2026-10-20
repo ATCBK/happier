@@ -31,6 +31,7 @@ export async function machineWorkspaceFileReplaceApply(machineId: string, input:
         const response = await machineRpcWithServerScope<unknown, DaemonWorkspaceFileReplaceApplyRequest>({
             machineId, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY, payload,
             serverId: options?.serverId ?? null, accountId: options?.accountId ?? null, operationTimeoutMs: null,
+            waitForResultOnCancel: true,
             ...(options?.signal ? { signal: options.signal } : {}),
         });
         const parsed = DaemonWorkspaceFileReplaceApplyResponseSchema.safeParse(response);

@@ -30,6 +30,11 @@ replacement keeps dollar signs literal; regex replacement uses JavaScript
 capture syntax. Both operate within individual lines and preserve existing
 line endings. Binary files and text that is not valid UTF-8 are skipped.
 
+Regex preview uses the same JavaScript matcher as replacement, including
+look-around and capture syntax. Cancelling stops between files; the result
+still includes completed changes and their Undo data. A lost connection can
+leave the outcome unknown, so it is not a reason to repeat the replacement.
+
 Blame combines commit authorship with evidence from the Session whose File page
 is open. Committed lines name their commit author. Uncommitted lines name a
 Session turn only when its recorded edit still matches the displayed line;
@@ -296,6 +301,12 @@ For directories, available actions include:
 - Copy path
 
 Directory deletion is confirmed explicitly and applies recursively.
+
+In unreleased 0.3 development source, submitting a rename applies it without a
+second approval prompt. An agent's rename request still asks for approval by
+default. You can change that Action's approval preferences under
+**Settings → Actions**; an explicit requirement there also applies to your own
+rename requests. Delete keeps its confirmation.
 
 ## File preview and editing
 
@@ -628,6 +639,32 @@ Supported link shapes include:
 Happier only opens links that resolve inside the current workspace. Links outside the workspace, traversal paths, and arbitrary non-loopback `http`/`https` URLs stay external or are ignored for workspace navigation.
 
 On desktop, opening a workspace file link opens the right sidebar/details pane. On phone-sized layouts, it opens the file in the **Tabs** surface with the session header still visible.
+
+### Let an agent open or link a file
+
+In unreleased 0.3 development source, an agent can ask the connected app to open
+a file with `workspace.tabs.open`. Pass a `file` target instead of constructing
+a navigation URL:
+
+```json
+{
+  "file": {
+    "target": { "kind": "session", "sessionId": "your-session-id" },
+    "path": "src/index.ts",
+    "anchor": { "kind": "fileLine", "startLine": 12 },
+    "view": "view"
+  },
+  "mode": "preview"
+}
+```
+
+The path is relative to the workspace. A project target names the project
+workspace and Home instead of a session. The app must be connected to answer
+this client-side Action, and normal workspace access still applies.
+`workspace.files.link.get` takes the same file target directly, without the
+outer `file` field, and returns its canonical link without opening a tab.
+Both Actions have no approval prompt by default;
+**Settings → Actions** can require one.
 
 ## Limits and safety
 

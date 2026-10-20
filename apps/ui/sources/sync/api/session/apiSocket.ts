@@ -668,6 +668,7 @@ class ApiSocket {
             onIssued?: () => void;
             onResponse?: () => void;
             signal?: AbortSignal;
+            waitForResultOnCancel?: boolean;
             requestId?: string;
         },
     ): Promise<R> {

@@ -33,6 +33,8 @@ export type ServerScopedMachineRpcParams<A> = Readonly<{
     requireEncryptedPayload?: true;
     authorization?: SocketRpcAuthorizationContext;
     signal?: AbortSignal;
+    /** Cancel remote work cooperatively while retaining its own acknowledgement. */
+    waitForResultOnCancel?: boolean;
     /** Exact-action issuance hook, invoked immediately before the real socket emit. */
     onIssued?: () => void;
     /** Transport dispatch hook; unlike exact-action issuance, preserves peer routing. */

@@ -141,6 +141,7 @@ import { projectSessionFollowSourceKeyPreparationAfterSetV1, type SessionFollowS
 import type { SessionFollowActionInputV1, SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
 import { machineContributionRegistryProjectionDescribe, machinePluginUiTargetedContributionsRead } from '@/sync/ops/machineContributionRegistryProjection';
 import { machineWorkspaceFileSearch } from '@/sync/ops/machineWorkspaceFileSearch';
+import { machineWorkspaceFileReplacePreview, machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFileReplace';
 import { randomUUID } from '@/platform/randomUUID';
 import { executeCurrentUiContextAction, executeCurrentUiContextContributedAction } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
 import { createUiAccountAction, resolveUiAccountActionFallbackMachineId } from './accountActionDeps';
@@ -2851,6 +2852,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       accountContext.assertCurrent();
       return listAgentBackendsForVoiceTool({ includeDisabled, limit, machineId, serverId: accountContext.serverId,
         acpCatalogSnapshot: catalog, backendEnabledByTargetKey: preferences.backendEnabledByTargetKey ?? null });
+    },
+    workspaceFilesReplacePreview: async ({ machineId, ...request }, context) => {
+      const result = await machineWorkspaceFileReplacePreview(machineId, request, { serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal });
+      return !result.ok && 'errorCode' in result ? { ok: false, errorCode: result.errorCode === 'method_unavailable' ? 'update_required' : 'workspace_file_replace_unavailable', error: result.errorCode } : result;
+    },
+    workspaceFilesReplace: async ({ machineId, rootPath, files, ...matcher }, context) => {
+      const result = await machineWorkspaceFileReplaceApply(machineId, { rootPath, operation: { kind: 'replace', matcher, files } }, { serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal });
+      return !result.ok && 'errorCode' in result ? { ok: false, errorCode: result.errorCode === 'method_unavailable' ? 'update_required' : 'workspace_file_replace_unavailable', error: result.errorCode } : result;
     },
     workspaceFilesSearch: async ({ machineId, ...request }, context) => {
       const result = await machineWorkspaceFileSearch(machineId, request, {

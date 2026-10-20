@@ -44,6 +44,11 @@ Workspace replacement in 0.3 development calls the same
 `commitGuardedFileReplace` owner as editor saves: the replace handler authorizes
 each rooted path and supplies raw bytes plus the reviewed SHA-256 expectation;
 it does not own another filesystem writer.
+Replace apply uses the shared Socket RPC `waitForResultOnCancel` opt-in: the
+existing correlated cancel stops work between files while the caller and relay
+retain that call's own ACK for partial results and Undo edits. The existing
+deadline and transport-loss handling still apply; ordinary callers keep their
+immediate cancellation behavior.
 
 ## Explicit session creation targets (0.3 development)
 
@@ -239,14 +244,17 @@ retained `materializedRoot` continues to identify the native home. A durable
 native home is never used as a substitute capability root or removed on release.
 
 Run rematerialization reads its native conversation identity from the existing
-sealed Run record, including after Stop and Session resume. If isolated home
-preparation detaches a borrowed state link, the catalog verifier selects only
+sealed Run record, including after Stop and Session resume. Every isolated
+native-home preparation, including an ordinary Session spawn, inventories
+retained conversations before detaching a borrowed state link. The catalog verifier selects only
 the authorized retained conversations before detachment and the existing
 importer retains their exact files in the prepared home. The sealed records
 must belong to the same Session or requester scope, and recorded Connected
 Account selections must resolve to this native home. Another Account's records
-cannot authorize importing its history. An incomplete retained-record read
-refuses preparation before detaching the source. Agents that
+cannot authorize importing its history. Spawn, refresh and auth-switch callers
+carry their existing requester attribution to this shared home owner. An
+incomplete retained-record read or missing requester identity for a matching
+retained conversation refuses preparation before detaching the source. Agents that
 declare a local resume verifier are checked against the prepared home before
 native launch; Agents without that declaration retain their native continuation
 contract. A definite missing conversation retains the typed continuity cause
@@ -1354,6 +1362,10 @@ Category adapters preserve managed-session/model-pack/SCM ownership rather
 than bypassing it with generic filesystem mutation. Restore uses the existing native
 helper's atomic no-overwrite operation; an occupied destination is refused. Move,
 empty and Undo receipts consume the shared Activity log, not a storage-local journal.
+An entry whose protected manifest is missing, malformed or identity-inconsistent is
+retained and reported in the local file log; it cannot block healthy entries from
+listing or reconciliation. Unknown payloads are never restored or deleted on that
+evidence, and root-level protection checks still fail closed.
 Recipient projections and effects require current proven Session-folder ownership;
 accepted effects detach from request cancellation but continue revalidating authority.
 The data-layer Pile hook exposes optimistic pending deltas without introducing a
@@ -1540,7 +1552,12 @@ invented timeout; cancellation retires the helper. Signed-build TCC prompts and
 Settings behavior remain a release check, not a claim of these source contracts.
 
 The helper does not follow symlinks or open cloud placeholders; foreign mounts are
-leaves, with sibling APFS devices allowed only by canonical volume facts.
+leaves. Each native scan resolves sibling APFS devices once from the canonical
+mount-volume reader, using the same real-device identities as enumeration; startup
+System/Data firmlinks remain traversable while foreign containers remain leaves.
+Progress names the longest-inactive in-flight directory only after ten seconds
+without a metadata batch. A fresh batch clears that stalled observation; the index
+replaces these transient progress facts rather than retaining an earlier stall.
 Allocated and logical bytes remain distinct; hard-link/clone allocation facts
 support union accounting rather than summing overlapping rows. A POSIX name that
 is not UTF-8 retains base64 `nameBytes` beside its display name. Native path operands
@@ -1937,6 +1954,13 @@ this diagnostic. Unreadable Account role overrides project before admission as
 The shared presenter explains that Account role settings could not be read and
 offers Retry; this is separate from an unusable selected role. The diagnostic
 retains `account_role_overrides_unavailable` as the original code.
+
+A transient requester-Home read failure before an external Action envelope opens
+is `storage_unavailable` with HTTP 503, not `target_unavailable`. The daemon,
+generic relay parser and HTTP error projection share that closed pre-open code.
+Workflow feature/currentness reads likewise preserve transport failure for the
+existing Workflow failure normalizer rather than relabeling it as unreadable
+content. These are error classifications, not additional automatic retries.
 
 In 0.3 development, a Session startup failure becomes a failed Workflow leaf
 only after the daemon's existing startup-cancellation owner proves the launch
@@ -2528,7 +2552,8 @@ Configuration lives in `src/configuration.ts`:
 - Recovery-key login failures retain the originating error code and operation phase (plus HTTP status when present). The CLI writes a local-only, redacted error diagnostic; attached HTTP bodies and credentials are never serialized into that diagnostic.
 - `HAPPIER_VARIANT` and `HAPPIER_EXPERIMENTAL` control behavior.
 - In 0.3 development source, the machine's `resourcesPolicyV1.guard.keepAwake` controls sleep prevention (`off`, `on`, `on_power`; absent = `on`). One daemon-owned inhibitor preserves idle reachability without keeping the display awake: macOS uses `caffeinate`, Linux uses logind's stdin-bound `systemd-inhibit` where available, and Windows uses the shipped native helper's system execution requirement. On power consumes the canonical vitals AC facts without requiring a viewer; unknown power does not report holding. macOS also enforces AC-only assertion behavior in the OS; closing the lid follows the OS. Inhibitors release on daemon shutdown or pipe closure. The former environment override is replaced by this single policy authority.
-- The same development-source resources document owns the full Guard policy. The daemon's Guard composition shares the existing minute sampler, live-work inventory, native ownership verdicts and parked-watch primitive. Guard Activity is a local 30-day append-only journal; only committed guard-kind effects light the shared automatic-action indicator. Undo invokes the receipt's original Action with fresh admission and that Action's approval policy. Recipient views expose their own work totals and Activity, plus counts for other work; withheld or unavailable left-behind sizes are `null`, not measured zero. The visual Guard tab and composed loaded-daemon certification are separate integration work.
+- The same development-source resources document owns the full Guard policy. The daemon's Guard composition shares the existing minute sampler, live-work inventory, native ownership verdicts and parked-watch primitive. Guard Activity is a local 30-day append-only journal; only committed guard-kind effects light the shared automatic-action indicator. Its existing watch cursor also covers journal commits outside Today's displayed rows, so demanded longer-range Activity queries refresh after an Undo on another device. Undo invokes the receipt's original Action with fresh admission and that Action's approval policy. Recipient views expose their own work totals and Activity, plus counts for other work; withheld or unavailable left-behind sizes are `null`, not measured zero. The visual Guard tab and composed loaded-daemon certification are separate integration work.
+- Automatic memory Guard observes accepted minute records and meaningful policy/owner changes; another surface's live demand does not accelerate candidate reads. Post-action verification still observes the next required sample, and idle/cooldown deadlines keep their existing owner. Auxiliary policies use the sampler's minute frontiers and reporting-state edges, including failed-reader retries; cheap Guard-state refresh remains on every completed tick. A viewed ladder consumes the sampler's summary cadence without inheriting a simultaneous Overview's two-second clock.
 - Development-source idle Session, left-behind, Session ceiling and idle-terminal rules share that same Guard loop and earliest deadline. Session stop requires current draft, subagent, question and resume eligibility plus an acknowledged runner marker; next-message activation remains the existing activation owner's decision. Left-behind grace consumes the Processes owner's confirmed identities and cleanup Action, including its original Account approval. Linux Session ceilings use `MemoryHigh`, not `MemoryMax`; live enforcement requires a canonical Session-scope containment verdict, never an arbitrary runner cgroup. The root owner joins retained physical launch custody to the exact runner generation and observed native containment, including fresh launches whose unit name does not encode the accepted Session ID; Guard consumes that verdict without reclassifying the unit name. macOS and Windows expose an unavailable reason. Plain terminals have no count eviction or background reaper: the Off-by-default rule closes through the PTY owner, preserves its left-behind retirement, and records Activity without lighting the Guard-acted dot. Missing native foreground or authenticated notification facts prevent a commanded-terminal close.
 - The development-source service rung stops only Project services with captured Stop/Start again, no client connection observed on any listener throughout the sustain window, and no working Session in the same workspace according to that inventory (unknown is busy). Session-plugin services are excluded; stopping their idle Session ends its services and the Session wakes on its next message.
 
@@ -3104,6 +3129,9 @@ terminal, service, Execution Run, sidecar and daemon-helper owners, not a new re
 Local-services listener provenance consumes the same result; its socket discovery and
 listener re-probe remain local-services responsibilities. Role classification and
 command redaction are shared under `processes/classification` and `processes/redaction`.
+Owned rows retain the classifier's catalog/tool `displayName` alongside the native
+process name, role and generation reference. External rows retain their existing
+name-only privacy boundary.
 Ownership evidence records containment, parent chain, host marker and group/port hints,
 each as met, not met or unavailable.
 
@@ -3214,8 +3242,10 @@ viewer, a notification only marks discovery dirty for the next watch. Native
 census/vitals helpers use their separate sampling execution boundary and do not
 generate workload-launch notifications.
 Successful targeted observations remove exited or replaced generations immediately;
-unreadable observations keep the retained identity uncertain, with unavailable
-resources rather than recycled census figures. Restricted native census reads honor
+unreadable identity or changed/unreadable principal observations keep the retained
+identity uncertain, with unavailable resources and history points rather than
+recycled census figures. Recovery warms only the affected CPU baseline.
+Restricted native census reads honor
 the requested fields and omit unrelated command, environment, path and inferred
 Job discovery; explicit verified Job observations retain their existing boundary.
 Ports use the existing local-services watch; no census-triggered socket scan is added.

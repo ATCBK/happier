@@ -25,6 +25,7 @@ export type SocketRpcSocket = SocketRpcAckScope & Readonly<{
 export async function emitWithAckCancellable<T>(params: Readonly<{
   socket: SocketRpcSocket; event: string; payload: unknown;
   timeoutMs?: number | null; signal?: AbortSignal; requestId?: string; onIssued?: () => void;
+  waitForResultOnCancel?: boolean;
 }>): Promise<T> {
   let issued = false;
   try {
@@ -40,6 +41,7 @@ export async function emitWithAckCancellable<T>(params: Readonly<{
     if (!emitWithAck && !emit) throw new Error('Socket acknowledgement scope cannot emit');
     return await issueSocketRpcCallWithCancellation<T>({
       signal: params.signal, requestId: params.requestId, onIssued: params.onIssued,
+      waitForResultOnCancel: params.waitForResultOnCancel,
       emitCancel: (requestId) => { params.socket.emit(SOCKET_RPC_EVENTS.CANCEL, { requestId }); },
       issue: () => {
         issued = true;
@@ -52,7 +54,7 @@ export async function emitWithAckCancellable<T>(params: Readonly<{
                 } else resolve(args[0]);
               });
             });
-        return raceSocketIoAckTimeout(result as Promise<T>, timeout, params.signal);
+        return raceSocketIoAckTimeout(result as Promise<T>, timeout, params.waitForResultOnCancel ? undefined : params.signal);
       },
     });
   } catch (error) {
@@ -78,6 +80,8 @@ export async function callSocketRpc<R>(params: Readonly<{
   workspaceSyncSeedRouting?: WorkspaceSyncSeedRoutingV1;
   originalActionEnvelope?: ExternalActionRequestEnvelope;
   signal?: AbortSignal; onIssued?: () => void; requestId?: string;
+  /** Send cooperative cancellation while retaining this call's result custody. */
+  waitForResultOnCancel?: boolean;
   /** Records the transport reply before asynchronous result admission/decoding. */
   onResponse?: (response: unknown) => void;
   randomBytes?: (length: number) => Uint8Array;
@@ -151,6 +155,7 @@ export async function callSocketRpc<R>(params: Readonly<{
       ...(workspaceSyncSeedRouting ? { workspaceSyncSeedRouting } : {}),
       ...(originalActionEnvelope ? { originalActionEnvelope } : {}),
       ...(requestId ? { requestId } : {}),
+      ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
       ...(authorization ? { authorization } : {}),
       ...(externalActionExecution ? { externalActionExecution } : {}),

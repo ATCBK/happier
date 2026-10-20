@@ -16,6 +16,7 @@ import { registerPreviewEnvHandler } from './previewEnv';
 import { registerBashHandler } from './bash';
 import { registerWorkspaceFileListHandler } from './workspaceFileList';
 import { registerWorkspaceFileSearchHandler } from './workspaceFileSearch';
+import { registerWorkspaceFileReplaceHandlers } from './workspaceFileReplace';
 import { registerDifftasticHandler } from './difftastic';
 import { registerSessionUserMessageSendHandler } from './sessionUserMessageSend';
 import { registerSessionControlHandlers, type SessionRuntimeControls } from './sessionControls';
@@ -250,6 +251,7 @@ export function registerSessionHandlers(
     registerPreviewEnvHandler(rpcHandlerManager);
     registerWorkspaceFileListHandler(rpcHandlerManager, workingDirectory, { accessPolicy });
     registerWorkspaceFileSearchHandler(rpcHandlerManager, workingDirectory, { accessPolicy });
+    registerWorkspaceFileReplaceHandlers(rpcHandlerManager, workingDirectory, { accessPolicy });
     registerDifftasticHandler(rpcHandlerManager, workingDirectory, { accessPolicy });
     registerSessionUserMessageSendHandler(authorizedSessionRpcHandlerManager, {
         workingDirectory,
