@@ -71,10 +71,13 @@ export const HappierResizeHandle = React.memo((props: Readonly<{
                 {
                     alignItems: 'center',
                     justifyContent: 'center',
+                },
+                // RNW supports these CSS properties; keep the native ViewStyle boundary closed.
+                Platform.OS === 'web' ? ({
                     cursor: props.axis === 'x' ? 'col-resize' : 'row-resize',
                     userSelect: 'none',
-                    ...(Platform.OS === 'web' ? { touchAction: 'none' } : null),
-                },
+                    touchAction: 'none',
+                } as object) : null,
                 props.style,
                 centeredNativeTargetStyle,
             ]}
