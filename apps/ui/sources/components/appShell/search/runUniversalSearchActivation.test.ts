@@ -3,6 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { runUniversalSearchActivation } from './runUniversalSearchActivation';
 
 describe('runUniversalSearchActivation', () => {
+    it('abandons a selected file when query, workspace or close supersedes async preparation', async () => {
+        let current = true;
+        const activate = vi.fn(async () => true);
+        const dismiss = vi.fn();
+        const presentFailure = vi.fn();
+        await runUniversalSearchActivation({ isCurrent: () => current,
+            prepare: async () => { current = false; return true; }, activate, dismiss, presentFailure });
+        expect(activate).not.toHaveBeenCalled();
+        expect(dismiss).not.toHaveBeenCalled();
+        expect(presentFailure).not.toHaveBeenCalled();
+    });
     it('keeps Search open when the selected identity is no longer current', async () => {
         const order: string[] = [];
         const activate = vi.fn(async () => true);

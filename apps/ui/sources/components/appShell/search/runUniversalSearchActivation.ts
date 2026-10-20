@@ -6,17 +6,23 @@
  * mounting either platform host.
  */
 export async function runUniversalSearchActivation(input: Readonly<{
+    /** Query, close and workspace changes cancel preparation before custody passes to the destination. */
+    isCurrent?(): boolean;
     prepare?(): boolean | Promise<boolean>;
     dismiss(): void;
     activate(): Promise<boolean>;
     presentFailure(): void;
 }>): Promise<void> {
+    if (input.isCurrent?.() === false) return;
     try {
-        if (input.prepare && !await input.prepare()) {
+        const prepared = input.prepare ? await input.prepare() : true;
+        if (input.isCurrent?.() === false) return;
+        if (!prepared) {
             input.presentFailure();
             return;
         }
     } catch {
+        if (input.isCurrent?.() === false) return;
         input.presentFailure();
         return;
     }
