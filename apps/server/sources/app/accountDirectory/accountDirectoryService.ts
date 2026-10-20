@@ -640,13 +640,16 @@ function validateAssertionAgainstLink(
     if (signatureStatus !== "ok") throw new AccountDirectoryError("invalid_assertion");
 }
 
-export type HomeConnectionDescriptorResolver = (tx?: Tx) => Promise<HomeConnectionDescriptorV1 | undefined>;
+/** Final checks receive only the descriptor prepared by this redemption before its transaction. */
+export type HomeConnectionDescriptorResolver = (
+    tx?: Tx,
+    prepared?: HomeConnectionDescriptorV1,
+) => Promise<HomeConnectionDescriptorV1 | undefined>;
 
 function createCurrentHomeConnectionDescriptorResolver(
     env: NodeJS.ProcessEnv,
 ): HomeConnectionDescriptorResolver {
-    let prepared: HomeConnectionDescriptorV1 | undefined;
-    return async (tx) => {
+    return async (tx, prepared) => {
         if (tx) return prepared ? readPreparedHomeCredentialDestination({ env, prepared }) : undefined;
         // The canonical descriptor publication binds to the server identity
         // primed once at startup. Establish it through the canonical owner so
@@ -659,11 +662,10 @@ function createCurrentHomeConnectionDescriptorResolver(
         await initializeServerIdentityCache(env);
         const continuityStore = createHomeConnectionDescriptorContinuityStoreForServer(env);
         if (!continuityStore) return undefined;
-        prepared = await readRequiredAuthenticatedHomeConnectionDescriptor({
+        return await readRequiredAuthenticatedHomeConnectionDescriptor({
             env,
             continuityStore,
         });
-        return prepared;
     };
 }
 
@@ -671,10 +673,11 @@ async function validateCredentialDestination(
     assertion: HomeLoginAssertionV1,
     resolveHomeConnectionDescriptor: HomeConnectionDescriptorResolver,
     tx?: Tx,
-): Promise<void> {
+    prepared?: HomeConnectionDescriptorV1,
+): Promise<HomeConnectionDescriptorV1> {
     let descriptor: HomeConnectionDescriptorV1 | undefined;
     try {
-        descriptor = await resolveHomeConnectionDescriptor(tx);
+        descriptor = await resolveHomeConnectionDescriptor(tx, prepared);
     } catch {
         throw new AccountDirectoryError(
             "home_redemption_unavailable",
@@ -696,6 +699,7 @@ async function validateCredentialDestination(
             "Home credential destination does not match the assertion",
         );
     }
+    return descriptor;
 }
 
 export async function redeemHomeLoginAssertion(params: Readonly<{
@@ -735,7 +739,7 @@ export async function redeemHomeLoginAssertion(params: Readonly<{
     if (!isValidBoxBundlePublicKey(clientPublicKey)) throw new AccountDirectoryError("invalid_client_key");
     const resolveHomeConnectionDescriptor = params.resolveHomeConnectionDescriptor
         ?? createCurrentHomeConnectionDescriptorResolver(params.env ?? process.env);
-    await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor);
+    const preparedHomeConnectionDescriptor = await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor);
     const eligibility = await enforceLoginEligibility({
         accountId: link.accountId,
         env: params.env ?? process.env,
@@ -837,7 +841,7 @@ export async function redeemHomeLoginAssertion(params: Readonly<{
         // while approval was pending cannot produce a usable Home credential.
         // Native observation and continuity publication were prepared before
         // opening this transaction; final validation performs no external IO.
-        await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor, tx);
+        await validateCredentialDestination(assertion, resolveHomeConnectionDescriptor, tx, preparedHomeConnectionDescriptor);
         if (params.nowMs === undefined) {
             const issuanceBoundaryNowMs = Date.now();
             if (assertion.expiresAtMs <= issuanceBoundaryNowMs) {
