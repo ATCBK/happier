@@ -167,6 +167,7 @@ export const GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1: TriageSourceDescriptorV1 =
       pluralDisplayName: 'Issues',
       task: true,
       taskCapabilities: {
+        completingTransitionId: 'completed',
         createFields: ['title', 'body', 'assigneeIds', 'labelIds', 'scopeId'],
         editFields: ['title', 'body', 'assigneeIds', 'labelIds'],
         transitions: [
