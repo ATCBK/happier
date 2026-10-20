@@ -778,6 +778,14 @@ an original-return tuple alone cannot authorize caller-authored text. None of th
 introduces another credential or uses human HTTP posting to invent Agent provenance. The
 Discussion's own key remains the content key, independent of an optional source Session.
 
+In current development source, the canonical `discussion.reply` Action declares direct
+Agent tool exposure as `discussion_reply`, through the same shared Action/MCP projection.
+It is not injected separately for addressed turns or particular Agents. Explicit Action
+exposure/disable settings and the Home conversations feature still govern availability;
+direct visibility does not waive dangerous-post approval, private draft review, original
+custody, cutoff or publisher admission. Generic Action discovery/execution remains available
+when the caller deliberately selects discoverable-only exposure.
+
 Development-source publisher diagnostics retain typed refusal codes and identify the
 content-free approval, original-custody, exact-result or publication stage in the existing
 correlated RPC completion record. A thrown transient prerequisite read is unavailable,
