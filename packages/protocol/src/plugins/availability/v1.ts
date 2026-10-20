@@ -305,6 +305,18 @@ export const PluginMachineUiArtifactV1Schema = lazyZodSchema(() => z.strictObjec
 }));
 export type PluginMachineUiArtifactV1 = z.infer<typeof PluginMachineUiArtifactV1Schema>;
 
+/** Release slots may carry an executable graph; Machine observations carry only these facts. */
+export function projectPluginMachineUiArtifactV1(artifact: PluginMachineUiArtifactV1): PluginMachineUiArtifactV1 {
+  return Object.freeze({
+    contributionId: artifact.contributionId,
+    artifactId: artifact.artifactId,
+    tier: artifact.tier,
+    platform: artifact.platform,
+    artifactDigest: artifact.artifactDigest,
+    hostUiApiRange: artifact.hostUiApiRange,
+  });
+}
+
 export const PluginMachineMaterializationV1Schema = lazyZodSchema(() => z.strictObject({
   serverIdentityId: ServerIdentityIdSchema,
   machineId: PluginMachineMaterializationMachineIdV1Schema,
@@ -375,7 +387,7 @@ export function projectPluginMachineMaterializationReportFactsV1(
     ...(materialization.archiveDigestSha256 !== undefined
       ? { archiveDigestSha256: materialization.archiveDigestSha256 }
       : {}),
-    uiArtifacts: materialization.uiArtifacts,
+    uiArtifacts: Object.freeze(materialization.uiArtifacts.map(projectPluginMachineUiArtifactV1)),
     enabled: materialization.enabled,
     trustState: materialization.trustState,
     observedAt: materialization.observedAt,

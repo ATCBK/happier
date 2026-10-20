@@ -1,4 +1,5 @@
 import type { PluginMachineMaterializationV1, PluginSourceSpecV1 } from '@happier-dev/protocol';
+import { projectPluginMachineUiArtifactV1 } from '@happier-dev/protocol/plugins/availability/v1';
 
 import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
 import type { PluginSourceCustody } from '@/plugins/runtime/sourceAuthority';
@@ -113,6 +114,7 @@ export function projectReleaseLessPluginDeclarations(input: Readonly<{
                     portableRelease: false,
                     uiArtifacts: Object.freeze(target.generatedUiArtifactsManifest
                         ? projectVerifiedPluginUiReleaseSlotsV2({ manifest: target.manifest, generatedUiArtifacts: target.generatedUiArtifactsManifest })
+                            .map(projectPluginMachineUiArtifactV1)
                         : []),
                     enabled: true,
                     // Reading an installed manifest is not source admission.

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { PluginUiArtifactsManifestV2Schema } from '@happier-dev/protocol/plugins/ui';
+import { PluginAvailabilityMaterializationsReportActionInputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
+import { projectPluginMachineMaterializationReportFactsV1 } from '@happier-dev/protocol/plugins/availability/v1';
 
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
@@ -27,6 +29,16 @@ describe('verified portable Plugin Availability facts', () => {
       ['web', 'ios', 'android'].map(platform => ({ contributionId: 'read', artifactId: 'account', tier: 'reactNative',
         platform, artifactDigest: digest('c'), hostUiApiRange: '^1.0.0', artifactGraph: generatedUiArtifacts.entries[0] })),
     );
+    const uiArtifacts = projectVerifiedPluginUiReleaseSlotsV2({ manifest, generatedUiArtifacts });
+    const snapshot = { serverIdentityId: 'srv_availability', machineId: 'machine', materializations: [
+      projectPluginMachineMaterializationReportFactsV1({ serverIdentityId: 'srv_availability', machineId: 'machine',
+        materializationId: 'installation', pluginId: manifest.id, version: manifest.version,
+        sourceClass: 'bundledFirstParty', portableRelease: false, uiArtifacts,
+        enabled: true, trustState: 'trusted', observedAt: 1 }),
+    ] };
+    // Release slots retain the executable graph; the Machine census carries
+    // only materialization facts. A leaked graph rejects the entire report.
+    expect(PluginAvailabilityMaterializationsReportActionInputV1Schema.safeParse({ expectedRevision: null, snapshot }).success).toBe(true);
   });
   it('does not publish a native declaration backed by the wrong artifact tier', () => {
     const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({
