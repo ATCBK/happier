@@ -114,6 +114,37 @@ describe('Tree', () => {
     view.unmount();
   });
 
+  it('opens the same row actions from a right-click as a long press does, and keeps the browser menu away', async () => {
+    const context = createSurfaceContext();
+    const hostApi = createHostApiStub(context);
+    const opened: boolean[] = [];
+    const view = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={hostApi} context={context}>
+        <HappierTreeRow
+          node={{ key: 'menu.ts', parentKey: null, depth: 0, kind: 'leaf', expanded: false }}
+          title="menu.ts"
+          renderActions={(control) => {
+            opened.push(control.open);
+            return <span data-row-actions>{control.open ? 'open' : 'closed'}</span>;
+          }}
+          tabStop
+          theme={context.theme}
+          onActivate={() => {}}
+          onFocus={() => {}}
+          onKeyDown={() => false}
+          controlRef={() => {}}
+          testID="menu-row"
+        />
+      </PluginUiProvider>,
+    );
+    const row = view.container.querySelector<HTMLElement>('[data-testid="menu-row"]')!;
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
+    await act(async () => { row.dispatchEvent(event); });
+    expect(event.defaultPrevented).toBe(true);
+    expect(row.querySelector('[data-row-actions]')?.textContent).toBe('open');
+    view.unmount();
+  });
+
   it('keeps inline controls in the row without activating or disclosing it, then returns focus to the row', async () => {
     const { view, row, activated, expanded, finishEdit } = mount(items, undefined, item => item.key === 'docs' ? (
       <input aria-label="Folder name" defaultValue="docs" autoFocus />

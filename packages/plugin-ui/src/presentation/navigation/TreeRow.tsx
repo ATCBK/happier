@@ -155,6 +155,11 @@ export type HappierTreeRowProps = Readonly<{
   reducedMotion?: boolean;
   onActivate: () => void;
   onLongPress?: () => void;
+  /**
+   * Touch: the long press that opens the row's actions reached its threshold (the host plays its haptic
+   * here, once, never on a tap).
+   */
+  onActionsLongPress?: () => void;
   onContextMenu?: (event: unknown) => void;
   keyboardShortcuts?: string;
   onFocus: () => void;
@@ -252,8 +257,16 @@ export function HappierTreeRow(props: HappierTreeRowProps) {
         setRowFocused(focused);
         if (focused) props.onFocus();
       }}
-      onLongPress={props.renderActions && props.touch ? () => setActionsOpen(true) : props.onLongPress}
-      onContextMenu={props.onContextMenu}
+      onLongPress={props.renderActions && props.touch ? () => {
+        props.onActionsLongPress?.();
+        setActionsOpen(true);
+      } : props.onLongPress}
+      // A right-click opens the same actions a long press does (one row menu, two inputs).
+      onContextMenu={props.renderActions && !props.touch && !editing ? (event: unknown) => {
+        (event as { preventDefault?: () => void } | null)?.preventDefault?.();
+        setActionsOpen(true);
+        props.onContextMenu?.(event);
+      } : props.onContextMenu}
       keyboardShortcuts={props.keyboardShortcuts}
       onPress={() => {
         if (!editing) props.onActivate();
