@@ -23,6 +23,7 @@ import type { SessionNavigationDirection } from '@/sync/domains/session/navigati
 import { useSetting } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { useOptionalModal } from '@/modal';
 
 import {
     SESSION_SWITCHER_ACTIVATION_PX,
@@ -125,6 +126,7 @@ export function SessionSwitcherBand(props: Readonly<{
 
     const router = useRouter();
     const deviceType = useDeviceType();
+    const modalOwnsInput = useOptionalModal()?.isKeyboardLiftSuppressedByModal === true;
     const window = useWindowDimensions();
     const insets = useChromeSafeAreaInsets();
     const reducedMotion = useReducedMotionPreference();
@@ -147,7 +149,7 @@ export function SessionSwitcherBand(props: Readonly<{
     }, []);
 
     // Native phones only: on mobile web the browser owns the edges and the bottom of the screen.
-    const gestureEnabled = Platform.OS !== 'web' && deviceType === 'phone' && !keyboardVisible
+    const gestureEnabled = Platform.OS !== 'web' && deviceType === 'phone' && !keyboardVisible && !modalOwnsInput
         && (sidewaysEnabled || dragUpEnabled || flickEnabled || holdEnabled);
 
     const [panel, setPanel] = React.useState<PanelState | null>(null);
