@@ -97,19 +97,42 @@ import { publishLocalDaemonStatus, readLocalDaemonSharedState } from '@/componen
 import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
 
 describe('Track device-local Settings declaration', () => {
-    it('lets an agent read and write Track through settings.set without changing Account settings', async () => {
-        const owner = createOwner();
-        const executor = throughActionExecutor(owner.action);
+    it('lets an agent read and write Track with SCM writes disabled without changing Account settings', async () => {
+        const initialAccount = applySettings(settingsDefaults, { actionsSettingsV1: {
+            v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent'] },
+        } });
+        // File tracking is independent of SCM write admission; the agent still needs its explicit Settings waiver.
+        const owner = createOwner(undefined, false, true, initialAccount);
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
         const context = { surface: 'agent', authority: 'account_automation' } as const;
         expect(await executor.execute('settings.get', { anchor: 'files.trackAgentEdits' }, context))
-            .toMatchObject({ ok: true, result: { value: false } });
+            .toEqual({ ok: true, result: { anchor: 'files.trackAgentEdits', value: false } });
         expect(await executor.execute('settings.set', { anchor: 'files.trackAgentEdits', value: true }, context))
             .toMatchObject({ ok: true, result: { value: true } });
         expect(owner.local().filesTrackAgentEdits).toBe(true);
-        expect(owner.account()).toEqual(settingsDefaults);
+        expect(owner.account()).toEqual(initialAccount);
         expect(await executor.execute('settings.set', { anchor: 'files.trackAgentEdits', value: 'true' }, context))
             .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
         expect(owner.local().filesTrackAgentEdits).toBe(true);
+    });
+});
+
+describe('image Background device-local Settings declaration', () => {
+    it('reads and changes the manual image and SVG preferences through the real Actions owner', async () => {
+        const owner = createOwner();
+        const executor = throughActionExecutor(owner.action);
+        const context = { surface: 'agent', authority: 'account_automation' } as const;
+        expect(await executor.execute('settings.get', { anchor: 'files.imageBackground' }, context))
+            .toMatchObject({ ok: true, result: { value: {} } });
+        expect(await executor.execute('settings.set', {
+            anchor: 'files.imageBackground', value: { image: 'dark', svg: 'light' },
+        }, context)).toMatchObject({ ok: true, result: { value: { image: 'dark', svg: 'light' } } });
+        expect(owner.local().filesImageBackgroundByKind).toEqual({ image: 'dark', svg: 'light' });
+        expect(owner.account()).toEqual(settingsDefaults);
+        expect(await executor.execute('settings.set', {
+            anchor: 'files.imageBackground', value: { svg: 'automatic' },
+        }, context)).toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(owner.local().filesImageBackgroundByKind).toEqual({ image: 'dark', svg: 'light' });
     });
 });
 
@@ -1081,6 +1104,10 @@ describe('navigation placement Settings Actions', () => {
                 defaults: { configMode: 'linked', stateMode: 'isolated' }, acknowledgedRisksByAgentId: {},
             },
         }));
+        const input = { anchor: 'connectedServicesAgentSignIn.sharingState', value: true };
+        expect(await owner.action({ actionId: 'settings.set', input }))
+            .toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
+        await admitSettingsSharingCatalog();
         expect(await owner.action({ actionId: 'settings.set', input: {
             anchor: 'connectedServicesAgentSignIn.sharingState', value: true,
         } })).toMatchObject({ value: true });
@@ -1187,6 +1214,21 @@ function readSummaryCatalogAccount() {
         summaryCatalogAccount = capture;
     }
     return summaryCatalogAccount;
+}
+
+/** Publish the Account inventory at its real writer; sharing admission and consent stay real. */
+async function admitSettingsSharingCatalog() {
+    const account = await readSummaryCatalogAccount();
+    const scope = await activateStorageAccountScope(account.accountLifetime.scope);
+    const { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } =
+        await import('@/sync/domains/plugins/availability/projection');
+    onTestFinished(() => {
+        clearPluginAccountAvailabilityProjection();
+        scope.dispose();
+    });
+    replacePluginAccountAvailabilityProjection({ scope: account.accountLifetime.scope, snapshot: {
+        availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [], inventoryComplete: true,
+    } });
 }
 
 /** Seed only device storage; model descriptors, catalog projection and admission stay real. */
@@ -2400,6 +2442,7 @@ describe('declared settings owner', () => {
             const invoke = vi.spyOn(desktopHostBoundary, 'invokeDesktopHost').mockResolvedValue(undefined);
             onTestFinished(() => invoke.mockRestore());
             const value = await supportedSummaryPreference();
+            await admitSettingsSharingCatalog();
             const owner = createOwner(host, true, true, applySettings(settingsDefaults, {
                 'scm.diffSummary.modelProfileOverride': value,
             }));

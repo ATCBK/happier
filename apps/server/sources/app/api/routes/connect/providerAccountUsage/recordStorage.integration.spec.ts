@@ -343,6 +343,33 @@ describe("provider account usage record storage (integration)", () => {
             .not.toHaveProperty("recoveryCreditDetails");
     });
 
+    it("preserves every credential alias when another source reports the same usage observation", async () => {
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" }, select: { id: true } });
+        const snapshot = createUsageSnapshot({ fetchedAt: Date.now() - 3000 });
+        const source = (index: number) => ({ serviceId: "openai-codex" as const, profileId: `profile-${index}`, bindingKind: "profile" as const });
+        const sealed = { format: "account_scoped_v1" as const, ciphertext: "opaque-quota" };
+        const write = {
+            accountId: account.id, recordId: snapshot.recordId, recordKey: snapshot.recordKey,
+            payloadMode: "sealed_account_scoped_v1" as const, status: "ok" as const, fetchedAt: snapshot.fetchedAtMs,
+            staleAfterMs: snapshot.staleAfterMs, sealedPayload: { format: "account_scoped_v1" as const, ciphertext: "opaque-base" },
+        };
+        await upsertProviderAccountUsageRecord({ ...write, metadata: {
+            materialFingerprint: "same-observation",
+            legacyQuotaCompatibilityProjections: Array.from({ length: 100 }, (_, index) => ({
+                source: source(index), providerAccountUsageFetchedAt: snapshot.fetchedAtMs, sealed,
+            })),
+        } });
+        await expect(writeProviderAccountUsageRecordWithPolicy({ ...write,
+            materialFingerprint: "same-observation",
+            legacyQuotaCompatibility: { source: source(100), sealed },
+        })).resolves.toBe("written");
+        const retained = await readProviderAccountUsageRecord({ accountId: account.id, recordId: snapshot.recordId });
+        const aliases = retained?.metadata?.legacyQuotaCompatibilityProjections;
+        expect(aliases).toHaveLength(101);
+        expect(aliases?.some(alias => alias.source.profileId === "profile-0")).toBe(true);
+        expect(aliases?.some(alias => alias.source.profileId === "profile-100")).toBe(true);
+    });
+
     it("preserves opaque recovery details in current and historical V4 encrypted projections", async () => {
         const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" }, select: { id: true } });
         const snapshot = createUsageSnapshot({ fetchedAt: Date.now() - 3000 });
