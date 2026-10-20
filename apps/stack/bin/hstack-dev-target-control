@@ -101,7 +101,7 @@ check_sync_session_clean() {
     printf '%s\n' 'hstack-dev-target-control: MUTAGEN_DATA_DIRECTORY is required for sync inspection' >&2
     return 1
   }
-  sync_template='{{range .}}{{.Name}}|{{.Status}}|{{.Paused}}|{{.Alpha.Connected}}|{{if .Alpha.Connected}}{{if .Alpha.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.ScanProblems}}/{{.Alpha.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.TransitionProblems}}/{{.Alpha.ExcludedTransitionProblems}}{{else}}X{{end}}|{{.Beta.Connected}}|{{if .Beta.Connected}}{{if .Beta.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.ScanProblems}}/{{.Beta.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.TransitionProblems}}/{{.Beta.ExcludedTransitionProblems}}{{else}}X{{end}}|{{if .Paused}}paused|0|ok|0|0{{else}}active|{{.SuccessfulCycles}}|{{if .LastError}}error{{else}}ok{{end}}|{{len .Conflicts}}|{{.ExcludedConflicts}}{{end}}|{{.Alpha.Watch.Mode}}|{{.Beta.Watch.Mode}}{{println}}{{range .Alpha.TransitionProblems}}{{println .Error}}{{end}}{{range .Beta.TransitionProblems}}{{println .Error}}{{end}}{{range .Alpha.ScanProblems}}{{println .Error}}{{end}}{{range .Beta.ScanProblems}}{{println .Error}}{{end}}{{end}}'
+  sync_template='{{range .}}{{.Name}}|{{.Status}}|{{.Paused}}|{{.Alpha.Connected}}|{{if .Alpha.Connected}}{{if .Alpha.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.ScanProblems}}/{{.Alpha.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Alpha.Connected}}{{len .Alpha.TransitionProblems}}/{{.Alpha.ExcludedTransitionProblems}}{{else}}X{{end}}|{{.Beta.Connected}}|{{if .Beta.Connected}}{{if .Beta.Scanned}}1{{else}}0{{end}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.ScanProblems}}/{{.Beta.ExcludedScanProblems}}{{else}}X{{end}}|{{if .Beta.Connected}}{{len .Beta.TransitionProblems}}/{{.Beta.ExcludedTransitionProblems}}{{else}}X{{end}}|{{if .Paused}}paused|0|ok|0|0{{else}}active|{{.SuccessfulCycles}}|{{if .LastError}}error{{else}}ok{{end}}|{{len .Conflicts}}|{{.ExcludedConflicts}}{{end}}|{{.Alpha.Watch.Mode}}|{{.Beta.Watch.Mode}}{{println}}{{range .Alpha.TransitionProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Beta.TransitionProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Alpha.ScanProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{range .Beta.ScanProblems}}{{printf "%s|%s\n" .Path .Error}}{{end}}{{end}}'
   if ! status_output=$(mutagen sync list "$session_name" --template "$sync_template" 2>/dev/null); then
     printf '%s\n' "hstack-dev-target-control: $session_name synchronization status inspection failed" >&2
     return 1
@@ -146,27 +146,59 @@ EOF
     return 1
   }
   # Unknown/excluded scan or transition failures, conflicts and missing evidence stay
-  # fail-closed. The shared generated policy recognizes only known races.
+  # fail-closed. The generated owner policy exempts only named project data.
   for scan_counts in "$s_alpha_scan" "$s_beta_scan" "$s_alpha_trans" "$s_beta_trans"; do
     case "$scan_counts" in ''|*[!0-9/]*|/*|*/|*/*/*) return 1 ;; esac
     case "$scan_counts" in */*) ;; *) return 1 ;; esac
   done
   expected_transition_count=$(( ${s_alpha_trans%/*} + ${s_beta_trans%/*} ))
   expected_scan_count=$(( ${s_alpha_scan%/*} + ${s_beta_scan%/*} ))
+  scan_errors=''
+  transition_errors=''
+  blocking_scan_count=0
+  blocking_transition_count=0
   if [ "$((expected_transition_count + expected_scan_count))" -gt 0 ]; then
     problem_count=$(printf '%s\n' "$status_output" | sed '1d' | wc -l | tr -d ' ')
     if [ "$problem_count" != "$((expected_transition_count + expected_scan_count))" ]; then
       printf '%s\n' "hstack-dev-target-control: $session_name synchronization has malformed scan problems or transition problems" >&2
       return 1
     fi
+    problem_lines=$(printf '%s\n' "$status_output" | sed '1d')
+    problem_index=0
+    while IFS= read -r problem_line; do
+      problem_index=$((problem_index + 1))
+      case "$problem_line" in
+        *'|'*) problem_path=${problem_line%%|*}; problem_error=${problem_line#*|} ;;
+        *) printf '%s\n' "hstack-dev-target-control: $session_name synchronization has malformed problem paths" >&2; return 1 ;;
+      esac
+      case "$problem_error" in
+        ''|*'|'*) printf '%s\n' "hstack-dev-target-control: $session_name synchronization has malformed problem evidence" >&2; return 1 ;;
+      esac
+      if printf '%s\n' "$problem_error" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then
+        printf '%s\n' "hstack-dev-target-control: $session_name synchronization has malformed problem evidence" >&2
+        return 1
+      fi
+      if is_mutagen_project_data_path "$problem_path"; then
+        printf '%s\n' "hstack-dev-target-control: $session_name synchronization warning: $problem_path: $problem_error" >&2
+      elif [ "$problem_index" -le "$expected_transition_count" ]; then
+        blocking_transition_count=$((blocking_transition_count + 1))
+        transition_errors="${transition_errors}${transition_errors:+
+}$problem_error"
+      else
+        blocking_scan_count=$((blocking_scan_count + 1))
+        scan_errors="${scan_errors}${scan_errors:+
+}$problem_error"
+      fi
+    done <<EOF
+$problem_lines
+EOF
   fi
   sync_fact_transientScanProblems=0
-  if [ "$s_alpha_scan" != '0/0' ] || [ "$s_beta_scan" != '0/0' ]; then
-    if [ "${s_alpha_scan#*/}" != 0 ] || [ "${s_beta_scan#*/}" != 0 ]; then
-      printf '%s\n' "hstack-dev-target-control: $session_name synchronization has excluded scan problems" >&2
-      return 1
-    fi
-    scan_errors=$(printf '%s\n' "$status_output" | sed -n "$((expected_transition_count + 2)),\$p")
+  if [ "${s_alpha_scan#*/}" != 0 ] || [ "${s_beta_scan#*/}" != 0 ]; then
+    printf '%s\n' "hstack-dev-target-control: $session_name synchronization has excluded scan problems" >&2
+    return 1
+  fi
+  if [ "$blocking_scan_count" -gt 0 ]; then
     if ! classify_transient_mutagen_scan_errors "$scan_errors"; then
       printf '%s\n' "hstack-dev-target-control: $session_name synchronization has unsafe scan problems: $scan_errors" >&2
       return 1
@@ -174,12 +206,11 @@ EOF
     sync_fact_transientScanProblems=1
   fi
   sync_fact_transientTransitionProblems=0
-  if [ "$s_alpha_trans" != '0/0' ] || [ "$s_beta_trans" != '0/0' ]; then
-    if [ "${s_alpha_trans#*/}" != 0 ] || [ "${s_beta_trans#*/}" != 0 ]; then
-      printf '%s\n' "hstack-dev-target-control: $session_name synchronization has excluded transition problems" >&2
-      return 1
-    fi
-    transition_errors=$(printf '%s\n' "$status_output" | sed -n "2,$((expected_transition_count + 1))p")
+  if [ "${s_alpha_trans#*/}" != 0 ] || [ "${s_beta_trans#*/}" != 0 ]; then
+    printf '%s\n' "hstack-dev-target-control: $session_name synchronization has excluded transition problems" >&2
+    return 1
+  fi
+  if [ "$blocking_transition_count" -gt 0 ]; then
     if ! classify_transient_mutagen_transition_errors "$transition_errors"; then
       printf '%s\n' "hstack-dev-target-control: $session_name synchronization has unsafe transition problems: $transition_errors" >&2
       return 1
@@ -196,7 +227,7 @@ EOF
   sync_fact_completed=0
   if [ "$sync_fact_cyclesValid" = 1 ] && [ "$s_cycles" -gt 0 ]; then sync_fact_completed=1; fi
   sync_fact_scanProblems=0
-  if [ "$s_alpha_scan" != "0/0" ] || [ "$s_beta_scan" != "0/0" ]; then sync_fact_scanProblems=1; fi
+  if [ "$blocking_scan_count" -gt 0 ]; then sync_fact_scanProblems=1; fi
   classify_clean_mutagen_readiness
   if [ "$sync_readiness" = rescan ]; then
     printf '%s\n' "hstack-dev-target-control: $session_name synchronization needs a fresh scan (scan=$s_alpha_scan/$s_beta_scan transition=$s_alpha_trans/$s_beta_trans)" >&2

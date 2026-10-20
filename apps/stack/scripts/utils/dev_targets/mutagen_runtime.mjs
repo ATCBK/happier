@@ -36,6 +36,22 @@ const transientTransitionError = new RegExp(TRANSIENT_TRANSITION_ERRORS.join('|'
 const TRANSIENT_SCAN_ERRORS = ['^hashed size mismatch: [0-9]+ != [0-9]+$'];
 const transientScanError = new RegExp(TRANSIENT_SCAN_ERRORS.join('|'), 'i');
 
+// Dev-target policy permits stale project data/captures by extension. Other
+// extensions and all paths outside .project remain blocking command inputs.
+const PROJECT_DATA_PROBLEM_PATH = '^\\.project/([^/]+/)*[^/]+\\.(json|md|txt|csv|html|svg|png|jpg|jpeg|webp|gif)$';
+const invalidProblemSegments = /(^|\/)([.]|[.][.]|)(\/|$)/;
+const projectDataProblemPath = new RegExp(PROJECT_DATA_PROBLEM_PATH);
+
+function isProjectDataProblem(problem) {
+  return typeof problem?.path === 'string'
+    && typeof problem?.error === 'string'
+    && problem.error.length > 0
+    && !/[\x00-\x1f\x7f\\|]/.test(problem.path)
+    && !/[\x00-\x1f\x7f|]/.test(problem.error)
+    && !invalidProblemSegments.test(problem.path)
+    && projectDataProblemPath.test(problem.path);
+}
+
 export function classifyCleanMutagenReadiness(facts) {
   return SYNC_READINESS_RULES.find(({ when }) => (
     Object.entries(when).every(([fact, value]) => facts[fact] === value)
@@ -57,6 +73,12 @@ export function renderNativeSyncReadinessPolicy() {
     'classify_transient_mutagen_transition_errors() {',
     `  printf '%s\\n' "$1" | grep -Eiv '${TRANSIENT_TRANSITION_ERRORS.join('|')}' >/dev/null`,
     '  case "$?" in 1) return 0 ;; *) return 1 ;; esac',
+    '}',
+    'is_mutagen_project_data_path() {',
+    "  case \"$1\" in *'|'*|*'\\'*) return 1 ;; esac",
+    "  if printf '%s\\n' \"$1\" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null; then return 1; fi",
+    `  if printf '%s\\n' "$1" | grep -Eq '${invalidProblemSegments.source}'; then return 1; fi`,
+    `  printf '%s\\n' "$1" | grep -Eq '${PROJECT_DATA_PROBLEM_PATH}'`,
     '}',
     'classify_transient_mutagen_scan_errors() {',
     `  printf '%s\\n' "$1" | grep -Eiv '${TRANSIENT_SCAN_ERRORS.join('|')}' >/dev/null`,
@@ -234,20 +256,21 @@ export function parseMutagenSyncList(raw, sessionName) {
   }
   const scanDetails = [];
   const transitionDetails = [];
+  const warnings = [];
   let transientTransitions = true;
   let transientScans = true;
   for (const [endpointName, endpoint] of [['alpha', alpha], ['beta', beta]]) {
-    const scanProblems = endpoint.scanProblems == null ? [] : endpoint.scanProblems;
+    const rawScanProblems = endpoint.scanProblems == null ? [] : endpoint.scanProblems;
     const excludedScan = endpoint.excludedScanProblems == null ? 0 : endpoint.excludedScanProblems;
-    const transitionProblems = endpoint.transitionProblems == null ? [] : endpoint.transitionProblems;
+    const rawTransitionProblems = endpoint.transitionProblems == null ? [] : endpoint.transitionProblems;
     const excludedTransition = endpoint.excludedTransitionProblems == null
       ? 0
       : endpoint.excludedTransitionProblems;
     if (
-      !Array.isArray(scanProblems)
+      !Array.isArray(rawScanProblems)
       || !Number.isSafeInteger(excludedScan)
       || excludedScan < 0
-      || !Array.isArray(transitionProblems)
+      || !Array.isArray(rawTransitionProblems)
       || !Number.isSafeInteger(excludedTransition)
       || excludedTransition < 0
     ) {
@@ -258,6 +281,13 @@ export function parseMutagenSyncList(raw, sessionName) {
         session,
       };
     }
+    const blockingProblems = (problems, kind) => problems.filter(problem => {
+      if (!isProjectDataProblem(problem)) return true;
+      warnings.push(`${endpointName} ${kind} warning: ${problem.path}: ${problem.error}`);
+      return false;
+    });
+    const scanProblems = blockingProblems(rawScanProblems, 'scan');
+    const transitionProblems = blockingProblems(rawTransitionProblems, 'transition');
     const hasExcludedScan = excludedScan > 0;
     const hasExcludedTransition = excludedTransition > 0;
     if (transitionProblems.length > 0 || hasExcludedTransition) {
@@ -290,15 +320,15 @@ export function parseMutagenSyncList(raw, sessionName) {
   });
   if (transitionDetails.length) {
     return { state: 'unhealthy', sessionName: expectedName, lastError: transitionDetails.join('; '),
-      ...(transientTransitions && readiness === 'rescan' ? { recovery: 'rescan' } : {}), session };
+      ...(transientTransitions && readiness === 'rescan' ? { recovery: 'rescan' } : {}), warnings, session };
   }
   if (scanDetails.length) {
     return {
       state: 'unhealthy', sessionName: expectedName, lastError: scanDetails.join('; '),
-      ...(readiness === 'rescan' ? { recovery: 'rescan' } : {}), session,
+      ...(readiness === 'rescan' ? { recovery: 'rescan' } : {}), warnings, session,
     };
   }
-  return { state: readiness, sessionName: expectedName, session };
+  return { state: readiness, sessionName: expectedName, warnings, session };
 }
 
 function isSafeRelativeConflictRoot(value) {

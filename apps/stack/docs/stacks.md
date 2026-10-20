@@ -146,6 +146,16 @@ unconfirmed with a target-specific warning; cleanup does not execute stale helpe
 code from that mirror. A reachable helper failure still prevents stop finalization,
 and both JSON and console output retain its sanitized cause.
 
+In 0.3 development source, scan or transition problems on `.project/` data and
+capture files are named warnings when their extension is `.json`, `.md`, `.txt`,
+`.csv`, `.html`, `.svg`, `.png`, `.jpg`, `.jpeg`, `.webp` or `.gif`. These files may
+be stale on the mirror. Other extensions (including script and configuration
+extensions), extensionless paths and paths outside `.project/` remain blocking,
+including a list that mixes captures with command inputs.
+Excluded or malformed problem evidence, conflicts, disconnected endpoints and
+incomplete synchronization cycles also remain blocking. Status and dispatch use
+the same policy; no ignore-list change or session recreation is needed.
+
 Use `local` placement for services on the controller. A separate mirror on the
 same host must remain outside the authoritative checkout: the synchronization
 producer rejects equal, nested or enclosing destinations before creating a mirror,

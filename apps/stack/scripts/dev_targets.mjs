@@ -127,6 +127,7 @@ function requireTarget(targets, rawName, command) {
 function formatSyncStatus(target, status) {
   const detail = status.lastError || status.error;
   return `[dev-targets] ${target.name}\t${status.state}${detail ? `\t${detail}` : ''}`
+    + (status.warnings?.length ? `\t${status.warnings.join('; ')}` : '')
     + (status.recovery === 'rescan' ? '\twill rescan at the next dispatch barrier' : '');
 }
 
@@ -706,9 +707,7 @@ async function main() {
             `[dev-targets] ${target} startup preparation history\t${preparation.state}`
               + (preparation.error ? `\t${preparation.error}` : '')
           )),
-          ...result.statuses.map(({ target, status }) => `[dev-targets] ${target}\t${status.state}`
-            + (status.lastError || status.error ? `\t${status.lastError || status.error}` : '')
-            + (status.recovery === 'rescan' ? '\twill rescan at the next dispatch barrier' : '')),
+          ...result.statuses.map(({ target, status }) => formatSyncStatus({ name: target }, status)),
         ].join('\n'),
       });
       if (result.state !== 'ready') {
