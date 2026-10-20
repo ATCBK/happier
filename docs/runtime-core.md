@@ -100,6 +100,10 @@ In 0.3 development source, Session input routing uses Pending's committed
 Input can therefore reach its existing custody while a planned replacement has
 no live publisher socket. Archive, Account access and current Machine installation
 checks still apply. Runtime effects continue to require a current publisher.
+If an admitted Session runtime effect has no current publisher, the existing
+RPC classifier returns `target_unavailable`; a current publisher lacking the
+method still returns `RPC_METHOD_NOT_AVAILABLE`. A submitted mutation whose
+publisher disappears retains `RPC_OUTCOME_UNKNOWN`, not a retryable absence.
 When the send requests Resume, the daemon consults the existing intended-respawn
 state and signaled-restart PID set for that exact Session, after requester
 validation. A pending replacement retains launch ownership; the replacement

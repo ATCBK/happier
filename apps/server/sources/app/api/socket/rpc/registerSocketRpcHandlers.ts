@@ -2042,6 +2042,12 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 targetUserId,
                 method,
                 callParams,
+                ...(sessionAuthorization?.routeToSessionOwnerDaemon && !requesterApprovalMachine ? {
+                    isTargetUnavailable: async () => !await resolveCurrentSessionMachineFromServer({
+                        io: params.io, presence: params.sessionPublisherPresence, accountId: targetUserId,
+                        sessionId: admittedMethod.slice(0, admittedMethod.lastIndexOf(':')),
+                    }),
+                } : {}),
                 ...(requesterApprovalMachine ? {
                     sessionDecisionTargetMethod: `${requesterApprovalMachine.machineId}:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`,
                 } : {}),
