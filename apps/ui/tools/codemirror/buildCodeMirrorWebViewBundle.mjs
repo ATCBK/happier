@@ -36,9 +36,10 @@ function findRepoRoot(startDir) {
 function createEntrySource() {
     // Note: this bundle is executed inside a WebView. Keep it browser-compatible and avoid Node globals.
     return `
-import { EditorState } from '@codemirror/state';
-import { EditorView, lineNumbers, keymap, drawSelection, highlightSpecialChars, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { createCodeMirrorDecorations } from ${JSON.stringify(path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '../../sources/components/ui/code/editor/bridge/codeMirrorDecorations.ts'))};
+import { EditorState, StateField, StateEffect, RangeSet, RangeSetBuilder, RangeValue, MapMode } from '@codemirror/state';
+import { EditorView, Decoration, gutter, GutterMarker, ViewPlugin, lineNumbers, keymap, drawSelection, highlightSpecialChars, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
+import { defaultKeymap, history, historyKeymap, indentMore, indentLess, undo, redo, undoDepth, redoDepth, cursorCharLeft, cursorCharRight, isolateHistory } from '@codemirror/commands';
 import { StreamLanguage, indentOnInput, bracketMatching, syntaxHighlighting, defaultHighlightStyle, HighlightStyle } from '@codemirror/language';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { search, SearchQuery, setSearchQuery, getSearchQuery, findNext, findPrevious, openSearchPanel, closeSearchPanel } from '@codemirror/search';
@@ -70,7 +71,18 @@ const legacyToml = StreamLanguage.define(toml);
 const legacyIni = StreamLanguage.define(properties);
 
 globalThis.HAPPIER_CODEMIRROR_WEBVIEW = {
+  createCodeMirrorDecorations,
   EditorState,
+  StateField,
+  StateEffect,
+  RangeSet,
+  RangeSetBuilder,
+  RangeValue,
+  MapMode,
+  Decoration,
+  gutter,
+  GutterMarker,
+  ViewPlugin,
   EditorView,
   lineNumbers,
   keymap,
@@ -81,6 +93,7 @@ globalThis.HAPPIER_CODEMIRROR_WEBVIEW = {
   defaultKeymap,
   history,
   historyKeymap,
+  indentMore, indentLess, undo, redo, undoDepth, redoDepth, cursorCharLeft, cursorCharRight, isolateHistory,
   indentOnInput,
   bracketMatching,
   syntaxHighlighting,

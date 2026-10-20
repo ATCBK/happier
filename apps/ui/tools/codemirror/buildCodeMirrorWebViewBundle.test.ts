@@ -34,5 +34,15 @@ describe('buildCodeMirrorWebViewBundle', () => {
         expect(generated).toMatch(/\bSearchQuery:/);
         expect(generated).toMatch(/\bsetSearchQuery:/);
         expect(generated).toMatch(/\bopenSearchPanel:/);
+        expect(generated).toMatch(/\bcreateCodeMirrorDecorations:/);
+        for (const primitive of ['StateField', 'StateEffect', 'RangeSet', 'RangeSetBuilder', 'RangeValue', 'MapMode', 'Decoration', 'gutter', 'GutterMarker', 'ViewPlugin']) {
+            expect(generated).toMatch(new RegExp('\\b' + primitive + ':'));
+        }
+        expect(generated).toMatch(/\bStateField:/);
+        expect(generated).toMatch(/\bStateEffect:/);
+        expect(generated).toMatch(/\bRangeSet:/);
+        expect(generated).toMatch(/\bDecoration:/);
+        expect(generated).toMatch(/\bGutterMarker:/);
+        expect(generated).toMatch(/\bundoDepth:/);
     });
 });
