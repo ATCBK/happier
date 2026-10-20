@@ -200,6 +200,10 @@ describe('shared workspace filesystem Action admission', () => {
         filesystem.carrierUnavailable = true;
         const { activateUniversalSearchResult } = await import('@/components/appShell/search/activateUniversalSearchResult');
         const { parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+        const { createWorkspaceActionAdapter } = await import('@/components/appShell/workspace/workspaceActions');
+        const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
+        const { createWorkspaceState, reduceWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
+        const { resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
         const { createFileFindSeedHandoff } = await import('@/components/appShell/panes/fileFindSeedHandoff');
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
         const { refreshWorkspaceFileDetails } = await import('@/components/workspaces/files/details/workspaceFileDetails/refreshWorkspaceFileDetails');
@@ -214,27 +218,36 @@ describe('shared workspace filesystem Action admission', () => {
         const anchor = { kind: 'fileLine' as const, startLine: 2 };
         const find = { query: 'riverglassneedle', options: { matchCase: false, regex: false },
             target: { kind: 'file' as const, path: destination.path, anchor } };
-        let openedPath: string | null = null;
+        let workspace = createWorkspaceState({ id: 'search-view', target: { kind: 'session',
+            params: { id: destination.id, serverId: scope.serverId } }, pinned: false, preview: false });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: true, workflows: false, friends: false } });
+        const navigation = createWorkspaceNavigationAdapter({ getState: () => workspace, getCatalog: () => catalog,
+            getScope: () => lifetime.scope, dispatch: action => { workspace = reduceWorkspaceState(workspace, action); },
+            transport: { commit: () => {} }, createId: () => 'search-file-view', onChange: () => {} });
+        const execute = createWorkspaceActionAdapter({ getState: () => workspace, navigation, readCanvas: () => null,
+            createId: () => 'search-file-view', chatFind: { handoff, resolveAuthority: requestedServerId =>
+                requestedServerId === lifetime.scope.serverId ? lifetime : null } });
         try {
             expect(await activateUniversalSearchResult({ kind: 'workspaceFile', scope, serverId, accountId: 'account-a',
                 sessionId: host === 'session' ? destination.id : null, workspaceRefId: host === 'project' ? destination.id : null,
                 path: destination.path, anchor, find }, {
-                push: () => {}, stageFileFindSeed: (_target, seed) => handoff.stage(destination, seed, lifetime),
-                navigateToSession: async (_id, options) => {
-                    const details = parseSessionPaneUrlState(options?.query ?? {})?.details;
-                    if (details?.kind !== 'file') throw new Error('Expected file pane');
-                    expect(details.anchor).toEqual(anchor);
-                    openedPath = details.path;
-                },
-                openProject: async (_id, options) => {
-                    const resource = options?.initialResource;
-                    if (resource?.kind !== 'file') throw new Error('Expected project file');
-                    expect(resource.anchor).toEqual(anchor);
-                    openedPath = resource.path;
-                    return true;
-                },
+                push: () => { throw new Error('A file result must use the file Action'); },
+                navigateToSession: () => { throw new Error('A file result must use the file Action'); },
+                openProject: async () => { throw new Error('A file result must use the file Action'); },
+                openFile: async ({ path, ...address }, options) => execute('workspace.tabs.open', {
+                    file: { target: address, path, anchor: options?.anchor, anchorSource: options?.anchorSource },
+                    mode: 'preview', find: options?.find,
+                }).ok,
             })).toEqual({ ok: true });
-            expect(openedPath).toBe(destination.path);
+            const opened = workspace.tabs[workspace.groups[workspace.focusedGroupId].activeTabId].target;
+            if (host === 'session') {
+                expect(parseSessionPaneUrlState(opened.params)?.details).toMatchObject({ kind: 'file', path: destination.path, anchor });
+            } else {
+                expect(opened).toMatchObject({ kind: 'project', params: { workspaceRefId: destination.id,
+                    initialFile: destination.path, anchor: 'fileLine', startLine: '2' } });
+            }
+            expect(JSON.stringify(workspace)).not.toContain(find.query);
             const loaded = await refreshWorkspaceFileDetails({ scope, filePath: destination.path, diffMode: 'both', includeDiff: false });
             expect(loaded.error).toBeNull();
             expect(loaded.fileContent?.content).toBe(text);
