@@ -344,7 +344,7 @@ test.describe('ui e2e: session list multi-select actions', () => {
     await dismissSelectionResult(page);
   });
 
-  test('selects a Shift range and archives it with progress and result state', async ({ page }) => {
+  test('selects a Shift range and archives it with progress and result state @smoke', async ({ page }) => {
     test.setTimeout(720_000);
     if (!server || !uiBaseUrl || !token) throw new Error('missing server/ui fixtures');
 
@@ -376,9 +376,12 @@ test.describe('ui e2e: session list multi-select actions', () => {
 
     const archiveGate = createDeferred();
     let delayedFirstArchive = false;
-    await page.route('**/v2/sessions/*/archive', async (route) => {
+    let pendingSessionId: string | null = null;
+    const archiveUrl = (url: URL) => /^\/v2\/sessions\/[^/]+\/archive$/.test(url.pathname);
+    await page.route(archiveUrl, async (route) => {
       if (!delayedFirstArchive) {
         delayedFirstArchive = true;
+        pendingSessionId = new URL(route.request().url()).pathname.split('/')[3] ?? null;
         await archiveGate.promise;
       }
       await route.continue();
@@ -389,13 +392,18 @@ test.describe('ui e2e: session list multi-select actions', () => {
       const progress = page.getByTestId(testIds.selectionProgress);
       await expect(progress).toBeVisible({ timeout: 60_000 });
       await expect(progress).toHaveAttribute('data-action-id', 'ui.session.archive', { timeout: 60_000 });
+      expect(delayedFirstArchive).toBe(true);
+      expect(pendingSessionId).not.toBeNull();
+      const pendingStatus = page.getByTestId(`session-list-status-subtitle-text-${pendingSessionId}-working`);
+      await expect(pendingStatus).toBeVisible({ timeout: 60_000 });
+      await expect(pendingStatus).toContainText(/archiving/i);
 
       archiveGate.resolve();
 
       await expectBulkResult({ page, actionId: 'ui.session.archive', succeeded: rangeIds.length });
     } finally {
       archiveGate.resolve();
-      await page.unroute('**/v2/sessions/*/archive').catch(() => {});
+      await page.unroute(archiveUrl).catch(() => {});
     }
 
     for (const sessionId of rangeIds) {
