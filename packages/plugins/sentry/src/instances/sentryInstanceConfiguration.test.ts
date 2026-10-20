@@ -9,6 +9,24 @@ import {
 } from './sentryInstanceConfiguration.js';
 
 describe('encodeSentryInstanceConfiguration', () => {
+  it('reads legacy all-accessible scope as All and accepts a non-empty selected project set', () => {
+    const retained = {
+      v: 1, organizationId: '7701', environmentScope: { kind: 'all' },
+    };
+    expect(decodeSentryInstanceConfiguration(JSON.stringify({
+      ...retained, projectScope: { kind: 'allAccessible' },
+    }))).toMatchObject({ ok: true, configuration: { projectScope: { kind: 'all' } } });
+    const selected = { ...retained, projectScope: { kind: 'selected', unitIds: ['9001', '9002'] } };
+    expect(decodeSentryInstanceConfiguration(JSON.stringify(selected)))
+      .toEqual({ ok: true, configuration: selected });
+    expect(decodeSentryInstanceConfiguration(JSON.stringify({
+      ...retained, projectScope: { kind: 'selected', unitIds: [] },
+    })).ok).toBe(false);
+    expect(decodeSentryInstanceConfiguration(JSON.stringify({
+      ...retained, projectScope: { kind: 'selected', unitIds: ['mutable-slug'] },
+    })).ok).toBe(false);
+  });
+
   it('round-trips the source-private configuration and persists no deployment origin', () => {
     const token = encodeSentryInstanceConfiguration({
       v: 1,

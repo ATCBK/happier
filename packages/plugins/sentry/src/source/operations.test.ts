@@ -122,6 +122,34 @@ function configuredInstance(origin: string) {
 }
 
 describe('Sentry Triage source operations', () => {
+  it('keeps selected projects on the registered scan Action across continuation pages', async () => {
+    const harness = host({ responses: [issuesListPage1, {
+      ...issuesListPage1,
+      headers: { link: '<https://us.sentry.io/api/0/organizations/7701/issues/>; rel="next"; results="false"' },
+      body: [],
+    }] });
+    const register = vi.fn();
+    await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
+    const scan = register.mock.calls.find(([id]) => id === 'sentry/scan-issues')?.[1];
+    expect(scan).toBeTypeOf('function');
+    const instance = configuredInstance('https://us.sentry.io');
+    instance.configuration.token = JSON.stringify({
+      v: 1, organizationId: ORGANIZATION_ID,
+      projectScope: { kind: 'selected', unitIds: ['9001'] }, environmentScope: { kind: 'all' },
+    });
+    const first = TriageScanResultV1Schema.parse(await scan({
+      v: 1, instance, page: { kind: 'initial', limit: 30 },
+    }, harness.context));
+    expect(first.kind).toBe('page');
+    if (first.kind !== 'page') throw new Error('expected a continuation');
+    const last = TriageScanResultV1Schema.parse(await scan({
+      v: 1, instance, page: { kind: 'continuation', continuation: first.continuation },
+    }, harness.context));
+    expect(last.kind).toBe('complete');
+    expect(harness.request.mock.calls.map(([request]) => new URL(request.url).searchParams.getAll('project')))
+      .toEqual([['9001'], ['9001']]);
+  });
+
   async function write(action: string, harness: ReturnType<typeof host>, extra: object = {}) {
     const register = vi.fn();
     await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);

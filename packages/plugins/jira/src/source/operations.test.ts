@@ -12,6 +12,7 @@ import { assertTriageSourceContributionV1 } from '@happier-dev/triage-protocol/t
 import { runTriageScanPass } from '../../../triage/src/projection/scanPass.js';
 import { createJiraIssue, editJiraIssue, transitionJiraIssue, commentJiraIssue } from './writes.js';
 import { TriageTaskWriteResultV1Schema } from '@happier-dev/triage-protocol/v1';
+import { readJiraConfiguration } from './model.js';
 
 const origin = 'https://work.atlassian.net';
 const account = { service: { pluginId: 'happier.jira', localId: 'jira-account' }, accountId: 'account-1' };
@@ -66,6 +67,39 @@ export function host(respond: (url: URL, body: unknown) => { status?: number; bo
 }
 
 describe('Jira source through provider HTTP', () => {
+    it('reads historical project configuration as a selected scope without losing create defaults', () => {
+        expect(readJiraConfiguration(JSON.stringify({ v: 1, projectId: '10000', involvement: 'mine', issueTypeId: '10002' })))
+            .toEqual({ v: 2, scope: { kind: 'selected', unitIds: ['10000'] }, involvement: 'mine', projectId: '10000', issueTypeId: '10002' });
+    });
+
+    it.each(['selected', 'all'] as const)('scans the %s project scope through one site and checks returned project membership', async (kind) => {
+        const configured = { ...instance, localInstanceKey: origin, configuration: { v: 1 as const,
+            token: JSON.stringify({ v: 2, scope: kind === 'all' ? { kind } : { kind, unitIds: ['10000', '10002'] }, involvement: 'mine' }) } };
+        const h = host((url, body) => {
+            if (url.pathname === '/rest/api/3/myself') return { body: { accountId: 'person-1' } };
+            expect(body).toMatchObject({ jql: kind === 'selected'
+                ? 'project IN (10000,10002) AND (assignee = currentUser() OR creator = currentUser() OR watcher = currentUser()) ORDER BY updated DESC, id DESC'
+                : '(assignee = currentUser() OR creator = currentUser() OR watcher = currentUser()) ORDER BY updated DESC, id DESC' });
+            return { body: { isLast: true, issues: [issue,
+                { ...issue, id: '10005', fields: { ...issue.fields, project: { id: '10002', name: 'Mobile' } } },
+                { ...issue, id: '10006', fields: { ...issue.fields, project: { id: '10003', name: 'Other' } } }] } };
+        });
+        const result = TriageScanResultV1Schema.parse(await scanJiraSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 3 } }, h.context));
+        expect(result).toMatchObject({ kind: 'complete', observations: kind === 'selected'
+            ? [{ localRef: { entryId: '10001' } }, { localRef: { entryId: '10005' } }]
+            : [{ localRef: { entryId: '10001' } }, { localRef: { entryId: '10005' } }, { localRef: { entryId: '10006' } }] });
+        expect(result.kind === 'complete' && result.evidence).toMatchObject(kind === 'selected'
+            ? { kind: 'partial', omittedItemCount: 1 } : { kind: 'walkFinished' });
+    });
+
+    it('refuses nonnumeric selected project ids before provider access', async () => {
+        const h = host(() => ({ body: {} }));
+        const configured = { ...instance, localInstanceKey: origin, configuration: { v: 1 as const,
+            token: JSON.stringify({ v: 2, scope: { kind: 'selected', unitIds: ['10000) OR project is not EMPTY'] }, involvement: 'all' }) } };
+        expect(await scanJiraSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 1 } }, h.context))
+            .toMatchObject({ kind: 'failed', failure: { code: 'jira/configurationInvalid' } });
+        expect(h.request).not.toHaveBeenCalled();
+    });
     it('loads complete editable values and never invents a value for an omitted provider field', async () => {
         const h = host((url) => ({ body: url.pathname.endsWith('/transitions') ? { transitions: [] }
             : url.pathname.endsWith('/editmeta') ? { fields: {} }
@@ -82,16 +116,18 @@ describe('Jira source through provider HTTP', () => {
         expect(unavailable).toMatchObject({ kind: 'present', taskFields: { title: issue.fields.summary } });
         expect(unavailable).not.toHaveProperty('taskFields.body');
     });
-    it('discovers every project on the exact configured site without persisting source instances', async () => {
+    it('discovers one source boundary for the exact configured Jira site', async () => {
         const h = host((url) => ({ body: url.pathname === '/rest/api/3/project/search'
             ? { isLast: Number(url.searchParams.get('startAt')) > 0, startAt: Number(url.searchParams.get('startAt')), maxResults: 1, total: 2,
                 values: [{ id: Number(url.searchParams.get('startAt')) > 0 ? '10002' : '10000', key: 'ABC', name: 'Platform' }] }
             : { accountId: 'person-1', displayName: 'Amina' } }));
         const result = TriageListInstancesResultV1Schema.parse(await listJiraInstances({ v: 1 }, h.context));
         expect(result).toMatchObject({ kind: 'complete', candidates: [
-            { localInstanceKey: `${origin}#10000`, binding: { account } },
-            { localInstanceKey: `${origin}#10002`, binding: { account } },
+            { localInstanceKey: origin, binding: { account } },
         ] });
+        if (result.kind !== 'complete') throw new Error('Expected site discovery');
+        expect(result.candidates).toHaveLength(1);
+        expect(h.request).not.toHaveBeenCalled();
     });
 
     it('pages enhanced JQL search and preserves Jira identity, native state and involvement', async () => {

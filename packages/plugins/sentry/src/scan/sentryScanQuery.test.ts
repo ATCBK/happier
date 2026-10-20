@@ -43,6 +43,21 @@ describe('buildSentryScanIssuesUrl', () => {
     expect(parameters.has('llmFormat')).toBe(false);
   });
 
+  it('scans the selected immutable projects in the same organization-wide walk', () => {
+    const parameters = parametersOf(buildSentryScanIssuesUrl({
+      instance: INSTANCE,
+      nativeLimit: 64,
+      projectIds: ['9001', '9002'],
+    }));
+
+    expect(parameters.getAll('project')).toEqual(['9001', '9002']);
+    expect(parameters.get('query')).toBe('');
+    expect(() => buildSentryScanIssuesUrl({ instance: INSTANCE, nativeLimit: 64, projectIds: [] }))
+      .toThrow();
+    expect(() => buildSentryScanIssuesUrl({ instance: INSTANCE, nativeLimit: 64, projectIds: ['project-slug'] }))
+      .toThrow();
+  });
+
   it('never collapses lifetime, which is the only all-time count source', () => {
     const collapse = parametersOf(buildSentryScanIssuesUrl({ instance: INSTANCE, nativeLimit: 64 }))
       .getAll('collapse');

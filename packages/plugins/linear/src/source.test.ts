@@ -4,6 +4,9 @@ import { getLinearEntry, listLinearInstances, scanLinearSource, readLinearDetail
 
 import { account, instance, localRef, issue, page, host } from './fixtures.test-support.js';
 
+const workspaceInstance = (teams: unknown) => ({ ...instance, localInstanceKey: 'linear',
+  configuration: { v: 1 as const, token: JSON.stringify({ v: 1, teams, involvement: 'everyone' }) } });
+
 describe('Linear source through provider HTTP', () => {
   it('loads complete editable values without putting bodies into scans', async () => {
     const body = 'Full Markdown\n\nPreserve whitespace.  \n';
@@ -17,12 +20,13 @@ describe('Linear source through provider HTTP', () => {
       snapshot: { projectionTruncated: true }, taskFields: { title: '界'.repeat(1000), body, assigneeIds: ['viewer-1'],
         labelIds: ['label-1'], projectId: 'project-1', priority: 2, dueDate: '2026-10-25', estimate: 3, parent: { entryId: 'parent-1' } } });
   });
-  it('discovers teams through the exact listed account and preserves pagination', async () => {
-    const h = host(({ variables }) => ({ teams: variables.after ? page([{ id: 'team-2', key: 'OPS', name: 'Operations' }]) : page([issue.team], true, 'teams-next') }));
+  it('discovers one workspace through the exact listed account', async () => {
+    const h = host(() => ({ organization: { id: 'workspace-1', name: 'Engineering workspace' } }));
     const result = TriageListInstancesResultV1Schema.parse(await listLinearInstances({ v: 1 }, h.context));
     expect(result.kind).toBe('complete');
     if (result.kind === 'failed') throw new Error('discovery failed');
-    expect(result.candidates.map((candidate) => candidate.localInstanceKey)).toEqual(['linear/team-1', 'linear/team-2']);
+    expect(result.candidates.map((candidate) => candidate.localInstanceKey)).toEqual(['linear']);
+    expect(result.candidates[0]?.locator.displayLabel).toBe('Engineering workspace');
     expect(h.materializeListedAccount).toHaveBeenCalledWith(expect.objectContaining({ purpose: 'linear-api', account }), expect.anything());
     expect(JSON.stringify(result)).not.toContain('test-personal-key');
   });
@@ -44,6 +48,29 @@ describe('Linear source through provider HTTP', () => {
     if (result.observations[0]?.kind !== 'present') throw new Error('missing present issue');
     expect(result.observations[0].snapshot.facts).toContainEqual({ id: 'assignee', label: 'Assignee', importance: 'secondary', value: { kind: 'text', value: 'Mara' } });
     expect(JSON.stringify(result)).not.toContain('description');
+  });
+
+  it('scans all accessible teams or the exact selected set in one workspace lane', async () => {
+    for (const teams of [{ kind: 'all' }, { kind: 'selected', unitIds: ['team-1', 'team-2'] }]) {
+      const configured = workspaceInstance(teams);
+      const h = host(({ operationName, variables }) => {
+        if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+        expect(variables.filter).toEqual(teams.kind === 'all' ? {} : { team: { id: { in: ['team-1', 'team-2'] } } });
+        return { issues: page([issue, { ...issue, id: 'issue-2', team: { id: 'team-2', key: 'OPS', name: 'Operations' } }]) };
+      });
+      expect(await scanLinearSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 20 } }, h.context))
+        .toMatchObject({ kind: 'complete', observations: [{ localRef: { entryId: 'issue-1' } }, { localRef: { entryId: 'issue-2' } }] });
+    }
+  });
+
+  it('refuses provider rows outside selected teams in scans and exact reads', async () => {
+    const configured = workspaceInstance({ kind: 'selected', unitIds: ['team-2'] });
+    const h = host(({ operationName }) => operationName === 'LinearViewer' ? { viewer: { id: 'viewer-1' } }
+      : operationName === 'LinearIssues' ? { issues: page([issue]) } : { issue });
+    expect(await scanLinearSource({ v: 1, instance: configured, page: { kind: 'initial', limit: 20 } }, h.context))
+      .toMatchObject({ kind: 'failed', failure: { code: 'linear/teamMismatch' } });
+    expect(await getLinearEntry({ v: 1, instance: configured, localRef }, h.context))
+      .toMatchObject({ kind: 'unresolved', failure: { code: 'linear/entryMismatch' } });
   });
 
   it('reports GraphQL HTTP-400 RATELIMITED with the provider complexity reset and never retries', async () => {

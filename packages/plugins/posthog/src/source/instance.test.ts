@@ -22,6 +22,18 @@ const CONFIGURATION: PosthogConfigurationToken = {
 };
 
 describe('PostHog configured-instance codec', () => {
+    it('reads historical environment sets as selected immutable ids and emits the canonical include shape', () => {
+        const decoded = decodePosthogConfiguration({ v: 1, token: JSON.stringify(CONFIGURATION) });
+        expect(decoded).toMatchObject({ include: {
+            kind: 'selected', unitIds: ['00000000-0000-4000-8000-0000000000d1'],
+        } });
+        if (decoded === null) throw new Error('historical configuration must decode');
+        const encoded = encodePosthogConfiguration(decoded);
+        expect(encoded.ok && JSON.parse(encoded.token)).toMatchObject({ include: {
+            kind: 'selected', unitIds: ['00000000-0000-4000-8000-0000000000d1'],
+        } });
+    });
+
     it('round-trips only source facts and never encodes account or origin authority', () => {
         const encoded = encodePosthogConfiguration(CONFIGURATION);
 
