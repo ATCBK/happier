@@ -39,6 +39,8 @@ const codeByDisplayKey: Readonly<Record<string, string>> = {
     '?': 'Slash',
     '`': 'Backquote',
     '\\': 'Backslash',
+    '=': 'Equal',
+    NumpadAdd: 'NumpadAdd',
 };
 
 function codeForToken(token: string): string | undefined {

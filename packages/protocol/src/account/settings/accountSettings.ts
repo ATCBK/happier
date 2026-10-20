@@ -942,6 +942,7 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     }),
     executionRunsGuidanceEnabled: accountPreference(z.boolean(), true, 'execution guidance'),
     executionRunsNotifyParentOnCompletionDefault: accountPreference(z.boolean(), false, 'execution guidance'),
+    filesAskWithoutSessionTarget: accountPreference(z.enum(['detached_run', 'session']), 'detached_run', 'file selection Ask'),
     executionRunsGuidanceMaxChars: accountPreference(z.number().check(z.int(), z.minimum(1), z.maximum(64 * 1024)), 4000, 'execution guidance'),
     attachmentsUploadsUploadLocation: accountPreference(z.enum(['workspace', 'os_temp']), 'workspace', 'attachment uploads'),
     attachmentsUploadsWorkspaceRelativeDir: accountCatalogDefinition(z.string().check(z.minLength(1), z.maxLength(4 * 1024)), '.happier/uploads', {
@@ -1246,7 +1247,6 @@ const ACCOUNT_SCM_AND_FILES_CATALOG_DEFINITIONS = {
     filesMarkdownRichEditorMaxBytes: accountPreference(accountNonNegativeInteger(), 256000, 'file editing'),
     filesMarkdownRichEditorHtmlRoundTripMaxBytes: accountPreference(accountNonNegativeInteger(), 50000, 'file editing'),
     filesEditorChangeDebounceMs: accountPreference(accountNonNegativeInteger(), 250, 'file editing'),
-    filesEditorMaxFileBytes: accountPreference(accountNonNegativeInteger(), 2500000, 'file editing'),
     filesEditorBridgeMaxChunkBytes: accountPreference(accountNonNegativeInteger(), 64000, 'file editing'),
     filesEditorWebMonacoEnabled: accountPreference(z.boolean(), true, 'file editing'),
     filesEditorNativeCodeMirrorEnabled: accountPreference(z.boolean(), true, 'file editing'),
