@@ -70,7 +70,7 @@ export async function setSessionArchivedState(params: Readonly<{
       idOrPrefix: resolved.sessionId,
       stopIntent: 'lifecycle_control',
       ...(signal ? { signal } : {}),
-      ...(params.externalAction ? { externalAction: params.externalAction } : {}),
+      ...(params.externalAction ? { externalAction: { ...params.externalAction, effectActionId: 'session.stop' } } : {}),
       ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
     if (!stopResult.ok) {

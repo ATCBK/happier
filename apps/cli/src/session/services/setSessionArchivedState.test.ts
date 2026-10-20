@@ -69,7 +69,8 @@ describe('setSessionArchivedState', () => {
       externalAction, resolveAuthorizationHeaders }))
       .resolves.toEqual({ ok: true, sessionId, archivedAt: 456 });
     expect(boundary.callMachineRpc).toHaveBeenCalledWith(expect.objectContaining({
-      machineId: 'machine-1', method: RPC_METHODS.STOP_SESSION, request: { sessionId }, externalAction,
+      machineId: 'machine-1', method: RPC_METHODS.STOP_SESSION, request: { sessionId },
+      externalAction: { ...externalAction, effectActionId: 'session.stop' },
     }));
     expect(post).toHaveBeenCalledTimes(2);
     for (const [, config] of vi.mocked(axios.get).mock.calls) {
