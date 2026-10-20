@@ -980,10 +980,10 @@ describe('createActionExecutor (approvals)', () => {
       .toMatchObject({ ok: true, result: { status: 'executed' } });
     expect(sessionOpen).toHaveBeenCalledOnce();
   });
-  it('cancels a pending owned terminal through the conditional Artifact owner without launching it', async () => {
+  it.each(['open', 'approved'] as const)('cancels an unclaimed %s terminal through the conditional Artifact owner without launching it', async status => {
     expect(getActionSpec('approval.request.decide').inputSchema.safeParse({ artifactId: 'pending-terminal',
       decision: 'cancel', requesterAccountId: 'forged' }).success).toBe(false);
-    let stored = createApprovalRequest('open', { actionId: 'machines.terminal.open',
+    let stored = createApprovalRequest(status, { actionId: 'machines.terminal.open',
       actionArgs: { serverId: 'server-1', machineId: 'machine', terminalKey: 'member' } });
     let effects = 0;
     const executor = createExecutor({ approvalsGet: async () => stored,
@@ -994,19 +994,29 @@ describe('createActionExecutor (approvals)', () => {
         return { ok: true };
       }, machineTerminalAction: async () => { effects++; return { ok: true, terminalId: 'pty', reused: false }; },
     });
+    const settledStatus = status === 'approved' ? 'failed' : 'canceled';
     expect(await executor.execute('approval.request.decide', { artifactId: 'pending-terminal', decision: 'cancel' }))
-      .toMatchObject({ ok: true, result: { status: 'canceled' } });
-    expect(stored.status).toBe('canceled');
-    expect(stored.decision).toBeUndefined();
+      .toMatchObject({ ok: true, result: { status: settledStatus } });
+    expect(stored.status).toBe(settledStatus);
+    if (status === 'approved') {
+      expect(stored).toMatchObject({ decision: { kind: 'approve', decidedAtMs: 2 },
+        execution: { ok: false, effectAttempted: false, errorCode: 'approval_canceled' } });
+    } else expect(stored.decision).toBeUndefined();
     expect(await executor.execute('approval.request.decide', { artifactId: 'pending-terminal', decision: 'cancel' }))
-      .toMatchObject({ ok: true, result: { status: 'canceled' } });
+      .toMatchObject({ ok: true, result: { status: settledStatus } });
     expect(await executor.execute('approval.request.decide', { artifactId: 'pending-terminal', decision: 'approve' }))
-      .toMatchObject({ ok: false, errorCode: 'approval_not_open' });
+      .toMatchObject(status === 'approved'
+        ? { ok: true, result: { status: 'failed', execution: { errorCode: 'approval_canceled' } } }
+        : { ok: false, errorCode: 'approval_not_open' });
+    if (status === 'approved') {
+      expect(await executor.replayApprovedApprovalRequest({ artifactId: 'pending-terminal' }))
+        .toMatchObject({ ok: true, result: { status: 'failed', execution: { errorCode: 'approval_canceled' } } });
+    }
     expect(effects).toBe(0);
   });
 
-  it('does not turn an already claimed or conflicting terminal cancellation into success', async () => {
-    const opened = createApprovalRequest('open', { actionId: 'machines.terminal.open',
+  it.each(['open', 'approved'] as const)('does not turn an already claimed or conflicting %s terminal cancellation into success', async status => {
+    const opened = createApprovalRequest(status, { actionId: 'machines.terminal.open',
       actionArgs: { serverId: 'server-1', machineId: 'machine', terminalKey: 'member' } });
     if (opened.v !== 2) throw new Error('Expected current approval fixture');
     let stored: ApprovalRequest = opened;

@@ -1,8 +1,14 @@
 import { FriendsMutationInputSchema, FriendsMutationResponseSchema } from '../../social/friends.js';
-import { homeDomainActionRow, homeDomainApprovalField } from './homeDomainRow.js';
+import { homeDomainActionRow, homeDomainApprovalField, type HomeDomainActionRow } from './homeDomainRow.js';
+
+type FriendsActionId = 'friends.add' | 'friends.remove';
+type FriendsActionSpec = {
+  [Id in FriendsActionId]: HomeDomainActionRow<Id, typeof FriendsMutationInputSchema, typeof FriendsMutationResponseSchema>
+    & Readonly<{ bindings: { mcpToolName: Id extends 'friends.add' ? 'friends_add' : 'friends_remove' } }>;
+}[FriendsActionId];
 
 /** Relationship changes remain decided by the existing authenticated Home writers. */
-export const FRIENDS_ACTION_SPECS = Object.freeze([
+export const FRIENDS_ACTION_SPECS: readonly FriendsActionSpec[] = Object.freeze([
   {
     ...homeDomainActionRow({
       id: 'friends.add', approval: { result: 'required', flow: 'deferred' },

@@ -409,7 +409,8 @@ describe('ActionExecutor prepared invocation', () => {
       authority: 'account_automation',
     })).resolves.toEqual({
       kind: 'settled',
-      result: { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' },
+      result: { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters',
+        details: { issues: [{ code: 'invalid_type', path: ['limit'], expected: 'number' }] } },
     });
     expect(sessionList).not.toHaveBeenCalled();
   });

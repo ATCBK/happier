@@ -81,6 +81,17 @@ export function createTargetActionApprovalDecision(deps: Readonly<{
     const coordinator = getSharedBlockingApprovalCoordinator();
     if (decision === 'cancel') {
       if (existing.status === 'canceled') return buildTargetActionApprovalDecisionResult(existing);
+      if (existing.status === 'failed' && existing.execution?.errorCode === 'approval_canceled'
+        && existing.execution.effectAttempted === false) return buildTargetActionApprovalDecisionResult(existing);
+      if (existing.status === 'approved' && existing.decision?.kind === 'approve' && !existing.execution) {
+        const canceledAtMs = nextTimestamp(existing);
+        const failed: TargetActionApprovalRequestV1 = { ...existing, status: 'failed', updatedAtMs: canceledAtMs,
+          execution: { executedAtMs: canceledAtMs, ok: false, effectAttempted: false,
+            errorCode: 'approval_canceled', error: 'approval_canceled' } };
+        const persistenceFailure = await persist(failed);
+        if (!persistenceFailure) coordinator.notifyApprovalUpdated({ artifactId, request: failed });
+        return persistenceFailure ?? buildTargetActionApprovalDecisionResult(failed);
+      }
       if (existing.status !== 'open') return failure('approval_not_open');
       const canceled: TargetActionApprovalRequestV1 = { ...existing, status: 'canceled', updatedAtMs: nextTimestamp(existing) };
       const persistenceFailure = await persist(canceled);
@@ -96,11 +107,11 @@ export function createTargetActionApprovalDecision(deps: Readonly<{
       if (!persistenceFailure) coordinator.notifyApprovalUpdated({ artifactId, request: rejected });
       return persistenceFailure ?? buildTargetActionApprovalDecisionResult(rejected);
     }
-    if (existing.approvalInputCustody === 'live_only' && deps.hasLiveInvocation && !deps.hasLiveInvocation(artifactId)) {
-      return failure('approval_stale');
-    }
     if ((existing.status === 'executed' || existing.status === 'failed') && existing.decision?.kind === 'approve') {
       return buildTargetActionApprovalDecisionResult(existing);
+    }
+    if (existing.approvalInputCustody === 'live_only' && deps.hasLiveInvocation && !deps.hasLiveInvocation(artifactId)) {
+      return failure('approval_stale');
     }
     if (existing.status === 'executing' && existing.decision?.kind === 'approve') return failure('approval_execution_outcome_unknown');
     if (existing.status !== 'open' && (existing.status !== 'approved' || existing.decision?.kind !== 'approve')) return failure('approval_not_open');

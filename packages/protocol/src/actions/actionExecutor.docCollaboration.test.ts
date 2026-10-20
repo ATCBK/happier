@@ -356,6 +356,17 @@ describe('Doc collaboration Actions', () => {
       replyTarget: rootMessage.replyTarget }]);
   });
 
+  it('re-attaches a thread as a new comment basis at the current revision in the same thread, without a parent or a relocated anchor', async () => {
+    const { executor, writes } = discussionFixture();
+    const current = { headerVersion: 2, bodyVersion: 5 };
+    const fresh = { ref, revision: current, range: { start: 2, end: 8 }, quote: 'Reword' };
+    expect(await executor.execute('doc.comment.reply', { discussionRef, target: fresh, localId: 'reattach-1', content: text }, person))
+      .toMatchObject({ ok: true });
+    expect(writes).toEqual([{ discussionId: 'thread', localId: 'reattach-1',
+      content: { kind: 'doc_passage_comment', passage: fresh, content: text },
+      replyTarget: { kind: 'doc_passage', doc: { ref, revision: current } } }]);
+  });
+
   it('uses the committed root for replies and permits a new-revision redo proposal only on the same Doc', async () => {
     const { executor, writes } = discussionFixture();
     const parentMessageRef = rootMessage.messageRef;

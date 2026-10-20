@@ -65,10 +65,16 @@ export function admitTargetActionApprovalTransition(
     && request.decision?.kind === 'approve' && request.execution === undefined;
   const isApprovedStale = existing.status === 'approved' && request.status === 'failed'
     && request.decision?.kind === 'approve' && request.execution?.ok === false && request.execution.errorCode === 'approval_stale';
+  const isApprovedCancellation = existing.status === 'approved' && request.status === 'failed'
+    && request.decision?.kind === 'approve' && request.execution?.ok === false
+    && request.execution.errorCode === 'approval_canceled' && request.execution.effectAttempted === false
+    && stable(existing.decision) === stable(request.decision);
   const isExecutingTerminal = existing.status === 'executing'
     && (request.status === 'executed' || request.status === 'failed')
-    && request.decision?.kind === 'approve' && request.execution !== undefined;
-  return (!isOpenDecision && !isApprovedExecution && !isApprovedStale && !isExecutingTerminal)
+    && request.decision?.kind === 'approve' && request.execution !== undefined
+    // A cancellation receipt cannot settle custody another invocation claimed.
+    && !(request.execution.errorCode === 'approval_canceled' && request.execution.effectAttempted === false);
+  return (!isOpenDecision && !isApprovedExecution && !isApprovedStale && !isApprovedCancellation && !isExecutingTerminal)
     || request.updatedAtMs < existing.updatedAtMs ? invalid : { ok: true, unchanged: false };
 }
 

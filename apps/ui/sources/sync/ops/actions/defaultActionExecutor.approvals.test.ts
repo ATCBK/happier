@@ -35,6 +35,8 @@ import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protoc
 import { createPluginInstallationReviewFixture } from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
 import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { buildWidgetSurfaceArtifactIdV1 } from '@happier-dev/protocol/widgets/widgetSurfaceArtifactV1';
+import { TargetActionApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
+import { buildTargetActionApprovalArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 
 // Only HTTP, device credentials and Socket.IO network acknowledgements are replaced.
 // Home/Account policy, Sync, scoped RPC, the Artifact codec and versioned CAS remain real.
@@ -193,6 +195,29 @@ await import('@/sync/syncEngine');
 await import('./defaultActionExecutor');
 
 describe('createDefaultActionExecutor approvals', () => {
+    it.each(['approve', 'reject'] as const)('records a public %s decision for a live Account Action without a Machine', async decision => {
+        const artifactId = `account-target-${decision}`;
+        const request = TargetActionApprovalRequestV1Schema.parse({
+            v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'cli' }, requestedSurface: 'cli',
+            qualifiedActionId: 'acme.account-actions/actions/write', input: { key: 'personal', value: 'reviewed' },
+            secretInputPaths: [], approvalInputCustody: 'live_only',
+            sourceCustody: { kind: 'account_release', pluginId: 'acme.account-actions', version: '1.0.0',
+                archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
+            policyFingerprint: 'b'.repeat(64), subjectFingerprint: 'c'.repeat(64), summary: 'Write personal value',
+        });
+        const seeded = await homes.artifacts(homeId).handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({
+            id: artifactId, header: encodePlainArtifactStoredContent(buildTargetActionApprovalArtifactHeaderV1(request)),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+        }) });
+        expect(seeded?.ok).toBe(true);
+        expect(await executor.execute('approval.request.decide', { artifactId, decision }, context()))
+            .toMatchObject({ ok: true, result: { status: decision === 'approve' ? 'approved' : 'rejected' } });
+        expect(TargetActionApprovalRequestV1Schema.parse(JSON.parse(homes.artifacts(homeId).readPlainBody(artifactId) ?? 'null')))
+            .toMatchObject({ status: decision === 'approve' ? 'approved' : 'rejected', decision: { kind: decision } });
+        expect(outgoing).toEqual([]);
+    });
+
     it.each(['origin_profile', 'portable_home', 'independent_device'] as const)('executes unsigned deferred CLI Doc comments and proposals in the approving app without a daemon replay (%s)', async decidingProfile => {
         expect(homeId).not.toBe(connection.serverId);
         expect(connection.serverId).toBe('srv_approval_home');

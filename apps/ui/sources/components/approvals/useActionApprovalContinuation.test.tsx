@@ -2,13 +2,13 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
-import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel:
 // the harness installs its network boundaries with `vi.doMock`, which only
 // reaches modules imported afterwards (see `installHomeGovernanceBoundaries`).
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createUiApprovalRequest, decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import {
     createHomeGovernanceHarness,
@@ -82,9 +82,13 @@ async function addApprovalHome(): Promise<string> {
     if (!home?.token) throw new Error('Expected the saved Home credential');
     // Account restoration performs these real bootstrap reads. A missing list
     // is a Home-health error, not a healthy baseline for the later offline step.
-    harness.answer(serverId, '/v2/sessions', { body: V2SessionListResponseSchema.parse({
-        sessions: [], nextCursor: null, hasNext: false,
-    }) });
+    for (const path of ['/v2/sessions/active', '/v2/sessions', '/v2/session-organization']) {
+        harness.answer(serverId, `GET ${path}`, { select: async () => {
+            const response = createEmptyAccountBootstrapHttpResponse(path);
+            if (!response) throw new Error(`Missing approval bootstrap fixture: ${path}`);
+            return { status: response.status, body: await response.json() };
+        } });
+    }
     harness.answer(serverId, '/v1/machines?includeRevoked=true', { body: [] });
     connection = await restoreServerAccountForTest({
         serverUrl: home.serverUrl,

@@ -11141,6 +11141,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           && existing.status === 'approved'
           && existing.decision?.kind === 'approve'
           && !existing.execution;
+        const isCancelableApproved = decision === 'cancel' && existing.v === 2
+          && existing.status === 'approved' && existing.decision?.kind === 'approve' && !existing.execution;
 
         let settleDiscussionReview: (() => Promise<ActionExecuteFailure | null>) | undefined;
         if (decision !== 'approve' && existing.v === 2 && existing.discussionDraftReview === true
@@ -11195,7 +11197,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           if (settlementFailure) return settlementFailure;
           return buildApprovalDecisionResult(existing);
         }
-        if (decision === 'cancel' && existing.status === 'canceled') {
+        if (decision === 'cancel' && (existing.status === 'canceled'
+          || existing.status === 'failed' && existing.execution?.errorCode === 'approval_canceled'
+            && existing.v === 2 && existing.execution.effectAttempted === false)) {
           const settlementFailure = await settleDiscussionReview?.();
           return settlementFailure ?? buildApprovalDecisionResult(existing);
         }
@@ -11207,13 +11211,26 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return buildApprovalDecisionResult(existing);
         }
 
-        if (existing.status !== 'open' && !isRecoverableApproved) {
+        if (existing.status !== 'open' && !isRecoverableApproved && !isCancelableApproved) {
           return { ok: false, errorCode: 'approval_not_open', error: 'approval_not_open' };
         }
 
         const now = Date.now();
 
         if (decision === 'cancel') {
+          if (isCancelableApproved && existing.v === 2) {
+            // Consent remains history. Cancellation settles only unclaimed
+            // custody; the transition owner and Artifact CAS refuse a raced claim.
+            const nextFailed: ApprovalRequest = { ...settleApprovalRequestReplayInputs(existing), status: 'failed',
+              updatedAtMs: Math.max(now, existing.updatedAtMs),
+              execution: projectApprovalExecutionFailureV2({ request: existing, executedAtMs: now,
+                effectAttempted: false, failure: { ok: false, errorCode: 'approval_canceled', error: 'approval_canceled' } }) };
+            const updated = await deps.approvalsUpdate({ artifactId, request: nextFailed, serverId: effectiveServerId });
+            const updateFailure = readActionFailureEnvelope(updated);
+            if (updateFailure) return updateFailure;
+            const settlementFailure = await settleDiscussionReview?.();
+            return settlementFailure ?? buildApprovalDecisionResult(nextFailed);
+          }
           const nextCanceled: ApprovalRequest = { ...settleApprovalRequestReplayInputs(existing), status: 'canceled',
             updatedAtMs: Math.max(now, existing.updatedAtMs) };
           const updated = await deps.approvalsUpdate({ artifactId, request: nextCanceled, serverId: effectiveServerId });

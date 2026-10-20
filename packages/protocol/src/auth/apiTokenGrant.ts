@@ -19,11 +19,12 @@ import type { SessionPermissionMode } from '../sessions/metadata/sessionPermissi
 import { parseAgentPermissionIntentV1Alias, type AgentPermissionIntentV1 } from '../runtime/permissionIntentV1.js';
 import { parseQualifiedPluginActionId } from '../plugins/actions/qualifiedActionId.js';
 import { SessionSpawnNewInputV2BaseSchema, SessionSpawnNewInputV2Schema } from '../sessions/creation/sessionSpawnNewInputV2.js';
+import { ConnectedServiceBindingsV2Schema, type ConnectedServiceBindingsV2 } from '../connect/connectedServiceBindings.js';
 
 /** Prompt-free admission projection; ordinary Session input retains private custody. */
 export const ApiTokenSessionSpawnAdmissionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.pick(SessionSpawnNewInputV2BaseSchema, {
   executionTarget: true, agentTarget: true, directory: true, organizationPlacement: true,
-  modelSelection: true, permissionMode: true,
+  modelSelection: true, permissionMode: true, connectedServices: true,
 })));
 export type ApiTokenSessionSpawnAdmissionV1 = z.infer<typeof ApiTokenSessionSpawnAdmissionV1Schema>;
 export function projectApiTokenSessionSpawnAdmissionV1(input: unknown): ApiTokenSessionSpawnAdmissionV1 {
@@ -33,6 +34,7 @@ export function projectApiTokenSessionSpawnAdmissionV1(input: unknown): ApiToken
     ...(canonical.organizationPlacement !== undefined ? { organizationPlacement: canonical.organizationPlacement } : {}),
     ...(canonical.modelSelection !== undefined ? { modelSelection: canonical.modelSelection } : {}),
     ...(canonical.permissionMode !== undefined ? { permissionMode: canonical.permissionMode } : {}),
+    ...(canonical.connectedServices !== undefined ? { connectedServices: canonical.connectedServices } : {}),
   });
 }
 
@@ -61,6 +63,7 @@ export const ApiTokenGrantV1Schema = lazyZodSchema(() => z.strictObject({
     agentTargetKey: ProviderAgentTargetKeySchema,
     directory: z.literal('managed'),
     placement: SessionOrganizationPlacementV1Schema,
+    connectedServices: z.optional(ConnectedServiceBindingsV2Schema),
   })),
 }).check(z.superRefine((value, context) => {
   const lists: ReadonlyArray<readonly [readonly string[], readonly (string | number)[]]> = [
@@ -126,6 +129,19 @@ function placementsEqual(a: SessionOrganizationPlacementV1, b: SessionOrganizati
   return aTags.size === bTags.size && [...aTags].every((tag) => bTags.has(tag));
 }
 
+function connectedServiceBindingsEqual(
+  a: ConnectedServiceBindingsV2 | undefined,
+  b: ConnectedServiceBindingsV2 | undefined,
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  const aIds = Object.keys(a.bindingsByServiceId);
+  const bIds = Object.keys(b.bindingsByServiceId);
+  return aIds.length === bIds.length && aIds.every((serviceId) => (
+    Object.prototype.hasOwnProperty.call(b.bindingsByServiceId, serviceId)
+    && JSON.stringify(a.bindingsByServiceId[serviceId]) === JSON.stringify(b.bindingsByServiceId[serviceId])
+  ));
+}
+
 /** All transports call this owner; encrypted spawn fields are decisively rechecked by the daemon. */
 export function evaluateApiTokenGrantV1(input: Readonly<{
   grant: ApiTokenGrantV1;
@@ -163,10 +179,18 @@ export function evaluateApiTokenGrantV1(input: Readonly<{
       const agent = AgentExecutionTargetV1Schema.safeParse(fields.agentTarget);
       const directory = SessionDirectoryIntentV1Schema.safeParse(fields.directory);
       const placement = SessionOrganizationPlacementV1Schema.safeParse(fields.organizationPlacement);
+      const hasConnectedServices = Object.prototype.hasOwnProperty.call(fields, 'connectedServices');
+      const connectedServices = ConnectedServiceBindingsV2Schema.safeParse(fields.connectedServices);
       if ((!projectedApiTarget && (!execution.success || execution.data.machineId !== binding.machineId))
         || !agent.success || buildBackendTargetKeyV2(agent.data) !== binding.agentTargetKey
         || !directory.success || directory.data.kind !== 'managed'
-        || !placement.success || !placementsEqual(placement.data, binding.placement)) return { ok: false, reason: 'create_not_granted' };
+        || !placement.success || !placementsEqual(placement.data, binding.placement)
+        || (binding.connectedServices === undefined
+          ? hasConnectedServices
+          : !hasConnectedServices || !connectedServices.success
+            || !connectedServiceBindingsEqual(connectedServices.data, binding.connectedServices))) {
+        return { ok: false, reason: 'create_not_granted' };
+      }
     }
     return { ok: true };
   }
@@ -195,7 +219,8 @@ export function isApiTokenGrantWithinV1(child: ApiTokenGrantV1, parent: ApiToken
     if (parent.create !== null) {
       if (child.create === null || child.create.machineId !== parent.create.machineId
         || child.create.agentTargetKey !== parent.create.agentTargetKey
-        || !placementsEqual(child.create.placement, parent.create.placement)) return false;
+        || !placementsEqual(child.create.placement, parent.create.placement)
+        || !connectedServiceBindingsEqual(child.create.connectedServices, parent.create.connectedServices)) return false;
     } else if (child.create !== null && !isApiTokenGrantTargetMemberV1(parent, { kind: 'machine', machineId: child.create.machineId })) return false;
   }
   return true;

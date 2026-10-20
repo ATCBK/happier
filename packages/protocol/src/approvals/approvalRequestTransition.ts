@@ -194,9 +194,13 @@ export function decideApprovalRequestTransition(
     && next.execution.error === 'approval_stale';
   const isExecutingTerminal = existing.v === 2
     && existing.status === 'executing'
+    && next.v === 2
     && (next.status === 'executed' || next.status === 'failed')
     && next.decision?.kind === 'approve'
-    && next.execution !== undefined;
+    && next.execution !== undefined
+    // Cancellation owns only unclaimed custody. The writer may have re-read
+    // an execution claim after the canceling caller read `approved`.
+    && !(next.execution.errorCode === 'approval_canceled' && next.execution.effectAttempted === false);
   if (
     (!isOpenDecision
       && !isApprovedExecution
