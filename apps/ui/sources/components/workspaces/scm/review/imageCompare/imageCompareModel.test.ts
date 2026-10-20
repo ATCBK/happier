@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { buildImageCompareModel } from './imageCompareModel';
+import { buildImageCompareModel, projectImageComparePreview } from './imageCompareModel';
 import type { MediaStageItem } from '@/components/ui/media/stage/mediaStageItems';
 
 describe('image comparison evidence', () => {
+    it('keeps preview errors unreadable even when a successful revision read reported zero bytes', () => {
+        const model = buildImageCompareModel({ changeKind: 'modified',
+            before: projectImageComparePreview({ status: 'error', uri: null, error: 'Preview cache unavailable', sizeBytes: 0 }),
+            after: projectImageComparePreview({ status: 'loaded', uri: 'after', error: null, byteLength: 0 }),
+        });
+        expect(model.before).toEqual({ kind: 'unreadable', reason: 'Preview cache unavailable' });
+        expect(model.after).toEqual({ kind: 'noPreview', reason: 'empty' });
+    });
+    it.each(['disabled', 'loading'] as const)('does not treat %s preview metadata as loaded empty bytes', (status) => {
+        const model = buildImageCompareModel({ changeKind: 'modified',
+            before: projectImageComparePreview({ status, uri: null, error: null, sizeBytes: 0 }),
+            after: projectImageComparePreview({ status, uri: null, error: null, byteLength: 0 }),
+        });
+        expect(model.before).toEqual({ kind: 'noPreview', reason: status });
+        expect(model.after).toEqual({ kind: 'noPreview', reason: status });
+    });
     it('keeps before/after order and never calls empty bytes deletion', () => {
         const empty = buildImageCompareModel({ changeKind: 'modified', before: { status: 'loaded', uri: 'before', sizeBytes: 0 },
             after: { status: 'loaded', uri: 'after', sizeBytes: 12 } });

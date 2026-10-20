@@ -7,27 +7,11 @@ import { buildWorkspacePreviewIdentity } from '@/components/ui/media/buildWorksp
 import type { MediaStageItem } from '@/components/ui/media/stage/mediaStageItems';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
-import { buildImageCompareModel, type ImageComparePreview } from './imageCompareModel';
+import { buildImageCompareModel, projectImageComparePreview } from './imageCompareModel';
 
 export type ImageCompareSource =
     | Readonly<{ kind: 'captured'; file: ScmComparisonFile; comparisonId: string }>
     | Readonly<{ kind: 'workingTree'; changeKind: string; area: ScmDiffArea; signature?: string | null; sizeBytes?: number | null }>;
-
-function previewResult(preview: Readonly<{
-    status: 'loaded' | 'loading' | 'disabled' | 'error';
-    uri: string | null;
-    error: string | null;
-    errorCode?: string | null;
-    sizeBytes?: number | null;
-    byteLength?: number;
-}>): ImageComparePreview {
-    if (preview.sizeBytes === 0 || preview.byteLength === 0) return { status: 'empty' };
-    if (preview.status === 'loaded' && preview.uri !== null) return { status: 'loaded', uri: preview.uri,
-        sizeBytes: preview.sizeBytes ?? preview.byteLength ?? null };
-    if (preview.status === 'error') return { status: 'error', error: preview.error ?? 'blob_unavailable',
-        ...(preview.errorCode ? { errorCode: preview.errorCode } : {}) };
-    return { status: preview.status === 'disabled' ? 'disabled' : 'loading' };
-}
 
 /** Review and File Changes share pinned revision bytes and the normal live-after preview owner. */
 export function useImageCompare(input: Readonly<{
@@ -71,10 +55,10 @@ export function useImageCompare(input: Readonly<{
     const liveAfter = useFilePreviewSource(liveAfterInput);
     const beforePreview = captured && !beforeAbsent && !beforeBlobId
         ? { status: 'error' as const, error: 'blob_unavailable', errorCode: 'blob_unavailable' }
-        : previewResult(before);
+        : projectImageComparePreview(before);
     const afterPreview = captured && !afterAbsent && !afterBlobId
         ? { status: 'error' as const, error: 'blob_unavailable', errorCode: 'blob_unavailable' }
-        : previewResult(captured ? capturedAfter : liveAfter);
+        : projectImageComparePreview(captured ? capturedAfter : liveAfter);
     const kind = viewer.kind === 'svg' ? 'svg' as const : 'image' as const;
     const beforeItem: MediaStageItem = { kind: beforeViewer.kind === 'svg' ? 'svg' : 'image', title: input.beforeTitle ?? input.filePath, source: before.previewInput,
         ...('sizeBytes' in before ? { sizeBytes: before.sizeBytes } : {}), ...(input.openFile ? { openFile: input.openFile } : {}) };

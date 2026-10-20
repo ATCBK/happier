@@ -4,6 +4,23 @@ export type ImageComparePreview =
     | Readonly<{ status: 'disabled' | 'loading' }>
     | Readonly<{ status: 'error'; error: string; errorCode?: string }>;
 
+export function projectImageComparePreview(preview: Readonly<{
+    status: 'loaded' | 'loading' | 'disabled' | 'error';
+    uri: string | null;
+    error: string | null;
+    errorCode?: string | null;
+    sizeBytes?: number | null;
+    byteLength?: number;
+}>): ImageComparePreview {
+    if (preview.status === 'error') return { status: 'error', error: preview.error ?? 'blob_unavailable',
+        ...(preview.errorCode ? { errorCode: preview.errorCode } : {}) };
+    if (preview.status !== 'loaded') return { status: preview.status };
+    if (preview.sizeBytes === 0 || preview.byteLength === 0) return { status: 'empty' };
+    if (preview.uri !== null) return { status: 'loaded', uri: preview.uri,
+        sizeBytes: preview.sizeBytes ?? preview.byteLength ?? null };
+    return { status: 'loading' };
+}
+
 export type ImageCompareSide =
     | Readonly<{ kind: 'present'; uri: string; sizeBytes: number | null }>
     | Readonly<{ kind: 'added' | 'deleted' }>
