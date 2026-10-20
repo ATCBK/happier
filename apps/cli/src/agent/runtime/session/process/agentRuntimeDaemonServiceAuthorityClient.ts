@@ -13,7 +13,7 @@ import type {
   AgentRuntimeDaemonTurnContributionsResultV1,
 } from './agentRuntimeRunnerProtocol';
 import { createProviderErrorV1, ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/errors';
-import type { SessionInputAdmissionResultV1 } from '@happier-dev/protocol';
+import type { SessionInputEnqueueResultV1 } from '@happier-dev/protocol';
 import { TeamCredentialErrorCodeV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import {
   readAgentRuntimeDaemonServiceAuthority,
@@ -331,7 +331,7 @@ export async function admitCurrentRunnerSessionInput(
     timeoutMs?: number | null;
     signal?: AbortSignal;
   }>,
-): Promise<SessionInputAdmissionResultV1> {
+): Promise<SessionInputEnqueueResultV1> {
   if (input.signal?.aborted) {
     return { status: 'rejected', code: 'session_input_cancelled' };
   }

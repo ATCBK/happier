@@ -62,6 +62,10 @@ describe('Agent runtime daemon Session-input admission service protocol', () => 
     expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(response)).toEqual(response);
     expect(AgentRuntimeDaemonServiceResponseV1Schema.safeParse({
       ...response,
+      result: { ...response.result, admission: { status: 'held', localId: 'local-1', code: 'autonomous_check_in' } },
+    }).success).toBe(false);
+    expect(AgentRuntimeDaemonServiceResponseV1Schema.safeParse({
+      ...response,
       result: { ...response.result, messageId: 'forbidden' },
     }).success).toBe(false);
   });
