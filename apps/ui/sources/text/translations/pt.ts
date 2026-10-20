@@ -2763,6 +2763,7 @@ const ptValues = {
   common: {
     stop: "Parar",
     unknown: 'Desconhecido',
+    undo: 'Desfazer',
     saveError: 'Falha ao salvar.',
         decrease: "Diminuir",
         increase: "Aumentar",
@@ -10278,9 +10279,10 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       },
       fileEditingUnsupported:
         "A edição de arquivos não é suportada pelo daemon conectado. Atualize o Happier na máquina para habilitar operações de escrita.",
-      fileChangedExternally:
+      externalFileChange:
         "Este arquivo mudou no disco enquanto você o editava. Seu rascunho foi mantido sem alterações; revise o arquivo mais recente antes de salvar.",
       selectionFailed: "Falha ao atualizar a seleção",
+      askSelection: fileSelectionAskTranslations.pt,
       openReviewCommentsFailed: "Falha ao abrir comentários de revisão",
         reviewPreviousFile: "Arquivo anterior",
                   reviewNextFile: "Próximo arquivo",

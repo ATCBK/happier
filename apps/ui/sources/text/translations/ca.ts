@@ -2553,6 +2553,7 @@ const caValues = {
     common: {
         stop: "Atura",
         unknown: 'Desconegut',
+        undo: 'Desfés',
         saveError: 'No s’ha pogut desar.',
         decrease: "Redueix",
         increase: "Augmenta",
@@ -9338,7 +9339,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             },
             fileEditingUnsupported:
                 "L'edició de fitxers no és compatible amb el dimoni connectat. Actualitza Happier a la màquina per habilitar operacions d'escriptura.",
-            fileChangedExternally:
+            externalFileChange:
                 "Aquest fitxer ha canviat al disc mentre l'editaves. L'esborrany s'ha mantingut sense canvis; revisa el fitxer més recent abans de desar.",
           selectionFailed: "No s'ha pogut actualitzar la selecció",
           askSelection: fileSelectionAskTranslations["ca"],

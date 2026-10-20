@@ -2530,6 +2530,7 @@ const zhHansValues = {
   common: {
     stop: "停止",
     unknown: '未知',
+    undo: '撤销',
         decrease: "减少",
         increase: "增加",
     // Simple string constants
@@ -9797,7 +9798,7 @@ const zhHansValues = {
       },
       fileEditingUnsupported:
         "连接的守护进程不支持文件编辑。请在该机器上更新 Happier 以启用写入操作。",
-      fileChangedExternally:
+      externalFileChange:
         "你编辑时，此文件已在磁盘上更改。草稿已保持不变；保存前请查看最新文件。",
       selectionFailed: "更新选择失败",
       askSelection: fileSelectionAskTranslations["zh-Hans"],

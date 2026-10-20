@@ -2730,6 +2730,7 @@ const esValues = {
   common: {
     stop: "Detener",
     unknown: 'Desconocido',
+    undo: 'Deshacer',
     saveError: 'No se pudo guardar.',
         decrease: "Reducir",
         increase: "Aumentar",
@@ -10159,7 +10160,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     },
       fileEditingUnsupported:
         "La edición de archivos no es compatible con el daemon conectado. Actualiza Happier en la máquina para habilitar operaciones de escritura.",
-      fileChangedExternally:
+      externalFileChange:
         "Este archivo cambió en disco mientras lo editabas. Tu borrador se mantuvo sin cambios; revisa el archivo más reciente antes de guardar.",
       selectionFailed: "No se pudo actualizar la selección",
       askSelection: fileSelectionAskTranslations["es"],

@@ -2569,6 +2569,7 @@ const ruValues = {
   common: {
     stop: "Остановить",
     unknown: 'Неизвестно',
+    undo: 'Отменить',
     saveError: 'Не удалось сохранить.',
         decrease: "Уменьшить",
         increase: "Увеличить",
@@ -10009,7 +10010,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       },
       fileEditingUnsupported:
         "Редактирование файлов не поддерживается подключённым демоном. Обновите Happier на машине, чтобы включить операции записи.",
-      fileChangedExternally:
+      externalFileChange:
         "Этот файл изменился на диске, пока вы его редактировали. Черновик оставлен без изменений; проверьте последнюю версию файла перед сохранением.",
       selectionFailed: "Не удалось обновить выбор",
       askSelection: fileSelectionAskTranslations["ru"],

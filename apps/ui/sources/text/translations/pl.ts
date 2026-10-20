@@ -2566,6 +2566,7 @@ const plValues = {
   common: {
     stop: "Zatrzymaj",
     unknown: 'Nieznane',
+    undo: 'Cofnij',
     saveError: 'Nie udało się zapisać.',
         decrease: "Zmniejsz",
         increase: "Zwiększ",
@@ -9990,7 +9991,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       },
       fileEditingUnsupported:
         "Edycja plików nie jest obsługiwana przez podłączonego daemona. Zaktualizuj Happier na maszynie, aby włączyć operacje zapisu.",
-      fileChangedExternally:
+      externalFileChange:
         "Ten plik zmienił się na dysku podczas edycji. Szkic pozostał bez zmian; sprawdź najnowszą wersję pliku przed zapisaniem.",
       selectionFailed: "Nie udało się zaktualizować wyboru",
       askSelection: fileSelectionAskTranslations["pl"],

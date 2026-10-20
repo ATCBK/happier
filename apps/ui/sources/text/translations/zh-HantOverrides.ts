@@ -3075,6 +3075,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
       common: {
         decrease: "減少",
         increase: "增加",
+        undo: '復原',
           // Simple string constants
           search: '搜尋',
           cancel: '取消',
@@ -8220,7 +8221,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             frontmatterReadOnly: 'Frontmatter (唯讀)',
         },
         fileEditingUnsupported: '連線的守護程式不支援檔案編輯。請在該機器上更新 Happier 以啟用寫入操作。',
-        fileChangedExternally: '你編輯時，此檔案已在磁碟上變更。草稿已保持不變；儲存前請查看最新檔案。',
+        externalFileChange: '你編輯時，此檔案已在磁碟上變更。草稿已保持不變；儲存前請查看最新檔案。',
         selectionFailed: '更新選取失敗',
         askSelection: fileSelectionAskTranslations["zh-Hant"],
         openReviewCommentsFailed: '無法開啟審閱評論',

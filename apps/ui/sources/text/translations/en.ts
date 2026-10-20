@@ -2876,6 +2876,7 @@ const enWebCryptoGate = {
 const enCommon = {
   stop: "Stop",
   unknown: 'Unknown',
+  undo: 'Undo',
   decrease: 'Decrease',
   increase: 'Increase',
   // Simple string constants
@@ -11939,7 +11940,7 @@ const enFiles = {
   },
   fileEditingUnsupported:
     'File editing isn’t supported by the connected daemon. Update Happier on the machine to enable write operations.',
-  fileChangedExternally:
+  externalFileChange:
     'This file changed on disk while you were editing. Your draft was kept unchanged; review the latest file before saving.',
   selectionFailed: 'Failed to update selection',
   askSelection: fileSelectionAskTranslations["en"],

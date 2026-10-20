@@ -2565,6 +2565,7 @@ const frValues = {
   common: {
     stop: "Arrêter",
     unknown: 'Inconnu',
+    undo: 'Annuler',
     saveError: 'Échec de l’enregistrement.',
         decrease: "Diminuer",
         increase: "Augmenter",
@@ -9995,7 +9996,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     },
       fileEditingUnsupported:
         "L’édition de fichiers n’est pas prise en charge par le daemon connecté. Mets Happier à jour sur la machine pour activer les opérations d’écriture.",
-      fileChangedExternally:
+      externalFileChange:
         "Ce fichier a changé sur le disque pendant ton édition. Ton brouillon est resté inchangé ; relis la dernière version avant d’enregistrer.",
       selectionFailed: "Échec de la mise à jour de la sélection",
       askSelection: fileSelectionAskTranslations["fr"],

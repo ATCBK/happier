@@ -2409,6 +2409,7 @@ export const de: TranslationStructure = {
 	    common: {
         stop: "Stoppen",
         unknown: 'Unbekannt',
+        undo: 'Rückgängig',
         decrease: "Verringern",
         increase: "Erhöhen",
 	        // Simple string constants
@@ -10035,7 +10036,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
                 },
             fileEditingUnsupported:
                 'Der verbundene Daemon unterstützt das Bearbeiten von Dateien nicht. Aktualisiere Happier auf dem Rechner, um Schreiboperationen zu aktivieren.',
-          fileChangedExternally:
+          externalFileChange:
               'Diese Datei hat sich auf der Festplatte geändert, während du bearbeitet hast. Dein Entwurf blieb unverändert; sieh dir die aktuelle Datei an, bevor du speicherst.',
           selectionFailed: 'Die Auswahl ließ sich nicht aktualisieren',
           askSelection: fileSelectionAskTranslations["de"],

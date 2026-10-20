@@ -2711,6 +2711,7 @@ const jaValues = {
   common: {
     stop: "停止",
     unknown: '不明',
+    undo: '元に戻す',
     saveError: '保存に失敗しました。',
         decrease: "減らす",
         increase: "増やす",
@@ -10456,7 +10457,7 @@ localTailscale: {
       },
       fileEditingUnsupported:
         "接続されたデーモンはファイル編集をサポートしていません。書き込み操作を有効にするには、マシン上のHappierを更新してください。",
-      fileChangedExternally:
+      externalFileChange:
         "編集中にこのファイルがディスク上で変更されました。下書きは変更していません。保存する前に最新のファイルを確認してください。",
       selectionFailed: "選択を更新できませんでした",
       askSelection: fileSelectionAskTranslations["ja"],

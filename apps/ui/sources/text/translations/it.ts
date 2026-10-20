@@ -2543,6 +2543,7 @@ const itValues = {
   common: {
     stop: "Interrompi",
     unknown: 'Sconosciuto',
+    undo: 'Annulla',
     saveError: 'Salvataggio non riuscito.',
         decrease: "Diminuisci",
         increase: "Aumenta",
@@ -10381,7 +10382,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     },
       fileEditingUnsupported:
         "La modifica dei file non è supportata dal daemon connesso. Aggiorna Happier sulla macchina per abilitare le operazioni di scrittura.",
-      fileChangedExternally:
+      externalFileChange:
         "Questo file è cambiato su disco mentre lo modificavi. La bozza è rimasta invariata; controlla il file più recente prima di salvare.",
       selectionFailed: "Impossibile aggiornare la selezione",
       askSelection: fileSelectionAskTranslations["it"],
