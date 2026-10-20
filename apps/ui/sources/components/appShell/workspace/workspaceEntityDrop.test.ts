@@ -84,6 +84,8 @@ describe('workspace entity Action admission', () => {
                 workspaceRefs: [{ id: 'workspace', serverId: 'home', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 }],
                 item, target: { leafId: 'group:1', placement: 'right' }, availableSizePx: 1400, minimumExistingSizePx: 400 });
             expect(decision).toMatchObject({ status: 'allowed', effect: { input: { mode: 'splitRight' } } });
+            if (item.kind === 'repository-file') expect(decision).toMatchObject({ effect: { input: { file: {
+                target: { kind: 'project', workspaceRefId: 'workspace', serverId: 'home', machineId: 'machine', rootPath: '/repo' }, path: 'README.md' } } } });
             if (decision.status !== 'allowed' || !isWorkspaceActionId(decision.effect.actionId)) throw new Error('Expected workspace effect');
             expect(h.execute(decision.effect.actionId, decision.effect.input)).toEqual({ ok: true });
             expect(h.workspace.state.root.kind).toBe('split');

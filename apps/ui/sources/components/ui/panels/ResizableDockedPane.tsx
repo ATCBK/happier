@@ -11,6 +11,10 @@ export type ResizableDockedPaneProps = Readonly<{
     maxWidthPx: number;
     onCommitWidthPx: (widthPx: number, meta?: ResizableDockedPaneCommitMeta) => void;
     onDragWidthPx?: (widthPx: number | null, meta?: ResizableDockedPaneCommitMeta | null) => void;
+    collapse?: true;
+    onCollapseArmedChange?: (armed: boolean) => void;
+    onCollapse?: () => void;
+    onResetRequest?: () => void;
     resizeEdge?: 'left' | 'right';
     children: React.ReactNode;
     testID?: string;
@@ -32,6 +36,10 @@ export const ResizableDockedPane = React.memo((props: ResizableDockedPaneProps) 
         maxSizePx: props.maxWidthPx,
         onCommitSizePx: props.onCommitWidthPx,
         onDragSizePx: props.onDragWidthPx,
+        collapse: props.collapse,
+        onCollapseArmedChange: props.onCollapseArmedChange,
+        onCollapse: props.onCollapse,
+        onResetRequest: props.onResetRequest,
     });
 
     // The handle sits on the edge it resizes in document order too, because order is focus order: a
@@ -42,11 +50,7 @@ export const ResizableDockedPane = React.memo((props: ResizableDockedPaneProps) 
             labels={{ label: t('ui.resizableDockedPane.resizeA11y'), hint: t('ui.resizableDockedPane.resizeHint'), value: (px) => t('ui.resizableDockedPane.resizeValue', { px }) }}
             axis="x"
             edge={resizeEdge === 'left' ? 'start' : 'end'}
-            interactionProps={Platform.OS === 'web'
-                ? ({
-                    ...webHandleProps,
-                } as any)
-                : panHandlers as any}
+            interactionProps={Platform.OS === 'web' ? webHandleProps : panHandlers}
             accessibilityHandleProps={accessibilityHandleProps}
             style={{
                 position: 'absolute',

@@ -20,6 +20,25 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
 });
 
 describe('workspace Action intent adapter', () => {
+    it('opens session and project file arms through real navigation with line ranges and view intent', () => {
+        let state = createWorkspaceState({ id: 'session-tab', target: { kind: 'session', params: { id: 'session-a', serverId: 'home-a' } }, pinned: false, preview: false });
+        const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });
+        let id = 0;
+        const navigation = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog,
+            dispatch: action => { state = reduceWorkspaceState(state, action); }, transport: { commit: () => {} },
+            createId: () => `new:${++id}`, onChange: () => {} });
+        const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => null, createId: () => `new:${++id}` });
+        const anchor = { kind: 'range', filePath: 'src/a.ts', startLine: 3, endLine: 8 };
+        expect(execute('workspace.tabs.open', { file: { target: { kind: 'session', sessionId: 'session-a', serverId: 'home-a' }, path: 'src/a.ts', anchor, view: 'changes', blame: true }, mode: 'preview' })).toEqual({ ok: true });
+        const current = state.tabs[state.groups[state.focusedGroupId].activeTabId];
+        expect(current.target.kind).toBe('session');
+        expect(parseSessionPaneUrlState(current.target.params)?.details).toEqual({ kind: 'file', path: 'src/a.ts', anchor, view: 'changes', blame: true, openAs: 'preview' });
+        expect(execute('workspace.tabs.open', { file: { target: { kind: 'project', workspaceRefId: 'workspace-a', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, path: 'src/a.ts', anchor, view: 'view' }, mode: 'preview' })).toEqual({ ok: true });
+        const project = state.tabs[state.groups[state.focusedGroupId].activeTabId];
+        expect(project.target.kind).toBe('project');
+        expect(project.target.params).toMatchObject({ workspaceRefId: 'workspace-a', initialFile: 'src/a.ts', fileView: 'view', anchor: 'range', startLine: '3', endLine: '8' });
+        expect(project.preview).toBe(true);
+    });
     it.each([
         ['workspace.tabs.close_others', { tabId: 'b' }, ['pin', 'b']],
         ['workspace.tabs.close_left', { tabId: 'b' }, ['pin', 'b', 'c']],

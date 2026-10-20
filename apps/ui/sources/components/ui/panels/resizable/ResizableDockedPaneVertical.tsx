@@ -12,6 +12,7 @@ export type ResizableDockedPaneVerticalProps = Readonly<{
     maxHeightPx: number;
     onCommitHeightPx: (heightPx: number, meta?: ResizableDockedPaneVerticalCommitMeta) => void;
     onDragHeightPx?: (heightPx: number | null, meta?: ResizableDockedPaneVerticalCommitMeta | null) => void;
+    onResetRequest?: () => void;
     resizeEdge?: 'top' | 'bottom';
     children: React.ReactNode;
     testID?: string;
@@ -35,6 +36,7 @@ export const ResizableDockedPaneVertical = React.memo((props: ResizableDockedPan
         maxSizePx: props.maxHeightPx,
         onCommitSizePx: props.onCommitHeightPx,
         onDragSizePx: props.onDragHeightPx,
+        onResetRequest: props.onResetRequest,
     });
 
     return (
@@ -51,13 +53,11 @@ export const ResizableDockedPaneVertical = React.memo((props: ResizableDockedPan
         >
             {canResize ? (
                 <ResizablePaneDividerHandle
-            labels={{ label: t('ui.resizableDockedPane.resizeA11y'), hint: t('ui.resizableDockedPane.resizeHint'), value: (px) => t('ui.resizableDockedPane.resizeValue', { px }) }}
+                    labels={{ label: t('ui.resizableDockedPane.resizeA11y'), hint: t('ui.resizableDockedPane.resizeHint'), value: (px) => t('ui.resizableDockedPane.resizeValue', { px }) }}
                     axis="y"
                     edge={resizeEdge === 'top' ? 'start' : 'end'}
                     testID={props.resizeHandleTestID ?? (props.testID ? `${props.testID}-resize-handle` : undefined)}
-                    interactionProps={Platform.OS === 'web'
-                        ? (webHandleProps as any)
-                        : (panHandlers as any)}
+                    interactionProps={Platform.OS === 'web' ? webHandleProps : panHandlers}
                     accessibilityHandleProps={accessibilityHandleProps}
                     style={{
                         position: 'absolute',

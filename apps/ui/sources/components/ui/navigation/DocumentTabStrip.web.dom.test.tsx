@@ -2,7 +2,7 @@
 import * as React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 
 vi.mock('react-native', () => vi.importActual('react-native-web'));
@@ -12,16 +12,49 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 // corridor exactly as Expo's Unistyles transform does (without a mock import cycle).
 const native = await vi.importActual<typeof import('react-native')>('react-native-web');
 // jsdom has no browser media-query API; the external wrapper reads it on import.
-vi.stubGlobal('matchMedia', (media: string): MediaQueryList => ({
+const matchMedia = (media: string): MediaQueryList => ({
     media, matches: false, onchange: null, addListener() {}, removeListener() {},
     addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
-}));
+});
+vi.stubGlobal('matchMedia', matchMedia);
+beforeEach(() => { vi.stubGlobal('matchMedia', matchMedia); });
 const { createUnistylesElement } = await vi.importActual<typeof import('react-native-unistyles')>(
     '../../../../node_modules/react-native-unistyles/src/core/createUnistylesElement',
 );
 vi.doMock('react-native', () => ({ ...native, View: createUnistylesElement(native.View) }));
 const { DocumentTabStrip } = await import('./DocumentTabStrip');
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it.each(['strip', 'bar', 'rail'] as const)('closes a %s tab through onClose on middle click and preserves primary activation', async (variant) => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const closed: string[] = [];
+    const activated: string[] = [];
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+        await act(async () => root.render(<DocumentTabStrip variant={variant}
+            tabs={[{ key: 'file', title: 'File', isPinned: true, isPreview: false }]}
+            activeTabKey="file" accessibilityLabel="Documents" onActivate={key => activated.push(key)}
+            onPin={() => {}} onUnpin={() => {}} onClose={key => closed.push(key)}
+            renderLeadingIcon={() => null} tabNativeId={id => id} panelNativeId={id => id}
+            testIds={{ tab: id => `middle-tab-${id}` }} />));
+        const tab = host.querySelector<HTMLElement>('[data-testid="middle-tab-file"]')!;
+        const right = new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 2 });
+        await act(async () => { tab.dispatchEvent(right); });
+        expect(closed).toEqual([]);
+        const middle = new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 });
+        await act(async () => { tab.dispatchEvent(middle); });
+        expect(closed).toEqual(['file']);
+        expect(middle.defaultPrevented).toBe(true);
+        expect(activated).toEqual([]);
+        await act(async () => { tab.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 })); });
+        expect(activated).toEqual(['file']);
+    } finally {
+        await act(async () => root.unmount());
+        host.remove();
+    }
+});
 
 it('keeps a real tab carry and resized target bounded through DOM feedback commits', async () => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);

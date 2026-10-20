@@ -112,9 +112,11 @@ describe('workspace tabs production composition', () => {
         const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: {
             externalSessions: false, inbox: false, workflows: false, friends: false } });
         let openProject!: ReturnType<typeof useOpenProject>;
+        const { useWorkspaceFileOpener } = await import('@/components/workspaces/files/useWorkspaceFileOpener');
+        let openFile!: ReturnType<typeof useWorkspaceFileOpener>['open'];
         let pane!: ReturnType<typeof useAppPaneContext>;
         let navigation!: WorkspaceNavigationContextValue;
-        function SearchActivation() { openProject = useOpenProject(); pane = useAppPaneContext(); return null; }
+        function SearchActivation() { openProject = useOpenProject(); openFile = useWorkspaceFileOpener().open; pane = useAppPaneContext(); return null; }
         const screen = await renderScreen(<AppPaneProvider><WorkspaceProvider enabled={platform === 'web'} phone={platform === 'ios'} catalog={catalog}>
             {owner => { navigation = owner; return <SearchActivation />; }}
         </WorkspaceProvider></AppPaneProvider>);
@@ -130,7 +132,7 @@ describe('workspace tabs production composition', () => {
             await act(async () => { result = await activateUniversalSearchResult({ kind: 'workspaceFile', path: 'riverside.txt',
                 serverId: scope.serverId, accountId: scope.accountId, sessionId: null,
                 workspaceRefId: 'riverside', scope: { serverId: scope.serverId, machineId: 'studio', rootPath: '/repo' },
-                anchor: { kind: 'fileLine', startLine: 2 }, find }, { openProject,
+                anchor: { kind: 'fileLine', startLine: 2 }, find }, { openProject, openFile,
                 navigateToSession: () => { throw new Error('A Project hit must not open a Session'); },
                 push: () => { throw new Error('A Project hit must use its canonical owner'); } }); });
             expect(result).toEqual({ ok: true });

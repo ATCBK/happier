@@ -15,6 +15,9 @@ import { ESCAPE_LAYER_PRIORITIES } from '@/keyboard/escape';
 import { t } from '@/text';
 import { shadowLevelStyle } from '@/shadowElevation';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
+import { RetainedPanelSurface } from './RetainedPanelSurface';
+import { DEFAULT_DETAILS_MIN_PX, DEFAULT_RIGHT_MIN_PX, DEFAULT_SESSION_MIN_PX, DEFAULT_SESSION_WIDTH_PX } from './paneBreakpoints';
+import { usePaneRegionFocusBoundary } from '@/components/appShell/panes/paneRegion';
 
 // A pane floating over the main content (overlay presentation) rounds the one edge that shows.
 const PANE_OVERLAY_CORNER_RADIUS_PX = 16;
@@ -22,10 +25,24 @@ const PANE_OVERLAY_CORNER_RADIUS_PX = 16;
 // columns are present. Keep that user-visible precedence inside the one pane
 // layer rather than relying on hook registration order.
 const DOCKED_DETAILS_ESCAPE_PRIORITY = ESCAPE_LAYER_PRIORITIES.pane + 1;
+const NOOP = () => {};
 
 export type MultiPaneHostProps = Readonly<{
     main: React.ReactNode;
     hideMain?: boolean;
+    mirrored?: boolean;
+    detailsClosable?: boolean;
+    mainDrawerOpen?: boolean;
+    mainAccessibilityLabel?: string;
+    mainOverlayFocusReturnRef?: FocusReturnMutableRef;
+    mainDockWidthPx?: number;
+    mainDockMaxWidthPx?: number;
+    onCloseMain?: () => void;
+    onCommitMainDockWidthPx?: (widthPx: number) => void;
+    onDragMainDockWidthPx?: React.ComponentProps<typeof ResizableDockedPane>['onDragWidthPx'];
+    onResetMainDockWidthPx?: () => void;
+    onResetRightDockWidthPx?: () => void;
+    onResetDetailsDockWidthPx?: () => void;
     rightPane: React.ReactNode | null;
     detailsPane: React.ReactNode | null;
     layout: ResolvedPaneLayout;
@@ -65,6 +82,16 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
 
     const { theme } = useUnistyles();
     const overlayZIndexBase = 50;
+    const mirrored = props.mirrored === true;
+    const mainModalActive = layout.main === 'overlay' && props.mainDrawerOpen === true && hideMain !== true;
+    const mainLabel = props.mainAccessibilityLabel ?? t('ui.modalPane.right');
+    const mainPresence = useModalPanePresentation({ targetOpen: mainModalActive, node: main, overlay: true,
+        onClose: props.onCloseMain ?? NOOP });
+    const mainModalBoundary = useModalPaneBoundary({ active: mainModalActive, label: mainLabel,
+        focusReturnRef: props.mainOverlayFocusReturnRef,
+        discardPendingFocusReturn: hideMain !== true && layout.main !== 'overlay',
+        onRequestClose: mainPresence.requestClose, escapeEnabled: mainModalActive,
+        escapePriority: ESCAPE_LAYER_PRIORITIES.overlay + 1, allowEditableEscape: mainModalActive });
 
     // Pane *presence* is the logical open signal. Layout controls whether it's docked/overlay/hidden.
     // This lets us keep a pane mounted (state preserved) even when the layout temporarily hides it
@@ -81,8 +108,8 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
         overlay: layout.right === 'overlay',
         onClose: onCloseRight,
     });
-    const rightModalActive = layout.right === 'overlay' && rightPresence.present;
-    const detailsModalActive = layout.details === 'overlay' && detailsPresence.present && !rightModalActive;
+    const rightModalActive = layout.right === 'overlay' && rightPresence.present && !mainModalActive;
+    const detailsModalActive = layout.details === 'overlay' && detailsPresence.present && !rightModalActive && !mainModalActive;
     const rightModalLabel = t('ui.modalPane.right');
     const detailsModalLabel = t('ui.modalPane.details');
     const detailsModalBoundary = useModalPaneBoundary({
@@ -91,7 +118,7 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
         onRequestClose: detailsPresence.requestClose,
         focusReturnRef: props.detailsOverlayFocusReturnRef,
         discardPendingFocusReturn: Boolean(detailsPane) && layout.details !== 'overlay',
-        escapeEnabled: detailsModalActive || (layout.details === 'docked' && detailsPresence.present),
+        escapeEnabled: props.detailsClosable !== false && (detailsModalActive || (layout.details === 'docked' && detailsPresence.present)),
         escapePriority: detailsModalActive
             ? ESCAPE_LAYER_PRIORITIES.overlay
             : DOCKED_DETAILS_ESCAPE_PRIORITY,
@@ -132,30 +159,44 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
     // the private focus boundary instead of asking plugin surfaces to infer
     // their own presentation state.
     const mainFocusEligible = activeMainBoundary === null;
+    const mainRegionFocus = usePaneRegionFocusBoundary('main', mainFocusEligible && hideMain !== true && (layout.main !== 'overlay' || mainModalActive));
     const detailsOverlayFocusEligible = detailsModalActive && !detailsPresence.closing;
     const rightOverlayFocusEligible = rightModalActive && !rightPresence.closing;
 
     const detailsDocked = layout.details === 'docked' && detailsPresence.present;
     const rightDocked = layout.right === 'docked' && rightPresence.present;
-    const shouldHideDockedMainRegion = hideMain === true
-        && layout.details !== 'overlay'
-        && layout.right !== 'overlay';
+    const shouldHideDockedMainRegion = hideMain === true;
+    const mainWidthPx = props.mainDockWidthPx ?? DEFAULT_SESSION_WIDTH_PX;
+    const mainFocusRef = React.useCallback((node: unknown) => {
+        mainRegionFocus.ref(node);
+        if (mainModalActive) mainModalBoundary.setOverlayFocusRef(node as HTMLElement | null);
+    }, [mainModalActive, mainModalBoundary.setOverlayFocusRef, mainRegionFocus.ref]);
 
     return (
-        <View style={{ flex: 1, flexDirection: 'row', position: 'relative' }}>
-            {shouldHideDockedMainRegion ? null : (
-                <View key="main" style={{ flex: 1, minWidth: 0, minHeight: 0, position: 'relative' }}>
+        <View style={{ flex: 1, flexDirection: mirrored ? 'row-reverse' : 'row', position: 'relative' }}>
+                <View key="main" ref={mainFocusRef} testID="multi-pane-main-column" onFocusCapture={mainRegionFocus.onFocusCapture}
+                    onFocus={mainRegionFocus.onFocus} role={Platform.OS === 'web' ? 'region' : undefined}
+                    accessibilityLabel={mainLabel}
+                    style={shouldHideDockedMainRegion ? { position: 'absolute', width: 0, height: '100%', overflow: 'hidden', opacity: 0, zIndex: -1 }
+                        : layout.main === 'overlay' ? { position: 'absolute', top: 0, right: 0, bottom: 0, width: mainWidthPx, zIndex: overlayZIndexBase + 5, backgroundColor: theme.colors.surface.base }
+                            : { flex: mirrored ? undefined : 1, width: mirrored ? mainWidthPx : undefined, minWidth: 0, minHeight: 0, position: 'relative' }}>
+                    <RetainedPanelSurface isActive={!shouldHideDockedMainRegion} mode="flow" testID="multi-pane-main-retained">
+                    <ResizableDockedPane widthPx={mainWidthPx}
+                        minWidthPx={mirrored && layout.main !== 'overlay' ? DEFAULT_SESSION_MIN_PX : mainWidthPx}
+                        maxWidthPx={mirrored && layout.main !== 'overlay' ? props.mainDockMaxWidthPx ?? mainWidthPx : mainWidthPx}
+                        resizeEdge="left" onCommitWidthPx={props.onCommitMainDockWidthPx ?? NOOP}
+                        onDragWidthPx={props.onDragMainDockWidthPx} onResetRequest={props.onResetMainDockWidthPx}>
                     <ModalPaneBoundaryView
                         ref={setMainUnderlayFocusRef}
                         testID="multi-pane-main-underlay"
                         style={{ flex: 1, minWidth: 0, minHeight: 0 }}
-                        {...(activeMainBoundary?.underlayProps ?? {})}
+                        {...(mainModalActive ? mainModalBoundary.overlayProps : activeMainBoundary?.underlayProps ?? {})}
                     >
                         <PluginSurfaceFocusEligibilityProvider active={mainFocusEligible}>
                             {main}
                         </PluginSurfaceFocusEligibilityProvider>
                     </ModalPaneBoundaryView>
-                    {detailsModalActive ? (
+                    {!mirrored && detailsModalActive ? (
                         <PaneAnimatedScrimPressable
                             testID="multi-pane-details-scrim"
                             accessibilityRole="button"
@@ -171,7 +212,7 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                             }}
                         />
                     ) : null}
-                    {rightModalActive ? (
+                    {!mirrored && rightModalActive ? (
                         <PaneAnimatedScrimPressable
                             testID="multi-pane-right-scrim"
                             accessibilityRole="button"
@@ -185,52 +226,65 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                             }}
                         />
                     ) : null}
+                    </ResizableDockedPane>
+                    </RetainedPanelSurface>
                 </View>
-            )}
             {detailsPresence.present ? (
                 <PaneColumn
                     key="details"
                     name="details"
+                    mirrored={mirrored}
+                    flexible={mirrored}
                     presentation={layout.details}
                     modalActive={detailsModalActive}
                     progress={detailsPresence.progress}
                     widthPx={detailsDockWidthPx}
-                    minWidthPx={props.detailsDockMinWidthPx ?? 320}
-                    maxWidthPx={props.detailsDockMaxWidthPx ?? 900}
+                    minWidthPx={props.detailsDockMinWidthPx ?? DEFAULT_DETAILS_MIN_PX}
+                    maxWidthPx={props.detailsDockMaxWidthPx ?? Number.POSITIVE_INFINITY}
                     onCommitWidthPx={props.onCommitDetailsDockWidthPx}
                     onDragWidthPx={props.onDragDetailsDockWidthPx}
+                    onResetWidthPx={props.onResetDetailsDockWidthPx}
                     overlayRightInsetPx={rightDocked ? rightDockWidthPx : 0}
                     overlayZIndex={overlayZIndexBase + 1}
                     overlayFocusRef={detailsModalBoundary.setOverlayFocusRef}
                     overlayProps={detailsModalOverlayProps}
-                    underlayProps={rightModalActive ? rightModalBoundary.underlayProps : undefined}
+                    underlayProps={mainModalActive ? mainModalBoundary.underlayProps : rightModalActive ? rightModalBoundary.underlayProps : undefined}
+                    underlayFocusRef={mirrored ? mainModalBoundary.setUnderlayFocusRef : undefined}
                     nativeAccessibilityFocusAnchor={detailsNativeAccessibilityFocusAnchor}
                     nativeBackLayer={detailsNativeBackLayer}
-                    focusEligible={layout.details === 'docked' ? !rightModalActive : detailsOverlayFocusEligible}
+                    focusEligible={layout.details === 'docked' ? !rightModalActive && !mainModalActive : detailsOverlayFocusEligible}
                 >
                     {detailsPresence.node}
+                    {mirrored && (mainModalActive || rightModalActive) ? <PaneAnimatedScrimPressable
+                        testID={mainModalActive ? 'multi-pane-main-scrim' : 'multi-pane-right-scrim'}
+                        accessibilityRole="button" accessibilityLabel={t('ui.modalPane.dismiss', { pane: mainModalActive ? mainLabel : rightModalLabel })}
+                        onPress={mainModalActive ? mainPresence.requestClose : rightPresence.requestClose}
+                        animatedStyle={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: overlayZIndexBase + 4,
+                            backgroundColor: theme.dark ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.18)' }} /> : null}
                 </PaneColumn>
             ) : null}
             {rightPresence.present ? (
                 <PaneColumn
                     key="right"
                     name="right"
+                    mirrored={mirrored}
                     presentation={layout.right}
                     modalActive={rightModalActive}
                     progress={rightPresence.progress}
                     widthPx={rightDockWidthPx}
-                    minWidthPx={props.rightDockMinWidthPx ?? 260}
-                    maxWidthPx={props.rightDockMaxWidthPx ?? 720}
+                    minWidthPx={props.rightDockMinWidthPx ?? DEFAULT_RIGHT_MIN_PX}
+                    maxWidthPx={props.rightDockMaxWidthPx ?? Number.POSITIVE_INFINITY}
                     onCommitWidthPx={props.onCommitRightDockWidthPx}
                     onDragWidthPx={props.onDragRightDockWidthPx}
-                    overlayRightInsetPx={detailsDocked ? detailsDockWidthPx : 0}
+                    onResetWidthPx={props.onResetRightDockWidthPx}
+                    overlayRightInsetPx={!mirrored && detailsDocked ? detailsDockWidthPx : 0}
                     overlayZIndex={overlayZIndexBase + 3}
                     overlayFocusRef={rightModalBoundary.setOverlayFocusRef}
                     overlayProps={rightModalOverlayProps}
-                    underlayProps={detailsModalActive ? detailsModalBoundary.underlayProps : undefined}
+                    underlayProps={mainModalActive ? mainModalBoundary.underlayProps : detailsModalActive ? detailsModalBoundary.underlayProps : undefined}
                     nativeAccessibilityFocusAnchor={rightNativeAccessibilityFocusAnchor}
                     nativeBackLayer={rightNativeBackLayer}
-                    focusEligible={layout.right === 'docked' ? !detailsModalActive : rightOverlayFocusEligible}
+                    focusEligible={layout.right === 'docked' ? !detailsModalActive && !mainModalActive : rightOverlayFocusEligible}
                 >
                     {rightPresence.node}
                 </PaneColumn>
@@ -245,6 +299,8 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
  */
 function PaneColumn(props: Readonly<{
     name: 'right' | 'details';
+    mirrored?: boolean;
+    flexible?: boolean;
     presentation: ResolvedPaneLayout['details'];
     modalActive: boolean;
     progress: Animated.Value;
@@ -253,11 +309,13 @@ function PaneColumn(props: Readonly<{
     maxWidthPx: number;
     onCommitWidthPx: (widthPx: number) => void;
     onDragWidthPx?: (widthPx: number | null) => void;
+    onResetWidthPx?: () => void;
     overlayRightInsetPx: number;
     overlayZIndex: number;
     overlayFocusRef: ReturnType<typeof useModalPaneBoundary>['setOverlayFocusRef'];
     overlayProps: Omit<ReturnType<typeof useModalPaneBoundary>['overlayProps'], 'nativeAccessibilityFocusAnchor' | 'nativeBackLayer'>;
     underlayProps?: Readonly<Record<string, unknown>>;
+    underlayFocusRef?: ReturnType<typeof useModalPaneBoundary>['setUnderlayFocusRef'];
     nativeAccessibilityFocusAnchor: ReturnType<typeof useModalPaneBoundary>['overlayProps']['nativeAccessibilityFocusAnchor'];
     nativeBackLayer: ReturnType<typeof useModalPaneBoundary>['overlayProps']['nativeBackLayer'];
     focusEligible: boolean;
@@ -267,11 +325,19 @@ function PaneColumn(props: Readonly<{
     const docked = props.presentation === 'docked';
     const overlay = props.presentation === 'overlay';
     const hidden = props.presentation === 'hidden';
+    const regionFocus = usePaneRegionFocusBoundary(props.name, !hidden && props.focusEligible);
+    const setFocusRef = React.useCallback((node: unknown) => {
+        regionFocus.ref(node);
+        props.underlayFocusRef?.(node as HTMLElement | null);
+        if (props.modalActive) props.overlayFocusRef(node as HTMLElement | null);
+    }, [props.modalActive, props.overlayFocusRef, props.underlayFocusRef, regionFocus.ref]);
     const boundaryProps = props.modalActive ? props.overlayProps : (props.underlayProps ?? {});
     return (
         <Animated.View
             style={docked ? {
                 position: 'relative',
+                flex: props.flexible ? 1 : undefined,
+                minWidth: 0,
                 width: props.progress.interpolate({ inputRange: [0, 1], outputRange: [0, props.widthPx] }),
                 overflow: 'hidden',
                 flexShrink: 0,
@@ -282,24 +348,28 @@ function PaneColumn(props: Readonly<{
             } : {
                 position: 'absolute',
                 top: 0,
-                right: props.overlayRightInsetPx,
+                ...(props.mirrored ? { left: props.overlayRightInsetPx } : { right: props.overlayRightInsetPx }),
                 bottom: 0,
                 zIndex: overlay ? props.overlayZIndex : -1,
                 backgroundColor: 'transparent',
                 opacity: overlay ? props.progress.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) : 0,
                 ...(overlay ? {
-                    borderTopLeftRadius: PANE_OVERLAY_CORNER_RADIUS_PX,
-                    borderBottomLeftRadius: PANE_OVERLAY_CORNER_RADIUS_PX,
+                    ...(props.mirrored ? { borderTopRightRadius: PANE_OVERLAY_CORNER_RADIUS_PX, borderBottomRightRadius: PANE_OVERLAY_CORNER_RADIUS_PX }
+                        : { borderTopLeftRadius: PANE_OVERLAY_CORNER_RADIUS_PX, borderBottomLeftRadius: PANE_OVERLAY_CORNER_RADIUS_PX }),
                     overflow: 'hidden',
                     ...shadowLevelStyle(theme.colors.shadowLevels[6]),
                 } : {}),
                 transform: [{ translateX: overlay
-                    ? props.progress.interpolate({ inputRange: [0, 1], outputRange: [props.widthPx, 0] })
-                    : props.widthPx }],
+                    ? props.progress.interpolate({ inputRange: [0, 1], outputRange: [props.mirrored ? -props.widthPx : props.widthPx, 0] })
+                    : props.mirrored ? -props.widthPx : props.widthPx }],
             }}
         >
             <ModalPaneBoundaryView
-                ref={props.modalActive ? props.overlayFocusRef : undefined}
+                ref={setFocusRef}
+                onFocusCapture={regionFocus.onFocusCapture}
+                onFocus={regionFocus.onFocus}
+                role={Platform.OS === 'web' ? 'region' : undefined}
+                accessibilityLabel={props.name === 'right' ? t('ui.modalPane.right') : t('ui.modalPane.details')}
                 testID={hidden ? `multi-pane-${props.name}-parked`
                     : props.modalActive ? `multi-pane-${props.name}-modal` : undefined}
                 {...boundaryProps}
@@ -319,6 +389,8 @@ function PaneColumn(props: Readonly<{
                     maxWidthPx={props.maxWidthPx}
                     onCommitWidthPx={props.onCommitWidthPx}
                     onDragWidthPx={props.onDragWidthPx}
+                    onResetRequest={props.onResetWidthPx}
+                    resizeEdge={props.mirrored ? 'right' : 'left'}
                 >
                     <ModalPaneBoundaryView
                         nativeAccessibilityFocusAnchor={props.nativeAccessibilityFocusAnchor}
@@ -327,8 +399,9 @@ function PaneColumn(props: Readonly<{
                     >
                         <GlassSurface surfaceGroup="content" solidColor={theme.colors.surface.base} finishRole={null} nested={docked} style={{
                             flex: 1, minHeight: 0, minWidth: 0,
-                            borderLeftWidth: docked ? StyleSheet.hairlineWidth : 0,
-                            borderLeftColor: theme.colors.border.subtle,
+                            borderLeftWidth: docked && !props.mirrored ? StyleSheet.hairlineWidth : 0,
+                            borderRightWidth: docked && props.mirrored ? StyleSheet.hairlineWidth : 0,
+                            borderLeftColor: theme.colors.border.subtle, borderRightColor: theme.colors.border.subtle,
                             overflow: 'hidden',
                         }}>
                             <PluginSurfaceFocusEligibilityProvider active={props.focusEligible}>

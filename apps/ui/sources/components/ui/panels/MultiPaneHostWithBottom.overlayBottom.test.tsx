@@ -39,7 +39,7 @@ describe('MultiPaneHostWithBottom (overlayBottom)', () => {
                     main={<Main />}
                     rightPane={null}
                     detailsPane={null}
-                    layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+                    layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}
@@ -75,7 +75,7 @@ describe('MultiPaneHostWithBottom (overlayBottom)', () => {
                         main={<Main />}
                         rightPane={<Right />}
                         detailsPane={null}
-                        layout={{ kind: 'overlayStack', right: 'overlay', details: 'hidden' }}
+                        layout={{ main: 'docked', kind: 'overlayStack', right: 'overlay', details: 'hidden' }}
                         rightDockWidthPx={360}
                         detailsDockWidthPx={520}
                         onCloseRight={onCloseRight}
@@ -160,7 +160,7 @@ describe('MultiPaneHostWithBottom (overlayBottom)', () => {
                     main={<Main />}
                     rightPane={null}
                     detailsPane={null}
-                    layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+                    layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}
@@ -186,7 +186,7 @@ describe('MultiPaneHostWithBottom (overlayBottom)', () => {
                     main={<Main />}
                     rightPane={null}
                     detailsPane={null}
-                    layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+                    layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
                     rightDockWidthPx={360}
                     detailsDockWidthPx={520}
                     onCloseRight={() => {}}
@@ -268,7 +268,7 @@ function renderOverlayBottom(main: React.ReactNode, bottomPane: React.ReactNode 
             main={main}
             rightPane={null}
             detailsPane={null}
-            layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+            layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
             rightDockWidthPx={360}
             detailsDockWidthPx={520}
             onCloseRight={() => {}}

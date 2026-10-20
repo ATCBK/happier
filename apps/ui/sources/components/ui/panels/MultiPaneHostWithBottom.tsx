@@ -15,6 +15,7 @@ import { ESCAPE_LAYER_PRIORITIES } from '@/keyboard/escape';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { t } from '@/text';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
+import { usePaneRegionFocusBoundary } from '@/components/appShell/panes/paneRegion';
 
 export type BottomPanePresentation = ResolvedBottomPanePresentation;
 
@@ -27,6 +28,7 @@ export type MultiPaneHostWithBottomProps = MultiPaneHostProps & Readonly<{
     onCloseBottom: () => void;
     onCommitBottomDockHeightPx: (heightPx: number) => void;
     onDragBottomDockHeightPx?: (heightPx: number | null) => void;
+    onResetBottomDockHeightPx?: () => void;
     bottomOverlayFocusReturnRef?: FocusReturnMutableRef;
 }>;
 
@@ -40,6 +42,7 @@ export const MultiPaneHostWithBottom = React.memo((props: MultiPaneHostWithBotto
         onCloseBottom,
         onCommitBottomDockHeightPx,
         onDragBottomDockHeightPx,
+        onResetBottomDockHeightPx,
         bottomOverlayFocusReturnRef,
         ...multiPaneProps
     } = props;
@@ -55,6 +58,7 @@ export const MultiPaneHostWithBottom = React.memo((props: MultiPaneHostWithBotto
     const shouldRenderBottomPane = bottomPresence.present;
     const renderedBottomPane = bottomPresence.node;
     const isBottomOverlayPresented = bottomPresentation === 'overlay' && bottomPresence.present;
+    const bottomRegionFocus = usePaneRegionFocusBoundary('bottom', bottomPresence.present && bottomPresentation !== 'hidden');
     const bottomModalLabel = t('ui.modalPane.bottom');
     const bottomModalBoundary = useModalPaneBoundary({
         active: isBottomOverlayPresented,
@@ -73,6 +77,10 @@ export const MultiPaneHostWithBottom = React.memo((props: MultiPaneHostWithBotto
         nativeBackLayer: bottomNativeBackLayer,
         ...bottomModalOverlayProps
     } = bottomModalBoundary.overlayProps;
+    const bottomFocusRef = React.useCallback((node: unknown) => {
+        bottomRegionFocus.ref(node);
+        if (isBottomOverlayPresented) bottomModalBoundary.setOverlayFocusRef(node as HTMLElement | null);
+    }, [bottomModalBoundary.setOverlayFocusRef, bottomRegionFocus.ref, isBottomOverlayPresented]);
 
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -89,7 +97,11 @@ export const MultiPaneHostWithBottom = React.memo((props: MultiPaneHostWithBotto
 
             {shouldRenderBottomPane ? (
                 <Animated.View
-                    ref={isBottomOverlayPresented ? bottomModalBoundary.setOverlayFocusRef : undefined}
+                    ref={bottomFocusRef}
+                    onFocusCapture={bottomRegionFocus.onFocusCapture}
+                    onFocus={bottomRegionFocus.onFocus}
+                    role={Platform.OS === 'web' ? 'region' : undefined}
+                    accessibilityLabel={bottomModalLabel}
                     testID={isBottomOverlayPresented ? 'multi-pane-bottom-overlay' : undefined}
                     {...(isBottomOverlayPresented ? bottomModalOverlayProps : {})}
                     {...(bottomPresentation === 'hidden' ? {
@@ -159,6 +171,7 @@ export const MultiPaneHostWithBottom = React.memo((props: MultiPaneHostWithBotto
                         resizeEdge="top"
                         onCommitHeightPx={onCommitBottomDockHeightPx}
                         onDragHeightPx={onDragBottomDockHeightPx}
+                        onResetRequest={onResetBottomDockHeightPx}
                         >
                             <ModalPaneBoundaryView
                                 suppressDescendantPaneBoundaries={bottomPresentation === 'hidden'}

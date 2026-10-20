@@ -163,7 +163,7 @@ async function mountSurface(initialInput: Readonly<{
                         ) : null}
                         rightPane={null}
                         detailsPane={null}
-                        layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+                        layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
                         rightDockWidthPx={360}
                         detailsDockWidthPx={520}
                         onCloseRight={() => {}}

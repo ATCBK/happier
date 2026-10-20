@@ -24,7 +24,7 @@ vi.mock('@/modal', async () => {
 });
 // Expo's module-loader boundary supplies the Sessions-list body used by this shell journey.
 registerWorkspaceRouteContext((key) => {
-    if (key !== './(app)/index.tsx') throw new Error(`Unexpected shell route: ${key}`);
+    if (key !== './(app)/index.tsx' && key !== './(app)/projects/[workspaceRefId]/index.tsx') throw new Error(`Unexpected shell route: ${key}`);
     return { WorkspaceRouteBody: StatefulRouteBody };
 });
 
@@ -189,6 +189,19 @@ function measureCanvas(screen: Awaited<ReturnType<typeof renderScreen>>, width: 
 }
 
 describe('WorkspaceShell', () => {
+    it('budgets an honouring editor-first project leaf by the editor minimum', async () => {
+        const screen = await renderWorkspace(createWorkspaceState({ id: 'project',
+            target: { kind: 'project', params: { workspaceRefId: 'project-fixture' } }, pinned: false, preview: false }));
+        const { storage } = production[7];
+        const minimum = () => {
+            const canvas = screen.root.find(node => typeof node.props.getLeafMinimumSizePx === 'function');
+            return canvas.props.getLeafMinimumSizePx(stateOf(screen).root);
+        };
+        await act(async () => storage.getState().applyLocalSettings({ paneArrangement: 'editor' }, { source: 'ui' }));
+        expect(minimum().width).toBe(480);
+        await act(async () => storage.getState().applyLocalSettings({ paneArrangement: 'session' }, { source: 'ui' }));
+        expect(minimum().width).toBe(420);
+    });
     it('shows the registered split-down shortcut in the tab menu and withdraws it when shortcuts are disabled', async () => {
         const { KeyHint } = await import('@/components/ui/keyboard/KeyHint');
         const screen = await renderWorkspace(initialState());

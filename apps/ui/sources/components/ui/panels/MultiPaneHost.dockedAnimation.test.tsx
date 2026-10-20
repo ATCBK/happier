@@ -67,7 +67,7 @@ describe('MultiPaneHost docked pane animation', () => {
                 main={<Main />}
                 rightPane={<Right />}
                 detailsPane={<Details />}
-                layout={{ kind: 'threePane', right: 'docked', details: 'docked' }}
+                layout={{ main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' }}
                 rightDockWidthPx={360}
                 detailsDockWidthPx={520}
                 onCloseRight={() => {}}
@@ -93,7 +93,7 @@ describe('MultiPaneHost docked pane animation', () => {
                 main={<Main />}
                 rightPane={<Right />}
                 detailsPane={<Details />}
-                layout={{ kind: 'threePane', right: 'docked', details: 'docked' }}
+                layout={{ main: 'docked', kind: 'threePane', right: 'docked', details: 'docked' }}
                 rightDockWidthPx={360}
                 detailsDockWidthPx={520}
                 onCloseRight={() => {}}
@@ -117,7 +117,7 @@ describe('MultiPaneHost docked pane animation', () => {
         const current = vi.fn();
         const paneProps = {
             main: <Main />, rightPane: null,
-            layout: { kind: 'twoPane', right: 'hidden', details: 'docked' } as const,
+            layout: { main: 'docked', kind: 'twoPane', right: 'hidden', details: 'docked' } as const,
             rightDockWidthPx: 360, detailsDockWidthPx: 520,
             onCloseRight: () => {}, onCloseDetails: () => {},
             onCommitRightDockWidthPx: () => {}, onCommitDetailsDockWidthPx: () => {},
@@ -145,7 +145,7 @@ describe('MultiPaneHost docked pane animation', () => {
                 main={<Main />}
                 rightPane={null}
                 detailsPane={null}
-                layout={{ kind: 'single', right: 'hidden', details: 'hidden' }}
+                layout={{ main: 'docked', kind: 'single', right: 'hidden', details: 'hidden' }}
                 rightDockWidthPx={360}
                 detailsDockWidthPx={520}
                 onCloseRight={() => {}}

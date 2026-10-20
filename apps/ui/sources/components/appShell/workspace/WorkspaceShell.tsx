@@ -7,7 +7,8 @@ import { hrefForDestinationRef, type CompactAppDestination } from '@/components/
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
 import { SplitCanvasHost, type SplitCanvasRetainedLeafContent } from '@/components/appShell/splitCanvas/components/SplitCanvasHost';
 import type { SplitCanvasAction, SplitCanvasDirection, SplitCanvasLeafNode } from '@/components/appShell/splitCanvas/model/splitCanvasTypes';
-import { useWorkspaceRefs, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useWorkspaceRefs, useActiveServerAccountScope, useLocalSetting } from '@/sync/domains/state/storage';
+import { DEFAULT_EDITOR_MIN_PX } from '@/components/ui/panels/paneBreakpoints';
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { executeWorkspaceEntityDrop, resolveWorkspaceEntityDrop, WORKSPACE_ENTITY_KINDS } from './workspaceEntityDrop';
 import { describePaneDropDestination, presentPaneDropAdmission } from '@/components/appShell/splitCanvas/presentation/paneDropPresentation';
@@ -40,7 +41,7 @@ const SessionDetailsBody = retryableLazy(async () => ({
 }));
 const renderSession = () => <SessionBody />;
 const renderSessionDetails = () => <SessionDetailsBody />;
-const leafMinimum = () => WORKSPACE_VIEW_MINIMUM;
+const EDITOR_WORKSPACE_MINIMUM = { ...WORKSPACE_VIEW_MINIMUM, width: DEFAULT_EDITOR_MIN_PX };
 type GroupPayload = Readonly<{ groupId: string }>;
 
 const styles = StyleSheet.create(() => ({
@@ -80,6 +81,13 @@ function WorkspaceCanvas(props: Readonly<{
     catalog: readonly CompactAppDestination[];
 }>) {
     const workspace = props.workspace;
+    const arrangement = useLocalSetting('paneArrangement');
+    const leafMinimum = React.useCallback((leaf: SplitCanvasLeafNode<GroupPayload>) => {
+        const group = workspace.state.groups[leaf.payload.groupId];
+        const destination = group ? workspace.state.tabs[group.activeTabId]?.target : undefined;
+        return arrangement === 'editor' && (destination?.kind === 'session' || destination?.kind === 'project')
+            ? EDITOR_WORKSPACE_MINIMUM : WORKSPACE_VIEW_MINIMUM;
+    }, [arrangement, workspace.state.groups, workspace.state.tabs]);
     const scope = useActiveServerAccountScope();
     const workspaceRefs = useWorkspaceRefs();
     const runtime = useEntityDragDropRuntime();
