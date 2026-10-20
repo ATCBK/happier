@@ -4746,6 +4746,9 @@ localTailscale: {
       full: "全幅",
       fullDescription: "利用可能なウィンドウ幅を使用します",
     },
+    feedback: "フィードバック",
+    haptics: "触覚フィードバック",
+    hapticsDescription: "このデバイスで操作や並べ替え時に触覚フィードバックを使用します。",
     backdropBlur: "背景ぼかし",
     backdropBlurDescription:
       "モーダルやメニューの背後に背景ぼかしを適用します。ブラウザー性能を優先する場合は無効にしてください。",
