@@ -421,6 +421,7 @@ describe('First-class Discussions service (SQLite)', () => {
             ] } }, mentionedSessionIds: [session.id] } });
         if (!question.ok) throw new Error(question.error);
         const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq, participantSessionId: session.id };
+        const homeId = await getOrCreateServerIdentityId();
         const { socket, machine } = await publisherSocket(owner.id, session.id);
         const current = await db.session.findUniqueOrThrow({ where: { id: session.id } });
         const publisherAuthority = { accountId: owner.id, sessionId: session.id, machineId: machine.id, committedFence: current.lastActiveAt };
@@ -438,8 +439,12 @@ describe('First-class Discussions service (SQLite)', () => {
         expect(claim).toMatchObject({ ok: true, didMaterialize: true, message: { localId: requestLocalId } });
         if (!claim.ok || !claim.didMaterialize) throw new Error('Expected the actual original claim');
         const receipt = SessionInputAdmissionReceiptV1Schema.parse(claim.message.inputAdmissionReceipt);
-        const finalContent = { ...content, v: { ...content.v, meta: withSessionInputAuthorityV1(content.v.meta,
-            settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt })) } };
+        const finalContent = { ...content, v: { ...content.v, meta: {
+            ...withSessionInputAuthorityV1(content.v.meta, settleSessionInputRequestV1({
+                request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt: receipt })),
+            [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({
+                request, requestedProvenance: undefined, inputAdmissionReceipt: receipt }),
+        } } };
         expect(finalContent.v.meta).not.toHaveProperty('happierInputRequestV1');
         expect(await settlePendingInputAdmission({ actorUserId: owner.id, sessionId: session.id, localId: requestLocalId, publisherAuthority,
             decision: { kind: 'admit', finalContent, validation: { reply } } })).toMatchObject({ ok: true, result: { status: 'accepted' } });
@@ -463,7 +468,7 @@ describe('First-class Discussions service (SQLite)', () => {
         expect(await inTx(tx => isSessionInputSourceCurrentInTx(tx, owner.id, sourceSession))).toBe(true);
         const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: session.id, localId: requestLocalId, acceptedTurnId });
         const publication = { v: 1 as const, sessionId: session.id, discussionId,
-            replyReturn: { serverId: await getOrCreateServerIdentityId(), requestLocalId, acceptedTurnId },
+            replyReturn: { serverId: homeId, requestLocalId, acceptedTurnId },
             request: { ...postRequest('Two plus two is four.'), localId, replyTarget: { kind: 'message' as const, messageId: discussion.messageId } } };
         const publish = async (causalSource?: typeof sourceSession) => {
             let response: unknown;
