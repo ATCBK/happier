@@ -3,7 +3,22 @@ import { fetchWithTimeout } from '@/voice/runtime/fetchWithTimeout';
 import { buildGoogleApiKeyRestrictionHeaders } from '@/voice/runtime/googleApiKeyHeaders';
 import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/VoicePlaybackController';
 import { playAudioBytesWithStopper } from '@/voice/output/playAudioBytesWithStopper';
+import { createStoppableSpeech } from '@/voice/output/stoppableSpeech';
+import { createTtsChunker } from '@/voice/output/TtsChunker';
 
+// Google Cloud TTS rejects `input.text` above 5000 bytes. A UTF-8 code point is at most 4 bytes,
+// so requests of at most 1250 characters always fit.
+const GOOGLE_CLOUD_TTS_MAX_INPUT_CHARS = 5000 / 4;
+
+function splitGoogleCloudTtsInput(input: string): string[] {
+  const chunker = createTtsChunker(GOOGLE_CLOUD_TTS_MAX_INPUT_CHARS);
+  return [...chunker.push(input), ...chunker.flush()];
+}
+
+/**
+ * Speaks text with Google Cloud TTS. Resolves when playback finishes or is deliberately stopped
+ * (including while a request is in flight); rejects only on a real failure.
+ */
 export async function speakGoogleCloudText(opts: {
   apiKey: string;
   androidCertSha1?: string | null;
@@ -16,12 +31,24 @@ export async function speakGoogleCloudText(opts: {
   timeoutMs: number;
   registerPlaybackStopper: VoicePlaybackStopperRegistrar;
 }): Promise<void> {
-  const bytes = await fetchGoogleCloudSpeechAudio(opts);
-  await playAudioBytesWithStopper({
-    bytes,
-    format: opts.format,
-    registerPlaybackStopper: opts.registerPlaybackStopper,
-  });
+  const speech = createStoppableSpeech(opts.registerPlaybackStopper);
+  try {
+    for (const input of splitGoogleCloudTtsInput(opts.input)) {
+      const bytes = await fetchGoogleCloudSpeechAudio({ ...opts, input, signal: speech.signal });
+      if (speech.signal.aborted) return;
+      await playAudioBytesWithStopper({
+        bytes,
+        format: opts.format,
+        registerPlaybackStopper: speech.registerPlayback,
+      });
+      if (speech.signal.aborted) return;
+    }
+  } catch (error) {
+    if (speech.signal.aborted) return;
+    throw error;
+  } finally {
+    speech.dispose();
+  }
 }
 
 async function fetchGoogleCloudSpeechAudio(opts: {
@@ -34,6 +61,7 @@ async function fetchGoogleCloudSpeechAudio(opts: {
   speakingRate: number | null;
   pitch: number | null;
   timeoutMs: number;
+  signal: AbortSignal;
 }): Promise<ArrayBuffer> {
   const apiKey = String(opts.apiKey ?? '').trim();
   if (!apiKey) {
@@ -54,6 +82,7 @@ async function fetchGoogleCloudSpeechAudio(opts: {
   const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(apiKey)}`;
   const init: RequestInit = {
     method: 'POST',
+    signal: opts.signal,
     headers: {
       'Content-Type': 'application/json',
       ...buildGoogleApiKeyRestrictionHeaders({ androidCertSha1: opts.androidCertSha1 ?? null }),

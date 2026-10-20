@@ -85,4 +85,72 @@ describe('playAudioBytesWithStopper (native)', () => {
     await waitForFileDeleteCall();
     expect(fileDelete).toHaveBeenCalledTimes(1);
   });
+
+  function startPlayback() {
+    playbackState.playbackStatusListener = null;
+    let settled: 'resolved' | 'rejected' | null = null;
+    let rejection: unknown = null;
+    const promise = playAudioBytesWithStopper({
+      bytes: new Uint8Array([1]).buffer,
+      format: 'wav',
+      registerPlaybackStopper: () => () => {},
+    }).then(
+      () => {
+        settled = 'resolved';
+      },
+      (error) => {
+        settled = 'rejected';
+        rejection = error;
+      },
+    );
+    return {
+      promise,
+      emit: (status: any) => playbackState.playbackStatusListener?.(status),
+      settled: () => settled,
+      rejection: () => rejection,
+    };
+  }
+
+  it('rejects when the player reports a failed item (iOS)', async () => {
+    const playback = startPlayback();
+    await waitForPlaybackStatusListener();
+
+    playback.emit({ playbackState: 'failed', playing: false, didJustFinish: false, isBuffering: false });
+
+    await vi.waitFor(() => expect(playback.settled()).toBe('rejected'));
+    expect(String((playback.rejection() as Error)?.message)).toContain('audio_playback_failed');
+  });
+
+  it('rejects when the player drops back to idle after loading (Android player error)', async () => {
+    const playback = startPlayback();
+    await waitForPlaybackStatusListener();
+
+    playback.emit({ playbackState: 'ready', playing: true, didJustFinish: false, isBuffering: false });
+    playback.emit({ playbackState: 'idle', playing: false, didJustFinish: false, isBuffering: false });
+
+    await vi.waitFor(() => expect(playback.settled()).toBe('rejected'));
+  });
+
+  it('ends playback when the system pauses it (audio focus loss) instead of waiting forever', async () => {
+    const playback = startPlayback();
+    await waitForPlaybackStatusListener();
+
+    playback.emit({ playbackState: 'ready', playing: true, didJustFinish: false, isBuffering: false });
+    playback.emit({ playbackState: 'ready', playing: false, didJustFinish: false, isBuffering: false });
+
+    await vi.waitFor(() => expect(playback.settled()).toBe('resolved'));
+  });
+
+  it('keeps waiting while the player is still loading', async () => {
+    const playback = startPlayback();
+    await waitForPlaybackStatusListener();
+
+    playback.emit({ playbackState: 'idle', playing: false, didJustFinish: false, isBuffering: false, isLoaded: false });
+    playback.emit({ playbackState: 'buffering', playing: false, didJustFinish: false, isBuffering: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(playback.settled()).toBe(null);
+
+    playback.emit({ didJustFinish: true });
+    await vi.waitFor(() => expect(playback.settled()).toBe('resolved'));
+  });
 });

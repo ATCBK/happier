@@ -30,7 +30,7 @@ vi.mock('@/voice/kokoro/runtime/synthesizeKokoroWav', () => ({
 import { speakKokoroText } from '@/voice/output/KokoroTtsController';
 
 describe('speakKokoroText', () => {
-  it('registers a stopper that aborts in-flight synthesis', async () => {
+  it('treats a deliberate stop as completion, not as a failure', async () => {
     let registeredStopper: (() => void) | null = null;
     const registerPlaybackStopper = (stopper: () => void) => {
       registeredStopper = stopper;
@@ -48,7 +48,7 @@ describe('speakKokoroText', () => {
     expect(typeof registeredStopper).toBe('function');
     registeredStopper!();
 
-    await expect(promise).rejects.toThrow('aborted');
+    await expect(promise).resolves.toBeUndefined();
     expect(playAudioBytesWithStopperSpy).not.toHaveBeenCalled();
   });
 
@@ -74,5 +74,23 @@ describe('speakKokoroText', () => {
     expect(playAudioBytesWithStopperSpy).toHaveBeenCalledTimes(2);
     expect(playAudioBytesWithStopperSpy.mock.calls[0]?.[0]?.bytes).toBe(a);
     expect(playAudioBytesWithStopperSpy.mock.calls[1]?.[0]?.bytes).toBe(b);
+  });
+
+  it('rejects when synthesis fails without being stopped', async () => {
+    streamKokoroWavSentencesSpy.mockImplementationOnce(() => ({
+      async *[Symbol.asyncIterator]() {
+        throw new Error('model_pack_not_installed');
+      },
+    }));
+
+    await expect(
+      speakKokoroText({
+        text: 'hello',
+        voiceId: null,
+        speed: 1,
+        timeoutMs: 15000,
+        registerPlaybackStopper: () => () => {},
+      }),
+    ).rejects.toThrow('model_pack_not_installed');
   });
 });

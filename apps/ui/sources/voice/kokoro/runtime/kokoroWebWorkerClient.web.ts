@@ -16,7 +16,7 @@ type WorkerRequest =
       type: 'generate';
       cfg: KokoroWorkerRuntimeConfig;
       text: string;
-      voiceId: string;
+      voiceId: string | null;
       speed: number;
     }
   | {
@@ -24,7 +24,7 @@ type WorkerRequest =
       type: 'stream';
       cfg: KokoroWorkerRuntimeConfig;
       text: string;
-      voiceId: string;
+      voiceId: string | null;
       speed: number;
     }
   | {
@@ -161,7 +161,18 @@ function ensureWorker(): Worker {
       const pending = pendingById?.get(data.id);
       pending?.touchTimeout?.();
       pending?.onProgress?.(data.progress);
+      // A first streamed request may also download the model; progress keeps it alive too.
+      pendingStreamsById?.get(data.id)?.touchTimeout?.();
       return;
+    }
+
+    if (data.type === 'error') {
+      const stream = pendingStreamsById?.get(data.id);
+      if (stream) {
+        stream.error = new Error(data.message || 'worker_error');
+        stream.wake?.();
+        return;
+      }
     }
 
     if (data.type === 'stream_chunk') {
@@ -295,7 +306,7 @@ export async function prepareKokoroTtsInWorker(opts: {
 export async function synthesizeKokoroWavInWorker(opts: {
   cfg: KokoroWorkerRuntimeConfig;
   text: string;
-  voiceId: string;
+  voiceId: string | null;
   speed: number;
   timeoutMs: number;
   signal: AbortSignal;
@@ -310,7 +321,7 @@ export async function synthesizeKokoroWavInWorker(opts: {
 export function streamKokoroWavSentencesInWorker(opts: {
   cfg: KokoroWorkerRuntimeConfig;
   text: string;
-  voiceId: string;
+  voiceId: string | null;
   speed: number;
   timeoutMs: number;
   signal: AbortSignal;

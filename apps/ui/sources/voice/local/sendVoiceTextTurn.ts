@@ -148,26 +148,11 @@ export async function sendVoiceTextTurn(params: {
     if (!durableLocalId) {
       throw new Error('voice_durable_local_id_required');
     }
+    // Whether a provider can actually speak (configured key/base URL) is decided by the canonical
+    // TTS runtime behind speakAssistantText; this turn only honours the auto-speak preference.
     const autoSpeak = config?.tts?.autoSpeakReplies !== false;
-    const tts = config?.tts ?? null;
-    const legacyUseDeviceTts = tts?.useDeviceTts === true;
-    const legacyBaseUrl = typeof tts?.baseUrl === 'string' ? tts.baseUrl : null;
-    const ttsProvider =
-      typeof tts?.provider === 'string'
-        ? tts.provider
-        : legacyUseDeviceTts
-          ? 'device'
-          : legacyBaseUrl && legacyBaseUrl.trim().length > 0
-            ? 'openai_compat'
-            : 'openai_compat';
-    const openaiCompatBaseUrl = String(tts?.openaiCompat?.baseUrl ?? legacyBaseUrl ?? '').trim();
     const streamingSpeechEnabled =
-      autoSpeak &&
-      config?.streaming?.enabled === true &&
-      config?.streaming?.ttsEnabled === true &&
-      (ttsProvider === 'device' ||
-        ttsProvider === 'local_neural' ||
-        (ttsProvider === 'openai_compat' && Boolean(openaiCompatBaseUrl)));
+      autoSpeak && config?.streaming?.enabled === true && config?.streaming?.ttsEnabled === true;
     const streamingChunkChars = resolveStreamingTtsChunkChars(config?.streaming?.ttsChunkChars);
 
     patchLocalVoiceState({ status: 'sending' });
@@ -177,25 +162,30 @@ export async function sendVoiceTextTurn(params: {
       const playbackEpoch = params.playbackController.captureEpoch();
       let queuedChunkCount = 0;
       let chunkPlaybackQueue: Promise<void> = Promise.resolve();
+      // One failure is reported once per turn; the rest of that turn's speech is skipped.
+      let speechFailed = false;
+
+      // A barge-in advances the playback epoch without aborting the turn, so every reply of this
+      // turn (streamed chunks and later tool-round replies) is dropped once the epoch is stale.
+      const speakForThisTurn = async (text: string) => {
+        if (params.signal?.aborted || speechFailed) return;
+        if (!params.playbackController.isEpochCurrent(playbackEpoch)) return;
+        const spoken = await speakAssistantText({
+          text,
+          settings,
+          networkTimeoutMs,
+          registerPlaybackStopper: params.playbackController.registerStopper,
+          onSpeaking: () => patchLocalVoiceState({ status: 'speaking' }),
+        });
+        if (!spoken) speechFailed = true;
+      };
 
       const queueSpokenChunk = (chunkText: string) => {
         if (params.signal?.aborted) return;
         const trimmed = chunkText.trim();
         if (!trimmed) return;
         queuedChunkCount += 1;
-        chunkPlaybackQueue = chunkPlaybackQueue
-          .then(async () => {
-            if (params.signal?.aborted) return;
-            if (!params.playbackController.isEpochCurrent(playbackEpoch)) return;
-            await speakAssistantText({
-              text: trimmed,
-              settings,
-              networkTimeoutMs,
-              registerPlaybackStopper: params.playbackController.registerStopper,
-              onSpeaking: () => patchLocalVoiceState({ status: 'speaking' }),
-            });
-          })
-          .catch(() => {});
+        chunkPlaybackQueue = chunkPlaybackQueue.then(() => speakForThisTurn(trimmed));
       };
 
       const sendOptions = chunker
@@ -211,13 +201,8 @@ export async function sendVoiceTextTurn(params: {
           ? { signal: params.signal }
           : undefined;
 
-      const canSpeak =
-        autoSpeak &&
-        (ttsProvider === 'device' ||
-          ttsProvider === 'local_neural' ||
-          (ttsProvider === 'openai_compat' && Boolean(openaiCompatBaseUrl)));
       const speakAssistantReply = async (assistantText: string, turnIndex: number) => {
-        if (!canSpeak || !assistantText.trim()) return;
+        if (!autoSpeak || !assistantText.trim()) return;
         if (turnIndex === 0 && chunker) {
           chunker.flush().forEach((chunk) => queueSpokenChunk(chunk));
           if (queuedChunkCount === 0) {
@@ -228,13 +213,7 @@ export async function sendVoiceTextTurn(params: {
         }
 
         throwIfAborted();
-        await speakAssistantText({
-          text: assistantText,
-          settings,
-          networkTimeoutMs,
-          registerPlaybackStopper: params.playbackController.registerStopper,
-          onSpeaking: () => patchLocalVoiceState({ status: 'speaking' }),
-        });
+        await speakForThisTurn(assistantText);
       };
 
       await runVoiceAgentTurnWithTools({

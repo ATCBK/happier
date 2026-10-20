@@ -10,6 +10,7 @@ import {
     daemonVoiceAgentStartTurnStream,
     daemonVoiceAgentWelcome,
     expoSpeechSpeak,
+    expoSpeechStop,
     getStorage,
     registerLocalVoiceEngineHarnessHooks,
     resolveRuntimeFeatureDecision,
@@ -1661,6 +1662,176 @@ describe('local voice engine agent behavior', () => {
 
         expect(daemonVoiceAgentStartTurnStream).toHaveBeenCalledTimes(1);
         expect(expoSpeechSpeak).toHaveBeenCalledTimes(1);
+    });
+
+    it('speaks agent replies with Google Cloud TTS when it is the configured provider', async () => {
+        const storage = await getStorage();
+        storage.__setState({
+            settings: {
+                ...storage.getState().settings,
+                voice: {
+                    ...storage.getState().settings.voice,
+                    providerId: 'local_conversation',
+                    adapters: {
+                        ...storage.getState().settings.voice.adapters,
+                        local_conversation: {
+                            ...storage.getState().settings.voice.adapters.local_conversation,
+                            conversationMode: 'agent',
+                            stt: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.stt,
+                                baseUrl: 'http://localhost:8000',
+                            },
+                            tts: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.tts,
+                                autoSpeakReplies: true,
+                                provider: 'google_cloud',
+                                googleCloud: {
+                                    apiKey: { _isSecretValue: true, encryptedValue: { t: 'enc-v1', c: 'x' } },
+                                    voiceName: null,
+                                    languageCode: null,
+                                    format: 'mp3',
+                                    speakingRate: null,
+                                    pitch: null,
+                                },
+                            },
+                            agent: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.agent,
+                                backend: 'daemon',
+                            },
+                            streaming: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.streaming,
+                                enabled: false,
+                            },
+                        },
+                    },
+                },
+            },
+            sessions: {
+                ...storage.getState().sessions,
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+            },
+        });
+
+        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
+        daemonVoiceAgentSendTurn.mockResolvedValueOnce({ assistantText: 'Here is the answer.' });
+
+        (globalThis.fetch as any).mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ text: 'hello world' }),
+        });
+
+        const { toggleLocalVoiceTurn } = localVoiceEngine;
+        await toggleLocalVoiceTurn('s1');
+        await toggleLocalVoiceTurn('s1');
+
+        const ttsCalls = (globalThis.fetch as any).mock.calls.filter((call: any[]) =>
+            String(call[0]).includes('texttospeech.googleapis.com'),
+        );
+        expect(ttsCalls.length).toBe(1);
+    });
+
+    async function setAgentDeviceTtsSettings(streaming: Record<string, unknown>) {
+        const storage = await getStorage();
+        storage.__setState({
+            settings: {
+                ...storage.getState().settings,
+                voice: {
+                    ...storage.getState().settings.voice,
+                    providerId: 'local_conversation',
+                    adapters: {
+                        ...storage.getState().settings.voice.adapters,
+                        local_conversation: {
+                            ...storage.getState().settings.voice.adapters.local_conversation,
+                            conversationMode: 'agent',
+                            stt: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.stt,
+                                baseUrl: 'http://localhost:8000',
+                            },
+                            tts: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.tts,
+                                autoSpeakReplies: true,
+                                bargeInEnabled: true,
+                                provider: 'device',
+                            },
+                            agent: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.agent,
+                                backend: 'daemon',
+                            },
+                            streaming: {
+                                ...storage.getState().settings.voice.adapters.local_conversation.streaming,
+                                ...streaming,
+                            },
+                        },
+                    },
+                },
+            },
+            sessions: {
+                ...storage.getState().sessions,
+                s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'claude' } },
+            },
+        });
+        (globalThis.fetch as any).mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ text: 'hello world' }),
+        });
+    }
+
+    it('does not speak later replies of a turn after the user barged in', async () => {
+        await setAgentDeviceTtsSettings({ enabled: false });
+        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
+        daemonVoiceAgentSendTurn
+            .mockResolvedValueOnce({ assistantText: 'Checking your sessions.', actions: [{ t: 'setTrackedSessions', args: { sessionIds: ['s1'] } }] })
+            .mockResolvedValueOnce({ assistantText: 'All sessions are tracked now.' });
+
+        const { toggleLocalVoiceTurn } = localVoiceEngine;
+        let stopCurrentUtterance: (() => void) | null = null;
+        let bargeIn: Promise<void> | null = null;
+        expoSpeechSpeak.mockImplementation((text: string, options: any) => {
+            if (text.startsWith('Checking')) {
+                stopCurrentUtterance = () => options?.onStopped?.();
+                bargeIn = toggleLocalVoiceTurn('s1');
+                return;
+            }
+            options?.onDone?.();
+        });
+        expoSpeechStop.mockImplementation(() => stopCurrentUtterance?.());
+
+        await toggleLocalVoiceTurn('s1');
+        await toggleLocalVoiceTurn('s1');
+        await vi.waitFor(() => expect(bargeIn).toBeTruthy());
+        await bargeIn;
+
+        const spoken = expoSpeechSpeak.mock.calls.map((call: any[]) => String(call[0]));
+        expect(spoken).toContain('Checking your sessions.');
+        expect(spoken).not.toContain('All sessions are tracked now.');
+    });
+
+    it('stops speaking the rest of a streamed reply after a speech failure and reports it once', async () => {
+        await setAgentDeviceTtsSettings({ enabled: true, ttsEnabled: true, ttsChunkChars: 32 });
+        daemonVoiceAgentStart.mockResolvedValueOnce({ voiceAgentId: 'va1' });
+        daemonVoiceAgentStartTurnStream.mockResolvedValueOnce({ streamId: 'stream-fail-1' });
+        daemonVoiceAgentReadTurnStream.mockResolvedValueOnce({
+            streamId: 'stream-fail-1',
+            events: [
+                { t: 'delta', textDelta: 'hello world. this is chunk one. ' },
+                { t: 'delta', textDelta: 'and this is chunk two with extra words.' },
+                { t: 'done', assistantText: 'hello world. this is chunk one. and this is chunk two with extra words.' },
+            ],
+            nextCursor: 3,
+            done: true,
+        });
+        expoSpeechSpeak.mockImplementation((_text: string, options: any) => {
+            options?.onError?.(new Error('synthesis-failed'));
+        });
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const { toggleLocalVoiceTurn } = localVoiceEngine;
+        await toggleLocalVoiceTurn('s1');
+        await toggleLocalVoiceTurn('s1');
+
+        expect(expoSpeechSpeak).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls.filter((call) => String(call[0]).includes('[voice/tts]')).length).toBe(1);
+        warn.mockRestore();
     });
 
     it('agent mode (openai_compat) starts a review run when the voice agent emits startReview', async () => {

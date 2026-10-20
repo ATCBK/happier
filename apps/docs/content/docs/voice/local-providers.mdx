@@ -49,6 +49,12 @@ You can mix providers freely. For example:
 - OpenAI-compatible STT + Google Cloud TTS
 - Gemini STT + Kokoro TTS
 
+### What gets spoken
+
+Replies are converted to plain speech before any TTS provider reads them. Markdown formatting is dropped, link text is read without the link target, bare URLs are read as their domain, and fenced code blocks are skipped.
+
+If the selected TTS provider fails, Happier reports a speech error in Local voice instead of silently reading the reply with a different voice. Stopping playback or interrupting it with your voice is not treated as an error.
+
 ## Conversation modes
 
 Local voice supports two conversation modes.
@@ -317,6 +323,8 @@ You can configure:
 
 The Google Cloud voice picker is searchable and lets you choose from the voices supported by your current API key and selected language.
 
+Long replies are split into several requests so each one stays within Google Cloud's per-request input limit.
+
 ## Local neural TTS: Kokoro
 
 Happier’s **Local neural TTS** currently uses **Kokoro**.
@@ -351,6 +359,17 @@ You can configure:
 Model downloads happen on demand and can be removed later to free storage.
 
 Native builds currently offer the q8 Kokoro pack. The fp32 option is web-only; if it is selected on web, native devices use the q8 pack instead.
+
+On native, Kokoro synthesizes one sentence at a time, so playback starts after the first sentence instead of after the whole reply.
+
+### Voices on web and native
+
+Web and native use different Kokoro voice catalogs, but the selected voice syncs across your devices. Each device checks the selected voice against its own catalog:
+
+- on web, a voice that is not in the web catalog (or no selection) uses `af_heart`
+- on native, a voice that is not in the installed model pack (or no selection) uses the pack's default voice
+
+The voice picker shows the voice that device will actually use.
 
 ### Voice previews
 
@@ -443,6 +462,8 @@ Check:
 - that **Test TTS** works
 
 ### Kokoro is unavailable
+
+Local voice does not switch to the device voice when Kokoro fails; it shows a speech error instead.
 
 Check:
 
