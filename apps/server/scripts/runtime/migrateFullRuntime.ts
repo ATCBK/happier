@@ -4,6 +4,7 @@ import { stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { openPgliteMigrationSession } from '../pgliteMigrationSession';
 import { assertForwardRecoveryCapableUpdater } from '../../sources/app/runtime/updaterMigrationAdmission';
+import { resolveMigrationEnv } from '../migrationEnv';
 
 import {
     hasSessionSystemRecordContractMigration,
@@ -81,6 +82,7 @@ export async function isFullRuntimeMigrationApplied({
     pgliteBoundary = defaultPgliteBoundary,
 }: FullRuntimeMigrationLedgerCheckOptions): Promise<boolean> {
     const provider = normalizeProvider(env);
+    env = resolveMigrationEnv(env, provider);
     const migrationName = assertMigrationName(rawMigrationName);
     const configuredDatabaseUrl = String(env.DATABASE_URL ?? '').trim();
     if (provider !== 'pglite' && !configuredDatabaseUrl) {
@@ -157,6 +159,7 @@ export async function runFullRuntimeMigration({
     pgliteBoundary = defaultPgliteBoundary,
 }: FullRuntimeMigrationOptions): Promise<number> {
     const provider = normalizeProvider(env);
+    env = resolveMigrationEnv(env, provider);
     if (provider === 'sqlite') {
         throw new Error('[happier-server-migrate] unsupported database provider: sqlite');
     }

@@ -7,9 +7,11 @@ import {
     runSessionSystemRecordMigrationDeployment,
 } from "../sources/app/session/systemRecords/sessionSystemRecordMigrationDeployment";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { resolveMigrationEnv } from "./migrationEnv";
 
-async function main() {
-    const env: NodeJS.ProcessEnv = { ...process.env };
+export async function runPostgresMigrationDeploy(environment: NodeJS.ProcessEnv = process.env): Promise<void> {
+    const env = resolveMigrationEnv(environment, "postgres");
     const serverRoot = resolveServerWorkspaceRoot(import.meta.url);
     await runSessionSystemRecordMigrationDeployment({
         migrationsDir: join(serverRoot, "prisma", "migrations"),
@@ -32,7 +34,9 @@ async function main() {
     });
 }
 
-main().catch((err) => {
-    console.error(err);
-    process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    runPostgresMigrationDeploy().catch((err) => {
+        console.error(err);
+        process.exit(1);
+    });
+}

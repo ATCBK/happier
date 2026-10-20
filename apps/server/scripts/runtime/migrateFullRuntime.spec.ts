@@ -41,6 +41,24 @@ async function createArtifact(): Promise<{ root: string; executablePath: string 
 afterEach(async () => Promise.all(tempRoots.splice(0).map((path) => rm(path, { recursive: true, force: true }))));
 
 describe('runFullRuntimeMigration', () => {
+    it.each([['direct-connection', true], [undefined, false], ['', false], ['  ', false]])(
+        'selects optional DIRECT_URL for the Postgres migration child (case %#)', async (directUrl, usesDirect) => {
+            const artifact = await createArtifact();
+            const env = { HAPPIER_DB_PROVIDER: 'postgres', DATABASE_URL: 'runtime-connection', DIRECT_URL: directUrl };
+            const selections: boolean[] = [];
+            await expect(runFullRuntimeMigration({
+                executablePath: artifact.executablePath,
+                env,
+                processBoundary: { spawn(_command, _args, options) {
+                    selections.push(options.env.DATABASE_URL === (usesDirect ? 'direct-connection' : 'runtime-connection'));
+                    return { status: 0, signal: null };
+                } },
+            })).resolves.toBe(0);
+            expect(selections).toEqual([true]);
+            expect(env.DATABASE_URL === 'runtime-connection').toBe(true);
+        },
+    );
+
     it.each([
         '20260725100000_activate_qualified_connected_accounts_v4',
         '20260905220000_add_team_home_governance',
@@ -125,7 +143,7 @@ describe('runFullRuntimeMigration', () => {
         let closes = 0;
         const code = await runFullRuntimeMigration({
             executablePath: artifact.executablePath,
-            env: { HAPPIER_DB_PROVIDER: 'pglite', HAPPIER_SERVER_LIGHT_DB_DIR: '/data/pglite' },
+            env: { HAPPIER_DB_PROVIDER: 'pglite', HAPPIER_SERVER_LIGHT_DB_DIR: '/data/pglite', DIRECT_URL: 'direct-connection' },
             pgliteBoundary: {
                 open: async () => ({
                     databaseUrl: 'postgresql://127.0.0.1:54321/postgres?connection_limit=1',
@@ -162,6 +180,25 @@ describe('runFullRuntimeMigration', () => {
 });
 
 describe('isFullRuntimeMigrationApplied', () => {
+    it.each([['direct-connection', true], [undefined, false], ['', false]])(
+        'uses the migration connection for the Postgres ledger read (case %#)', async (directUrl, usesDirect) => {
+            const selections: boolean[] = [];
+            await expect(isFullRuntimeMigrationApplied({
+                env: { HAPPIER_DB_PROVIDER: 'postgres', DATABASE_URL: 'runtime-connection', DIRECT_URL: directUrl },
+                migrationName: '20260725100000_activate_qualified_connected_accounts_v4',
+                createClient: async (_provider, databaseUrl) => {
+                    selections.push(databaseUrl === (usesDirect ? 'direct-connection' : 'runtime-connection'));
+                    return {
+                        $connect: async () => undefined,
+                        $disconnect: async () => undefined,
+                        $queryRawUnsafe: async () => [],
+                    };
+                },
+            })).resolves.toBe(false);
+            expect(selections).toEqual([true]);
+        },
+    );
+
     it('reads the existing Prisma ledger completion fields for the exact migration', async () => {
         const queries: string[] = [];
         let disconnected = 0;

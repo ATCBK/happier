@@ -104,7 +104,7 @@ test('shared source provider switches at runtime while files, secret and QA stat
   await writeFile(join(sourceDir, 'handy-master-secret.txt'), 'fixture-only-secret');
   const sourceEnvPath = fixture.path('dev', 'env');
   const databaseUrl = 'postgresql://fixture:fixture-password@private-host/dev';
-  await writeFile(sourceEnvPath, `HAPPIER_DB_PROVIDER=postgresql\nDATABASE_URL=${databaseUrl}\nHAPPIER_SERVER_LIGHT_DATA_DIR=${sourceDir}\n`);
+  await writeFile(sourceEnvPath, `HAPPIER_DB_PROVIDER=postgresql\nDATABASE_URL=${databaseUrl}\nDIRECT_URL=direct-connection\nHAPPIER_SERVER_LIGHT_DATA_DIR=${sourceDir}\n`);
   const qaDir = fixture.path('qa', 'server-light');
   const env = { HAPPIER_DB_PROVIDER: 'sqlite', DATABASE_URL: 'file:/stale/qa.sqlite',
     HAPPIER_SERVER_LIGHT_DATA_DIR: qaDir, HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev',
@@ -113,6 +113,7 @@ test('shared source provider switches at runtime while files, secret and QA stat
   applyRuntimeServerDatabaseEnv({ env, serverDir: '/server' });
   assert.equal(env.HAPPIER_DB_PROVIDER, 'postgres');
   assert.equal(env.DATABASE_URL, databaseUrl);
+  assert.equal(env.DIRECT_URL, undefined);
   assert.equal(env.HAPPIER_SERVER_LIGHT_DATA_DIR, qaDir);
   assert.equal(env.HAPPIER_SERVER_LIGHT_FILES_DIR, join(sourceDir, 'files'));
   assert.equal(env.HAPPIER_SERVER_LIGHT_PRIVATE_FILES_DIR, join(sourceDir, 'private-files'));

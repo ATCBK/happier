@@ -51,6 +51,17 @@ source still requires a fresh consumer. Shared consumers skip migrations and met
 the source owns canonical migration deployment. This is development behavior, not
 a statement that a retained database has been cut over.
 
+For Postgres behind transaction-mode PgBouncer, keep runtime `DATABASE_URL` pointed
+at the pooler and set optional `DIRECT_URL` in the same private source env authority
+to PostgreSQL's direct endpoint for the same database/schema. PostgreSQL migration
+deployment (including startup migrations, ledger reads and backfills) uses
+`DIRECT_URL` as its migration-local `DATABASE_URL` when nonblank; absent, empty or
+whitespace-only values keep the existing `DATABASE_URL`. Runtime server connections
+remain pooled. Shared consumers still skip migrations and do not copy the source's
+`DIRECT_URL`; the source remains the sole migrator. SQLite, PGlite and MySQL ignore
+this Postgres override. No Prisma `directUrl` setting is required. Supply these
+values privately, never in command arguments or logs.
+
 ### `happier-server` (full server)
 
 - Docker-managed infra per stack (Postgres + Redis + Minio/S3)

@@ -1,6 +1,7 @@
 import { requireDbProviderFromEnv, type DbProvider } from '../sources/storage/prisma';
 import { runCommand } from './runCommand';
 import { pathToFileURL } from 'node:url';
+import { resolveMigrationEnv } from './migrationEnv';
 
 const MIGRATION_SCRIPT_BY_PROVIDER: Readonly<Record<DbProvider, string>> = Object.freeze({
     postgres: 'migrate:full:deploy',
@@ -15,7 +16,7 @@ export function resolveMigrationDeployScript(env: NodeJS.ProcessEnv): string {
 }
 
 async function main(): Promise<void> {
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const env = resolveMigrationEnv(process.env, requireDbProviderFromEnv(process.env, 'postgres'));
     await runCommand('yarn', ['-s', resolveMigrationDeployScript(env)], env);
 }
 

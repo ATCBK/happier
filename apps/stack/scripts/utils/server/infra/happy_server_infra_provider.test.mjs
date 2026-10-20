@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import {
@@ -15,6 +17,33 @@ function parseEnvText(text) {
     return index > 0 ? [[line.slice(0, index), line.slice(index + 1)]] : [];
   }));
 }
+
+test('stack migration dispatch uses the direct child connection while runtime stays pooled', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'happier-stack-migration-env-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const yarnBoundary = join(dir, 'yarn.cjs');
+  await writeFile(yarnBoundary, `process.stdout.write(JSON.stringify({
+    direct: process.env.DATABASE_URL === 'direct-connection',
+    pooled: process.env.DATABASE_URL === 'runtime-connection',
+    script: process.argv.at(-1),
+  }));`);
+  const serverDir = fileURLToPath(new URL('../../../../../server/', import.meta.url));
+  for (const [directUrl, usesDirect] of [['direct-connection', true], [undefined, false], ['', false]]) {
+    const env = { ...process.env, HAPPIER_DB_PROVIDER: 'postgres',
+      DATABASE_URL: 'runtime-connection', DIRECT_URL: directUrl, npm_execpath: yarnBoundary };
+    await applyHappyServerMigrations({ serverDir, env }, {
+      pmExecBinImpl: async input => {
+        assert.equal(input.bin, 'migrate:deploy');
+        const result = spawnSync(process.execPath, ['--import', 'tsx', resolve(serverDir, 'scripts/migrate.deploy.ts')], {
+          cwd: serverDir, env: input.env, encoding: 'utf8',
+        });
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), { direct: usesDirect, pooled: !usesDirect, script: 'migrate:full:deploy' });
+      },
+    });
+    assert.equal(env.DATABASE_URL === 'runtime-connection', true);
+  }
+});
 
 test('mysql managed infra keeps shared services without allocating or waiting for postgres', async (t) => {
   const baseDir = await mkdtemp(join(tmpdir(), 'happier-mysql-infra-'));
