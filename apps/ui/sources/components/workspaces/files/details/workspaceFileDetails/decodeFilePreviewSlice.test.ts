@@ -1,5 +1,20 @@
 import { expect, it } from 'vitest';
-import { decodeFilePreviewSlice } from './decodeFilePreviewSlice';
+import { decodeFilePreviewSlice, resolveFilePreviewRead } from './decodeFilePreviewSlice';
+
+it('uses the configured budget for a chosen head or tail, with no automatic partial read', () => {
+    expect(resolveFilePreviewRead({ sizeBytes: 14, maxPreviewBytes: 10 })).toEqual({
+        kind: 'tooLarge', sizeBytes: 14, maxPreviewBytes: 10,
+    });
+    expect(resolveFilePreviewRead({ sizeBytes: 14, maxPreviewBytes: 10, previewSlice: 'head' })).toEqual({
+        kind: 'partial', slice: 'head', range: { offset: 0, length: 10 }, totalBytes: 14,
+    });
+    expect(resolveFilePreviewRead({ sizeBytes: 15, maxPreviewBytes: 10, previewSlice: 'tail' })).toEqual({
+        kind: 'partial', slice: 'tail', range: { offset: 5, length: 10 }, totalBytes: 15,
+    });
+    expect(resolveFilePreviewRead({ sizeBytes: 10, maxPreviewBytes: 10, previewSlice: 'tail' })).toEqual({ kind: 'complete' });
+    expect(resolveFilePreviewRead({ sizeBytes: null, maxPreviewBytes: 10, previewSlice: 'tail' })).toEqual({ kind: 'complete' });
+    expect(resolveFilePreviewRead({ sizeBytes: 15, maxPreviewBytes: null, previewSlice: 'tail' })).toEqual({ kind: 'complete' });
+});
 
 it('trims a UTF-8 character split by either preview boundary without stripping interior replacement characters', () => {
     const bytes = new TextEncoder().encode('a€b😀c');

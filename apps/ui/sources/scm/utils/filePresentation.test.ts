@@ -48,7 +48,9 @@ describe('resolveFileViewerKind', () => {
         for (const path of ['icon.png', 'icon.webp', 'icon.gif', 'icon.ico', 'icon.svg', 'icon.avif']) {
             expect(resolveFileViewerKind({ path }).alphaCapable).toBe(true);
         }
-        expect(resolveFileViewerKind({ path: 'photo.jpg' }).alphaCapable).toBe(false);
+        for (const path of ['photo.jpg', 'photo.bmp', 'README.md', 'unknown']) {
+            expect(resolveFileViewerKind({ path }).alphaCapable).toBe(false);
+        }
         expect(resolveFileViewerKind({ path: 'icon.png', mimeType: 'image/jpeg' }).alphaCapable).toBe(false);
         expect(resolveFileViewerKind({ path: 'photo.jpg', mimeType: 'image/png' }).alphaCapable).toBe(true);
         expect(resolveFileViewerKind({ path: 'icon.png', isBinaryContent: true }).alphaCapable).toBe(false);
@@ -77,16 +79,6 @@ describe('resolveFileViewerKind', () => {
         expect(resolveFileViewerKind({ path: 'unknown.asset', isBinaryContent: true })).toMatchObject({ kind: 'binary', mimeType: 'application/octet-stream' });
         expect(resolveFileViewerKind({ path: 'photo', mimeType: 'image/heic' })).toMatchObject({ kind: 'image', mimeType: 'image/heic', previewable: true });
         expect(resolveFileViewerKind({ path: 'recording', mimeType: 'audio/opus' })).toMatchObject({ kind: 'audio', mimeType: 'audio/opus', previewable: true });
-    });
-
-    it('owns alpha capability for the image well in the same classification', () => {
-        for (const path of ['logo.png', 'logo.webp', 'logo.gif', 'logo.ico', 'logo.svg']) {
-            expect(resolveFileViewerKind({ path }).alphaCapable).toBe(true);
-        }
-        for (const path of ['photo.jpg', 'photo.bmp', 'README.md', 'unknown']) {
-            expect(resolveFileViewerKind({ path }).alphaCapable).toBe(false);
-        }
-        expect(resolveFileViewerKind({ path: 'photo.png', mimeType: 'image/jpeg' }).alphaCapable).toBe(false);
     });
 
     it('refines supplied generic bytes without reading anything itself', () => {

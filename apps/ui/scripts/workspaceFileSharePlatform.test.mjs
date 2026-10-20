@@ -3,6 +3,31 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { createDesktopDownloadFileSink, openInDefaultApp } from '../sources/sync/runtime/files/openInDefaultApp.ts';
 import { resolveWorkspaceFileDownloadSource } from '../sources/hooks/workspaces/transfers/workspaceFileDownloadSource.ts';
+import { buildFileShareClipboardRequest, resolveFileShareActionScope } from '../sources/components/workspaces/files/file/fileShareClipboard.ts';
+
+test('an explicitly retired file Account never falls back to the composer Account', () => {
+    const composer = { serverId: 'home-a', accountId: 'alice' };
+    const original = { serverId: 'home-b', accountId: 'bob' };
+    assert.equal(resolveFileShareActionScope(null, composer), null);
+    assert.equal(resolveFileShareActionScope(undefined, composer), composer);
+    assert.equal(resolveFileShareActionScope(original, composer), original);
+});
+
+test('file clipboard intents preserve exact relative, absolute and canonical link text', () => {
+    const source = { relativePath: 'src/has space.ts', absolutePath: 'C:\\Users\\Alice\\repo\\src\\has space.ts',
+        link: '/session/session-a?path=src%2Fhas+space.ts&serverId=home-a&details=file&startLine=9' };
+    assert.deepEqual(buildFileShareClipboardRequest(source, { kind: 'path' }), {
+        actionId: 'clipboard.write', input: { text: source.relativePath },
+    });
+    assert.deepEqual(buildFileShareClipboardRequest(source, { kind: 'path', absolute: true }), {
+        actionId: 'clipboard.write', input: { text: source.absolutePath },
+    });
+    assert.deepEqual(buildFileShareClipboardRequest(source, { kind: 'link' }), {
+        actionId: 'clipboard.write', input: { text: source.link },
+    });
+    assert.equal(buildFileShareClipboardRequest({ ...source, absolutePath: null }, { kind: 'path', absolute: true }), null);
+    assert.equal(buildFileShareClipboardRequest({ ...source, link: null }, { kind: 'link' }), null);
+});
 
 test('desktop default-handler permission is confined to the download temp area', () => {
     const capability = JSON.parse(readFileSync(new URL('../src-tauri/capabilities/default.json', import.meta.url), 'utf8'));

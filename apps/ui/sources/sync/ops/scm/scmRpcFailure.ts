@@ -2,6 +2,8 @@ import { createScmOperationUnknownOutcome, SCM_OPERATION_ERROR_CODES, ScmOperati
 import { getScmRpcSideEffectClass } from '@happier-dev/protocol/actions/scmGitActionSpecs';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, type RpcErrorCarrier } from '@happier-dev/protocol/rpcErrors';
 import { RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { isTransientConnectivityError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
+import { isMachineRpcTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 
 const SCM_UNSUPPORTED_RESPONSE_ERROR = 'SCM_UNSUPPORTED_RESPONSE_ERROR';
 
@@ -86,6 +88,14 @@ export function scmFallbackError(error: unknown, context: ScmRpcFailureContext):
     if (error instanceof Error && error.message === SCM_UNSUPPORTED_RESPONSE_ERROR) {
         return { success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_FOUND, errorCode: SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED };
     }
+    // Preserve recognized read outages through the existing native failure
+    // vocabulary. Generic refusals still quarantine private Work witnesses.
+    if (isMachineRpcTimeoutError(error)) return {
+        success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_TIMEOUT,
+    };
+    if (isTransientConnectivityError(error)) return {
+        success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.REMOTE_NETWORK_FAILED,
+    };
     return { success: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE };
 }
 

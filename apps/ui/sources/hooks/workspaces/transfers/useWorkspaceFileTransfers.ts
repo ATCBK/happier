@@ -19,6 +19,12 @@ import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/run
 import { t } from '@/text';
 import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { WorkspaceFileUploadFinalizeResponse } from '@/sync/domains/transfers/runtime/transferRuntime/families/workspaceFileTransfers';
+import { desktopHostKind, invokeDesktopHost } from '@/utils/platform/desktopHost';
+import { createDesktopDownloadFileSink, openInDefaultApp } from '@/sync/runtime/files/openInDefaultApp';
+import { saveFileBytes } from '@/sync/runtime/files/saveFileBytes';
+import { sanitizeFileUriSegment } from '@/sync/runtime/files/fileUriPath';
+import { resolveWorkspaceFileDownloadSource, type WorkspaceFileCachedContent } from './workspaceFileDownloadSource';
+export type { WorkspaceFileCachedContent } from './workspaceFileDownloadSource';
 
 export type WorkspaceUploadEntry =
     | Readonly<{ kind: 'web'; file: File; relativePath: string }>
@@ -549,12 +555,14 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         }
     }, [maxConcurrentUploads, onAfterUploadSuccess, onResolveUploadConflicts, stableWorkspaceScope]);
 
-    const startDownload = React.useCallback(async (input: Readonly<{ path: string; asZip: boolean; action?: WorkspaceFileDownloadAction }>): Promise<WorkspaceTransferResult> => {
+    const startDownload = React.useCallback(async (input: Readonly<{ path: string; asZip: boolean; action?: WorkspaceFileDownloadAction; cachedContent?: WorkspaceFileCachedContent | null }>): Promise<WorkspaceTransferResult> => {
         if (downloadOperationRef.current) {
             return { ok: false, error: 'Download already in progress' };
         }
 
         const controller = new AbortController();
+        const desktopOpening = Platform.OS === 'web' && desktopHostKind() === 'tauri' && input.action === 'open';
+        const useWebSink = Platform.OS === 'web' && !desktopOpening;
         const operation = { controller, cancelable: true };
         downloadOperationRef.current = operation;
         const isCurrentDownload = (): boolean => (
@@ -574,7 +582,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         let keepNativeSink = false;
         const nativeSinkRef: { current: NativeDownloadSink | null } = { current: null };
         const cleanupNativeSinkOnce = async () => {
-            if (Platform.OS === 'web' || !nativeSinkRef.current) {
+            if (useWebSink || !nativeSinkRef.current) {
                 return;
             }
             const sink = nativeSinkRef.current;
@@ -585,7 +593,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         let webSinkCleanupScheduled = false;
         const webSinkFailureRef: { current: Error | null } = { current: null };
         const cleanupWebSinkOnce = async () => {
-            if (Platform.OS !== 'web' || !webSinkRef.current) {
+            if (!useWebSink || !webSinkRef.current) {
                 return;
             }
             const sink = webSinkRef.current;
@@ -602,11 +610,27 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         let cleanupOverride: WorkspaceTransferResult | null = null;
         const download = (async (): Promise<WorkspaceTransferResult> => {
             try {
-                const scope = stableWorkspaceScope;
-                if (!scope) {
+                const source = resolveWorkspaceFileDownloadSource({ workspaceScope: stableWorkspaceScope,
+                    asZip: input.asZip, cachedContent: input.cachedContent });
+                if (source.kind === 'held') {
+                    const content = source.content;
+                    setCurrentDownloadState({ status: 'downloading', name: content.fileName,
+                        downloadedBytes: content.bytes.byteLength, totalBytes: content.bytes.byteLength });
+                    const result = await saveFileBytes({ ...content, action: input.action ?? 'save',
+                        isCurrent: () => isCurrentDownload() && !controller.signal.aborted,
+                        onHandoff: beginNativeHandoff });
+                    if (result === 'canceled') {
+                        setCurrentDownloadState({ status: 'canceled' });
+                        return { ok: false, error: 'Download canceled', canceled: true };
+                    }
+                    setCurrentDownloadState({ status: 'done', name: content.fileName, totalBytes: content.bytes.byteLength });
+                    return { ok: true };
+                }
+                if (source.kind === 'unavailable') {
                     setCurrentDownloadState({ status: 'error', error: 'Workspace scope not available' });
                     return { ok: false, error: 'Workspace scope not available' };
                 }
+                const scope = source.scope;
 
                 setCurrentDownloadState({ status: 'downloading', name: input.path, downloadedBytes: 0, totalBytes: 0 });
                 let res: Awaited<ReturnType<typeof downloadDaemonWorkspaceFileToDestination>> | null = null;
@@ -621,7 +645,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                                 if (!isCurrentDownload() || controller.signal.aborted) {
                                     throw new Error('Download canceled');
                                 }
-                                if (Platform.OS === 'web') {
+                                if (useWebSink) {
                                     if (!webSinkRef.current) {
                                         throw new Error('Download sink unavailable');
                                     }
@@ -643,14 +667,14 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                                 await nativeSinkRef.current.writeBytes(bytes);
                             },
                             close: async () => {
-                                if (Platform.OS === 'web' && webSinkRef.current) {
+                                if (useWebSink && webSinkRef.current) {
                                     await webSinkRef.current.close();
                                 } else if (nativeSinkRef.current) {
                                     await nativeSinkRef.current.close();
                                 }
                             },
                             cleanup: async () => {
-                                if (Platform.OS === 'web') {
+                                if (useWebSink) {
                                     await cleanupWebSinkOnce();
                                     return;
                                 }
@@ -669,7 +693,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                                 totalBytes: init.sizeBytes,
                             });
 
-                            if (Platform.OS === 'web') {
+                            if (useWebSink) {
                                 try {
                                     webSinkRef.current = await createWebDownloadFileSink({
                                         expectedSizeBytes: init.sizeBytes,
@@ -684,10 +708,11 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                                 return;
                             }
 
-                            const sink = await createNativeCacheFileSink({
-                                directoryName: 'happier-downloads',
-                                fileName: init.name || 'download',
-                            });
+                            const sink = desktopOpening
+                                ? { ok: true as const, ...await createDesktopDownloadFileSink({
+                                    fileName: sanitizeFileUriSegment(init.name, 'download'), invoke: invokeDesktopHost,
+                                }) }
+                                : await createNativeCacheFileSink({ directoryName: 'happier-downloads', fileName: init.name || 'download' });
                             if (!sink.ok) {
                                 return {
                                     success: false,
@@ -732,7 +757,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                     return { ok: false, error: 'Download canceled', canceled: true };
                 }
 
-                if (Platform.OS === 'web') {
+                if (useWebSink) {
                     if (!webSinkRef.current) {
                         setCurrentDownloadState({ status: 'error', error: 'Download sink unavailable' });
                         return { ok: false, error: 'Download sink unavailable' };
@@ -746,23 +771,15 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                     downloadWebFile(file, res.name || 'download', cleanupWebSinkOnce);
                 } else if (nativeSinkRef.current) {
                     const action = input.action ?? 'save';
-                    if (Platform.OS === 'android' && action !== 'share') {
-                        const { performAndroidFileAction } = await import('@/sync/runtime/files/nativeFileActions');
-                        if (!isCurrentDownload() || controller.signal.aborted) {
-                            return { ok: false, error: 'Download canceled', canceled: true };
-                        }
+                    if (desktopOpening) {
                         beginNativeHandoff();
-                        const result = await performAndroidFileAction({ fileUri: nativeSinkRef.current.fileUri, name: res.name || 'download', action });
-                        if (result.canceled) {
-                            failureMessage = 'Download canceled';
-                            setCurrentDownloadState({ status: 'canceled' });
-                            return { ok: false, error: 'Download canceled', canceled: true };
-                        }
-                        keepNativeSink = action !== 'save';
+                        await openInDefaultApp({ path: nativeSinkRef.current.fileUri, invoke: invokeDesktopHost });
+                        keepNativeSink = true;
                     } else {
                         const shared = await shareNativeCacheFile({
                             fileUri: nativeSinkRef.current.fileUri,
                             name: res.name || 'download',
+                            action,
                             isCurrent: () => isCurrentDownload() && !controller.signal.aborted,
                             onHandoff: beginNativeHandoff,
                         });
@@ -805,7 +822,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
             let cleanupResult: WorkspaceTransferResult | null = null;
             try {
                 if (!keepNativeSink) await cleanupNativeSinkOnce();
-                if (Platform.OS === 'web' && !webSinkCleanupScheduled) {
+                if (useWebSink && !webSinkCleanupScheduled) {
                     await cleanupWebSinkOnce();
                 }
             } catch (error) {
