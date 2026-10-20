@@ -1,0 +1,49 @@
+import { describe, expect, it, vi } from 'vitest';
+import { resolveFileMenuItems, type FileMenuContext } from './fileMenus';
+
+const base: FileMenuContext = {
+    machineReachable: true, unavailableReason: 'offline', hasCachedContent: true, platform: 'web',
+};
+
+describe('one file menu inventory across page, phone and tree', () => {
+    it('hides missing provider behaviours and exposes one comparison discard across surfaces', async () => {
+        expect(resolveFileMenuItems(base, 'page')).toEqual([]);
+        const discard = vi.fn();
+        const context = { ...base, changes: { discardAll: discard }, readBlame: true,
+            toggleBlame: vi.fn(), openWithBlame: vi.fn(), commands: { 'code.restart': vi.fn() } };
+        const page = resolveFileMenuItems(context, 'page');
+        expect(page.map(item => item.id)).toEqual(['blame', 'code.restart', 'discard']);
+        const tree = resolveFileMenuItems(context, 'treeRow');
+        expect(tree.map(item => item.id)).toEqual(['openWithBlame', 'discard']);
+        await tree.find(item => item.id === 'discard')?.run();
+        expect(discard).toHaveBeenCalledOnce();
+        expect(resolveFileMenuItems({ ...context, readBlame: false }, 'page').some(item => item.id === 'blame')).toBe(false);
+    });
+
+    it('keeps cached sharing available offline while Machine operations explain their unavailability', () => {
+        const noop = () => {};
+        const context = { ...base, platform: 'tauri' as const, machineReachable: false,
+            copyPath: noop, copyLink: noop, attachToMessage: noop, download: noop,
+            rename: noop, openInDefaultApp: noop, changes: { discardAll: noop } };
+        const items = resolveFileMenuItems(context, 'treeRow');
+        for (const id of ['copyPath', 'copyLink', 'attachToMessage', 'download']) {
+            expect(items.find(item => item.id === id)?.state).toBe('enabled');
+        }
+        for (const id of ['rename', 'openInDefaultApp', 'discard']) {
+            expect(items.find(item => item.id === id)?.state).toEqual({ disabledReason: 'offline' });
+        }
+        expect(resolveFileMenuItems({ ...context, platform: 'web' }, 'page').some(item => item.id === 'openInDefaultApp')).toBe(false);
+    });
+
+    it('does not let partial content become a selection or directory become blame', () => {
+        const context = { ...base, partial: true, selectLines: () => {}, readBlame: true, toggleBlame: () => {} };
+        expect(resolveFileMenuItems(context, 'page').map(item => item.id)).toEqual(['blame']);
+        expect(resolveFileMenuItems({ ...context, isDirectory: true }, 'page')).toEqual([]);
+    });
+
+    it('keeps the existing Android Share export beside Save and Open with', () => {
+        const context = { ...base, platform: 'android' as const, shareFile: () => {} };
+        expect(resolveFileMenuItems(context, 'phone').map(item => item.id)).toEqual(['shareFile']);
+        expect(resolveFileMenuItems({ ...context, platform: 'web' }, 'page')).toEqual([]);
+    });
+});
