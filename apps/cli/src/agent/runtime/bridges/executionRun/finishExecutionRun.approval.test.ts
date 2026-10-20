@@ -93,7 +93,10 @@ describe('terminal Run approval occurrence custody', () => {
         return ExecutionRunGetResponseSchema.parse({ run: projectExecutionRunPublicState({ ...current, inputTurns }) });
       },
       reviewCommentAction: async ({ input }) => {
-        body = ReviewCommentActionInputSchemasV1['reviews.comments.edit'].parse(input).nextBody;
+        const nextBody = ReviewCommentActionInputSchemasV1['reviews.comments.edit'].parse(input).nextBody;
+        if (typeof nextBody === 'string') body = nextBody;
+        else if (nextBody.t === 'plain' && typeof nextBody.v === 'string') body = nextBody.v;
+        else throw new Error('Expected the plain comment-edit boundary');
         effects += 1;
         return ReviewCommentActionOutputSchemasV1['reviews.comments.edit'].parse({ comment: ReviewCommentV1Schema.parse({
           v: 1, id: 'comment', accountId: 'account', workspace: { machineId: 'machine', path: '/workspace' }, sessionId: 'session',

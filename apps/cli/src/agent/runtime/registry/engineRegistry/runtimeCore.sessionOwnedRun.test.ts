@@ -542,7 +542,9 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
       expect(executionRunOpen).toHaveBeenCalledOnce();
       await expect(runtime?.waitForTurnCompletion?.()).resolves.toBeUndefined();
       const output = messages.filter(message => message.type === 'model-output').map(message => message.textDelta ?? message.fullText ?? '').join('');
-      expect(decodeExecutionRunProfileResult(output, executionRunOpen.mock.calls[0]?.[0].resultContract))
+      const openedRun = executionRunOpen.mock.calls[0]?.[0];
+      if (!openedRun || !('resultContract' in openedRun)) throw new Error('Expected bounded Run result contract');
+      expect(decodeExecutionRunProfileResult(output, openedRun.resultContract))
         .toEqual({ ok: true, value: { verdict: 'done' } });
       expect(executionRunOpen.mock.calls[0]?.[0]).toMatchObject({ localInputId: 'judge-input', resultContract: { kind: 'json' } });
       const mcpServers = executionRunOpen.mock.calls[0]?.[0].mcpServers;

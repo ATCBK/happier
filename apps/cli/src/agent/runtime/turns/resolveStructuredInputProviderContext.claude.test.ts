@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { expect, it, vi } from 'vitest';
-import { buildMentionRefForKindV1, MENTION_KIND_V1, HappierStructuredInputV1Schema } from '@happier-dev/protocol';
+import { buildMentionRefForKindV1, MENTION_KIND_V1, HappierStructuredInputV1Schema, StrictJsonValueSchema } from '@happier-dev/protocol';
 import { SessionSkillCatalogListResponseV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import type { AgentSessionControlContext, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createClaudeNativeRuntime } from '../../../../../../packages/plugins/claude/src/agent/runtime/nativeRuntime';
@@ -18,7 +18,7 @@ it('delivers two native user-only skills from Claude catalog through identity re
     items: [{ name: 'library', skillId: 'library-skill', digest: `sha256:${'a'.repeat(64)}` }], nativeDisables: [] };
   const exec = createSdkExecFixture();
   const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
-  const operations = createClaudeAgentSdkTurnOperations({ ctx, directory: root, launchEnv: { HOME: root, USERPROFILE: root, CLAUDE_CONFIG_DIR: config }, happierSessionId: 'skill-session', skills });
+  const operations = createClaudeAgentSdkTurnOperations({ ctx, permissionMode: 'default', directory: root, launchEnv: { HOME: root, USERPROFILE: root, CLAUDE_CONFIG_DIR: config }, happierSessionId: 'skill-session', skills });
   const runtime = createClaudeNativeRuntime({ openSession: async () => operations,
     resolveSupportsEffort: async () => false, resolveSupportsSystemPromptSnapshotOff: async () => false });
   const sessions = runtime.sessions;
@@ -90,7 +90,7 @@ it('delivers two native user-only skills from Claude catalog through identity re
       { name: 'second', path: join(config, 'skills/second/SKILL.md') },
     ]);
     await expect(session.send({ inputIds: ['input-1'], delivery: { kind: 'newTurn', turnId: 'turn-1' },
-      input: { text, structuredInput: resolved.structuredInput } })).resolves.toMatchObject({ status: 'admitted' });
+      input: { text, structuredInput: StrictJsonValueSchema.parse(resolved.structuredInput) } })).resolves.toMatchObject({ status: 'admitted' });
     const record = exec.written.find(item => item !== null && typeof item === 'object' && Reflect.get(item, 'type') === 'user');
     expect(record).toBeDefined();
     const content: unknown = record && typeof record === 'object' ? Reflect.get(Reflect.get(record, 'message'), 'content') : null;

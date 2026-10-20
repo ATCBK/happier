@@ -227,8 +227,8 @@ describe('native inactive Agent session controls', () => {
     { status: 'unavailable' as const, facet: { phase: 'native_effect' as const, privateText: 'must not disclose' }, expected: undefined },
   ])('preserves only closed external Goal evidence for $status / $facet', async ({ status, facet, expected }) => {
     // This is an external plugin contribution, not a replacement for host logic.
-    const fail = async (): Promise<AgentSessionGoalMutationResult> => ({ status,
-      diagnostic: { code: 'external_goal_refused' }, retryable: false, goalControlFailure: facet });
+    const fail = async () => ({ status,
+      diagnostic: { code: 'external_goal_refused', severity: 'error' as const }, retryable: false, goalControlFailure: facet });
     const fixture = runtimeRegistryFixture({ agent: { pluginId: 'test.external-goals', localId: 'goal-agent' },
       sessions: { goals: { get: fail, set: fail, clear: fail }, async open() { throw new Error('not used'); } } });
     const adapter = createNativeInactiveGoalAdapter({ agentId: fixture.agentId,

@@ -6,6 +6,10 @@ import type {
   HostCurrentSessionInteractionsService as PluginCurrentSessionInteractionsService,
   HostSessionApprovalRequest as PluginSessionApprovalRequest,
   HostSessionApprovalResult as PluginSessionApprovalResult,
+  HostSessionQuestionsRequest,
+  HostSessionQuestionsResult,
+  HostSessionConfirmationRequest,
+  HostSessionConfirmationResult,
   HostSessionInteractionRequest as PluginSessionInteractionRequest,
   HostSessionInteractionResult as PluginSessionInteractionResult,
 } from '@/agent/runtime/state/currentSessionUiTypes';
@@ -23,6 +27,8 @@ class TestInteractions implements PluginCurrentSessionInteractionsService {
   constructor(private readonly requestApproval: ApprovalRequester) {}
 
   request(request: PluginSessionApprovalRequest, options?: { signal?: AbortSignal }): Promise<PluginSessionApprovalResult>;
+  request(request: HostSessionQuestionsRequest, options?: { signal?: AbortSignal }): Promise<HostSessionQuestionsResult>;
+  request(request: HostSessionConfirmationRequest, options?: { signal?: AbortSignal }): Promise<HostSessionConfirmationResult>;
   async request(
     request: PluginSessionInteractionRequest,
     options?: { signal?: AbortSignal },

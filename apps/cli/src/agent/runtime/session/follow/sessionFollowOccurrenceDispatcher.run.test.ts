@@ -36,6 +36,10 @@ it.each([
   const pending = new Map<string, unknown>();
   let muted = true;
   let routePresent = true;
+  let returnDifferentOriginal = false;
+  const replacementOriginal: RunFollowOriginalV1 = 'terminalEventId' in original
+    ? { ...original, terminalEventId: 'replacement-terminal' }
+    : { ...original, revision: original.revision + 1 };
   vi.spyOn(axios, 'get').mockImplementation(async url => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
@@ -53,7 +57,8 @@ it.each([
   vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v3/automations/runs/workflow-storage') return { status: 200, data: workflow };
-    if (path.endsWith('/run-occurrence-routes')) return { status: 200, data: { ok: true, v: 1, original, event: occurrence.event,
+    if (path.endsWith('/run-occurrence-routes')) return { status: 200, data: { ok: true, v: 1,
+      original: returnDifferentOriginal ? replacementOriginal : original, event: occurrence.event,
       routes: routePresent ? [{ destinationSessionId, relation: 'follower', attachedAt: 1, policy: { preset: 'quiet' },
         ...(kind === 'execution_run' ? { expectedTerminalEventId: null } : { expectedRevision: 3 }) }] : [] } };
     if (path === '/v2/sessions/lookup-by-tags') return { status: 200, data: { sessions: [] } };
@@ -86,6 +91,12 @@ it.each([
     await deliver();
     expect(pending.size).toBe(0);
     muted = false;
+    if (entry === 'notification') {
+      returnDifferentOriginal = true;
+      await deliver();
+      expect(pending.size).toBe(0);
+      returnDifferentOriginal = false;
+    }
     await deliver();
     expect(pending.size).toBe(1);
     const localId = deriveSessionFollowInputLocalIdV1({ destinationSessionId, original });

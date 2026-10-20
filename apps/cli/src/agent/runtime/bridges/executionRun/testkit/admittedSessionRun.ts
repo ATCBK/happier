@@ -84,7 +84,6 @@ import { prepareProjectAgentLaunch } from '@/workspaces/projectSetup/projectAgen
 import type { HostAgentNativeLaunchPreparation } from '@/plugins/runtime/invocation/services/exec';
 import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
 import { SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
-import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 
 // This is a host attribution contract, not Claude codec/process certification.
 // An authored public-SDK Agent supplies the external sessions.open/send behavior;
@@ -414,11 +413,6 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
     ...(skillStore ? { skillStore } : {}),
     getChildren: () => tracked, machineId: 'admitted-machine', controlToken,
     agentRuntimeDaemonServices: { dispatch: async (request, context) => {
-      const traceLifecycleOperation = request.operation.kind === 'plugin_services.prepare_v1'
-        || request.operation.kind === 'plugin_services.close_v1'
-        || request.operation.kind === 'execution_run.snapshot.release_v1';
-      if (traceLifecycleOperation) console.error('Admitted Run daemon dispatch started', request.operation.kind);
-      try {
       if (request.operation.kind === 'session.open.attest') {
         const tracked = context.trackedSession;
         const attestation = tracked && await recordTrackedRunnerAgentSessionOpenAttestation({ tracked,
@@ -486,16 +480,6 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
         return { ok: true as const, result: await services.dispatch(serviceRequest) };
       }
       throw new Error(`Unexpected runner operation: ${request.operation.kind}`);
-      } catch (error) {
-        console.error('Admitted Run daemon dispatch failure', {
-          operation: request.operation.kind,
-          name: error instanceof Error ? redactBugReportSensitiveText(error.name) : typeof error,
-          message: error instanceof Error ? redactBugReportSensitiveText(error.message) : 'Non-Error dispatch failure',
-        });
-        throw error;
-      } finally {
-        if (traceLifecycleOperation) console.error('Admitted Run daemon dispatch finished', request.operation.kind);
-      }
     } },
     stopSession: async () => ({ status: 'not_found' as const }),
     spawnSession: async () => { throw new Error('Unexpected child spawn'); },

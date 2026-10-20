@@ -114,7 +114,7 @@ describe('manager answers at the registered question RPC owner', () => {
     ])('refuses %s without completing or transferring the request', async (reason) => {
         const { session, rpc } = prepareQuestion();
         const request = session.agentState.requests!.question!;
-        let context = managerContext();
+        let context: RpcHandlerContext = managerContext();
         if (reason === 'approval') Object.assign(request, { tool: 'Bash', kind: 'permission', arguments: { command: 'echo hi' } });
         if (reason === 'lasting') Object.assign(request, { questionV1: { mode: 'wait', lasting: true } });
         if (reason === 'other-worker-account') session.sessions.set('worker', { ...session.sessions.get('worker')!, accountId: 'other-account' });

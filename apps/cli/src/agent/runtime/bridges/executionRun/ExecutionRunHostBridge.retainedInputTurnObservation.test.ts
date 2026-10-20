@@ -116,7 +116,8 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
                 enqueueAgentMessageCommitted: vi.fn(async () => ({ persisted: true, delivered: true })),
                 readCommittedTranscriptMessageByLocalId: async (localId: string) => {
                     committedResultLookups.push(localId);
-                    return { type: 'found', message: { id: `committed:${localId}`, localId, sidechainId: 'sidechain-1' } };
+                    return { type: 'found', message: { id: `committed:${localId}`, localId, sidechainId: 'sidechain-1',
+                        seq: 1, createdAt: 1, updatedAt: 1, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Committed result' } } } } };
                 },
                 mutateSessionMessageReply: async (input: unknown) => {
                     replyMutations.push(input);

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { withAdmittedSessionRun } from './bridges/executionRun/testkit/admittedSessionRun';
-import { createCapabilitySelectionSynchronizer } from './capabilitySelectionSynchronizer';
+import { createCapabilitySelectionSynchronizer, type CapabilitySelectionSynchronizerInput } from './capabilitySelectionSynchronizer';
+import { createSessionProviderInputConsumerSessionAdapter } from './waitForNextPermissionModeMessage';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { ExecutionRunListResponseSchema, ExecutionRunStartResponseSchema, readExecutionRunStartRunCreation } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -33,7 +34,7 @@ describe('capability refresh during real Run admission', () => {
             } }, { verifiedPeerAuthority: 'present_user' })) : start;
           registerSessionProviderInputAdmissionRpc({ rpcHandlerRegistrar: rpc,
             runnerRestartAdmission: createSessionRunnerRestartAdmission(() => rpc),
-            consumer: createSessionProviderInputConsumer({ session, messageQueue: new MessageQueue2(() => 'fixture') }) });
+            consumer: createSessionProviderInputConsumer({ session: createSessionProviderInputConsumerSessionAdapter(session), messageQueue: new MessageQueue2(() => 'fixture') }) });
           const tracked = trackedSessions.find(child => child.happySessionId === session.sessionId && child.pid === process.pid);
           if (!tracked) throw new Error('Missing daemon-tracked fixture Session');
           let creating: ReturnType<typeof start> | undefined;
@@ -132,7 +133,7 @@ describe('capability refresh during real Run admission', () => {
         expect(baseline).toContain(peer.runId);
         registerSessionProviderInputAdmissionRpc({ rpcHandlerRegistrar: rpc,
           runnerRestartAdmission: createSessionRunnerRestartAdmission(() => rpc),
-          consumer: createSessionProviderInputConsumer({ session, messageQueue: new MessageQueue2(() => 'fixture') }) });
+          consumer: createSessionProviderInputConsumer({ session: createSessionProviderInputConsumerSessionAdapter(session), messageQueue: new MessageQueue2(() => 'fixture') }) });
         armed = true;
         const creating = start();
         await Promise.race([reading, creating.then(() => { throw new Error('Run admission did not reach the held Home read'); })]);
@@ -145,7 +146,7 @@ describe('capability refresh during real Run admission', () => {
         let gateEntered!: () => void;
         const atGate = new Promise<void>(resolve => { gateEntered = resolve; });
         const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
-        const restart = vi.fn(async (_request, options: Readonly<{ signal: AbortSignal }>) => {
+        const restart = vi.fn<NonNullable<CapabilitySelectionSynchronizerInput['requestRestart']>>(async (_request, options) => {
           const tracked = trackedSessions.find(child => child.happySessionId === session.sessionId && child.pid === process.pid);
           if (!tracked) throw new Error('Missing daemon-tracked fixture Session');
           const result = await requestPlannedRunnerRestart({ sessionId: session.sessionId, tracked,

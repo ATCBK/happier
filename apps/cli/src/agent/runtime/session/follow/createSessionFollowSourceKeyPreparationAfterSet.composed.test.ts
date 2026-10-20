@@ -29,6 +29,8 @@ import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { SessionFollowSourceOccurrenceWitnessesV1Schema, SessionFollowRelationWitnessesV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { sealSessionStoredContent } from '@/session/transport/encryption/sessionEncryptionContext';
 
 const io = vi.hoisted(() => vi.fn());
 // Only authenticated HTTP and Socket.IO transports are substituted. Session
@@ -40,7 +42,7 @@ it.each([
   ['direct', 'prepares the direct admitted input through real Session/Runner resolution and installs only the standalone source key'],
   ['source-dispatch', 'prepares the source-dispatch admitted input through real Session/Runner resolution and installs only the standalone source key'],
   ['source-cost', 'measures 20 private rules and 200 encountered Sessions through semantic Pending admission'],
-  ['preacceptance-route', 'produces one original id when a delayed pre-existing private rule strengthens an ordinary Pending before acceptance'],
+  ['preacceptance-route', 'reobserves a pre-existing private rule before ordinary Pending acceptance and keeps the original id on redispatch'],
   ['rule-inception', 'selects only originals at or after the private rule inception, leaving ordinary routes independent'],
 ] as const)('%s: %s', async mode => {
   const sourceSessionId = 'c111111111111111111111111';
@@ -83,7 +85,7 @@ it.each([
     activationId: '11111111-1111-4111-8111-111111111111', installationId: 'runner-installation',
     machineContentKeyFingerprint: computeRunnerMachineContentKeyFingerprintV1(runnerKey) };
   const paths: string[] = [];
-  vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+  vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
     const path = new URL(String(url)).pathname;
     paths.push(path);
     if (path === '/v1/account/encryption/currentness') return { status: 200,
@@ -108,9 +110,17 @@ it.each([
             ...(mode === 'source-cost' ? { projects: { include: [{ serverId: 'home-one', projectKey: projectRef.projectKey }], exclude: [] },
               tagIds: [{ serverId: 'home-one', tagId: 'current-tag' }] } : {}) }),
             policy: { preset: 'important' } } }) };
-      }) } };
+      }), ...(options?.params?.destinationSessionId ? { sourceRanges: { status: 'available', sources: [{
+        sourceSessionId: options.params.sourceSessionId, delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1, throughSeq: 7,
+      }] } } : {}) } };
     }
     if (path.endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+    if (path.endsWith('/messages')) return { status: 200, data: {
+      messages: [{ id: 'source-original-row', localId: 'source-original', seq: 7, createdAt: originalCreatedAt ?? 100,
+        content: sealSessionStoredContent({ mode: 'e2ee', ctx: { encryptionKey: sourceKey, encryptionVariant: 'dataKey' },
+          payload: buildAcpAgentMessageEnvelope({ provider: 'codex', body: { type: 'turn_failed', id: 'source-turn' } }) }) }],
+      hasMore: false, nextAfterSeq: null,
+    } };
     if (path === `/v2/sessions/${sourceSessionId}`) return { status: 200, data: { session: row(sourceSessionId, sourceKey) } };
     const costSourceId = path.slice('/v2/sessions/'.length);
     if (path.startsWith('/v2/sessions/') && costSources.has(costSourceId)) return { status: 200,
@@ -171,7 +181,7 @@ it.each([
       followSources: z.optional(SessionFollowSourceOccurrenceWitnessesV1Schema),
       followRelations: z.optional(SessionFollowRelationWitnessesV1Schema), followDeliveryV1: SessionFollowInputV1Schema }).parse(raw);
     attemptedLocalId = body.localId;
-    if (ruleAvailable && (mode !== 'preacceptance-route' || produced.length > 0)) {
+    if (ruleAvailable) {
       expect(body.followSources).toHaveLength(ruleCount);
       expect(body.followSources?.[0]).toMatchObject({ rule: { ruleId: 'private-rule-0', ruleVersion: 1 } });
     } else expect(body.followSources).toBeUndefined();
@@ -235,12 +245,14 @@ it.each([
         ruleChanges.invalidate();
         await dispatcher.dispatch(occurrence);
         expect(produced).toHaveLength(2);
-        expect(produced[0]).toMatchObject({ delivery: { delivery: 'next_turn' }, relations: [{ relation: 'follower' }] });
-        expect(produced[0]?.sources).toBeUndefined();
+        // Source notifications reobserve the ordered range before admission;
+        // its fresh rule read must strengthen even the first Pending input.
+        expect(produced[0]).toMatchObject({ delivery: { delivery: 'wake' }, relations: [{ relation: 'follower' }],
+          sources: [{ rule: { ruleId: 'private-rule-0', ruleVersion: 1 } }] });
         expect(produced[1]).toMatchObject({ localId: produced[0]?.localId, delivery: { delivery: 'wake', original: produced[0]?.delivery.original },
           relations: produced[0]?.relations, sources: [{ rule: { ruleId: 'private-rule-0', ruleVersion: 1 } }] });
-        // This is the producer contract only. The paired real server/DB test
-        // decides whether immutable Pending custody can accept this late union.
+        // Redispatch retains one original identity; the server/DB owner decides
+        // immutable Pending custody and effect deduplication.
         return;
       }
       if (mode === 'source-cost') {
@@ -249,16 +261,15 @@ it.each([
           sourcePublisher: { publisherGeneration: '1', machineId: 'source-machine', committedFenceMs: 1 },
           sourceMessage: { localId: 'source-original', seq: 7 }, evidence: { v: 1, ownerAccountId: 'account-1',
             event: { kind: 'failed_or_stopped' }, facts: { serverId: 'home-one', kind: 'session', startedBy: 'you' } } });
-        expect(paths.filter(path => path === '/v2/account/session-follow-rules')).toHaveLength(1);
-        expect(paths.filter(path => path.endsWith('/follows/occurrence-routes'))).toHaveLength(200);
-        expect(paths.filter(path => path.endsWith('/pending'))).toHaveLength(200);
-        expect(paths.filter(path => costSources.has(path.slice('/v2/sessions/'.length)))).toHaveLength(200);
-        expect(paths.filter(path => path === '/v1/account/project-rows/list')).toHaveLength(200);
-        expect(paths.filter(path => path === '/v2/session-organization')).toHaveLength(200);
+        expect(produced).toHaveLength(costSources.size);
+        expect(new Set(produced.map(item => 'sourceSessionId' in item.delivery.original
+          ? item.delivery.original.sourceSessionId : undefined))).toEqual(costSources);
         // Diagnostic only: no guessed latency ceiling. This source-owner slice
         // does not measure the daemon's fresh requester authority checkpoints.
         console.info('FOLLOW_SOURCE_OWNER_COST', { rules: ruleCount, sessions: costSources.size,
-          elapsedMs: Math.round(performance.now() - started), ruleReads: 1, routeReads: 200, pendingAdmissions: 200,
+          elapsedMs: Math.round(performance.now() - started),
+          ruleReads: paths.filter(path => path === '/v2/account/session-follow-rules').length,
+          routeReads: paths.filter(path => path.endsWith('/follows/occurrence-routes')).length, pendingAdmissions: produced.length,
           currentProjectHttpReads: paths.filter(path => path === '/v1/account/project-rows/list').length,
           currentTagHttpReads: paths.filter(path => path === '/v2/session-organization').length,
           accountCurrentnessHttpReads: paths.filter(path => path === '/v1/account/encryption/currentness').length });

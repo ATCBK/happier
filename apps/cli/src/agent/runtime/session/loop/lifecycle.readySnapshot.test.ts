@@ -234,12 +234,13 @@ describe('host ready after a provider successor starts', () => {
         publishHostRuntimeEvent: event => metadataPublication?.observeRuntimeEvent(event),
       },
       api: { push: () => ({
-        fetchSessionNotificationContext: async id => {
+        fetchSessionNotificationContext: async (id: string) => {
           const source = createSessionNotificationContextFixture(id);
           return { ...source, viewer: { ...source.viewer!, follow: { follows: true, notificationLevel: 'important' as const,
             policy: { preset: 'quiet' as const } } } };
         }, readAccountSessionDeliveryMutedScopes: async () => [],
         async sendToAllDevicesAsync(...args: unknown[]) { sentNotifications.push(args); return true; },
+        sendToAllDevices(...args: unknown[]) { sentNotifications.push(args); },
       }) },
       // The canonical Session fixture substitutes the server/persistence boundary.
       session: session as unknown as SessionLoopLifecycleParams['session'],

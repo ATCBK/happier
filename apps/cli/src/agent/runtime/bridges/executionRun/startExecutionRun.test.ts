@@ -953,7 +953,7 @@ describe('startExecutionRun', () => {
       executeBoundedRun: async () => {},
       send,
       voiceAgentManager,
-      registerRunOccurrence: ({ controller }) => { occurrences.push(controller); },
+      registerRunOccurrence: ({ controller }) => { occurrences.push(controller); return () => {}; },
       admitStart: async () => {
         if (timing !== 'overlapping') return;
         admissionCalls += 1;

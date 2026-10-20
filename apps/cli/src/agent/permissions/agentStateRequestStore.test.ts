@@ -231,8 +231,13 @@ describe('AgentStateRequestStore', () => {
             }
             notifySessionFollowRuleRequestCommitted(occurrence: (typeof committed)[number]) { committed.push(occurrence); }
             override updateAgentState(updater: (state: AgentState) => AgentState): Promise<void> {
-                const durable = AgentStateSchema.parse(JSON.parse(JSON.stringify(updater(this.agentState))));
-                this.agentState = { ...this.agentState, requests: durable.requests, completedRequests: durable.completedRequests };
+                const snapshot = structuredClone(updater(this.agentState));
+                const durable = AgentStateSchema.parse(JSON.parse(JSON.stringify(snapshot)));
+                // The stored reader is deliberately broader than the live CLI
+                // state. Prove this produced state survives it without a cast.
+                expect(durable.requests).toEqual(snapshot.requests);
+                expect(durable.completedRequests).toEqual(snapshot.completedRequests);
+                this.agentState = snapshot;
                 return new Promise(resolve => { accept = resolve; });
             }
         }

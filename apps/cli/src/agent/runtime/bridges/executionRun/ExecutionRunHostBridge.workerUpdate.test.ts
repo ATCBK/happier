@@ -87,19 +87,19 @@ describe('execution-run retained WorkerUpdate inbox custody', () => {
     const { readRetainedExecutionRunRecord } = await import('@/daemon/executionRunRegistry');
     await retainTerminalRun('Unselected for parent', undefined, 'succeeded', { preset: 'custom', events: {} });
     const unselected = await readRetainedExecutionRunRecord('retained-run');
-    expect(unselected?.terminalOccurrenceId).toEqual(expect.any(String));
+    expect(unselected?.state.terminalOccurrenceId).toEqual(expect.any(String));
     expect(unselected).not.toHaveProperty('terminalEventId');
     await retainTerminalRun('Selected for parent', undefined, 'failed', { preset: 'everything' });
     const selected = await readRetainedExecutionRunRecord('retained-run');
-    expect(selected?.terminalOccurrenceId).toEqual(expect.any(String));
-    expect(selected?.terminalOccurrenceId).not.toBe(unselected?.terminalOccurrenceId);
+    expect(selected?.state.terminalOccurrenceId).toEqual(expect.any(String));
+    expect(selected?.state.terminalOccurrenceId).not.toBe(unselected?.state.terminalOccurrenceId);
     const bridge = await createBridge();
     const update = await bridge.takeWorkerUpdate('parent_session', new AbortController().signal);
     expect(update).not.toBeNull();
     update!.acknowledgeAccepted();
     await bridge.prepareWorkerUpdates('parent_session', { signal: new AbortController().signal });
     const accepted = await readRetainedExecutionRunRecord('retained-run');
-    expect(accepted?.terminalOccurrenceId).toBe(selected?.terminalOccurrenceId);
+    expect(accepted?.state.terminalOccurrenceId).toBe(selected?.state.terminalOccurrenceId);
     expect(accepted).not.toHaveProperty('terminalEventId');
   });
   it('retains each run creation policy across restart and uses it for report selection and wake', async () => {
