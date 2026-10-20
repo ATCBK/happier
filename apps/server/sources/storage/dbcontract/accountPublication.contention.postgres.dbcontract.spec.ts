@@ -58,6 +58,89 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
     });
     afterAll(async () => { await db.$disconnect(); });
 
+    it.each(['set', 'remove'] as const)('preserves concurrent Account mute set/%s changes', async secondOperation => {
+        const scopes = [0, 1].map(() => ({ kind: 'sender_session' as const, sessionId: randomUUID() }));
+        const account = await db.account.create({ data: { encryptionMode: 'plain',
+            deliveryMutes: JSON.stringify(secondOperation === 'remove' ? [scopes[1]] : []) } });
+        const captured = deferred(), release = deferred();
+        const transaction = db.$transaction;
+        let firstPid = 0, secondPid = 0;
+        let paused = false;
+        let transactionCount = 0;
+        // Only schedule the real Prisma boundary. Both public HTTP operations,
+        // Account admission, list merging and terminal publication remain real.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            const index = transactionCount++;
+            return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                if (index === 0) firstPid = pid;
+                else secondPid = pid;
+                return callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                    if (property !== 'account' || index !== 0) return Reflect.get(inner, property, innerReceiver);
+                    return new Proxy(inner.account, { get(model, method, modelReceiver) {
+                        if (method !== 'findUnique') return Reflect.get(model, method, modelReceiver);
+                        return async (...queryArgs: unknown[]) => {
+                            const row: unknown = await Reflect.apply(model.findUnique, model, queryArgs);
+                            const query = queryArgs[0];
+                            if (!paused && typeof query === 'object' && query !== null && 'select' in query
+                                && typeof query.select === 'object' && query.select !== null && 'deliveryMutes' in query.select) {
+                                paused = true;
+                                captured.resolve();
+                                await release.promise;
+                            }
+                            return row;
+                        };
+                    } });
+                } }));
+            }, ...args.slice(1)]);
+        } });
+        try {
+            await withAuthenticatedTestApp(registerSessionFollowRoutes, async app => {
+                const url = '/v2/account/session-delivery-mutes';
+                const headers = { 'x-test-user-id': account.id };
+                const first = app.inject({ method: 'PUT', url, headers, payload: { scope: scopes[0] } });
+                const firstOutcome = Promise.allSettled([first]);
+                let secondOutcome: Promise<PromiseSettledResult<Awaited<typeof first>>[]> | undefined;
+                try {
+                    await Promise.race([captured.promise, first.then(() => { throw new Error('First mute never read its receiver'); })]);
+                    let settled = false;
+                    const second = app.inject({ method: secondOperation === 'set' ? 'PUT' : 'DELETE', url, headers,
+                        payload: { scope: scopes[1] } });
+                    secondOutcome = Promise.allSettled([second]).finally(() => { settled = true; });
+                    // Before the fix, the peer commits through compatible entry.
+                    // After it, the merge holds terminal Account publication and
+                    // the peer waits there; either schedule must retain both edits.
+                    while (!settled) {
+                        const rows = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                            SELECT ${firstPid} = ANY(pg_blocking_pids(pid)) AS blocked
+                            FROM pg_stat_activity WHERE pid = ${secondPid}
+                        `;
+                        if (rows[0]?.blocked) break;
+                    }
+                } finally { release.resolve(); }
+                const outcomes = [...await firstOutcome, ...await secondOutcome ?? []];
+                for (const outcome of outcomes) {
+                    if (outcome.status === 'rejected') throw outcome.reason;
+                    expect(outcome.value.statusCode).toBe(200);
+                    expect(ChangeDeliveryMuteResponseV1Schema.parse(outcome.value.json())).toEqual({ changed: true,
+                        disposition: outcome === outcomes[0] || secondOperation === 'set' ? 'muted' : 'unmuted' });
+                }
+                db.$transaction = transaction;
+                const read = await app.inject({ method: 'GET', url, headers });
+                expect(read.statusCode).toBe(200);
+                const finalScopes = ListDeliveryMutesResponseV1Schema.parse(read.json()).scopes;
+                expect(finalScopes).toHaveLength(secondOperation === 'set' ? 2 : 1);
+                expect(finalScopes).toEqual(expect.arrayContaining(secondOperation === 'set' ? scopes : [scopes[0]]));
+            });
+        } finally {
+            release.resolve();
+            db.$transaction = transaction;
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
     it("preserves both delivery-mute scopes when different Accounts edit one Session", async () => {
         const owner = await db.account.create({ data: { encryptionMode: "plain" } });
         const editor = await db.account.create({ data: { encryptionMode: "plain" } });

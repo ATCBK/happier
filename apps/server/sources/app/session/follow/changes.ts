@@ -1,5 +1,5 @@
 import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID, buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
-import { enqueueAccountChangePublication, markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
+import { enqueueAccountChangePublication, markAccountChanged, markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { afterTx, type Tx } from "@/storage/inTx";
 
@@ -17,12 +17,20 @@ import { afterTx, type Tx } from "@/storage/inTx";
 export async function markSessionFollowsChangedForAccountsInTx(tx: Tx, accountIds: readonly string[]): Promise<AccountChangePublication[]> {
     const unique = [...new Set(accountIds)].filter(accountId => typeof accountId === 'string' && accountId.length > 0);
     if (unique.length === 0) return [];
-    const publications = await markAccountsChanged(tx, {
+    // The point writer publishes the singleton hint atomically and can run
+    // inside an already-declared Account operation (for example a mute merge).
+    // Multi-Account fanout retains the fixed-statement set publication path.
+    const publications = unique.length === 1 ? [await markAccountChanged(tx, {
+        accountId: unique[0],
+        entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID,
+        kind: 'account',
+        hint: buildSessionFollowChangeHintV1(),
+    })] : await markAccountsChanged(tx, {
         accountIds: unique,
         entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID,
         kind: 'account',
     });
-    enqueueAccountChangePublication(tx, unique, async client => { await client.accountChange.updateMany({
+    if (unique.length > 1) enqueueAccountChangePublication(tx, unique, async client => { await client.accountChange.updateMany({
         where: { accountId: { in: unique }, kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID },
         data: { hint: buildSessionFollowChangeHintV1() },
     }); });

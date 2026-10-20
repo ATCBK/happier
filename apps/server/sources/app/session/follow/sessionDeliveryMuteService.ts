@@ -10,11 +10,11 @@ import {
 import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
 
 import { resolveEffectiveSessionAccess } from '@/app/session/access/sessionAccess';
-import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
+import { acquireAccountChangePublicationLocksInTx, enqueueAccountChangePublication } from '@/app/changes/markAccountChanged';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { markSessionFollowsChangedInTx } from './changes';
-import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, transactionResult, type Tx } from '@/storage/inTx';
 
 export type DeliveryMuteFailure = 'invalid_parameters' | 'account_inactive' | 'session_not_found' | 'mute_state_unavailable';
 export type DeliveryMuteResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; error: DeliveryMuteFailure }>;
@@ -102,14 +102,9 @@ export async function changeDeliveryMute(input: Readonly<{
 }>): Promise<DeliveryMuteResult<Readonly<{ changed: boolean; disposition: 'muted' | 'unmuted' }>>> {
     const parsed = FollowDeliveryMuteScopeV1Schema.safeParse(input.scope);
     if (!parsed.success) return { ok: false, error: 'invalid_parameters' };
-    return await inTx(async tx => {
-        if (input.receiver.kind === 'account') {
-            await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
-        } else {
-            // Share/access transitions and other receiver editors use the same
-            // audience fence. Re-admit only after their queued writes commit.
-            await acquireSessionAccountCursorLocksInTx(tx, [input.receiver.sessionId], [input.accountId]);
-        }
+    const change = async (tx: Tx): Promise<DeliveryMuteResult<Readonly<{
+        changed: boolean; disposition: 'muted' | 'unmuted';
+    }>>> => {
         const receiver = await readAdmittedReceiverInTx(tx, input);
         if (!receiver.ok) return receiver;
         const scopes = readPersistedFollowDeliveryMutesV1(receiver.stored);
@@ -130,5 +125,21 @@ export async function changeDeliveryMute(input: Readonly<{
         }
         await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         return { ok: true, value: { changed: true, disposition } } as const;
+    };
+    return await inTx(async tx => {
+        if (input.receiver.kind === 'account') {
+            await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
+            let result: Awaited<ReturnType<typeof change>> | undefined;
+            // Compatible entry is not a list-write mutex. Read and merge only
+            // under the existing terminal Account lock, including no-op results.
+            enqueueAccountChangePublication(tx, [input.accountId], async client => { result = await change(client); });
+            return transactionResult(() => {
+                if (result === undefined) throw new Error('Account delivery-mute merge did not run');
+                return result;
+            });
+        }
+        // Session receiver editors already serialize through their resource owner.
+        await acquireSessionAccountCursorLocksInTx(tx, [input.receiver.sessionId], [input.accountId]);
+        return change(tx);
     });
 }
