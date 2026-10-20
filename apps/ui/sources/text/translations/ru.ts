@@ -18108,7 +18108,7 @@ settingsSession: {
         accountVoice: (params: { voice: string; provider: string }) => `${params.voice} · ваш голос ${params.provider}`,
         idleVoice: (params: { voice: string }) => `Говорит голосом ${params.voice}, когда вы разговариваете с этой сессией`,
         idleAccount: "Говорит голосом вашей учётной записи",
-        preferenceHint: 'Используется при следующей поддерживаемой голосовой попытке. Провайдер аккаунта не меняется.',
+        preferenceHint: "Применится при следующем разговоре в этой сессии.",
         loading: 'Загрузка голосов…',
         emptyCatalog: 'Этот провайдер не предлагает выбор голоса.',
         unavailablePreference: 'Этот голос больше недоступен. Выберите другой или используйте настройки аккаунта.',

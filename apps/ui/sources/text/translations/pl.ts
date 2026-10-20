@@ -17192,7 +17192,7 @@ settingsSession: {
         accountVoice: (params: { voice: string; provider: string }) => `${params.voice} · Twój głos ${params.provider}`,
         idleVoice: (params: { voice: string }) => `Mówi głosem ${params.voice}, gdy rozmawiasz z tą sesją`,
         idleAccount: "Mówi głosem ustawionym na twoim koncie",
-        preferenceHint: 'Używany przy następnej obsługiwanej próbie głosowej. Dostawca Twojego konta się nie zmienia.',
+        preferenceHint: "Obowiązuje przy następnej rozmowie w tej sesji.",
         loading: 'Wczytywanie głosów…',
         emptyCatalog: 'Ten dostawca nie oferuje wyboru głosu.',
         unavailablePreference: 'Ten głos nie jest już dostępny. Wybierz inny lub użyj ustawień konta.',

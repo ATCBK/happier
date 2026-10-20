@@ -18170,7 +18170,7 @@ settingsSession: {
         accountVoice: (params: { voice: string; provider: string }) => `${params.voice} · tu voz de ${params.provider}`,
         idleVoice: (params: { voice: string }) => `Habla como ${params.voice} cuando hablas con esta sesión`,
         idleAccount: "Habla con la voz de tu cuenta",
-        preferenceHint: 'Se usa en el siguiente intento de voz compatible. El proveedor de tu cuenta no cambia.',
+        preferenceHint: "Se aplica la próxima vez que hables en esta sesión.",
         loading: 'Cargando voces…',
         emptyCatalog: 'Este proveedor no ofrece elegir la voz.',
         unavailablePreference: 'Esta voz ya no está disponible. Elige otra o sigue la configuración de la cuenta.',

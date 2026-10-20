@@ -17769,7 +17769,7 @@ settingsSession: {
         accountVoice: (params: { voice: string; provider: string }) => `${params.voice} · 你的 ${params.provider} 语音`,
         idleVoice: (params: { voice: string }) => `与此会话对话时使用 ${params.voice} 的声音`,
         idleAccount: "使用你账户的声音",
-        preferenceHint: '在下一次支持的语音尝试中使用。你的账户提供商保持不变。',
+        preferenceHint: "下次在此会话中说话时生效。",
         loading: '正在加载语音…',
         emptyCatalog: '此提供商不提供语音选择。',
         unavailablePreference: '此语音已不可用。请选择其他语音或跟随账户设置。',

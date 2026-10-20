@@ -22208,7 +22208,7 @@ export const en: TranslationStructure = {
     accountVoice: (params: { voice: string; provider: string }) => `${params.voice} · your ${params.provider} voice`,
     idleVoice: (params: { voice: string }) => `Speaks as ${params.voice} when you talk to this session`,
     idleAccount: "Speaks with your account voice",
-    preferenceHint: 'Used on the next supported voice attempt. Your account provider stays the same.',
+    preferenceHint: "Applies the next time you talk in this session.",
     loading: 'Loading voices…',
     emptyCatalog: 'This provider doesn\'t offer a voice choice.',
     unavailablePreference: 'This voice is no longer available. Choose another or follow account settings.',

@@ -14117,7 +14117,7 @@ settingsSession: {
         accountVoice: (params: { voice: string; provider: string }) => `${params.voice} · 你的 ${params.provider} 語音`,
         idleVoice: (params: { voice: string }) => `與此工作階段對話時使用 ${params.voice} 的聲音`,
         idleAccount: "使用你帳戶的聲音",
-        preferenceHint: '在下一次支援的語音嘗試中使用。你的帳戶供應商保持不變。',
+        preferenceHint: "下次在此工作階段中說話時生效。",
         loading: '正在載入語音…',
         emptyCatalog: '此供應商不提供語音選擇。',
         unavailablePreference: '此語音已無法使用。請選擇其他語音或跟隨帳戶設定。',

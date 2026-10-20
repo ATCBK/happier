@@ -18072,7 +18072,7 @@ settingsSession: {
         accountVoice: (params: { voice: string; provider: string }) => `${params.voice} · あなたの ${params.provider} の音声`,
         idleVoice: (params: { voice: string }) => `このセッションと話すときは ${params.voice} の声で話します`,
         idleAccount: "アカウントの声で話します",
-        preferenceHint: '次に対応する音声の試行で使われます。アカウントのプロバイダーは変わりません。',
+        preferenceHint: "次にこのセッションで話すときに適用されます。",
         loading: '音声を読み込んでいます…',
         emptyCatalog: 'このプロバイダーは音声を選択できません。',
         unavailablePreference: 'この音声は利用できなくなりました。別の音声を選ぶか、アカウント設定に従ってください。',
