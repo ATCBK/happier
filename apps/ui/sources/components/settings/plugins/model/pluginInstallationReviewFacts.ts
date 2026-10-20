@@ -134,6 +134,33 @@ function formatNormalizedScope(
     : single.join('\n');
 }
 
+/**
+ * A network access reads as one sentence ("Can send POST requests to https://…") when every target is a
+ * fixed origin or an HTTPS host family and the scope holds nothing else. Anything this does not fully
+ * describe keeps the structured lines, so no declared fact is dropped.
+ */
+function formatNetworkScope(
+  scope: Readonly<Record<string, unknown>>,
+): string | null {
+  const { targets, methods, privateNetwork, ...rest } = scope;
+  if (Object.keys(rest).length > 0 || !Array.isArray(targets) || targets.length === 0) return null;
+  if (methods !== undefined && !(Array.isArray(methods) && methods.length > 0 && methods.every((method) => typeof method === 'string'))) return null;
+  if (privateNetwork !== undefined && typeof privateNetwork !== 'boolean') return null;
+  const named: string[] = [];
+  for (const target of targets) {
+    const record = target && typeof target === 'object' ? (target as Readonly<Record<string, unknown>>) : null;
+    if (record?.kind === 'fixedOrigin' && typeof record.origin === 'string' && Object.keys(record).length === 2) named.push(record.origin);
+    else if (record?.kind === 'httpsHostSuffix' && typeof record.hostSuffix === 'string' && Object.keys(record).length === 2)
+      named.push(t('settingsPlugins.installReviewSections.networkTargetHostSuffix', { suffix: record.hostSuffix }));
+    else return null;
+  }
+  const where = named.join(', ');
+  const line = methods
+    ? t('settingsPlugins.installReviewSections.networkAccess', { methods: (methods as string[]).join(', '), targets: where })
+    : t('settingsPlugins.installReviewSections.networkAccessAnyMethod', { targets: where });
+  return privateNetwork === true ? t('settingsPlugins.installReviewSections.networkPrivate', { line }) : line;
+}
+
 function sourceKindLabel(
   kind: PluginInstallationReview['source']['kind'],
 ): string {
@@ -418,7 +445,11 @@ export function describePluginInstallationReviewFacts(
     !isAuthorityExpansion || expansion.has('requestInterceptor');
   const showsRawCredentials =
     !isAuthorityExpansion || expansion.has('rawCredentialAccess');
-  const scopeLine = (scope: Readonly<Record<string, unknown>>) =>
+  const scopeLine = (
+    capability: string,
+    scope: Readonly<Record<string, unknown>>,
+  ) =>
+    (capability === 'network' ? formatNetworkScope(scope) : null) ??
     t('settingsPlugins.installReviewSections.scope', {
       scope: formatNormalizedScope(scope),
     });
@@ -469,7 +500,7 @@ export function describePluginInstallationReviewFacts(
           t('settingsPlugins.installReviewSections.requiredAccess'),
           review.requiredHostAccess.map(
             (entry) =>
-              `${entry.capability} · ${authorizationClassLabel(entry.authorizationClass)}\n${entry.reason}\n${scopeLine(entry.normalizedScope)}`,
+              `${entry.capability} · ${authorizationClassLabel(entry.authorizationClass)}\n${entry.reason}\n${scopeLine(entry.capability, entry.normalizedScope)}`,
           ),
         )
       : null,
@@ -480,7 +511,7 @@ export function describePluginInstallationReviewFacts(
             id: entry.id,
             capability: entry.capability,
             reason: entry.reason,
-            scope: scopeLine(entry.normalizedScope),
+            scope: scopeLine(entry.capability, entry.normalizedScope),
           })),
         }
       : null,
