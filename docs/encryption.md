@@ -3624,6 +3624,13 @@ Clients must parse the envelope and branch explicitly. Do not guess that content
 
 `require_e2ee` is enforced at the Account-settings and Session-content choke points. A client must reject a plaintext Account envelope before publishing it, reject plaintext session creation or a create-or-load response, and avoid opening or authoring plaintext Session content. The UI device-local pin remains scoped with the existing server/account settings persistence; the synced preference reaches a daemon through the existing Account-settings snapshot and pre-spawn minimum-version hint. No relay API or separate UI-to-daemon policy field owns this decision.
 
+In 0.3 development, `settings.set` at `account.requireE2ee` executes the whole
+preference intent in the connected client, including its scoped local pin. Agent
+and MCP callers reach that same owner; without an answering client the intent is
+unavailable rather than applying only the synced half. Enabling checks the Account
+mode and strengthens the local minimum before upload; disabling releases that
+minimum only after the synced write succeeds. Action policy governs admission.
+
 Missing client-requirement fields preserve the released behavior (`follow_account`). The daemon environment override can only strengthen the effective requirement; invalid non-empty values fail startup.
 
 Layout-1 Session owner metadata is a separate privacy contract approved by

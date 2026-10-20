@@ -96,6 +96,23 @@ import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystem
 import { publishLocalDaemonStatus, readLocalDaemonSharedState } from '@/components/settings/machines/localControl/localDaemonSharedState';
 import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
 
+describe('Track device-local Settings declaration', () => {
+    it('lets an agent read and write Track through settings.set without changing Account settings', async () => {
+        const owner = createOwner();
+        const executor = throughActionExecutor(owner.action);
+        const context = { surface: 'agent', authority: 'account_automation' } as const;
+        expect(await executor.execute('settings.get', { anchor: 'files.trackAgentEdits' }, context))
+            .toMatchObject({ ok: true, result: { value: false } });
+        expect(await executor.execute('settings.set', { anchor: 'files.trackAgentEdits', value: true }, context))
+            .toMatchObject({ ok: true, result: { value: true } });
+        expect(owner.local().filesTrackAgentEdits).toBe(true);
+        expect(owner.account()).toEqual(settingsDefaults);
+        expect(await executor.execute('settings.set', { anchor: 'files.trackAgentEdits', value: 'true' }, context))
+            .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(owner.local().filesTrackAgentEdits).toBe(true);
+    });
+});
+
 describe('desktop login-start service-backed Settings declaration', () => {
     const anchor = 'desktop.startOnLogin';
     const status = (mode: 'at-login' | 'on-demand' | null): LocalDaemonStatusData => ({
@@ -2076,7 +2093,11 @@ describe('declared settings owner', () => {
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.themes', value: 'dark' } }))
             .toMatchObject({ ok: false, errorCode: 'setting_not_bound' });
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'language.appLanguage', value: 'fr' } }))
-            .toMatchObject({ ok: false, errorCode: 'setting_read_only' });
+            .toEqual({ anchor: 'language.appLanguage', value: 'fr' });
+        expect(owner.account().preferredLanguage).toBe('fr');
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'language.appLanguage', value: 'unsupported-language' } }))
+            .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(owner.account().preferredLanguage).toBe('fr');
         expect(await owner.action({ actionId: 'settings.get', input: { anchor: 'accountSecurity.recoveryKey' } }))
             .toMatchObject({ ok: false, errorCode: 'setting_sensitive' });
         expect(await owner.action({ actionId: 'settings.list', input: { pageId: 'accountSecurity' } }))

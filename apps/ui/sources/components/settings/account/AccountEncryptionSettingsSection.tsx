@@ -4,7 +4,10 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import { useProfile, useSettingMutable } from '@/sync/domains/state/storage';
+import { useProfile, useSetting } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { SettingRow } from '@/components/settings/shell/SettingRow';
+import { ACCOUNT_SETTINGS } from './accountSettings';
 import { sync } from '@/sync/sync';
 import { Switch } from '@/components/ui/forms/Switch';
 import { HappyError } from '@/utils/errors/errors';
@@ -84,8 +87,9 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
     const executeAction = useMemo(() => createFrontDoorActionExecute(), []);
     const router = useRouter();
     const profile = useProfile();
-    const [clientEncryptionRequirement, setClientEncryptionRequirement] = useSettingMutable('clientEncryptionRequirementV1');
-    const [clientEncryptionRequirementLocal, setClientEncryptionRequirementLocal] = useSettingMutable('clientEncryptionRequirementLocalV1');
+    const clientEncryptionRequirement = useSetting('clientEncryptionRequirementV1');
+    const clientEncryptionRequirementLocal = useSetting('clientEncryptionRequirementLocalV1');
+    const { setSetting } = useSettingActionFeedback();
     const encryptionAccountOptOutEnabled = useFeatureEnabled('encryption.accountOptOut');
     const sessionDraftSyncEnabled = useFeatureEnabled('sessions.drafts');
     const activeServer = useActiveServerSnapshot();
@@ -283,9 +287,8 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                 {/* Analytics Section */}
                 {encryptionAccountOptOutEnabled && (
                     <ItemGroup title={t('terminal.encryption')}>
-                        <Item
-                            title={t('settingsAccount.requireE2ee')}
-                            subtitle={t('settingsAccount.requireE2eeDescription')}
+                        <SettingRow
+                            setting={ACCOUNT_SETTINGS.settings.requireE2ee}
                             rightElement={
                                 <Switch
                                     testID="settings-account-client-encryption-requirement-switch"
@@ -303,14 +306,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                             );
                                             return;
                                         }
-                                        const nextRequirement = enabled ? 'require_e2ee' : 'follow_account';
-                                        if (enabled) {
-                                            setClientEncryptionRequirementLocal(nextRequirement);
-                                            setClientEncryptionRequirement(nextRequirement);
-                                        } else {
-                                            setClientEncryptionRequirement(nextRequirement);
-                                            setClientEncryptionRequirementLocal(nextRequirement);
-                                        }
+                                        await setSetting(ACCOUNT_SETTINGS.settings.requireE2ee, enabled);
                                     }}
                                 />
                             }

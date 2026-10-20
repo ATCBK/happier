@@ -1151,6 +1151,8 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
         if (!accountContext) throw new Error('Account settings context is unavailable');
         return await accountContext.readSettings();
       },
+      ...(accountContext ? { setClientEncryptionRequirement: (enabled: boolean) =>
+        setClientEncryptionRequirement(accountContext, enabled) } : {}),
       writeAccountSettings: async (delta) => {
         if (!accountContext) throw new Error('Account settings context is unavailable');
         await accountContext.mutateRawSettings((raw) => ({ ...raw, ...delta }));
