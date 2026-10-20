@@ -27,9 +27,6 @@ describe('registered GitHub task writes at the provider HTTP boundary', () => {
     let issue: Record<string, unknown> = { ...GITHUB_ISSUE_RESPONSE, repository_url: `https://api.github.com/repos/${route}`, html_url: `https://github.com/${route}/issues/${issueNumber}`, title: 'Before', body: 'Before body', assignees: [{ login: 'old-owner' }], labels: [{ name: 'old-label' }] };
     const transport = createStubGithubTransport({ respond: (request) => {
       const pathname = new URL(request.url).pathname;
-      if (pathname === `/repositories/${GITHUB_REPOSITORY_RESPONSE.id}`) return {
-        status: 200, body: { ...GITHUB_REPOSITORY_RESPONSE, full_name: route },
-      };
       const body = readRecordedJsonBody(request) as Record<string, unknown> | undefined;
       if (request.method === 'POST' && pathname === `/repos/${route}/issues`) {
         issue = { ...issue, ...body, assignees: (body?.assignees as string[] ?? []).map((login) => ({ login })), labels: (body?.labels as string[] ?? []).map((name) => ({ name })) };
@@ -67,11 +64,11 @@ describe('registered GitHub task writes at the provider HTTP boundary', () => {
     try {
       const createdRaw = await plugin.invokeAction('github/issue/create', {
         v: 1, instance: { ...instance, configuration: { v: 1, token: JSON.stringify({ v: 1,
-          selection: { kind: 'selected', unitIds: [String(GITHUB_REPOSITORY_RESPONSE.id)] } }) } },
+          selection: { kind: 'selected', unitIds: [route] } }) } },
         kindId: 'issue', fields: { title: 'Created task', body: 'Details', assigneeIds: ['old-owner'], labelIds: ['old-label'] },
       });
       const created = TriageTaskWriteResultV1Schema.parse(createdRaw);
-      expect(created).toMatchObject({ kind: 'applied', observation: { kind: 'present', snapshot: { title: 'Created task' } } });
+      expect(created).toMatchObject({ kind: 'applied', observation: { kind: 'present', snapshot: { title: 'Created task', scopeUnitId: route } } });
       const edited = TriageTaskWriteResultV1Schema.parse(await plugin.invokeAction('github/issue/edit', {
         v: 1, instance, localRef, lastKnownLocator: locator,
         fields: { title: 'Updated task', body: 'Changed', assigneeIds: ['new-owner'], labelIds: ['new-label'] },

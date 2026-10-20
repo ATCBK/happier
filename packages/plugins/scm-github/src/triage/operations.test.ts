@@ -52,6 +52,22 @@ import {
 const REPOSITORY_KEY = `${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`.toLowerCase();
 
 describe('registered GitHub REST → Triage source contract', () => {
+  it('keeps a retained repository selection and the current directory on one native unit id', async () => {
+    const transport = createStubGithubTransport({ respond: (request) => new URL(request.url).pathname === '/user/repos'
+      ? { status: 200, body: [{ id: 11, full_name: 'org/app' }] } : undefined });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
+    } });
+    const instance = configuredInstance({ scope: 'account' });
+    try {
+      const result = TriageListScopeUnitsResultV1Schema.parse(await plugin.invokeAction('triage/list-github-scope-units', {
+        v: 1, draft: { v: 1, binding: instance.binding, localInstanceKey: instance.localInstanceKey,
+          configuration: { v: 1, token: JSON.stringify({ v: 1, scope: { kind: 'repository', repositoryKey: 'org/app' } }) } },
+      }, { surface: 'agent', sessionId: 'retained-selection' }));
+      if (result.kind !== 'page' || result.selection.kind !== 'selected') throw new Error('Expected a retained selection');
+      expect(result.units[0]?.id).toBe(result.selection.unitIds[0]);
+    } finally { await plugin.dispose(); }
+  });
   it('searches and pages selectable repositories under the exact account and refuses a foreign directory continuation', async () => {
     const transport = createStubGithubTransport({ respond: (request): StubHttpResponse | undefined => {
       const url = new URL(request.url);
@@ -73,12 +89,12 @@ describe('registered GitHub REST → Triage source contract', () => {
       const first = TriageListScopeUnitsResultV1Schema.parse(await plugin.invokeAction('triage/list-github-scope-units', {
         v: 1, draft, query: 'org:octo-org app',
       }, { surface: 'agent', sessionId: 'directory-session' }));
-      expect(first).toMatchObject({ kind: 'page', status: 'partial', units: [{ id: '11', label: 'octo-org/app', collisionScope: 'github:11' }] });
+      expect(first).toMatchObject({ kind: 'page', status: 'partial', units: [{ id: 'octo-org/app', label: 'octo-org/app', collisionScope: 'github:11' }] });
       if (first.kind !== 'page' || first.status !== 'partial' || first.nextCursor === undefined) throw new Error('Expected a directory continuation');
       const second = await plugin.invokeAction('triage/list-github-scope-units', {
         v: 1, draft, query: 'org:octo-org app', cursor: first.nextCursor,
       }, { surface: 'agent', sessionId: 'directory-session' });
-      expect(second).toMatchObject({ kind: 'page', status: 'complete', units: [{ id: '22', label: 'octo-org/api' }] });
+      expect(second).toMatchObject({ kind: 'page', status: 'complete', units: [{ id: 'octo-org/api', label: 'octo-org/api' }] });
       const requested = transport.requests.length;
       const foreign = await plugin.invokeAction('triage/list-github-scope-units', {
         v: 1, draft: { ...draft, localInstanceKey: 'another-boundary' }, query: 'org:octo-org app', cursor: first.nextCursor,
@@ -93,8 +109,8 @@ describe('registered GitHub REST → Triage source contract', () => {
       http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
     } });
     const instance = configuredInstance({ scope: 'account' });
-    const selection = { kind: 'selected', unitIds: ['11', '22'] };
-    const units = [{ id: '11', label: 'org/app', collisionScope: 'github:11' }, { id: '22', label: 'org/api', collisionScope: 'github:22' }];
+    const selection = { kind: 'selected', unitIds: ['org/app', 'org/api'] };
+    const units = [{ id: 'org/app', label: 'org/app', collisionScope: 'github:11' }, { id: 'org/api', label: 'org/api', collisionScope: 'github:22' }];
     try {
       const result = await plugin.invokeAction('triage/list-github-scope-units', { v: 1, mode: 'configured', draft: {
         v: 1, binding: instance.binding, localInstanceKey: instance.localInstanceKey, keyStability: 'locatorDerived',

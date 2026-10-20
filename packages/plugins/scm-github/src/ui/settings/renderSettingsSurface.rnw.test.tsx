@@ -9,6 +9,7 @@ import {
   TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1,
   TriageSourceAdministrationActionInputV1Schema,
   TriageSourceInstanceDraftV1Schema,
+  TriageListScopeUnitsInputV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -81,13 +82,18 @@ describe('the mounted GitHub PRs & Issues settings page', () => {
       configuration: { v: 1, token: JSON.stringify({ v: 1, scope: { kind: 'account' } }) },
       locator: { v: 1, displayLabel: 'Current login', displayPath: 'github.com' },
     });
-    const units = [{ id: '11', label: 'org/app', collisionScope: 'github:11' }, { id: '22', label: 'org/api', collisionScope: 'github:22' }];
+    const units = [{ id: 'org/app', label: 'org/app', collisionScope: 'github:11' }, { id: 'org/api', label: 'org/api', collisionScope: 'github:22' }];
     let saved = draft;
     let directoryAvailable = true;
     const administrations: unknown[] = [];
     const handler = async ({ action, input }: Readonly<{ action: unknown; input: unknown }>): Promise<JsonValue> => {
       const ref = action as Readonly<{ localId?: string }>;
       if (ref.localId === GITHUB_TRIAGE_ACTION_IDS_V1.listInstances) return { kind: 'complete', candidates: [draft], failures: [] };
+      if (ref.localId === GITHUB_TRIAGE_ACTION_IDS_V1.listScopeUnits && TriageListScopeUnitsInputV1Schema.parse(input).mode === 'configured') {
+        const decoded = decodeGithubTriageConfiguration(saved.configuration.token);
+        if (!decoded.ok) throw new Error('Expected readable retained selection');
+        return { kind: 'page', status: 'complete', selection: decoded.configuration.selection, units: decoded.configuration.units ?? [] };
+      }
       if (ref.localId === GITHUB_TRIAGE_ACTION_IDS_V1.listScopeUnits && !directoryAvailable) return {
         kind: 'failed', failure: { class: 'authentication', code: 'login-unavailable' },
       };
@@ -118,7 +124,7 @@ describe('the mounted GitHub PRs & Issues settings page', () => {
     await press('Save selection');
     expect(saved.binding).toEqual(draft.binding);
     expect(decodeGithubTriageConfiguration(saved.configuration.token)).toEqual({
-      ok: true, configuration: { v: 1, selection: { kind: 'selected', unitIds: ['11', '22'] }, units },
+      ok: true, configuration: { v: 1, selection: { kind: 'selected', unitIds: ['org/app', 'org/api'] }, units },
     });
     await page.dispose(); mounted.splice(mounted.indexOf(page), 1);
     directoryAvailable = false;
@@ -128,7 +134,7 @@ describe('the mounted GitHub PRs & Issues settings page', () => {
     expect(administrations).toHaveLength(2);
     expect(saved.binding).toEqual(draft.binding);
     expect(decodeGithubTriageConfiguration(saved.configuration.token)).toEqual({
-      ok: true, configuration: { v: 1, selection: { kind: 'selected', unitIds: ['11', '22'] }, units },
+      ok: true, configuration: { v: 1, selection: { kind: 'selected', unitIds: ['org/app', 'org/api'] }, units },
     });
   });
 

@@ -72,8 +72,6 @@ import {
 import { setGithubReviewThreadResolution } from './mutations/reviewThread.js';
 import { openGithubTriageClient, resolveGithubTriageInstance } from './operations.js';
 import { parseGithubRoutingToken } from './locator.js';
-import { createGithubRepositoryReader, resolveGithubSelectedRepository } from './repositories.js';
-import { toTriageFailure } from './mapping/protocol.js';
 import { GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1 } from './contribution.js';
 
 function taskFieldsSupported(fields: TriageTaskFieldsV1, create: boolean): boolean {
@@ -99,13 +97,11 @@ export async function createGithubIssueAction(input: unknown, context: PluginInv
   if (!resolved.ok) return failed(resolved.failure);
   const selection = resolved.configuration.selection;
   const scopeId = request.fields.scopeId ?? (selection.kind === 'selected' && selection.unitIds.length === 1 ? selection.unitIds[0] : undefined);
-  if (scopeId === undefined) return { kind: 'refused', reason: 'scope_required' };
+  const route = parseGithubRoutingToken(scopeId);
+  if (route === null) return { kind: 'refused', reason: 'scope_required' };
   const opened = await openGithubTriageClient(request.instance, context);
   if (!opened.ok) return failed(opened.failure);
-  const repositories = createGithubRepositoryReader({ client: opened.client, now: Date.now });
-  const repository = await resolveGithubSelectedRepository(scopeId, repositories);
-  if (repository.kind === 'failed') return failed(toTriageFailure(repository.failure));
-  return createGithubIssue({ route: repository.route, fields: request.fields }, { client: opened.client, now: Date.now, signal: context.signal, repositories });
+  return createGithubIssue({ route, fields: request.fields }, { client: opened.client, now: Date.now, signal: context.signal });
 }
 
 export async function editGithubIssueAction(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {

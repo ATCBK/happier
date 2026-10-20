@@ -69,3 +69,25 @@ export function readGitlabMergeRequestReviewRevision(
 
   return Object.freeze({ baseSha, headSha, nativeRevision });
 }
+
+export type GitlabComparisonEndpoints = Readonly<{
+  beforeOid: string;
+  baseOid: string;
+  headOid: string;
+  totalFileCount: number | null;
+}>;
+
+/** Latest provider diff version: merge base, target witness and source head. */
+export function readGitlabComparisonEndpoints(row: unknown): GitlabComparisonEndpoints | null {
+  const record = readRecord(row);
+  const revision = readGitlabMergeRequestReviewRevision(row);
+  const baseOid = readNonEmptyString(readRecord(record?.diff_refs)?.start_sha);
+  if (!record || !revision || !baseOid || revision.nativeRevision !== revision.headSha
+    || ![revision.baseSha, baseOid, revision.headSha].every(oid => /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(oid))) return null;
+  // GitLab reports capped counts with a '+' and populates new MRs
+  // asynchronously. Neither shape is an exact total, including on an empty page.
+  const count = typeof record.changes_count === 'string' && /^(0|[1-9][0-9]*)$/.test(record.changes_count)
+    ? Number(record.changes_count) : null;
+  return { beforeOid: revision.baseSha, baseOid, headOid: revision.headSha,
+    totalFileCount: count !== null && Number.isSafeInteger(count) ? count : null };
+}

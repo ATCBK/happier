@@ -50,25 +50,7 @@ export type GithubRepositoryReadV1 =
 
 export type GithubRepositoryReaderV1 = Readonly<{
   read(route: GithubRepositoryRouteV1): Promise<GithubRepositoryReadV1>;
-  readById(repositoryId: string): Promise<GithubRepositoryReadV1>;
 }>;
-
-/** Current immutable directory ids and retained path ids share one route resolver. */
-export async function resolveGithubSelectedRepository(
-  unitId: string,
-  repositories: GithubRepositoryReaderV1,
-): Promise<Readonly<{ kind: 'resolved'; route: GithubRepositoryRouteV1; repositoryKey: string }>
-  | Readonly<{ kind: 'failed'; failure: GithubTriageFailureV1 }>> {
-  const retainedRoute = parseGithubRoutingToken(unitId);
-  if (retainedRoute !== null) return { kind: 'resolved', route: retainedRoute, repositoryKey: `${retainedRoute.owner.toLowerCase()}/${retainedRoute.name.toLowerCase()}` };
-  const repository = await repositories.readById(unitId);
-  if (repository.kind === 'unreadable') return { kind: 'failed', failure: repository.failure };
-  const route = parseGithubRoutingToken(repository.repositoryKey);
-  if (route === null || repository.repositoryKey === null) return {
-    kind: 'failed', failure: { class: 'unsupportedContract', code: 'github_repository_locator_missing' },
-  };
-  return { kind: 'resolved', route, repositoryKey: repository.repositoryKey };
-}
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -106,7 +88,7 @@ export function createGithubRepositoryReader(input: Readonly<{
 }>): GithubRepositoryReaderV1 {
   const cache = new Map<string, Promise<GithubRepositoryReadV1>>();
 
-  const readOnce = async (url: string, expectedId?: string): Promise<GithubRepositoryReadV1> => {
+  const readOnce = async (url: string): Promise<GithubRepositoryReadV1> => {
     let response;
     try {
       response = await input.client.request({
@@ -128,7 +110,7 @@ export function createGithubRepositoryReader(input: Readonly<{
       return Object.freeze({ kind: 'unreadable', failure: classifyGithubTransportFailure(error) });
     }
     const metadata = decodeGithubRepositoryMetadata(body);
-    if (metadata === null || (expectedId !== undefined && metadata.repositoryId !== expectedId)) {
+    if (metadata === null) {
       return Object.freeze({
         kind: 'unreadable',
         failure: Object.freeze({
@@ -140,12 +122,11 @@ export function createGithubRepositoryReader(input: Readonly<{
     return Object.freeze(metadata);
   };
 
-  const readCached = (key: string, url: string, expectedId?: string): Promise<GithubRepositoryReadV1> => {
+  const readCached = (key: string, url: string): Promise<GithubRepositoryReadV1> => {
     const existing = cache.get(key);
     if (existing !== undefined) return existing;
-    const pending = readOnce(url, expectedId).then((result) => {
+    const pending = readOnce(url).then((result) => {
       if (result.kind === 'readable') {
-        cache.set(`id:${result.repositoryId}`, Promise.resolve(result));
         if (result.repositoryKey !== null) cache.set(result.repositoryKey, Promise.resolve(result));
       }
       return result;
@@ -158,9 +139,6 @@ export function createGithubRepositoryReader(input: Readonly<{
     read(route: GithubRepositoryRouteV1): Promise<GithubRepositoryReadV1> {
       const key = `${route.owner.toLowerCase()}/${route.name.toLowerCase()}`;
       return readCached(key, buildGithubApiUrl(['repos', route.owner, route.name]));
-    },
-    readById(repositoryId: string): Promise<GithubRepositoryReadV1> {
-      return readCached(`id:${repositoryId}`, buildGithubApiUrl(['repositories', repositoryId]), repositoryId);
     },
   });
 }

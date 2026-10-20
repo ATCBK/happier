@@ -57,7 +57,7 @@ import {
   toTriageScanEvidence,
   toTriageScanObservation,
 } from './mapping/protocol.js';
-import { createGithubRepositoryReader, decodeGithubRepositoryMetadata, resolveGithubSelectedRepository } from './repositories.js';
+import { createGithubRepositoryReader, decodeGithubRepositoryMetadata } from './repositories.js';
 import { buildGithubCollisionScope } from './identity.js';
 import { runGithubTriageScan } from './scan/scan.js';
 import { GITHUB_MAX_PAGE_SIZE_V1, type GithubTriageEntryLocalRefV1 } from './types.js';
@@ -197,7 +197,7 @@ export async function listGithubTriageScopeUnits(input: unknown, context: Plugin
   const { selection, units = [] } = resolved.configuration;
   if (mode === 'configured') return { kind: 'page', status: 'complete', selection,
     units: selection.kind === 'all' ? [] : selection.unitIds.map((id) => units.find((unit) => unit.id === id)
-      ?? { id, label: id, ...(buildGithubCollisionScope(id) === null ? {} : { collisionScope: buildGithubCollisionScope(id)! }) }) };
+      ?? { id, label: id }) };
   const query = parsed.data.query?.trim() ?? '';
   const first = new URL(query === '' ? '/user/repos' : '/search/repositories', GITHUB_API_ORIGIN);
   first.searchParams.set('per_page', String(GITHUB_MAX_PAGE_SIZE_V1));
@@ -229,7 +229,7 @@ export async function listGithubTriageScopeUnits(input: unknown, context: Plugin
     const projected = rows.map((row) => {
       const repository = decodeGithubRepositoryMetadata(row);
       return repository === null || repository.repositoryKey === null ? null : TriageSourceScopeUnitV1Schema.safeParse({
-        id: repository.repositoryId, label: repository.repositoryKey, collisionScope: buildGithubCollisionScope(repository.repositoryId),
+        id: repository.repositoryKey, label: repository.repositoryKey, collisionScope: buildGithubCollisionScope(repository.repositoryId),
       });
     });
     const listed = projected.flatMap((unit) => unit?.success ? [unit.data] : []);
@@ -498,12 +498,7 @@ export async function scanGithubTriageSource(
   return await scanTriageSelectedScopeUnitsV1({
     instance: scanInput.instance, selection: resolved.configuration.selection, page: scanInput.page,
     scan: async (unitId, page) => {
-      let repositoryKey: string | null = null;
-      if (unitId !== null) {
-        const repository = await resolveGithubSelectedRepository(unitId, repositories);
-        if (repository.kind === 'failed') return { kind: 'failed', failure: toTriageFailure(repository.failure) };
-        repositoryKey = repository.repositoryKey;
-      }
+      const repositoryKey = unitId;
       const result = await runGithubTriageScan({
         page: page.kind === 'initial' ? { kind: 'initial', limit: page.limit }
           : { kind: 'continuation', token: page.continuation.token },

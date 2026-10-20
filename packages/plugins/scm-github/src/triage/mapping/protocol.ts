@@ -23,7 +23,6 @@ import { GITHUB_PLUGIN_ID } from '../../observations/githubProviderContracts.js'
 import { GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1 } from '../contribution.js';
 import { GITHUB_CHANGED_FILES_PAGE_SIZE_V1 } from '../detail/routes.js';
 import { buildGithubRepositoryKey, parseGithubRoutingToken } from '../locator.js';
-import { readGithubRepositoryIdFromCollisionScope } from '../identity.js';
 
 import type {
   GithubTriageEntryLocalRefV1,
@@ -223,6 +222,8 @@ function toTriagePresentObservation(
   observation: Extract<GithubTriageObservationV1, Readonly<{ kind: 'present' }>>,
 ): Extract<TriageSourceObservationV1, Readonly<{ kind: 'present' }>> {
   const snapshot = observation.snapshot;
+  const scopeRoute = parseGithubRoutingToken(observation.locator.routingToken);
+  const scopeUnitId = scopeRoute === null ? null : buildGithubRepositoryKey(scopeRoute);
   const repository = snapshot.nameWithOwner === null
     ? null
     : normalizeScmHostingRepositoryIdentity({
@@ -236,7 +237,7 @@ function toTriagePresentObservation(
     locator: toTriageLocator(observation.locator),
     snapshot: {
       ...toTriageSnapshot(snapshot, observation.locator, observation.localRef.entryId),
-      scopeUnitId: readGithubRepositoryIdFromCollisionScope(observation.localRef.collisionScope) ?? undefined,
+      ...(scopeUnitId === null ? {} : { scopeUnitId }),
     },
     viewer: toTriageViewerFacts(observation.viewer),
     ...(isEmittableInstant(snapshot.sourceUpdatedAtMs)

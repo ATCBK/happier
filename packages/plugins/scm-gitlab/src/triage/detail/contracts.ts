@@ -95,7 +95,7 @@ const PageLimitSchema = defineProtocolNumber({
  */
 const IncompleteReasonSchema = defineProtocolLiteral('pagination');
 
-const pagedPlaneInput = defineProtocolObject({
+const pagedPlaneFields = {
   v: defineProtocolLiteral(1),
   instance: TriageConfiguredSourceConnectedAccountInstanceV1Schema,
   localRef: TriageSourceEntryLocalRefV1Schema,
@@ -103,7 +103,8 @@ const pagedPlaneInput = defineProtocolObject({
   limit: PageLimitSchema,
   /** Present only for a following page, and only as this source minted it. */
   continuation: ContinuationSchema.optional(),
-}, { policy: 'closed' });
+};
+const pagedPlaneInput = defineProtocolObject(pagedPlaneFields, { policy: 'closed' });
 
 const itemPlaneInput = defineProtocolObject({
   v: defineProtocolLiteral(1),
@@ -361,10 +362,13 @@ export type GitlabPipelinesResultV1 = ReturnType<typeof GitlabPipelinesResultV1S
 
 /* ------------------------------------------------------------------- changes */
 
-export const GitlabChangesInputV1Schema = pagedPlaneInput;
+export const GitlabChangesInputV1Schema = defineProtocolObject({
+  ...pagedPlaneFields,
+  comparison: defineProtocolLiteral(true).optional(),
+}, { policy: 'closed' });
 export type GitlabChangesInputV1 = ReturnType<typeof GitlabChangesInputV1Schema.parse>;
 
-export const GitlabProjectedChangedFileRowV1Schema = defineProtocolObject({
+const changedFileFields = {
   path: PathSchema,
   previousPath: PathSchema.optional(),
   newFile: GitlabBooleanSchema,
@@ -374,6 +378,47 @@ export const GitlabProjectedChangedFileRowV1Schema = defineProtocolObject({
   collapsed: GitlabBooleanSchema.optional(),
   tooLarge: GitlabBooleanSchema.optional(),
   truncated: defineProtocolLiteral(true).optional(),
+};
+export const GitlabProjectedChangedFileRowV1Schema = defineProtocolObject(changedFileFields, { policy: 'closed' });
+
+const GitlabPatchEvidenceV1Schema = defineProtocolUnion([
+  defineProtocolObject({ state: defineProtocolLiteral('available'), patch: defineProtocolString() }, { policy: 'closed' }),
+  defineProtocolObject({ state: defineProtocolLiteral('truncated'), patch: defineProtocolString(), reason: LabelSchema }, { policy: 'closed' }),
+  defineProtocolObject({ state: defineProtocolLiteral('unavailable'), reason: LabelSchema }, { policy: 'closed' }),
+]);
+export type GitlabPatchEvidenceV1 = ReturnType<typeof GitlabPatchEvidenceV1Schema.parse>;
+const GitlabComparisonFileV1Schema = defineProtocolObject({
+  ...changedFileFields,
+  status: LabelSchema,
+  diffAvailable: GitlabBooleanSchema,
+  evidence: GitlabPatchEvidenceV1Schema,
+}, { policy: 'closed' });
+export type GitlabComparisonFileV1 = ReturnType<typeof GitlabComparisonFileV1Schema.parse>;
+
+const comparisonEndpointFields = {
+  beforeOid: IdentifierSchema,
+  baseOid: IdentifierSchema,
+  headOid: IdentifierSchema,
+  totalFileCount: defineProtocolUnion([CountSchema, defineProtocolLiteral(null)]),
+};
+export const GitlabComparisonContinuationV1Schema = defineProtocolObject({
+  ...comparisonEndpointFields,
+  enumeratedFileCount: CountSchema,
+  inventoryIncomplete: GitlabBooleanSchema,
+  contentIncomplete: GitlabBooleanSchema,
+}, { policy: 'closed' });
+export type GitlabComparisonContinuationV1 = ReturnType<typeof GitlabComparisonContinuationV1Schema.parse>;
+
+const GitlabComparisonEvidenceV1Schema = defineProtocolObject({
+  ...comparisonEndpointFields,
+  locator: defineProtocolObject({ providerId: defineProtocolLiteral('gitlab'), repository: PathSchema,
+    number: defineProtocolNumber({ integer: true, minimum: 1 }) }, { policy: 'closed' }),
+  enumeratedFileCount: CountSchema,
+  freshness: defineProtocolUnion([defineProtocolLiteral('current'), defineProtocolLiteral('stale'), defineProtocolLiteral('unverified')]),
+  inventory: defineProtocolUnion([defineProtocolLiteral('complete'), defineProtocolLiteral('incomplete')]),
+  content: defineProtocolUnion([defineProtocolLiteral('complete'), defineProtocolLiteral('incomplete')]),
+  reasons: defineProtocolArray(LabelSchema),
+  failure: TriageSourceFailureV1Schema.optional(),
 }, { policy: 'closed' });
 
 /**
@@ -388,6 +433,17 @@ const DiffLimitStatusSchema = defineProtocolUnion([
 ]);
 
 export const GitlabChangesResultV1Schema = defineProtocolUnion([
+  // The evidence arm is the existing forge-neutral host page contract. The
+  // source-native display arm below remains a metadata-only read.
+  defineProtocolObject({
+    kind: defineProtocolLiteral('changedFiles'),
+    rows: defineProtocolArray(GitlabComparisonFileV1Schema),
+    omittedRowCount: CountSchema,
+    projectionTruncated: GitlabBooleanSchema,
+    incomplete: IncompleteReasonSchema.optional(),
+    continuation: ContinuationSchema.optional(),
+    comparison: GitlabComparisonEvidenceV1Schema,
+  }, { policy: 'closed' }),
   defineProtocolObject({
     kind: defineProtocolLiteral('changes'),
     rows: defineProtocolArray(GitlabProjectedChangedFileRowV1Schema, {

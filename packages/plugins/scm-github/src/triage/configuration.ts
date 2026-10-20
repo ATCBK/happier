@@ -8,7 +8,6 @@ import {
 import { createProtocolStoredReadSchema, defineProtocolArray, defineProtocolLiteral, defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
 
 import { buildGithubRepositoryKey, parseGithubRoutingToken } from './locator.js';
-import { buildGithubCollisionScope } from './identity.js';
 import type { GithubTriageFailureV1 } from './types.js';
 
 /**
@@ -103,7 +102,6 @@ export function encodeGithubTriageConfiguration(
 
 function normalizeUnitId(id: string): string | null {
   const trimmed = id.trim();
-  if (buildGithubCollisionScope(trimmed) !== null) return trimmed;
   const route = parseGithubRoutingToken(trimmed);
   return route === null ? null : buildGithubRepositoryKey(route);
 }
@@ -131,8 +129,7 @@ function readConfiguration(value: unknown): GithubTriageConfigurationV1 | null {
     const id = normalizeUnitId(unit.id);
     if (id === null) return null;
     if (!ids.includes(id)) continue;
-    const collisionScope = buildGithubCollisionScope(id);
-    units.push({ ...unit, id, ...(collisionScope === null ? {} : { collisionScope }) });
+    units.push({ ...unit, id });
   }
   return { v: 1, selection: selection.data, ...(parsed.data.units === undefined ? {} : { units }) };
 }

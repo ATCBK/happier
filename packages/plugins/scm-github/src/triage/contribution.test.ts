@@ -32,6 +32,8 @@ describe('GitHub Triage source declaration', () => {
     // admits the optional review-workspace operation.
     expect(GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1.kinds.map((kind) => kind.workflowSubject))
       .toEqual(['pullRequest', 'issue']);
+    expect(GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1.kinds.find(kind => kind.id === 'issue')?.taskCapabilities)
+      .toMatchObject({ completingTransitionId: 'completed' });
   });
 
   it('admits only its own declared kinds', () => {
