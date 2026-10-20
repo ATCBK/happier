@@ -13156,10 +13156,13 @@ export async function startDaemonSessionControlRuntime(
         });
       },
       resolveAuthForSpawn: async ({ parentSessionId, ...input }) => {
-        const context = await resolveSessionAccountContext(parentSessionId, undefined, input.signal);
+        const context = await readRequesterHomeWithinActionLifetime(
+          () => resolveSessionAccountContext(parentSessionId, undefined, input.signal), input.signal);
+        const assertPreparationCurrent = () => readRequesterHomeWithinActionLifetime(
+          () => assertSessionAccountCurrent(parentSessionId, context, undefined, input.signal), input.signal);
         let retained = false;
         try {
-          await assertSessionAccountCurrent(parentSessionId, context, undefined, input.signal);
+          await assertPreparationCurrent();
           const resolved = await withSessionAccountHome(context, () =>
             resolveConnectedServiceAuthForSpawn({
               ...input,
@@ -13193,7 +13196,7 @@ export async function startDaemonSessionControlRuntime(
                     allowNativeAccountState: false,
                     connectedAccountsOwner: context.connectedAccountsOwner,
                     isAccountRuntimeCurrent: async () => {
-                      await assertSessionAccountCurrent(parentSessionId, context, undefined, input.signal);
+                      await assertPreparationCurrent();
                       return true;
                     },
                   }
@@ -13201,7 +13204,7 @@ export async function startDaemonSessionControlRuntime(
             }),
           );
           try {
-            await assertSessionAccountCurrent(parentSessionId, context, undefined, input.signal);
+            await assertPreparationCurrent();
           } catch (error) {
             try { await resolved?.cleanupOnFailure?.(); }
             finally { await resolved?.materializationPurposeLease?.dispose(); }
@@ -13301,7 +13304,8 @@ export async function startDaemonSessionControlRuntime(
       },
       purposeBindingOwner: Object.freeze({
         activatePurposeBindings: async (input, { parentSessionId, signal }) => {
-          const context = await resolveSessionAccountContext(parentSessionId, undefined, signal);
+          const context = await readRequesterHomeWithinActionLifetime(
+            () => resolveSessionAccountContext(parentSessionId, undefined, signal), signal);
           try {
             const activate = context
               ? context.activatePurposeBindings
@@ -13310,7 +13314,8 @@ export async function startDaemonSessionControlRuntime(
               throw new Error(
                 'connected_account_purpose_binding_owner_unavailable',
               );
-            await assertSessionAccountCurrent(parentSessionId, context, undefined, signal);
+            await readRequesterHomeWithinActionLifetime(
+              () => assertSessionAccountCurrent(parentSessionId, context, undefined, signal), signal);
             const lease = await withSessionAccountHome(context, async () =>
               activate(input),
             );
@@ -15267,7 +15272,7 @@ export async function startDaemonSessionControlRuntime(
                     typeof resolvedSessionSpawnDirectTargetTransport.spawnedSession.spawn
                   >
                 ) => {
-                  const prepared = await prepareRequesterSessionBootstrap({
+                  const prepared = await readRequesterHomeWithinActionLifetime(() => prepareRequesterSessionBootstrap({
                     credentials,
                     machineAdmission: requesterSpawnCustody.machineAdmission,
                     attribution: requesterSpawnCustody.attribution,
@@ -15280,7 +15285,7 @@ export async function startDaemonSessionControlRuntime(
                     verifyMachineAdmissionCurrent: () =>
                       requesterSpawnCustody.isCurrent(),
                     ...(args[1]?.signal ? { signal: args[1].signal } : {}),
-                  });
+                  }), args[1]?.signal);
                   if (!prepared)
                     return {
                       type: 'error',

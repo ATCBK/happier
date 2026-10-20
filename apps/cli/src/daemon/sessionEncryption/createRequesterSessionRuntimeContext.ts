@@ -19,7 +19,7 @@ import { createProviderAccountUsagePersistenceScheduler } from '../connectedServ
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { startDaemonConnectedServiceRuntime } from '../startup/startDaemonRuntimeBootstrap';
 import type { AdmittedRequesterSessionBootstrap, RequesterSessionRuntimeContext } from './requesterSessionCredentials';
-import { readRequesterHomeWithinActionLifetime, rethrowRequesterHomeReadFailure, runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
+import { rethrowRequesterHomeReadFailure, runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
 import { createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
 import { ProfileCatalogUnavailableError, readProfilesFromAccountSettings,
@@ -72,13 +72,16 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   const savedSecrets = bootstrap.savedSecretOperationContext;
   let disposed = false;
   const lifetime = new AbortController();
+  // Background coordinators also supply cancellation signals. Surface their
+  // failed observation to the owning loop's backoff; only explicit preparation
+  // entrypoints may retain an accepted Action while Home recovers.
   const isCurrent = async (signal?: AbortSignal) => {
     if (disposed || signal?.aborted) return false;
     const readerSignal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
     try {
-      return await readRequesterHomeWithinActionLifetime(async () => await bootstrap.ensureAccountSettingsCurrent(readerSignal)
+      return await bootstrap.ensureAccountSettingsCurrent(readerSignal)
         && await waitForObservation(savedSecrets.isCurrent(), readerSignal)
-        && await bootstrap.ensureAccountSettingsCurrent(readerSignal) && !disposed, signal ? readerSignal : undefined);
+        && await bootstrap.ensureAccountSettingsCurrent(readerSignal) && !disposed;
     } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
   };
   if (!await isCurrent(input.signal)) return null;
@@ -267,13 +270,13 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     },
     listQualifiedConnectedAccountGroupQuotaTargets: purposes.listGroupQuotaTargets, onQualifiedConnectedAccountCredentialUpdated: purposes.invalidate,
     }));
+    if (!await isCurrent(input.signal)) {
+      await dispose();
+      return null;
+    }
   } catch (error) {
     try { await dispose(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Requester Account runtime startup failed'); }
     throw error;
-  }
-  if (!await isCurrent(input.signal)) {
-    await dispose();
-    return null;
   }
   return Object.freeze({ bootstrap, isCurrent, api, sessionFollowRuleCache,
     bindSessionFollowSourceReconciliation: (reconcile: (sourceSessionId: string | null) => Promise<void>, signal: AbortSignal) => {

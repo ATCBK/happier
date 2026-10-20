@@ -57,6 +57,7 @@ import { hashProcessCommand } from '../sessionRegistry';
 import { pluginReloadController as runPluginRuntimeController } from '@/plugins/runtime/reload/singleton';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { logger as fileLogger } from '@/utils/logger';
+import { readRequesterHomeWithinActionLifetime } from './requesterCurrentness';
 
 // HTTP substitutes authentication; the real Account owners still inspect the subject.
 function accountToken(accountId: string) {
@@ -190,7 +191,7 @@ let openedRunPluginRuntime = false;
 beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
 afterEach(async () => { await channel.close(); });
 afterAll(async () => { if (openedRunPluginRuntime) await runPluginRuntimeController.shutdown(); });
-it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
+it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
   const actionPolicySurface = surface === 'action-policy' || surface === 'action-home-recovery' || surface === 'authorization-observations';
   const runSurface = surface === 'run-home-recovery' || surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
   const runPurposeSurface = surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
@@ -414,15 +415,51 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
     admitted.admitted.bindRuntimeMachineAdmissionCurrentness(async () => current);
     // Admission captures the real settings/cache lifetime after daemon startup.
     expect(admitted.admitted.accountSettingsContext.scopeKey).toBe(resolveAccountSettingsScopeKey(admitted.admitted.credentials));
-    runtime = await createRequesterSessionRuntimeContext({ bootstrap: admitted.admitted,
+    const runtimeConstruction = createRequesterSessionRuntimeContext({ bootstrap: admitted.admitted,
       activeServerDir: directory, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
       resolveQualifiedConnectedAccountV4Support: () => runPurposeSurface ? 'advertised' : 'indeterminate',
       coordinatorInput: { machineId: 'machine', machineIdProvider: () => 'machine', runtimeId: 'runtime', happyHomeDir: directory,
         logger: { debug: () => {}, info: () => {}, warn: () => {} }, processEnv: {
-          HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
+          // Environment reads are the boundary after runtime resources start.
+          get HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED() {
+            if (surface === 'startup-home-failure') runHomeStatus = 503;
+            return '0';
+          }, HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
         pidToTrackedSession: trackedSessions, connectedServiceRuntimeRegistry: registry,
         connectedServiceAuthGroupPreTurnSwitchCoordinator: host.runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator } });
+    if (surface === 'startup-home-failure') {
+      try {
+        await expect(runtimeConstruction).rejects.toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
+        expect(await admitted.admitted.isCurrent()).toBe(false);
+      } finally { await admitted.cleanupOnFailure(); }
+      return;
+    }
+    runtime = await runtimeConstruction;
     if (!runtime) throw new Error('Missing real requester runtime');
+    if (surface === 'background-home-failure') {
+      // Coordinator inventory reads carry cancellation, not an accepted Action
+      // lifetime. A Home failure must reach the existing coordinator backoff.
+      const signal = new AbortController().signal;
+      const beforeRead = authorizationProfileReads;
+      const snapshot = runtime.readAccountSettingsSnapshot();
+      runHomeStatus = 503;
+      await expect(runtime.qualifiedConnectedAccountApi.listAccounts({
+        service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, signal,
+      })).rejects.toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
+      expect(authorizationProfileReads - beforeRead).toBe(1);
+      expect(snapshot).not.toBeNull();
+      expect(runtime.readAccountSettingsSnapshot()).toBe(snapshot);
+      runHomeStatus = 503;
+      await expect(runtime.bootstrap.isCurrent(signal))
+        .rejects.toMatchObject({ response: { status: 503 } });
+      // Explicit accepted preparation still uses its incumbent recovery owner.
+      runHomeStatus = 503;
+      expect(await readRequesterHomeWithinActionLifetime(() => runtime!.isCurrent(signal), signal)).toBe(true);
+      expect(await runtime.qualifiedConnectedAccountApi.listAccounts({
+        service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, signal,
+      })).toMatchObject({ accounts: [] });
+      return;
+    }
     if (runSurface) {
       const homeGet = get.getMockImplementation()!;
       get.mockRestore();
@@ -463,7 +500,8 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
           .rejects.toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
       }
       runHomeStatus = 503;
-      await expect(resolveRequester(requesterSessionId, runtime.bootstrap.attribution, signal)).resolves.toBe(runtime);
+      await expect(readRequesterHomeWithinActionLifetime(
+        () => resolveRequester(requesterSessionId, runtime!.bootstrap.attribution, signal), signal)).resolves.toBe(runtime);
       runHomeStatus = surface === 'run-home-recovery' ? 503 : null;
       let phaseFaultInjected = false;
       const infoFile = fileLogger.infoFile.bind(fileLogger);
@@ -498,9 +536,17 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       const exactRuntime = runtime;
       const registration = { runKey: 'requester-signaled-registration', runnerPid: process.pid, agentId: 'codex' as const,
         materializationKey: 'requester-signaled-registration', connectedServicesBindingsRaw: {}, connectedServiceSelectionsEnv: {}, sessionId: requesterSessionId };
+      let registrations = 0;
+      const releaseRegistrationObservation = registry.subscribeTargetRegistrations(target => {
+        if (target.materializationKey === registration.materializationKey) registrations++;
+      });
       const register = (registrationSignal: AbortSignal) => registerExecutionRunConnectedServicesTarget({ registry, registration,
         signal: registrationSignal,
-        withSessionAccountContext: async <T>(_sessionId: string | null, operation: (context: typeof exactRuntime | null) => Promise<T>) => await operation(exactRuntime),
+        withSessionAccountContext: async <T>(sessionId: string | null, operation: (context: typeof exactRuntime | null) => Promise<T>,
+          attribution?: typeof exactRuntime.bootstrap.attribution, readerSignal?: AbortSignal) => {
+          const context = sessionId ? await resolveRequester(sessionId, attribution, readerSignal) : null;
+          return await operation(context);
+        },
         assertSessionAccountCurrent: async (_sessionId, expected, _attribution, readerSignal) => await assertRequesterSessionAccountContextCurrent({
           expected, signal: readerSignal, resolveCurrent: async () => exactRuntime,
           readTrackedContext: () => trackedSessions.get(process.pid)?.requesterSessionRuntimeContext ?? null,
@@ -509,6 +555,8 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       runHomeStatus = 503;
       await expect(register(signal)).resolves.toBeUndefined();
       expect(registry.getRunTargetByRunKey(registration.runKey)?.requesterWorkAttributionV1).toEqual(runtime.bootstrap.attribution);
+      expect(registrations).toBe(1);
+      releaseRegistrationObservation();
       registry.unregisterRunKey(registration.runKey);
       runHomeStatus = 403;
       const beforeRefusal = authorizationProfileReads;
@@ -518,7 +566,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
       cancelled.abort();
       const beforeCancellation = authorizationProfileReads;
       expect(await runtime.isCurrent(cancelled.signal)).toBe(false);
-      await expect(register(cancelled.signal)).rejects.toThrow('requester_session_not_current');
+      await expect(register(cancelled.signal)).rejects.toMatchObject({ name: 'AbortError' });
       expect(registry.getRunTargetByRunKey(registration.runKey)).toBeNull();
       expect(authorizationProfileReads).toBe(beforeCancellation);
       return;

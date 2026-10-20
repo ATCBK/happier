@@ -61,7 +61,7 @@ import type { ConnectedServiceRuntimeRegistry } from '../connectedServices/runti
 /** Exact live Session Account ports; owned by ordinary daemon Session lifecycle, never serialized. */
 export type RequesterSessionRuntimeContext = Readonly<{
   bootstrap: AdmittedRequesterSessionBootstrap;
-  /** Includes admission, saved-secret custody and this runtime's retirement. */
+  /** One observation of admission, custody and retirement; signal cancels, never selects retry policy. */
   isCurrent(signal?: AbortSignal): Promise<boolean>;
   api: ApiClient;
   sessionFollowRuleCache: ReturnType<typeof import('@/agent/runtime/session/follow/accountSessionFollowRuleCache').createAccountSessionFollowRuleCache>;
@@ -240,6 +240,7 @@ export type AdmittedRequesterSessionBootstrap = Readonly<{
   subscribeAccountSettings(listener: () => void): () => void;
   subscribeSessionFollowRules(listener: () => void): () => void;
   subscribeSessionFollowSources(listener: (sourceSessionId: string | null) => void): () => void;
+  /** One authority observation; accepted preparation owns any retry outside this reader. */
   isCurrent(signal?: AbortSignal): Promise<boolean>;
   /** Retires this bootstrap's observation when its ordinary runtime lifetime ends. */
   dispose(): Promise<void>;
@@ -267,11 +268,11 @@ export async function admitRequesterSessionBootstrap(input: Readonly<{
   const attribution = RequesterWorkAttributionV1Schema.parse({ serverId: input.boundary.serverId,
     accountId: admission.actorAccountId, machineId: admission.machineId, installationId: admission.installationId });
   const preparedSessionId = 'sessionId' in input.bootstrap ? input.bootstrap.sessionId : undefined;
-  return await prepareRequesterSessionBootstrap({ credentials, attribution, boundary: input.boundary,
+  return await readRequesterHomeWithinActionLifetime(() => prepareRequesterSessionBootstrap({ credentials, attribution, boundary: input.boundary,
     machineAdmission: admission,
     verifyMachineAdmissionCurrent: verify, signal: input.context.signal,
     ...(input.existingSessionId ? { preparedSessionId: input.existingSessionId, boundSessionId: input.existingSessionId } : {}),
-    ...(preparedSessionId ? { preparedSessionId } : {}) });
+    ...(preparedSessionId ? { preparedSessionId } : {}) }), input.context.signal);
 }
 
 export async function prepareRequesterSessionBootstrap(input: Readonly<{
@@ -316,7 +317,7 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
         && live && !signal.aborted && await verify(signal)
         && observation.isCurrent(currentness) ? currentness : null;
     });
-    const currentness = await readRequesterHomeWithinActionLifetime(() => readAccountCurrentness(launchSignal), input.signal);
+    const currentness = await readAccountCurrentness(launchSignal);
     if (!currentness || !observation) return null;
     const accountObservation = observation;
     bindRequesterSessionCredentialScope(credentials, { serverId: attribution.serverId,
@@ -373,17 +374,19 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
       const observed = currentObservation;
       return reused ? timeWebLatencyPhase('requester.currentness_reuse', () => read(observed), reused.trace) : read(observed);
     };
-    const isCurrent = (signal?: AbortSignal) => readRequesterHomeWithinActionLifetime(
-      () => signal ? waitForObservation(readCurrentness(), signal) : readCurrentness(), signal);
+    const isCurrent = async (signal?: AbortSignal) => {
+      signal?.throwIfAborted();
+      return await (signal ? waitForObservation(readCurrentness(), signal) : readCurrentness());
+    };
     const readPreparationCurrentness = () => isCurrent(input.signal);
     if (!await readPreparationCurrentness()) return null;
-    const accountSettingsContext = await readRequesterHomeWithinActionLifetime(() => runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
+    const accountSettingsContext = await runWithServerHttpBaseUrl(input.boundary.serverHttpBaseUrl,
       () => bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
         signal: launchSignal,
         // Requester admission already requires network authority. A known minimum
         // of zero also preserves a failed read instead of quietly returning cache.
         expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false, minSettingsVersion: currentness.settingsVersion ?? 0,
-        shouldCommit: () => !input.signal?.aborted })), input.signal);
+        shouldCommit: () => !input.signal?.aborted }));
     if (accountSettingsContext.source !== 'network' || !await readPreparationCurrentness()) return null;
     const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials,
       machineAdmission,
@@ -456,6 +459,9 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
         await dispose();
         await cleanup();
       } };
+  } catch (error) {
+    rethrowRequesterHomeReadFailure(error);
+    throw error;
   } finally {
     if (!admitted) { live = false; lifetime.abort(); await observation?.dispose(); }
   }
@@ -576,8 +582,7 @@ export async function resolveRequesterSessionBootstrap(input: RequesterSessionCr
       machineAdmission = current ?? undefined;
       return current !== null;
     };
-    const credentials = await readRequesterHomeWithinActionLifetime(
-      () => resolveRequesterSessionCredentials({ ...input, verifyMachineAdmissionCurrent: verify(stored) }), input.signal);
+    const credentials = await resolveRequesterSessionCredentials({ ...input, verifyMachineAdmissionCurrent: verify(stored) });
     if (!credentials) return null;
     const result = await prepareRequesterSessionBootstrap({ credentials, attribution: input.attribution, machineAdmission,
       boundary: { serverId: input.attribution.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl, happyHomeDir: input.happyHomeDir },
@@ -622,8 +627,8 @@ export async function resolveRequesterSessionBootstrapFromCustody(input: Readonl
   if (!input.legacyOwnerCredentials) return null;
   try {
     const credentials = { ...input.legacyOwnerCredentials };
-    const profile = await readRequesterHomeWithinActionLifetime(() => runWithServerHttpBaseUrl(input.serverHttpBaseUrl,
-      () => fetchAccountProfile({ token: credentials.token, signal: input.signal })), input.signal);
+    const profile = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl,
+      () => fetchAccountProfile({ token: credentials.token, signal: input.signal }));
     const attribution = { serverId: input.serverId, accountId: profile.id,
       machineId: boundary.machineId, installationId: installation.installationId };
     if (expected && !isDeepStrictEqual(expected, attribution)) return null;
@@ -632,8 +637,8 @@ export async function resolveRequesterSessionBootstrapFromCustody(input: Readonl
     const path = requesterSessionCredentialPath({ ...input, attribution });
     try { await readPrivateOwnerFile(path); return null; }
     catch (error) { if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') return null; }
-    const machineAdmission = await readRequesterHomeWithinActionLifetime(() => readRequesterSessionMachineAdmissionCurrent({ credentials,
-      sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary, signal: input.signal }), input.signal);
+    const machineAdmission = await readRequesterSessionMachineAdmissionCurrent({ credentials,
+      sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary, signal: input.signal });
     if (!machineAdmission) return null;
     const verifyMachineAdmissionCurrent = (signal?: AbortSignal) => verifyRequesterSessionMachineAdmissionCurrent({ credentials,
       sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary, signal });

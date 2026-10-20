@@ -17,6 +17,7 @@ import {
 
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import { logger } from '@/utils/logger';
+import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
 import { resolveAgentContributionQualifiedId } from '@/plugins/projection/registry/agentRoutingIdentity';
 import type { AgentSpawnQualifiedPurposeBindingSnapshot } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -300,14 +301,14 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
         if (capturedPurposes.has(purposeKey) || !snapshot?.bindings.some(binding =>
           qualifiedPurposeKey(binding.purpose) === purposeKey)) continue;
         if (!connectedAccountsOwner) throw new Error('Connected Account launch authority is unavailable');
-        const binding = await observeConnectedServiceMaterializationPhase(params, 'binding_read', () => connectedAccountsOwner.getBinding({
+        const binding = await observeConnectedServiceMaterializationPhase(params, 'binding_read', () => readRequesterHomeWithinActionLifetime(() => connectedAccountsOwner.getBinding({
           purpose: scope.purpose,
           serviceRefs: scope.serviceRefs,
           ...(params.exactPurposeBindingSubjectId
             ? { exactPurposeBindingSubjectId: params.exactPurposeBindingSubjectId } : {}),
           ...(params.purposeBindingSessionId ? { sessionId: params.purposeBindingSessionId } : {}),
           signal: signalController.signal,
-        }));
+        }), params.signal));
         signalController.signal.throwIfAborted();
         if (!binding) {
           const error = new Error('Connected Account native-home binding is unavailable');

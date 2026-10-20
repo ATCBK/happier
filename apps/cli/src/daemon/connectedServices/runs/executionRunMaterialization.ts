@@ -36,6 +36,7 @@ import type { ConnectedServiceRuntimeFailureClassification } from '../runtimeAut
 import { applyConnectedServiceRuntimeAuthFailureSourceBinding, readConnectedServiceRuntimeAuthFailureSourceBinding } from '../runtimeAuth/handleConnectedServiceRuntimeAuthFailure';
 import type { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import type { RequesterSessionRuntimeContext } from '../../sessionEncryption/requesterSessionCredentials';
+import { readRequesterHomeWithinActionLifetime } from '../../sessionEncryption/requesterCurrentness';
 import { ConnectedServiceCredentialRevisionV1Schema, type ConnectedServiceCredentialRevisionV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { ConnectedServiceAuthGroupSwitchCoordinator } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import type { QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol';
@@ -139,7 +140,10 @@ export async function registerExecutionRunConnectedServicesTarget(input: Readonl
         attribution?: RequesterSessionRuntimeContext['bootstrap']['attribution'], signal?: AbortSignal) => Promise<void>;
 }>): Promise<void> {
     const registration = input.registration;
-    await input.withSessionAccountContext(registration.sessionId, async context => {
+    // Retryable Home failures occur during context resolution/currentness, before
+    // synchronous local registration. Release is local retirement and aggregates
+    // cleanup failures, so it cannot repeat this effect as a retryable Home read.
+    await readRequesterHomeWithinActionLifetime(() => input.withSessionAccountContext(registration.sessionId, async context => {
         await input.assertSessionAccountCurrent(registration.sessionId, context, undefined, input.signal);
         input.registry.registerRunTarget({ runKey: registration.runKey, pid: registration.runnerPid, agentId: registration.agentId,
             materializationKey: registration.materializationKey, connectedServicesBindingsRaw: registration.connectedServicesBindingsRaw,
@@ -147,7 +151,7 @@ export async function registerExecutionRunConnectedServicesTarget(input: Readonl
             exactPurposeBindingSubjectId: registration.exactPurposeBindingSubjectId, sessionId: registration.sessionId,
             sessionDirectory: registration.sessionDirectory,
             ...(context ? { requesterWorkAttributionV1: context.bootstrap.attribution } : {}) });
-    }, undefined, input.signal);
+    }, undefined, input.signal), input.signal);
 }
 
 export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{

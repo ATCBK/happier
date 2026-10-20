@@ -23,6 +23,7 @@ it('preserves requester custody across unavailable observations and recovers saf
   let profileReads = 0;
   let profileGate: (() => Promise<void>) | undefined;
   let releasePendingProfile: (() => void) | undefined;
+  const purposes = emptyConnectedAccountCatalogRecordV1('purposes');
   const home = fastify();
   home.get('/*', async (request, reply) => {
     const path = request.url;
@@ -35,6 +36,10 @@ it('preserves requester custody across unavailable observations and recovers saf
     }
     if (path.endsWith('/currentness')) return { mode: 'plain', version: 1,
       updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null };
+    if (path.endsWith('/account/encryption')) return { mode: 'plain', updatedAt: 1 };
+    if (path.endsWith('/entity-rows/connected-accounts/purposes')) return {
+      status: 'present', revision: 1, content: { t: 'plain', v: purposes },
+    };
     if (path === '/v2/account/settings') {
       if (settingsUnavailable) return reply.code(503).send({ error: 'unavailable' });
       return { content: { t: 'plain', v: {} }, version: settingsVersion };
@@ -76,14 +81,13 @@ it('preserves requester custody across unavailable observations and recovers saf
     });
     profileStatus = 503;
     expect(await readRequesterHomeWithinActionLifetime(() => custody.isCurrent(), signal)).toBe(true);
-    const purposes = emptyConnectedAccountCatalogRecordV1('purposes');
     expect(await custody.commitConnectedAccountCatalog({ key: 'purposes', catalog: { status: 'ready', record: purposes, revision: 1 } })).toBe(true);
     const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ operationContext: custody });
     profileStatus = 503;
-    expect(await store.read(signal)).toEqual(purposes.value);
+    expect(await readRequesterHomeWithinActionLifetime(() => store.read(signal), signal)).toEqual(purposes.value);
     const secrets = createAccountSettingsConnectedAccountSecrets({ expectedScopeKey: custody.readSnapshot()!.scopeKey, operationContext: custody });
     profileStatus = 503;
-    expect(await secrets.readMaterial?.('missing-secret', { signal })).toBeNull();
+    expect(await readRequesterHomeWithinActionLifetime(() => secrets.readMaterial!('missing-secret', { signal }), signal)).toBeNull();
     let enteredProfile!: () => void;
     const entered = new Promise<void>(resolve => { enteredProfile = resolve; });
     const held = new Promise<void>(resolve => { releasePendingProfile = resolve; });
@@ -103,12 +107,20 @@ it('preserves requester custody across unavailable observations and recovers saf
     const cancelled = new AbortController();
     cancelled.abort();
     const beforeCancellation = profileReads;
+    await expect(bootstrap.isCurrent(cancelled.signal)).rejects.toBeDefined();
     await expect(readRequesterHomeWithinActionLifetime(() => custody.isCurrent(), cancelled.signal)).rejects.toBeDefined();
     await expect(store.read(cancelled.signal)).rejects.toBeDefined();
     await expect(secrets.readMaterial?.('missing-secret', { signal: cancelled.signal })).rejects.toBeDefined();
     expect(profileReads).toBe(beforeCancellation);
+    const beforeColdBackground = profileReads;
+    let backgroundFailure: unknown;
     profileStatus = 503;
-    const cold = await prepare(signal);
+    try { await (await prepare(signal))?.cleanupOnFailure(); }
+    catch (error) { backgroundFailure = error; }
+    expect(backgroundFailure).toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
+    expect(profileReads - beforeColdBackground).toBe(1);
+    profileStatus = 503;
+    const cold = await readRequesterHomeWithinActionLifetime(() => prepare(signal), signal);
     expect(cold).not.toBeNull();
     await cold?.cleanupOnFailure();
     current = false;
