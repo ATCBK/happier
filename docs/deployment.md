@@ -140,6 +140,27 @@ console plan §3.5):
    - Used for avatars and other uploaded assets.
    - Configure via `S3_HOST`, `S3_PORT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_PUBLIC_URL`, `S3_USE_SSL`.
 
+## Shared-database QA servers (0.3 development)
+
+Stack's shared-database preset points consumer servers at a privately provisioned
+source-stack environment on their server host. `applySharedDatabaseSourceEnv`
+projects that authority at launch: database, server at-rest secret, file storage,
+and socket clustering. Consumers skip migrations against the shared database.
+
+When the source selects `HAPPIER_SOCKET_ADAPTER=redis-streams` with a nonempty
+`REDIS_URL`, consumers use the same adapter and Redis endpoint. Otherwise both
+projected settings are cleared, including stale consumer values. Remote server
+hosts need the current private source projection and authenticated network access
+to that endpoint. Keep connection secrets in the private environment file; never
+put them in command arguments or diagnostics. Reload consumers through Stack
+after provisioning changes so running processes consume the new settings.
+
+Sharing a database alone does not share Socket.IO fanout: in-memory adapters keep
+Machine activity/presence ephemerals and updates inside each server process.
+Servers connected to the shared Redis Streams cluster fan those events out to
+clients on other servers. `SERVER_ROLE=all` continues to flush presence to the
+database locally; selecting the adapter does not turn it into an API/worker split.
+
 ## Environment variables
 **Required for the full Postgres/S3 recipe**
 - `DATABASE_URL`: Postgres connection string.

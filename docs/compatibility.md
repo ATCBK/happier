@@ -3055,6 +3055,12 @@ Remove the path when its support window has ended and evidence shows no supporte
 
 Shared-database Stack consumers keep descriptor continuity in their private
 runtime directory, selected by the preset's explicit shared-DB consumer fact.
+This is a QA/development topology: the source and consumers share the database's
+one Home identity, while each consumer retains its own descriptor history.
+One client profile must follow a single consumer; it must not alternate between
+consumers of that shared database. Their revisions do not form one shared
+endpoint history, so a different consumer's equal revision can conflict and a
+lower revision can be ignored by the client's monotonic descriptor admission.
 The source Stack and ordinary PostgreSQL/MySQL servers retain database-backed
 continuity. Each consumer publishes and restarts from its own private history;
 it neither reads nor writes the shared continuity row. Earlier undeployed 0.3
