@@ -4,6 +4,8 @@ import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgentStartContextV1';
+import { accountSettingsParse } from '@happier-dev/protocol';
 import { setSessionArchivedState } from './setSessionArchivedState';
 
 const boundary = vi.hoisted(() => ({ createSocket: vi.fn(), callMachineRpc: vi.fn() }));
@@ -104,6 +106,24 @@ describe('setSessionArchivedState', () => {
     await expect(setSessionArchivedState({ credentials, idOrPrefix: sessionId, archived: true }))
       .resolves.toMatchObject(refusal);
     expect(post).toHaveBeenCalledTimes(1);
+    expect(active).toBe(true);
+  });
+
+  it('reports the self-Stop refusal when an Agent archives its own active session', async () => {
+    active = true;
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 409, data: { error: 'session_active' } });
+    const agentStartContext = resolveCliAgentStartContextV1({ sessionId, machineId: 'machine-1', directory: '/repo',
+      backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      metadata: {}, starterDepth: 0, turnDepth: 1, callerPermissionMode: 'default', settings: accountSettingsParse({}), roles: {},
+    });
+    if (!agentStartContext) throw new Error('Expected admitted Session caller');
+    const externalAction = { context: { surface: 'agent' as const,
+      actionCaller: { kind: 'session' as const, sessionId, starterDepth: 0, turnDepth: 1 }, agentStartContext },
+      effectActionId: 'session.archive', installationId: 'installation', privateKey: new Uint8Array(64) };
+    await expect(setSessionArchivedState({ credentials, idOrPrefix: sessionId, archived: true, externalAction }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action', error: 'self_stop_forbidden' });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(boundary.callMachineRpc).not.toHaveBeenCalled();
     expect(active).toBe(true);
   });
 

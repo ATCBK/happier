@@ -20047,7 +20047,7 @@ export async function startDaemonSessionControlRuntime(
             if (!rawSession || rawSession.id !== sessionId) throw new Error('Exact process Stop Session unavailable');
             const intent = resolveSessionExplicitControlIntent({ rawSession, actionContext });
             if (intent === 'automatic') return;
-            if (intent === 'unauthorized') throw new Error('Process Stop caller is not the admitted Session manager');
+            if (intent === 'unauthorized' || intent === 'self_stop_forbidden') throw new Error('Process Stop caller is not the admitted Session manager');
             const accountEncryptionCurrentness = await fetchAccountEncryptionCurrentness({ token: credentials.token,
               authorizationHeaders: resolveAuthorizationHeaders({ method: 'GET', path: '/v1/account/encryption/currentness' }) });
             const owner = resolveSessionOwningMachineId({ credentials, rawSession,

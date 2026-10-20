@@ -7,13 +7,12 @@ export function resolveSessionExplicitControlIntent(input: Readonly<{
   rawSession: Readonly<{ id: string }>;
   executionAuthority?: ActionExecutorContext['authority'];
   actionContext?: ActionExecutorContext;
-}>): 'person' | 'manager' | 'automatic' | 'unauthorized' {
+}>): 'person' | 'manager' | 'automatic' | 'unauthorized' | 'self_stop_forbidden' {
   const caller = input.actionContext?.actionCaller;
   const admittedCaller = input.actionContext?.agentStartContext?.caller;
   if (caller?.kind === 'session') {
-    return admittedCaller?.kind === 'session' && admittedCaller.sessionId === caller.sessionId
-      && input.rawSession.id !== caller.sessionId
-      ? 'manager' : 'unauthorized';
+    if (admittedCaller?.kind !== 'session' || admittedCaller.sessionId !== caller.sessionId) return 'unauthorized';
+    return input.rawSession.id === caller.sessionId ? 'self_stop_forbidden' : 'manager';
   }
   return (input.actionContext?.authority ?? input.executionAuthority) === 'account_automation'
     ? 'automatic' : 'person';

@@ -27,7 +27,7 @@ export function resolveSessionResumeControlIntent(input: Parameters<typeof resol
   const caller = input.actionContext?.actionCaller;
   if (caller?.kind === 'session' && readSessionManagerSessionIdV1(input.rawSession) !== caller.sessionId) return 'authority_unavailable';
   const intent = resolveSessionExplicitControlIntent(input);
-  if (intent === 'unauthorized') return 'authority_unavailable';
+  if (intent === 'unauthorized' || intent === 'self_stop_forbidden') return 'authority_unavailable';
   if (stop && (intent === 'automatic' || intent === 'manager' && !stop.managerSessionId)) return 'held_by_person';
   return intent;
 }
@@ -44,7 +44,7 @@ export async function recordSessionExplicitStopIntent(input: Readonly<{
   signal?: AbortSignal;
 }>): Promise<void> {
   const intent = resolveSessionExplicitControlIntent(input);
-  if (intent === 'automatic' || intent === 'unauthorized') throw new Error('Explicit Stop caller unavailable');
+  if (intent === 'automatic' || intent === 'unauthorized' || intent === 'self_stop_forbidden') throw new Error('Explicit Stop caller unavailable');
   const stop = { v: 1, cause: 'explicit_stop', requestId: input.requestId ?? randomUUID(), requestedAtMs: Date.now(),
     ...(intent === 'manager' && input.actionContext?.actionCaller?.kind === 'session'
       ? { managerSessionId: input.actionContext.actionCaller.sessionId } : {}),

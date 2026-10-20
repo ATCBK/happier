@@ -314,6 +314,7 @@ describe('requestSessionStop machine transport', () => {
         : await executor.execute('session.stop', { sessionId }, actionContext);
       expect(result, JSON.stringify(result)).toMatchObject(refused ? { ok: false } : caller === 'automatic'
         ? { ok: true, stopped: true } : { ok: true, result: { ok: true, stopped: true } });
+      if (caller === 'self') expect(result).toMatchObject({ errorCode: 'unsupported_action', error: 'self_stop_forbidden' });
       if (caller === 'own-child' || caller === 'grandchild') expect(readPersistedStop()).toMatchObject({ cause: 'explicit_stop', managerSessionId: 'lead-session' });
       else {
         expect(readPersistedStop()).toBeNull();

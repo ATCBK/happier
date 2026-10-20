@@ -409,6 +409,9 @@ export async function requestSessionStop(params: Readonly<{
     const controlIntent = resolveSessionExplicitControlIntent({ rawSession,
       actionContext: params.actionContext ?? params.externalAction?.context,
     });
+    if (controlIntent === 'self_stop_forbidden') {
+      return { ok: false, errorCode: 'unsupported_action', error: controlIntent, code: 'unsupported_action' };
+    }
     if (controlIntent === 'unauthorized') {
       return { ok: false, errorCode: 'unsupported_action', error: 'target_outside_led_subtree', code: 'unsupported_action' };
     }
