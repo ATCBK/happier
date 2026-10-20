@@ -1383,12 +1383,15 @@ async function prepareApprovalRequest(params: Readonly<{
         const ref = readRecord(readRecord(params.input).ref);
         const instance = WidgetInstanceV1Schema.safeParse(params.actionId === 'widgets.item.add' ? readRecord(params.input).instance
           : admitted.read?.instances.find(entry => entry.instance.id === ref.instanceId)?.instance);
-        const entries = instance.success && params.deps.widgetCatalog
+        const knownWidgetName = instance.success ? instance.data.displayName
+          || readBuiltinWidgetDescriptorV1(instance.data.definition)?.title : undefined;
+        // A known widget's exact Action must not await unrelated library
+        // inventory (which can be yielding to background bootstrap).
+        const entries = !knownWidgetName && instance.success && params.deps.widgetCatalog
           ? await params.deps.widgetCatalog.list(surface, params.context, params.context.signal) : null;
         const catalog = entries && !('ok' in entries) ? entries : null;
-        const widgetName = instance.success ? instance.data.displayName
-          || catalog?.find(entry => isSameWidgetDefinitionV1(entry.definition, instance.data.definition))?.title
-          || readBuiltinWidgetDescriptorV1(instance.data.definition)?.title : undefined;
+        const widgetName = knownWidgetName || (instance.success
+          ? catalog?.find(entry => isSameWidgetDefinitionV1(entry.definition, instance.data.definition))?.title : undefined);
         const surfaceNames = await params.deps.widgetCatalog?.describeSurface?.(surface, params.context, params.context.signal);
         if (widgetName || surfaceNames) widgetPresentation = { ...surfaceNames, ...(widgetName ? { widgetName } : {}) };
       } catch {
