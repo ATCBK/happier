@@ -32,6 +32,7 @@ export const DEVIN_ACP_RUNTIME_DECLARATION = {
   },
   definition: {
     modelConfigOptionId: 'model',
+    skills: { sessionDelivery: { kind: 'native_config_skills_dir', subdirectory: 'skills' } },
     permissionModeMapping: {
       default: null,
       'read-only': 'ask',

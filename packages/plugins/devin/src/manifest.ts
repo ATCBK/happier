@@ -66,8 +66,8 @@ export const DEVIN_PLUGIN = definePlugin({
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
-            nativeRoots: { user: [['.config', 'devin', 'skills'], ['.agents', 'skills']], project: [['.devin', 'skills'], ['.agents', 'skills'], ['.windsurf', 'skills']] } },
+          skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            nativeRoots: { user: [['.config', 'devin', 'skills'], ['.config', 'cognition', 'skills'], ['.agents', 'skills']], project: [['.devin', 'skills'], ['.cognition', 'skills'], ['.agents', 'skills'], ['.windsurf', 'skills']] } },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn', 'followUp'],
