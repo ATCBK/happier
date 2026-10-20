@@ -17,6 +17,7 @@ import {
 import { isExternalSessionProviderFailureError } from '@/session/external/providerOps';
 import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sessions/external';
 import { ExternalSessionPersistedTakeoverPreflightError } from './persistedTakeoverPreflightError';
+import { classifyServerEndpointError, isNetworkConnectionErrorCode, readNormalizedConnectionErrorCode } from '@/api/client/classifyServerEndpointError';
 
 const TAKEOVER_ADMISSION_INVARIANT_CODES = [
     'persisted_takeover_admission_invalid_metadataVersion',
@@ -215,6 +216,13 @@ const EXTERNAL_SESSION_FOLLOW_FAILURE_RESPONSES: Readonly<Record<
 export function mapExternalSessionCorridorFailureToExternalSessionsError(
     error: unknown,
 ): { ok: false; errorCode: ExternalSessionsErrorCode; error: string; retryable?: boolean } | null {
+    if (error instanceof Error && 'code' in error && error.code === 'outcome_unknown') {
+        logExternalSessionsInternalError('external_session.outcome_unknown', error);
+        // A lost create/rejoin receipt cannot establish rollback. Keep the
+        // released failure class, but do not flatten its outcome to a generic
+        // link failure or mislabel the Home transport as an Agent timeout.
+        return externalSessionsError('internal_error', 'external_session_outcome_unknown');
+    }
     const providerFailure = mapExternalSessionProviderFailureToExternalSessionsError(error);
     if (providerFailure) return providerFailure;
     if (error instanceof ExternalSessionViewerLeaseCapacityExceededError) {
@@ -367,11 +375,18 @@ export function logExternalSessionsInternalError(context: string, error: unknown
     }
 
     if (error instanceof Error) {
+        const cause = 'cause' in error ? error.cause : undefined;
+        const causeCode = readNormalizedConnectionErrorCode(cause);
+        const creationOutcomeUnknown = 'code' in error && error.code === 'outcome_unknown';
         logger.debug('[externalSessions][internal_error]', {
             context: safeContext,
             errorCode: 'internal_error',
             errorKind: 'error',
             ...describeErrorLocation(error),
+            ...(creationOutcomeUnknown ? {
+                transportKind: causeCode === 'ERR_CANCELED' ? 'cancelled' : classifyServerEndpointError(cause).kind,
+                ...(causeCode === 'ERR_CANCELED' || isNetworkConnectionErrorCode(causeCode) ? { causeCode } : {}),
+            } : {}),
         });
         return;
     }

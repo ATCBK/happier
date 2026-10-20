@@ -51,6 +51,27 @@ afterEach(() => {
 });
 
 describe('External Sessions structural error diagnostics', () => {
+    it('preserves a lost creation receipt and its safe transport cause without exposing the HTTP payload', () => {
+        const error = Object.assign(new Error(SENTINELS[1]), {
+            code: 'outcome_unknown',
+            cause: { code: 'ECONNABORTED', message: SENTINELS[2], config: { token: SENTINELS[4] } },
+        });
+        expect(mapExternalSessionCorridorFailureToExternalSessionsError(error)).toEqual({
+            ok: false, errorCode: 'internal_error', error: 'external_session_outcome_unknown',
+        });
+        expect(debugLog).toHaveBeenLastCalledWith('[externalSessions][internal_error]', expect.objectContaining({
+            code: 'outcome_unknown', causeCode: 'ECONNABORTED', transportKind: 'timeout',
+        }));
+        expectNoSentinels(debugLog.mock.calls);
+        debugLog.mockClear();
+        expect(mapExternalSessionCorridorFailureToExternalSessionsError(Object.assign(new Error(SENTINELS[1]), {
+            code: 'outcome_unknown', cause: { code: SENTINELS[4] },
+        }))).not.toBeNull();
+        expectNoSentinels(debugLog.mock.calls);
+        expect(debugLog.mock.calls[0]?.[1]).not.toHaveProperty('causeCode');
+        expect(mapExternalSessionCorridorFailureToExternalSessionsError(new Error('ordinary host defect'))).toBeNull();
+    });
+
     it('names transcript producer overflow through the exact safe-token owner without leaking failure prose', () => {
         mapExternalSessionProviderFailureToExternalSessionsError(new ExternalSessionProviderFailureError({
             code: 'agent_error', operation: 'pageTranscript', retryable: false,
