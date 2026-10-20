@@ -44,7 +44,7 @@ import {
   type WorkflowRunInvocationIndexV1,
   type WorkflowStep,
 } from '@happier-dev/protocol';
-import type { SessionInputResultV1 } from '@/session/services/sendSessionMessage';
+import type { WaitForSessionInputReplyResult } from '@/session/services/sendSessionMessage';
 import type { ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import type { AvailableAutomationAccountEncryptionV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
 import type { StoredCredentials } from '@/persistence';
@@ -328,7 +328,7 @@ function leafLabel(text: string): string {
 }
 
 function sessionInputBoundary(
-  outcomes: Readonly<Record<string, LeafOutcome | SessionInputResultV1>> = {},
+  outcomes: Readonly<Record<string, LeafOutcome | Extract<WaitForSessionInputReplyResult, { ok: true }>['result']>> = {},
   hooks: Readonly<{ sessionId?: string; onObserve?: (label: string, signal?: AbortSignal) => Promise<void> }> = {},
 ) {
   const destinationSessionId = hooks.sessionId ?? sessionId;
@@ -2466,9 +2466,9 @@ describe('composed Automation workflow claim and optional receipt', () => {
 });
 
 describe.each(['plain', 'e2ee'] as const)('composed exact result live/recovery parity (%s)', (mode) => {
-  it.each<Readonly<{ name: string; contract: WorkflowStep['result']; observed: SessionInputResultV1; valid: boolean }>>([
-    { name: 'successful no-text', contract: { kind: 'text' }, valid: true,
-      observed: { kind: 'terminal_no_result', reason: 'missing_final_assistant_text', usage: { inputTokens: 8 } } },
+  it.each<Readonly<{ name: string; contract: WorkflowStep['result']; observed: Extract<WaitForSessionInputReplyResult, { ok: true }>['result']; valid: boolean }>>([
+    { name: 'explicit pass without text', contract: { kind: 'text' }, valid: true,
+      observed: { kind: 'fulfilled', outcome: { kind: 'pass' } } },
     { name: 'exact whitespace', contract: { kind: 'text' }, valid: true,
       observed: { kind: 'final_text', text: '  answer\n', usage: { inputTokens: 8 } } },
     { name: 'strict JSON', contract: { kind: 'json', schema: { type: 'object', required: ['answer'] } }, valid: true,
@@ -2476,7 +2476,7 @@ describe.each(['plain', 'e2ee'] as const)('composed exact result live/recovery p
     { name: 'invalid JSON', contract: { kind: 'json', schema: {} }, valid: false,
       observed: { kind: 'final_text', text: 'not JSON', usage: { inputTokens: 8 } } },
     { name: 'missing required decision', contract: { kind: 'decision', decisions: ['continue', 'stop'] }, valid: false,
-      observed: { kind: 'terminal_no_result', reason: 'missing_final_assistant_text', usage: { inputTokens: 8 } } },
+      observed: { kind: 'fulfilled', outcome: { kind: 'pass' } } },
     { name: 'provider rejection', contract: { kind: 'text' }, valid: false,
       observed: { kind: 'failed', message: 'Provider rejected the required step input', usage: { inputTokens: 8 } } },
     ...[1_900_000_000_000, null].map(resetAtMs => ({ name: `usage-limit reset ${resetAtMs}`, contract: { kind: 'text' }, valid: false,
@@ -2517,6 +2517,7 @@ describe.each(['plain', 'e2ee'] as const)('composed exact result live/recovery p
       .resolves.toMatchObject({ state: valid ? 'succeeded' : 'interrupted' });
     const ordinaryIndex = rowFor(ordinary, 'first', runCrypto)!;
     const ordinaryFact = openRowProgress(ordinary, ordinaryIndex, runCrypto);
+    expect(ordinaryFact.replyOutcome).toEqual(observed.kind === 'fulfilled' ? observed.outcome : undefined);
     if (observed.kind === 'failed' && 'runtimeIssueV1' in observed) {
       expect(ordinaryFact.reason).toMatchObject({ code: 'session_input_failed', runtimeIssueV1: observed.runtimeIssueV1 });
     } else {
@@ -2556,8 +2557,8 @@ describe.each(['plain', 'e2ee'] as const)('composed exact result live/recovery p
     expect(recoveredIndex.id).toBe(pendingIndex.id);
     expect(recoveredIndex.lifecycle).toBe(ordinaryIndex.lifecycle);
     expect(recoveredFact.execution).toEqual(pendingFact.execution);
-    expect({ result: recoveredFact.result, usage: recoveredFact.usage, reason: recoveredFact.reason })
-      .toEqual({ result: ordinaryFact.result, usage: ordinaryFact.usage, reason: ordinaryFact.reason });
+    expect({ result: recoveredFact.result, usage: recoveredFact.usage, reason: recoveredFact.reason, replyOutcome: recoveredFact.replyOutcome })
+      .toEqual({ result: ordinaryFact.result, usage: ordinaryFact.usage, reason: ordinaryFact.reason, replyOutcome: ordinaryFact.replyOutcome });
     expect(rowFor(restarted, 'successor', runCrypto)).toBeUndefined();
 
     const replacementBoundary = sessionInputBoundary();

@@ -33,7 +33,7 @@ import { createWorkflowRunRecoveryReader, createWorkflowInvocationRecoveryFactWr
 import { createWorkflowInvocationRecoveryObserver } from './daemonRuntime';
 import { createPlainWorkflowRunKeyCensusFixture, createWorkflowRunStorageTestkit, type WorkflowRunStorageTestkitOperation } from './workflowRunStorage.testkit';
 import type { AvailableAutomationAccountEncryptionV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
-import type { SessionInputResultV1 } from '@/session/services/sendSessionMessage';
+import type { WaitForSessionInputReplyResult } from '@/session/services/sendSessionMessage';
 import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
 import { normalizePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -383,12 +383,12 @@ describe.each(['plain', 'e2ee'] as const)('frozen result recovery (%s)', (mode) 
   const cases: readonly Readonly<{
     name: string;
     contract: WorkflowStep['result'];
-    observed: SessionInputResultV1 | { kind: 'typed'; value: JsonValue };
+    observed: Extract<WaitForSessionInputReplyResult, { ok: true }>['result'] | { kind: 'typed'; value: JsonValue };
     expected: Pick<WorkflowProgressEnvelopeV1, 'result' | 'reason'>;
     lifecycle: 'completed' | 'failed' | 'cancelled';
   }>[] = [
-    { name: 'successful no-text', contract: { kind: 'text' },
-      observed: { kind: 'terminal_no_result', reason: 'missing_final_assistant_text', usage: { inputTokens: 8 } },
+    { name: 'explicit pass without text', contract: { kind: 'text' },
+      observed: { kind: 'fulfilled', outcome: { kind: 'pass' } },
       expected: { result: '' }, lifecycle: 'completed' },
     { name: 'raw JSON at the selected nested leaf', contract: { kind: 'json', schema: { type: 'object', required: ['answer'] } },
       observed: { kind: 'final_text', text: '{"answer":42}', usage: { inputTokens: 8 } },
@@ -397,10 +397,10 @@ describe.each(['plain', 'e2ee'] as const)('frozen result recovery (%s)', (mode) 
       observed: { kind: 'typed', value: '{"answer":42}' },
       expected: { result: '{"answer":42}' }, lifecycle: 'completed' },
     { name: 'missing required JSON output', contract: { kind: 'json', schema: {} },
-      observed: { kind: 'terminal_no_result', reason: 'missing_final_assistant_text', usage: { inputTokens: 8 } },
+      observed: { kind: 'fulfilled', outcome: { kind: 'pass' } },
       expected: { reason: { code: 'invalid_result_contract', message: 'not_json' } }, lifecycle: 'failed' },
     { name: 'missing permitted decision', contract: { kind: 'decision', decisions: ['continue', 'stop'] },
-      observed: { kind: 'terminal_no_result', reason: 'missing_final_assistant_text', usage: { inputTokens: 8 } },
+      observed: { kind: 'fulfilled', outcome: { kind: 'pass' } },
       expected: { reason: { code: 'invalid_result_contract', message: 'not_json' } }, lifecycle: 'failed' },
     { name: 'failed input is not successful no-text', contract: { kind: 'text' },
       observed: { kind: 'failed', message: 'provider failed', usage: { inputTokens: 8 } },
@@ -503,7 +503,8 @@ describe.each(['plain', 'e2ee'] as const)('frozen result recovery (%s)', (mode) 
     expect(recovered.lifecycle).toBe(test.lifecycle);
     expect(recovered.progress.result).toEqual(test.expected.result);
     expect(recovered.progress.reason).toEqual(test.expected.reason);
-    expect(recovered.progress.usage).toEqual(test.observed.kind === 'typed' ? undefined : { inputTokens: 8 });
+    expect(recovered.progress.usage).toEqual('usage' in test.observed ? test.observed.usage : undefined);
+    expect(recovered.progress.replyOutcome).toEqual(test.observed.kind === 'fulfilled' ? test.observed.outcome : undefined);
     expect(recovered.custody).toBe('settled');
     if (test.observed.kind !== 'typed') expect(recovered.observeSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session-1', localId: 'input-1' }));
   });
