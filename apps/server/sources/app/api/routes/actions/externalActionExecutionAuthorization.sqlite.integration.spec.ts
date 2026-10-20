@@ -1654,6 +1654,20 @@ describe("external Action execution authorization", () => {
             expect(admitted.json()).toMatchObject({ kind: 'created', run: { id: runId, state: 'queued' } });
             expect((await post(start, read)).json()).toMatchObject({ run: { id: runId, state: 'queued' } });
             expect((await post(start, { operation: 'run-key.census', publisherMachineId: fixture.machine.id, runId })).statusCode).toBe(200);
+            // Another round reads the accepted source's invocation history under
+            // the original Start authorization, before admitting the next Run.
+            const history = { operation: 'invocations.list', publisherMachineId: fixture.machine.id, runId, pageByteLimit: 4096 };
+            const listed = await post(start, history);
+            expect(listed.statusCode, listed.body).toBe(200);
+            expect(listed.json()).toMatchObject({ invocations: [], parentRevision: 0 });
+            const invocationRead = { operation: 'invocations.get', publisherMachineId: fixture.machine.id,
+                runId, invocationId: crypto.randomUUID() };
+            const missingInvocation = await post(start, invocationRead);
+            expect(missingInvocation.statusCode, missingInvocation.body).toBe(404);
+            expect(missingInvocation.json()).toEqual({ error: 'run_not_found' });
+            expect((await post(start, history, { publisher: false })).statusCode).toBe(401);
+            expect((await post(start, { ...history, publisherMachineId: crypto.randomUUID() })).statusCode).toBe(401);
+            expect((await post(start, history, { effectActionId: 'workflow.run.cancel' })).statusCode).toBe(401);
             expect((await post(start, read, { publisher: false })).statusCode).toBe(401);
             expect((await post(start, { ...read, publisherMachineId: crypto.randomUUID() })).statusCode).toBe(401);
             expect((await post(start, read, { effectActionId: 'workflow.run.cancel' })).statusCode).toBe(401);
