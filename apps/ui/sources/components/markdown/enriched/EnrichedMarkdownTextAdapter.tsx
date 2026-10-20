@@ -24,6 +24,7 @@ import {
     type StreamingTextRevealPreset,
 } from '../streaming/streamingTextRevealConfig';
 import { useWebRevealStyleInsertion } from '../streaming/useWebRevealStyleInsertion';
+import { MarkdownWorkspaceFileLinksContext } from '../rendering/MarkdownLinkPolicyContext';
 
 const ENRICHED_REVEAL_STYLE_ID = 'happier-streaming-enriched-markdown-reveal-style';
 const ENRICHED_REVEAL_DURATION_VAR = '--happier-streaming-enriched-markdown-duration';
@@ -155,6 +156,7 @@ function useWebInlineReferenceStyle(scope: string, references: ReadonlyMap<strin
 }
 
 export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTextAdapterProps) => {
+    const workspaceFileLinks = React.useContext(MarkdownWorkspaceFileLinksContext);
     const selectable = useHappierTextSelectability(props.selectable);
     const runtimeStatus = useEnrichedMarkdownRuntimeStatus();
     const styleBundle = useEnrichedMarkdownStyle({
@@ -170,18 +172,18 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
             if (target) inlineReferences?.onPress?.(target);
             return;
         }
-        const normalizedUrl = normalizeMarkdownLinkUrl(event.url);
+        const normalizedUrl = normalizeMarkdownLinkUrl(event.url, { workspaceFileLinks });
         if (!normalizedUrl) return;
         if (props.onLinkPress?.(normalizedUrl) === true) return;
         void openMarkdownLinkUrl(normalizedUrl);
-    }, [inlineReferences, props.onLinkPress]);
+    }, [inlineReferences, props.onLinkPress, workspaceFileLinks]);
     const revealConfig = resolveStreamingTextRevealConfig({
         animated: props.streamingAnimated,
         preset: props.streamingRevealPreset,
     });
     const sanitized = React.useMemo(
-        () => sanitizeEnrichedMarkdownWithInlineReferences(props.markdown, inlineReferences),
-        [inlineReferences, props.markdown],
+        () => sanitizeEnrichedMarkdownWithInlineReferences(props.markdown, inlineReferences, { workspaceFileLinks }),
+        [inlineReferences, props.markdown, workspaceFileLinks],
     );
     const sanitizedMarkdown = sanitized.markdown;
     const referenceScope = React.useId();

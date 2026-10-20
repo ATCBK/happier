@@ -194,6 +194,11 @@ type WorkspaceMarkdownReferenceInput = Readonly<{
     sourceFilePath: string;
 }>;
 
+/** Local Markdown paths use URI percent escapes, not renderer-dependent HTML entity decoding. */
+export function hasMarkdownPathCharacterReference(value: string): boolean {
+    return /&(?:#(?:x[\da-f]+|\d+)|[a-z][a-z\d]*;)/i.test(value);
+}
+
 /** URL's standard dot-segment resolution is platform-independent; containment stays path-owner controlled. */
 function normalizeJoinedLocalPath(path: string): string {
     const unc = path.startsWith('//');
@@ -205,6 +210,7 @@ function normalizeJoinedLocalPath(path: string): string {
 
 function resolveMarkdownLocalReference(input: WorkspaceMarkdownReferenceInput): ResolvedWorkspaceFileReference | null {
     const raw = input.destination.trim();
+    if (hasMarkdownPathCharacterReference(raw)) return null;
     if (!raw || /^(?:data|javascript|vbscript|mailto):/i.test(raw)
         || /^[a-z][a-z\d+.-]*:\/\//i.test(raw) && !/^file:\/\//i.test(raw)) return null;
     if ((raw.startsWith('//') || raw.startsWith('\\\\'))

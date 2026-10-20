@@ -1,6 +1,6 @@
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { splitMarkdownIntoBlockSources } from '../streaming/splitMarkdownIntoBlockSources';
-import { resolveWorkspaceFileReference } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
+import { hasMarkdownPathCharacterReference, resolveWorkspaceFileReference } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
 import {
     buildMarkdownInlineReferenceHref,
     type MarkdownInlineReference,
@@ -15,7 +15,9 @@ function stripTerminalLineAnchor(value: string): string {
     return value.replace(/:\d+(?::\d+)?$/, '');
 }
 
-function isLocalPathLikeMarkdownTarget(value: string): boolean {
+export type MarkdownLinkNormalizationOptions = Readonly<{ workspaceFileLinks?: boolean }>;
+
+function isLocalPathLikeMarkdownTarget(value: string, options: MarkdownLinkNormalizationOptions): boolean {
     const pathCandidate = stripTerminalLineAnchor(value);
     if (!pathCandidate) return false;
     return (
@@ -25,8 +27,10 @@ function isLocalPathLikeMarkdownTarget(value: string): boolean {
         || pathCandidate.startsWith('\\\\')
         || /^[A-Za-z]:[\\/]/.test(pathCandidate)
         || /[\\/]/.test(pathCandidate)
-        || pathCandidate.startsWith('#')
-        || resolveWorkspaceFileReference({ url: pathCandidate, workspacePath: null }) !== null
+        || options.workspaceFileLinks === true && (
+            pathCandidate.startsWith('#')
+            || resolveWorkspaceFileReference({ url: pathCandidate, workspacePath: null }) !== null
+        )
     );
 }
 
@@ -35,7 +39,7 @@ function isExternallyOpenableMarkdownLink(value: string): boolean {
     return lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('mailto:');
 }
 
-export function normalizeMarkdownLinkUrl(raw: string): string | null {
+export function normalizeMarkdownLinkUrl(raw: string, options: MarkdownLinkNormalizationOptions = {}): string | null {
     const trimmed = String(raw ?? '').trim();
     if (!trimmed) return null;
     if (isStreamingIncompleteLinkHref(trimmed)) return null;
@@ -47,7 +51,8 @@ export function normalizeMarkdownLinkUrl(raw: string): string | null {
     if (lower.startsWith('javascript:') || lower.startsWith('data:')) return null;
     if (/\s|[\u0000-\u001F\u007F]/.test(candidate)) return null;
     if (isExternallyOpenableMarkdownLink(candidate) || lower.startsWith('file://')) return candidate;
-    if (isLocalPathLikeMarkdownTarget(candidate)) return candidate;
+    if (hasMarkdownPathCharacterReference(candidate)) return null;
+    if (isLocalPathLikeMarkdownTarget(candidate, options)) return candidate;
     return null;
 }
 
@@ -145,6 +150,7 @@ function normalizeExplicitMarkdownLinks(
     markdown: string,
     references?: MarkdownInlineReferences,
     resolved: Map<string, MarkdownInlineReference> = new Map(),
+    options: MarkdownLinkNormalizationOptions = {},
 ): string {
     let out = '';
     const closingDelimiters = indexClosingMarkdownDelimiters(markdown);
@@ -187,7 +193,7 @@ function normalizeExplicitMarkdownLinks(
         // real URL arrives.
         const normalizedDestination = isStreamingIncompleteLinkHref(extracted.destination)
             ? STREAMING_INCOMPLETE_LINK_HREF
-            : normalizeMarkdownLinkUrl(extracted.destination);
+            : normalizeMarkdownLinkUrl(extracted.destination, options);
         out += normalizedDestination
             ? `[${label}](${normalizedDestination}${extracted.suffix})`
             : label;
@@ -275,26 +281,26 @@ export function applyEnrichedMarkdownImagePolicy(markdown: string, options: Read
 
 const autolinkTargetPattern = /^(?:[A-Za-z][A-Za-z0-9+.-]*:|www\.)/;
 
-function normalizeMarkdownAutolinks(markdown: string): string {
+function normalizeMarkdownAutolinks(markdown: string, options: MarkdownLinkNormalizationOptions): string {
     return markdown.replace(/<([^>\n]+)>/g, (fullMatch, rawTarget: string) => {
         if (!autolinkTargetPattern.test(rawTarget)) return fullMatch;
-        const normalized = normalizeMarkdownLinkUrl(rawTarget);
+        const normalized = normalizeMarkdownLinkUrl(rawTarget, options);
         return normalized ? `<${normalized}>` : rawTarget;
     });
 }
 
-export function sanitizeEnrichedMarkdownLinkTargets(markdown: string): string {
-    return sanitizeEnrichedMarkdownWithInlineReferences(markdown).markdown;
+export function sanitizeEnrichedMarkdownLinkTargets(markdown: string, options: MarkdownLinkNormalizationOptions = {}): string {
+    return sanitizeEnrichedMarkdownWithInlineReferences(markdown, undefined, options).markdown;
 }
 
 /** Sanitized Markdown plus the inline references the caller's resolver placed in it, by rendered href. */
-export function sanitizeEnrichedMarkdownWithInlineReferences(markdown: string, references?: MarkdownInlineReferences): Readonly<{
+export function sanitizeEnrichedMarkdownWithInlineReferences(markdown: string, references?: MarkdownInlineReferences, options: MarkdownLinkNormalizationOptions = {}): Readonly<{
     markdown: string;
     references: ReadonlyMap<string, MarkdownInlineReference>;
 }> {
     const resolved = new Map<string, MarkdownInlineReference>();
     const withoutImages = applyEnrichedMarkdownImagePolicy(String(markdown ?? ''));
-    return { markdown: normalizeMarkdownAutolinks(normalizeExplicitMarkdownLinks(withoutImages, references, resolved)), references: resolved };
+    return { markdown: normalizeMarkdownAutolinks(normalizeExplicitMarkdownLinks(withoutImages, references, resolved, options), options), references: resolved };
 }
 
 export async function openMarkdownLinkUrl(raw: string): Promise<void> {

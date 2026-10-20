@@ -5,6 +5,7 @@ import { Platform, View } from 'react-native';
 import type { Option, OptionLongPressHandler } from '../MarkdownBlockView';
 import type { MarkdownSelectionAction, MarkdownSourceMarkKind, MarkdownSourceRange, MarkdownSourceRangeAction, MarkdownSourceRangeLayoutObserver } from '../MarkdownView';
 import { MarkdownSourceMarkKindContext } from './MarkdownFindDecorationContext';
+import { MarkdownWorkspaceFileLinksContext } from './MarkdownLinkPolicyContext';
 import { usePreparedStreamingMarkdown, type MarkdownStreamingMode } from '../streaming/usePreparedStreamingMarkdown';
 import type { StreamingTextRevealPreset } from '../streaming/streamingTextRevealConfig';
 import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
@@ -149,6 +150,7 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
 
     return (
         <MarkdownSourceMarkKindContext.Provider value={props.sourceMarkKind}>
+        <MarkdownWorkspaceFileLinksContext.Provider value={imagesEnabled}>
         <View testID={props.testID} style={styles.root}>
             <View
                 ref={contentRef}
@@ -194,6 +196,7 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
             </View>
             {staticRenderPlaceholder.visible ? <StaticMarkdownRenderPlaceholder /> : null}
         </View>
+        </MarkdownWorkspaceFileLinksContext.Provider>
         </MarkdownSourceMarkKindContext.Provider>
     );
 });

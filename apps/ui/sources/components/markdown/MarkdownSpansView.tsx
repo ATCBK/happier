@@ -9,6 +9,8 @@ import type { StreamingTextRevealPreset } from './streaming/streamingTextRevealC
 import { FindHighlightedText, sliceFindRanges } from '@/components/ui/text/FindHighlightedText';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import { MarkdownFindDecorationContext, MarkdownSourceMarkKindContext } from './rendering/MarkdownFindDecorationContext';
+import { MarkdownWorkspaceFileLinksContext } from './rendering/MarkdownLinkPolicyContext';
+import { normalizeMarkdownLinkUrl } from './enriched/enrichedMarkdownLinkHandling';
 
 export type MarkdownSpansViewProps = {
     spans: MarkdownSpan[];
@@ -27,6 +29,7 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
     const inlineTextSelectable = props.inlineTextSelectable ?? true;
     const findDecoration = React.useContext(MarkdownFindDecorationContext);
     const markKind = React.useContext(MarkdownSourceMarkKindContext);
+    const workspaceFileLinks = React.useContext(MarkdownWorkspaceFileLinksContext);
     let offset = 0;
 
     return (
@@ -35,14 +38,16 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
                 const ranges = findDecoration?.get(span) ?? sliceFindRanges(props.findRanges, offset, span.text.length);
                 offset += span.text.length;
                 const text = ranges?.length ? <FindHighlightedText text={span.text} ranges={ranges} selectable={inlineTextSelectable} kind={markKind} /> : span.text;
-                if (span.url) {
+                const url = span.url ? normalizeMarkdownLinkUrl(span.url, { workspaceFileLinks }) : null;
+                const incompleteLink = isStreamingIncompleteLinkHref(span.url);
+                if (url || incompleteLink) {
                     const linkStyle = [props.linkStyle, span.styles.map(resolveSpanStyle)];
                     // Special blocks render from the same repaired source as prose, so a link
                     // whose URL is still streaming reaches here as the repair placeholder.
                     // Unlike the enriched path there is no link-target normalization between
                     // the span and the caller, so the placeholder is kept out of both the
                     // press callback and Expo Router until the real destination arrives.
-                    if (isStreamingIncompleteLinkHref(span.url)) {
+                    if (incompleteLink) {
                         return (
                             <Text
                                 key={index}
@@ -58,7 +63,7 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
                             <Text
                                 key={index}
                                 accessibilityRole="link"
-                                onPress={() => props.onLinkPress?.(span.url!)}
+                                onPress={() => props.onLinkPress?.(url!)}
                                 selectable={inlineTextSelectable}
                                 style={linkStyle}
                             >
@@ -70,7 +75,7 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
                     return (
                         <Link
                             key={index}
-                            href={span.url as any}
+                            href={url as any}
                             target="_blank"
                             rel="noopener noreferrer"
                             // On web, avoid `asChild` so Expo Router can forward `href`/`target`/`rel` to an anchor-like

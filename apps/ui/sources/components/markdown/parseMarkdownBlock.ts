@@ -228,7 +228,7 @@ export function parseMarkdownBlockContent(markdown: string, options: Readonly<{ 
     const imageSources = options.imagesEnabled ? new Map(splitMarkdownIntoBlockSources(markdown)
         .filter(source => source.imageBlock).map(source => [source.sourceStart, source])) : null;
     const parseSpans = (text: string, header: boolean) => parseMarkdownSpans(
-        options.imagesEnabled ? applyEnrichedMarkdownImagePolicy(text) : text, header,
+        options.imagesEnabled ? applyEnrichedMarkdownImagePolicy(text) : text, header, { workspaceFileLinks: options.imagesEnabled },
     );
     let index = 0;
     outer: while (index < lines.length) {

@@ -25,6 +25,7 @@ import { MarkdownFindDecorationContext, projectLeafRanges } from './rendering/Ma
 import { projectMarkdownFindSpans } from '@/components/markdown/rendering/markdownFindProjection';
 import type { MarkdownImageResolver, MarkdownImageDocument } from './markdownImages';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { MarkdownWorkspaceFileLinksContext } from './rendering/MarkdownLinkPolicyContext';
 
 // Option type for callback
 export type Option = {
@@ -434,6 +435,7 @@ function RenderTableCellContent(props: Readonly<{
     agentTexMath: boolean;
     findSourceRanges?: readonly FindTextRange[];
 }>) {
+    const workspaceFileLinks = React.useContext(MarkdownWorkspaceFileLinksContext);
     const findSpans = React.useMemo(() => {
         if (!props.findSourceRanges?.length) return null;
         const decorations = new Map<MarkdownSpan, readonly FindTextRange[]>();
@@ -447,8 +449,8 @@ function RenderTableCellContent(props: Readonly<{
     const spans = React.useMemo(
         () => containsPotentialEnrichedMath(props.markdown, props.agentTexMath)
             ? null
-            : parseMarkdownSpans(props.markdown, false),
-        [props.markdown, props.agentTexMath],
+            : parseMarkdownSpans(props.markdown, false, { workspaceFileLinks }),
+        [props.markdown, props.agentTexMath, workspaceFileLinks],
     );
     if (findSpans) return <MarkdownFindDecorationContext.Provider value={findSpans.decorations}>
         <Text selectable={props.selectable} style={props.textStyle}><MarkdownSpansView spans={findSpans.spans}

@@ -6,6 +6,8 @@ import { renderScreen } from '@/dev/testkit';
 import { parseMarkdown } from '../../../node_modules/react-native-enriched-markdown/src/web/parseMarkdown';
 import type { ASTNode } from '../../../node_modules/react-native-enriched-markdown/src/web/types';
 import { installMarkdownCommonModuleMocks } from './markdownTestHelpers';
+import type { MarkdownImageResolver } from './markdownImages';
+import type { MarkdownSourceRangeAction } from './MarkdownView';
 
 declare global {
     // eslint-disable-next-line no-var
@@ -15,6 +17,10 @@ declare global {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 installMarkdownCommonModuleMocks();
+
+const documentImages: MarkdownImageResolver = {
+    resolve: () => ({ kind: 'blocked' }), remoteLoaded: false, onLoadRemote() {},
+};
 
 vi.mock('./MarkdownCodeBlock', () => ({
     MarkdownCodeBlock: (props: Record<string, unknown>) =>
@@ -193,6 +199,7 @@ describe('MarkdownView (enriched renderer)', () => {
         { raw: 'mailto:test@example.com', rendered: '[target](mailto:test@example.com)' },
         { raw: 'https://example.com/path', rendered: '[target](https://example.com/path)' },
         { raw: 'http://example.com/path', rendered: '[target](http://example.com/path)' },
+        { raw: 'https://host.test/a?x=1&amp;y=2', rendered: '[target](https://host.test/a?x=1&amp;y=2)' },
     ])('validates $raw before exposing it to the renderer', async ({ raw, rendered }) => {
         const { MarkdownView } = await import('./MarkdownView');
         const screen = await renderScreen(
@@ -200,6 +207,43 @@ describe('MarkdownView (enriched renderer)', () => {
         );
 
         expect(screen.findByType('EnrichedMarkdownText').props.markdown).toBe(rendered);
+    });
+
+    it.each(['README.md', '#section', 'spec:draft.pdf'])('keeps %s available only in a resolver-enabled document', async (url) => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const onLinkPress = vi.fn(() => true);
+        const screen = await renderScreen(<MarkdownView markdown={`[target](${url})`} images={documentImages} onLinkPress={onLinkPress} />);
+        const run = screen.findByType('EnrichedMarkdownText');
+        expect(run.props.markdown).toBe(`[target](${url})`);
+        run.props.onLinkPress({ url });
+        expect(onLinkPress).toHaveBeenCalledWith(url);
+    });
+
+    it.each([undefined, documentImages])('keeps absolute URL entities while rejecting encoded local-path schemes, with resolver %s', async (images) => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const onLinkPress = vi.fn(() => true);
+        const screen = await renderScreen(<MarkdownView markdown="[target](https://host.test/a?x=1&amp;y=2)" images={images} onLinkPress={onLinkPress} />);
+        const run = screen.findByType('EnrichedMarkdownText');
+        expect(run.props.markdown).toBe('[target](https://host.test/a?x=1&amp;y=2)');
+        run.props.onLinkPress({ url: 'https://host.test/a?x=1&amp;y=2' });
+        expect(onLinkPress).toHaveBeenCalledWith('https://host.test/a?x=1&amp;y=2');
+        onLinkPress.mockClear();
+        for (const url of ['javascript&#58;alert(1)', 'java&#x73;cript:alert(1)', 'javascript&colon;alert(1)', 'javascript&#58alert(1)', 'data&colon;text/html,hello']) {
+            run.props.onLinkPress({ url });
+        }
+        expect(onLinkPress).not.toHaveBeenCalled();
+    });
+
+    it('uses the same document link policy while Find replaces the enriched renderer', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const onLinkPress = vi.fn();
+        const blocked = await renderScreen(<MarkdownView markdown="[target](javascript&#58;alert(1))" findActive onLinkPress={onLinkPress} images={documentImages} />);
+        expect(blocked.findAll(node => node.props.accessibilityRole === 'link')).toHaveLength(0);
+        const document = await renderScreen(<MarkdownView markdown="[target](README.md)" findActive onLinkPress={onLinkPress} images={documentImages} />);
+        const links = document.findAll(node => node.props.accessibilityRole === 'link');
+        expect(links.length).toBeGreaterThan(0);
+        links[0]!.props.onPress();
+        expect(onLinkPress).toHaveBeenCalledWith('README.md');
     });
 
     it.each([
@@ -261,6 +305,7 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 1, endLine: 1 },
             markdown: '# Title',
+            renderMarkdown: '# Title',
             sourceStart: 0,
             sourceLength: '# Title'.length,
         });
@@ -271,6 +316,19 @@ describe('MarkdownView (enriched renderer)', () => {
             textAlign: 'left',
         });
         expect(screen.findAllByType('EnrichedMarkdownText')).toHaveLength(1);
+    });
+
+    it('keeps document reference definitions in the native selection renderer input', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const onPressSourceRange = vi.fn<(action: MarkdownSourceRangeAction) => void>();
+        const markdown = '[target][ref]\n\n[ref]: https://example.com';
+        const screen = await renderScreen(<MarkdownView markdown={markdown} onPressSourceRange={onPressSourceRange} />);
+        screen.findByProps({ testID: 'markdown-source-range-trigger:1-1' }).props.onPress();
+        const action = onPressSourceRange.mock.calls[0]![0];
+        expect(action.markdown).toBe('[target][ref]');
+        expect(action.renderMarkdown).toContain('[ref]: https://example.com');
+        expect(action.renderMarkdown).toContain('[target][ref]');
+        expect(markdown.slice(action.sourceStart, action.sourceStart + action.sourceLength)).toBe(action.markdown);
     });
 
     /**
@@ -317,6 +375,7 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 1, endLine: 1 },
             markdown: '# Title',
+            renderMarkdown: '# Title',
             sourceStart: 0,
             sourceLength: '# Title'.length,
         });
@@ -353,6 +412,7 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 3, endLine: 3 },
             markdown: 'Second paragraph.',
+            renderMarkdown: 'Second paragraph.',
             sourceStart: markdown.indexOf('Second paragraph.'),
             sourceLength: 'Second paragraph.'.length,
         });

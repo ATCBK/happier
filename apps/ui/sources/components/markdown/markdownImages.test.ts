@@ -12,9 +12,10 @@ describe('opt-in Markdown document images', () => {
     const markdown = 'Intro ![badge](https://remote.test/badge.png)\n\n![Screen](./screen(1).png "Title")\n\n![Remote](https://remote.test/shot.png)';
 
     it('keeps local file links and anchors available to the workspace link handler', () => {
-        expect(normalizeMarkdownLinkUrl('a.pdf')).toBe('a.pdf');
-        expect(normalizeMarkdownLinkUrl('spec:draft.pdf')).toBe('spec:draft.pdf');
-        expect(normalizeMarkdownLinkUrl('#section')).toBe('#section');
+        expect(normalizeMarkdownLinkUrl('a.pdf')).toBeNull();
+        expect(normalizeMarkdownLinkUrl('a.pdf', { workspaceFileLinks: true })).toBe('a.pdf');
+        expect(normalizeMarkdownLinkUrl('spec:draft.pdf', { workspaceFileLinks: true })).toBe('spec:draft.pdf');
+        expect(normalizeMarkdownLinkUrl('#section', { workspaceFileLinks: true })).toBe('#section');
         expect(normalizeMarkdownLinkUrl('javascript:alert(1)')).toBeNull();
         expect(normalizeMarkdownLinkUrl(STREAMING_INCOMPLETE_LINK_HREF)).toBeNull();
     });

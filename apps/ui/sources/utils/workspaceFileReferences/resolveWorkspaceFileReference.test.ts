@@ -9,7 +9,7 @@ describe('workspace Markdown references', () => {
     ])('resolves %s using the document and workspace roots', (destination, path) => {
         expect(resolveWorkspaceMarkdownImage({ ...context, destination })).toEqual({ kind: 'workspace', path });
     });
-    it.each(['../../private.png', '..%2f..%2fprivate.png', 'file:///work/private.png', 'javascript:alert(1)', '//remote.test/pixel.png'])('blocks %s', destination => {
+    it.each(['../../private.png', '..%2f..%2fprivate.png', 'file:///work/private.png', 'javascript:alert(1)', 'javascript&#58;alert(1)', 'data&colon;text/html,hello', '//remote.test/pixel.png'])('blocks %s', destination => {
         expect(resolveWorkspaceMarkdownImage({ ...context, destination })).toEqual({ kind: 'blocked' });
     });
     it('keeps HTTP remote, including loopback, and never turns data into a workspace read', () => {

@@ -1,5 +1,5 @@
 import type { MarkdownSpan } from "./parseMarkdown";
-import { normalizeMarkdownLinkUrl } from './enriched/enrichedMarkdownLinkHandling';
+import { normalizeMarkdownLinkUrl, type MarkdownLinkNormalizationOptions } from './enriched/enrichedMarkdownLinkHandling';
 
 // Updated pattern to handle nested markdown and asterisks
 const pattern = /(\*\*(.*?)(?:\*\*|$))|(\*(.*?)(?:\*|$))|(\[([^\]]+)\](?:\(([^)]+)\))?)|(`(.*?)(?:`|$))/g;
@@ -43,7 +43,7 @@ function splitPlainTextWithAutoLinks(text: string): MarkdownSpan[] {
     return out;
 }
 
-export function parseMarkdownSpans(markdown: string, header: boolean) {
+export function parseMarkdownSpans(markdown: string, header: boolean, options: MarkdownLinkNormalizationOptions = {}) {
     const spans: MarkdownSpan[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -72,7 +72,7 @@ export function parseMarkdownSpans(markdown: string, header: boolean) {
         } else if (match[5]) {
             // Link - handle incomplete links (no URL part)
             if (match[7]) {
-                spans.push({ styles: [], text: match[6], url: normalizeMarkdownLinkUrl(match[7]) });
+                spans.push({ styles: [], text: match[6], url: normalizeMarkdownLinkUrl(match[7], options) });
             } else {
                 // If no URL part, treat as plain text with brackets
                 spans.push({ styles: [], text: `[${match[6]}]`, url: null });
