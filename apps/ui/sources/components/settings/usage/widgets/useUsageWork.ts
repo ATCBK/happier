@@ -84,19 +84,16 @@ export function useUsageWork(
     ...(summary?.projects ?? []).flatMap(row => row.machineIds).concat((summary?.sessions ?? []).flatMap(row => row.machineIds))
       .filter(id => !machines.some(machine => machine.id === id)).map(id => ({ id, absence: 'unlisted' as const }))]), [machines, summary]);
   const machineWords = React.useCallback((ids: readonly string[]) => ids.map(id => machineNames.get(id) ?? id).join(', '), [machineNames]);
-  // Two rows never read alike: a label several share is told apart by where (and, for a Session, when) it ran.
-  const displayProjectLabels = React.useMemo(() => {
-    const base = (projectKey: string | null) => projectKey === null
-      ? t('usage.board.work.unknownProject') : projectLabels.get(projectKey) ?? t('usage.board.work.unknownProject');
-    const counts = countLabels((summary?.projects ?? []).map(row => base(row.projectKey)));
-    return new Map((summary?.projects ?? []).map(row => [row.projectKey, counts.get(base(row.projectKey))! > 1 && row.machineIds.length > 0
-      ? `${base(row.projectKey)} · ${machineWords(row.machineIds)}` : base(row.projectKey)] as const));
-  }, [summary, projectLabels, machineWords]);
-  const projectLabel = React.useCallback(
-    (projectKey: string | null) => displayProjectLabels.get(projectKey)
-      ?? (projectKey === null ? t('usage.board.work.unknownProject') : projectLabels.get(projectKey) ?? t('usage.board.work.unknownProject')),
-    [displayProjectLabels, projectLabels],
-  );
+  // Two rows never read alike: a Project name several share keeps its name whole; where it ran is a separate fact the
+  // row carries on its own line, so a narrow screen never truncates the part that tells the rows apart.
+  const projectName = React.useCallback((projectKey: string | null) => projectKey === null
+    ? t('usage.board.work.unknownProject') : projectLabels.get(projectKey) ?? t('usage.board.work.unknownProject'), [projectLabels]);
+  const projectPlaces = React.useMemo(() => {
+    const counts = countLabels((summary?.projects ?? []).map(row => projectName(row.projectKey)));
+    return new Map((summary?.projects ?? []).map(row => [row.projectKey, counts.get(projectName(row.projectKey))! > 1
+      ? machineWords(row.machineIds) : ''] as const));
+  }, [summary, projectName, machineWords]);
+  const projectPlace = React.useCallback((projectKey: string | null) => projectPlaces.get(projectKey) ?? '', [projectPlaces]);
   const sessionHomes = React.useMemo(() => [serverId], [serverId]);
   const renderablesByHome = useSessionListRowsByServerId(sessionHomes);
   const renderables = renderablesByHome[serverId];
@@ -135,5 +132,5 @@ export function useUsageWork(
     },
     [router, serverId, query],
   );
-  return { summary, format, cell, basisLabel, projectLabel, sessionLabel, openSession };
+  return { summary, format, cell, basisLabel, projectLabel: projectName, projectPlace, sessionLabel, openSession };
 }

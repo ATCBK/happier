@@ -280,9 +280,9 @@ it('names available model-meter headroom through the catalog and readable unknow
   expect(screen.findByTestId('fit.plan.work.modelHeadroom.known')).toBeTruthy();
   expect(screen.findByTestId('fit.plan.work.modelHeadroom.external')).toBeTruthy();
   expect(screen.getTextContent()).toContain('Fable 5');
-  expect(screen.getTextContent()).toContain('Third Party Model Snapshot');
+  // An id outside the catalog is shown exactly (2a2cc0979c), never title-cased into a name.
+  expect(screen.getTextContent()).toContain('third-party/model-snapshot');
   expect(screen.getTextContent()).not.toContain('claude-fable-5');
-  expect(screen.getTextContent()).not.toContain('third-party/model-snapshot');
 });
 
 it('keeps unreported windows reachable behind one count and shows each reset once', async () => {

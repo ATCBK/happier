@@ -192,6 +192,23 @@ describe('Work and Coach widget bodies', () => {
     expect(first.length).toBeGreaterThan(t('session.untitled').length);
     await hook.unmount();
   });
+  it('keeps a shared Project name whole and tells twins apart by the machine they ran on', async () => {
+    const rows: UsageWorkContribution[] = [
+      { ...contribution('t1', 'twin-1', 't1'), projectKey: 'tmp-a', machineId: 'machine-a' },
+      { ...contribution('t2', 'twin-2', 't1'), projectKey: 'tmp-b', machineId: 'machine-b' },
+      { ...contribution('t3', 'lone-1', 't1'), projectKey: 'lone-key', machineId: 'machine-a' },
+    ];
+    const projection = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions: rows, evidence: [] }));
+    const project = (key: string, label: string) => ({ ...slice.accounting!.breakdowns!.project![0]!, key, label });
+    const accounting = { ...slice.accounting!, breakdowns: { project: [project('tmp-a', 'tmp'), project('tmp-b', 'tmp'), project('lone-key', 'solo')] } };
+    const hook = await renderHook(() => useUsageWork({ ...slice, work: projection, accounting }, query, 'home'));
+    const { projectLabel, projectPlace } = hook.getCurrent();
+    expect([projectLabel('tmp-a'), projectLabel('tmp-b'), projectLabel('lone-key')]).toEqual(['tmp', 'tmp', 'solo']);
+    expect(projectPlace('tmp-a')).not.toBe('');
+    expect(projectPlace('tmp-a')).not.toBe(projectPlace('tmp-b'));
+    expect(projectPlace('lone-key')).toBe('');
+    await hook.unmount();
+  });
   it('keeps an unanswered first Coach evaluation pending instead of claiming there are no findings', async () => {
     const pendingSlice = resolveUsagePageAggregation({ queries: [query],
       accounting: [{ query, status: 'available', value: slice.accounting!, asOfMs: 1000 }],
