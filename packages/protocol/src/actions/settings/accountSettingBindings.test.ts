@@ -11,6 +11,27 @@ function binding(owner: string, ...options: string[]) {
 }
 
 describe('portable coupled Account setting mutations', () => {
+    it.each(['collapsed', 'expanded'] as const)('rebases one %s tool detail choice and clears only its named override', kind => {
+        const owner = binding('toolDetailOverrideStorage', kind);
+        const key = kind === 'collapsed' ? 'toolViewDetailLevelByToolName' : 'toolViewExpandedDetailLevelByToolName';
+        const before = accountSettingsParse({ toolViewDetailLevelByToolName: { Bash: 'summary', Read: 'summary' },
+            toolViewExpandedDetailLevelByToolName: { Bash: 'summary', Read: 'summary' } });
+        expect(owner.read(before)).toEqual({ Bash: 'summary', Read: 'summary' });
+        const bash = { toolName: 'Bash', detailLevel: 'full' };
+        expect(owner.parse(bash)).toEqual({ success: true, value: bash });
+        const first = accountSettingsParse({ ...before, ...owner.mutate(before, bash) });
+        const second = accountSettingsParse({ ...first, ...owner.mutate(first, { toolName: 'Read', detailLevel: 'full' }) });
+        expect(second[key]).toEqual({ Bash: 'full', Read: 'full' });
+        expect(owner.mutate(second, { toolName: 'Bash', detailLevel: 'default' })).toEqual({ [key]: { Read: 'full' } });
+        const external = { toolName: 'mcp__acme__inspect', detailLevel: 'full' };
+        expect(owner.parse(external)).toEqual({ success: true, value: external });
+        for (const invalid of [{ Bash: 'full' }, { toolName: 1, detailLevel: 'full' },
+            { toolName: 'Bash', detailLevel: 'unknown' }, { toolName: 'Bash', detailLevel: true },
+            { toolName: 'Bash', detailLevel: 'full', extra: true }, { toolName: 'x'.repeat(1025), detailLevel: 'default' }]) {
+            expect(owner.parse(invalid)).toEqual({ success: false });
+        }
+        if (kind === 'expanded') expect(owner.parse({ toolName: 'Bash', detailLevel: 'title' })).toEqual({ success: false });
+    });
     it('admits external SCM routing and clears its qualified selection when choosing built-in Git', () => {
         const settings = accountSettingsParse({ scmGitRepoPreferredBackend: 'sapling', scmPushRejectPolicy: 'manual' });
         const external = scmGitRoutingStorage.parse('acme.scm/stacked');

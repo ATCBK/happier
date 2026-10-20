@@ -37,7 +37,8 @@ type CoupledSettings = Pick<AccountSettings, 'codingPromptBehaviorV1' | 'usageLi
     | 'sessionTerminalHost' | 'sessionUseTmux' | 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId'
     | 'sessionTmuxSessionName' | 'sessionTmuxIsolated' | 'sessionTmuxTmpDir' | 'actionsSettingsV1'
     | 'sessionDefaultPermissionModeByTargetKey' | 'backendEnabledByTargetKey' | 'backendCliSourcePreferenceByTargetKey'
-    | 'scmGitRepoPreferredBackend' | 'scmGitRepoPreferredBackendQualifiedId' | 'scmDefaultDiffModeByBackend'>;
+    | 'scmGitRepoPreferredBackend' | 'scmGitRepoPreferredBackendQualifiedId' | 'scmDefaultDiffModeByBackend'
+    | 'toolViewDetailLevelByToolName' | 'toolViewExpandedDetailLevelByToolName'>;
 
 export type PortableAccountSettingBindingV1 = Readonly<{
     scope: 'account'; kind: 'owner'; access: 'read_write' | 'read_only' | 'sensitive';
@@ -85,6 +86,36 @@ export const scmBackendDefaultDiffStorage = { ...owner,
         return { scmDefaultDiffModeByBackend: next };
     },
 } satisfies PortableAccountSettingBindingV1;
+const ToolDetailOverrideIntentSchema = z.strictObject({ toolName: z.string(), detailLevel: z.string() });
+/** A single tool choice is merged into the latest map by the existing Account CAS owner. */
+export function toolDetailOverrideStorage(kind: 'collapsed' | 'expanded'): PortableAccountSettingBindingV1 {
+    const key = kind === 'collapsed' ? 'toolViewDetailLevelByToolName' : 'toolViewExpandedDetailLevelByToolName';
+    function parse(value: unknown) {
+        const intent = ToolDetailOverrideIntentSchema.safeParse(value);
+        if (!intent.success) return null;
+        // The Account's map schema owns both actual tool-key admission and each detail-level enum.
+        // Clearing an override still validates its key using a detail level supported by both maps.
+        const detailLevel = intent.data.detailLevel === 'default' ? 'summary' : intent.data.detailLevel;
+        const record = ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue({ [intent.data.toolName]: detailLevel });
+        if (!record.success || record.data === null || typeof record.data !== 'object' || Array.isArray(record.data)
+            || !Object.entries(record.data).some(([toolName, value]: [string, unknown]) =>
+                toolName === intent.data.toolName && value === detailLevel)) return null;
+        return intent.data;
+    }
+    return { ...owner,
+        read: settings => settings[key],
+        parse: value => { const intent = parse(value); return intent ? { success: true, value: intent } : { success: false }; },
+        mutate: (settings, value) => {
+            const intent = parse(value);
+            if (!intent) return null;
+            const next: Record<string, string> = { ...settings[key] };
+            if (intent.detailLevel === 'default') delete next[intent.toolName];
+            else next[intent.toolName] = intent.detailLevel;
+            const record = ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue(next);
+            return record.success ? { [key]: record.data } : null;
+        },
+    };
+}
 type AgentPreferenceKey = 'sessionDefaultPermissionModeByTargetKey' | 'backendEnabledByTargetKey' | 'backendCliSourcePreferenceByTargetKey';
 const AgentPreferenceIntentSchema = z.strictObject({ agentTargetKey: BackendTargetKeyV2InputSchema, value: StrictJsonValueSchema });
 /** One target-sized intent, revalidated and rebased by the existing Settings CAS owner. */
@@ -466,6 +497,7 @@ export function readPortableAccountSettingBindingV1(declaration: Readonly<{
         }
         case 'scmGitRoutingStorage': return scmGitRoutingStorage;
         case 'scmBackendDefaultDiffStorage': return scmBackendDefaultDiffStorage;
+        case 'toolDetailOverrideStorage': return args[0] === 'collapsed' || args[0] === 'expanded' ? toolDetailOverrideStorage(args[0]) : null;
         case 'remoteConfirmationStorage': return args[0] === 'pull' || args[0] === 'push' ? remoteConfirmationStorage(args[0]) : null;
         case 'presentationStorage': {
             const section = (['profiles', 'backends', 'models', 'machines', 'paths', 'permissions'] as const).find(key => key === args[0]);

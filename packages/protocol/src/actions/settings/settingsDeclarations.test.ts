@@ -7,9 +7,35 @@ import { requiresPresentUserExecutionAuthorityForActionInputV1 } from '../decisi
 import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1,
   parseBuiltInAccountSettingValueV1, readBuiltInAccountSettingValueV1,
   buildBuiltInAccountSettingMutationV1, readPortablePlatformAccountSettingBindingV1,
-  readBuiltInSettingsOperationPolicyV1 } from './settingsDeclarations.js';
+  readBuiltInSettingsOperationPolicyV1, resolveBuiltInAccountSettingResetValueV1 } from './settingsDeclarations.js';
 
 describe('portable built-in Settings declarations', () => {
+  it.each([
+    ['toolRendering.collapsedOverrides', 'toolViewDetailLevelByToolName', 'compact'],
+    ['toolRendering.expandedOverrides', 'toolViewExpandedDetailLevelByToolName', 'summary'],
+  ] as const)('strictly admits a single tool detail choice through %s', (anchor, key, neighborLevel) => {
+    const declaration = readBuiltInSettingDeclarationV1(anchor);
+    if (!declaration) throw new Error(`Missing tool rendering declaration ${anchor}`);
+    const settings = accountSettingsParse({ toolViewDetailLevelByToolName: { Read: 'compact' },
+      toolViewExpandedDetailLevelByToolName: { Read: 'summary' } });
+    const value = { toolName: 'Bash', detailLevel: 'full' };
+    expect(parseBuiltInAccountSettingValueV1(declaration, value)).toEqual({ success: true, value });
+    const mutation = buildBuiltInAccountSettingMutationV1(declaration, settings, value);
+    expect(mutation).toEqual({ [key]: { Bash: 'full', Read: neighborLevel } });
+    expect(readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({ ...settings, ...mutation })))
+      .toEqual({ Bash: 'full', Read: neighborLevel });
+    expect(buildBuiltInAccountSettingMutationV1(declaration, accountSettingsParse({ ...settings, ...mutation }),
+      { toolName: 'Bash', detailLevel: 'default' })).toEqual({ [key]: { Read: neighborLevel } });
+    expect(resolveBuiltInAccountSettingResetValueV1(declaration)).toEqual({ success: false });
+    for (const invalid of [null, [], { Bash: 'full' }, { toolName: 'Bash', detailLevel: 'unknown' },
+      { toolName: 'Bash', detailLevel: 'full', extra: true }]) {
+      expect(parseBuiltInAccountSettingValueV1(declaration, invalid)).toEqual({ success: false });
+      expect(buildBuiltInAccountSettingMutationV1(declaration, settings, invalid)).toBeNull();
+    }
+    for (const surface of ['agent', 'mcp'] as const) {
+      expect(isAccountSettingActionSurfaceAllowedV1('settings.set', { anchor, value }, surface)).toBe(true);
+    }
+  });
   it('reads and changes coordinator creation defaults through sparse Account settings intents', () => {
     const baseline = accountSettingsParse({});
     const cases = [

@@ -5378,6 +5378,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
       if (id === 'settings.invoke') return 'client';
       if (typeof input !== 'object' || input === null || !('anchor' in input)) return 'client';
       const declaration = readBuiltInSettingDeclarationV1(input.anchor);
+      if (declaration?.storage?.prerequisite === 'ui_account_encryption_requirement') return 'client';
       return declaration?.storage && declaration.storage.scope !== 'local' ? 'account' : 'client';
     },
     bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_'), voiceClientToolName: id.replaceAll('.', '_') },
