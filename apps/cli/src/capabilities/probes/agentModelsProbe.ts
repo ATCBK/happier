@@ -9,7 +9,7 @@ import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
 import { resolveProviderCliCommand } from '@/runtime/managedTools/providerCliResolution';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import { getAgentModelConfig, getAgentStaticModels } from '@happier-dev/agents';
-import { AsyncTtlCache, MiniMaxModelChoicesSchema, type MiniMaxModelChoices, type BackendTargetRefV1, type ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
+import { AsyncTtlCache, type BackendTargetRefV1, type ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
 import type { Credentials } from '@/persistence';
 import { validateCatalogAcpProbeSpawn } from './validateCatalogAcpProbeSpawn';
 import { createConfiguredAcpProbeBackend } from './createConfiguredAcpProbeBackend';
@@ -52,7 +52,6 @@ export type ProbedAgentModelsResult = Readonly<{
   cacheable?: boolean;
   observedAt?: number;
   refreshError?: boolean;
-  miniMaxModelChoices?: MiniMaxModelChoices;
 }>;
 
 const DEFAULT_PROBE_MODELS_TIMEOUT_MS = 15_000;
@@ -64,7 +63,6 @@ const agentModelsProbeCache = new AsyncTtlCache<ProbedAgentModelsResult>({
 });
 
 const ProbeModelsObservationSchema = z.object({
-  miniMaxModelChoices: MiniMaxModelChoicesSchema.optional(),
   availableModels: z.array(z.unknown()),
   observedAt: z.number().finite().nonnegative().optional(),
   refreshError: z.boolean().optional(),
@@ -561,7 +559,7 @@ export async function probeAgentModelsBestEffort(params: {
     }
 
     if (preflightModelsAdapter?.probeModelsRaw) {
-      let provenance: { observedAt?: number; refreshError?: boolean; source?: 'dynamic' | 'static'; miniMaxModelChoices?: MiniMaxModelChoices } = {};
+      let provenance: { observedAt?: number; refreshError?: boolean; source?: 'dynamic' | 'static' } = {};
       const probePreflightModelsOnce = async (): Promise<ProbedAgentModel[] | null> => {
         const modelsRaw = await preflightModelsAdapter.probeModelsRaw!({
           backendTarget: params.backendTarget,
@@ -580,7 +578,6 @@ export async function probeAgentModelsBestEffort(params: {
         const envelope = ProbeModelsObservationSchema.safeParse(modelsRaw);
         if (envelope.success) {
           provenance = {
-            ...(envelope.data.miniMaxModelChoices ? { miniMaxModelChoices: envelope.data.miniMaxModelChoices } : {}),
             ...(envelope.data.observedAt !== undefined ? { observedAt: envelope.data.observedAt } : {}),
             ...(envelope.data.refreshError !== undefined ? { refreshError: envelope.data.refreshError } : {}),
             ...(envelope.data.source ? { source: envelope.data.source } : {}),

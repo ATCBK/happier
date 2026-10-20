@@ -3,7 +3,7 @@ import {
   providers,
   type AgentModelDescriptor,
 } from '@happier-dev/agents';
-import { parseBooleanEnv, type MiniMaxModelChoices, type ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
+import { parseBooleanEnv, type ConnectedServiceBindingsV1 } from '@happier-dev/protocol';
 
 import { buildDiscoveredClaudeModelDescriptor } from './deriveDiscoveredClaudeModel';
 import { fetchAnthropicModels, type AnthropicModelEntry } from './fetchAnthropicModels';
@@ -79,7 +79,6 @@ export type ClaudeModelCatalogResolution = Readonly<{
   source: 'dynamic' | 'static';
   observedAt?: number;
   refreshError?: boolean;
-  miniMaxModelChoices?: MiniMaxModelChoices;
 }>;
 
 type CatalogCacheEntry = Readonly<{ resolution: ClaudeModelCatalogResolution; expiresAtMs: number }>;
@@ -174,17 +173,12 @@ export async function resolveClaudeModelCatalogResolution(
   // failure TTL, so degrade to the curated catalog for this call only and leave the cache untouched.
   if (!target) return { models: resolveStaticClaudeModels(), source: 'static', refreshError: true };
 
-  // Presentation depends on current explicit overrides, not the credential-scoped catalog cache.
-  const withPresentation = (resolution: ClaudeModelCatalogResolution): ClaudeModelCatalogResolution => ({
-    ...resolution,
-    ...(target.miniMaxModelChoices ? { miniMaxModelChoices: target.miniMaxModelChoices } : {}),
-  });
   const cacheKey = target.cacheIdentity;
   const cached = catalogCache.get(cacheKey);
-  if (!params.bypassCache && cached && cached.expiresAtMs > nowMs()) return withPresentation(cached.resolution);
+  if (!params.bypassCache && cached && cached.expiresAtMs > nowMs()) return cached.resolution;
 
   const inFlight = inFlightCatalogResolutions.get(cacheKey);
-  if (inFlight) return withPresentation(await inFlight);
+  if (inFlight) return await inFlight;
 
   const resolution = (async () => {
     const entries = await fetchAnthropicModels({
@@ -213,7 +207,7 @@ export async function resolveClaudeModelCatalogResolution(
 
   inFlightCatalogResolutions.set(cacheKey, resolution);
   try {
-    return withPresentation(await resolution);
+    return await resolution;
   } finally {
     inFlightCatalogResolutions.delete(cacheKey);
   }

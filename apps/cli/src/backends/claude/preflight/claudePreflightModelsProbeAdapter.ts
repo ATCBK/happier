@@ -51,13 +51,11 @@ export const claudePreflightModelsProbeAdapter: PreflightSessionControlsProbeAda
       profileId,
       processEnv,
     });
-    const presentation = resolution.miniMaxModelChoices ? { miniMaxModelChoices: resolution.miniMaxModelChoices } : {};
     if (resolution.source === 'static') {
-      return { availableModels: resolution.models, source: 'static', refreshError: resolution.refreshError, ...presentation };
+      return { availableModels: resolution.models, source: 'static', refreshError: resolution.refreshError };
     }
     const installedCapabilities = await probeClaudeInstalledRuntimeCapabilities({ cwd, timeoutMs, processEnv });
     return {
-      ...presentation,
       availableModels: resolution.models.map((model) => toProbeRawModel(model, installedCapabilities)),
       source: resolution.source,
       observedAt: resolution.observedAt,

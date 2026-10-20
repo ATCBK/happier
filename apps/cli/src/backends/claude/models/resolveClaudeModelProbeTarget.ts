@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { resolveMiniMaxModelChoices, type MiniMaxModelChoices, type ConnectedServiceBindingsV1, type ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
+import type { ConnectedServiceBindingsV1, ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
 
 import {
   createConnectedServiceCredentialApi,
@@ -25,7 +25,6 @@ export type ClaudeModelProbeTarget = Readonly<{
   baseUrl: string | null;
   credential: ClaudeModelProbeCredential;
   cacheIdentity: string;
-  miniMaxModelChoices?: MiniMaxModelChoices;
 }>;
 
 export type ClaudeProbeBinding = Readonly<{
@@ -208,8 +207,6 @@ export async function resolveClaudeModelProbeTarget(
   const baseUrl = normalizeExplicitBaseUrl(effectiveEnv);
   if (baseUrl === 'invalid') return null;
 
-  const miniMaxModelChoices = resolveMiniMaxModelChoices(effectiveEnv);
-  const presentation = miniMaxModelChoices ? { miniMaxModelChoices } : {};
   const binding = resolveClaudeProbeBinding(params.connectedServices);
   if (binding) {
     if (!params.credentials) return null;
@@ -222,7 +219,7 @@ export async function resolveClaudeModelProbeTarget(
         nowMs: (params.nowMs ?? Date.now)(),
       });
       if (!credential) return null;
-      return { baseUrl, credential, cacheIdentity: targetCacheIdentity(baseUrl, credential), ...presentation };
+      return { baseUrl, credential, cacheIdentity: targetCacheIdentity(baseUrl, credential) };
     } catch {
       return null;
     }
@@ -230,7 +227,7 @@ export async function resolveClaudeModelProbeTarget(
 
   const envCredential = readAuthFromEnv(effectiveEnv);
   if (envCredential) {
-    return { baseUrl, credential: envCredential, cacheIdentity: targetCacheIdentity(baseUrl, envCredential), ...presentation };
+    return { baseUrl, credential: envCredential, cacheIdentity: targetCacheIdentity(baseUrl, envCredential) };
   }
 
   // Never pair a native saved subscription token with an explicitly configured third-party

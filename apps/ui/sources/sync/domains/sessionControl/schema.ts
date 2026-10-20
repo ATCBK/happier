@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { MiniMaxModelChoicesSchema } from '@happier-dev/protocol';
 import { opaqueSessionControlIdentifierSchema } from './opaqueIdentifiers';
 
 const SessionModeOptionSchema = z.object({
@@ -46,7 +45,6 @@ const SessionModelsStateSchema = z.object({
     provider: opaqueSessionControlIdentifierSchema,
     updatedAt: z.number(),
     currentModelId: opaqueSessionControlIdentifierSchema,
-    miniMaxModelChoices: MiniMaxModelChoicesSchema.optional(),
     availableModels: z.array(SessionModelSchema).default([]),
 });
 

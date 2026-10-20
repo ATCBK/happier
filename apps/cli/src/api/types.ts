@@ -659,7 +659,6 @@ export type Metadata = {
     provider: string,
     updatedAt: number,
     currentModelId: string,
-    miniMaxModelChoices?: import('@happier-dev/protocol').MiniMaxModelChoices,
     availableModels: Array<{
       id: string,
       name: string,
@@ -686,7 +685,6 @@ export type Metadata = {
     provider: string,
     updatedAt: number,
     currentModelId: string,
-    miniMaxModelChoices?: import('@happier-dev/protocol').MiniMaxModelChoices,
     availableModels: Array<{
       id: string,
       name: string,

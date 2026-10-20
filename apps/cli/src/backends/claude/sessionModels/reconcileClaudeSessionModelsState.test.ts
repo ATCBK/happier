@@ -20,24 +20,6 @@ it('replaces historical catalog membership and removes optional controls absent 
   expect(actual.availableModels).toEqual([{ id: 'kept', name: 'Kept' }]);
 });
 
-it('retains MiniMax presentation provenance through SDK updates without filtering either membership contribution', () => {
-  const reconcile = createClaudeSessionModelsReconciler();
-  const policy = { provider: 'minimax' as const, configuredModelIds: ['MiniMax-M2.7'] };
-  const catalog = reconcile({ metadata: null, source: 'catalog', incomingState: {
-    ...state([{ id: 'MiniMax-M3.1-Flash', name: 'Flash' }, { id: 'MiniMax-M2.7', name: 'Legacy' }]),
-    miniMaxModelChoices: policy,
-  } });
-  const result = reconcile({ metadata: { sessionModelsV1: catalog } as Metadata, source: 'agent_sdk',
-    incomingState: state([{ id: 'MiniMax-M2.5', name: 'SDK legacy' }]),
-  });
-  expect(result.miniMaxModelChoices).toEqual(policy);
-  expect(result.availableModels.map(model => model.id)).toEqual(['MiniMax-M3.1-Flash', 'MiniMax-M2.7', 'MiniMax-M2.5']);
-  const customEndpoint = reconcile({ metadata: { sessionModelsV1: result } as Metadata, source: 'catalog',
-    incomingState: state([{ id: 'MiniMax-M2.7', name: 'Custom endpoint model' }]),
-  });
-  expect(customEndpoint.miniMaxModelChoices).toBeUndefined();
-});
-
 it('keeps only the latest SDK contribution alongside the latest catalog in either publication order', () => {
   for (const firstSource of ['catalog', 'agent_sdk'] as const) {
     const reconcile = createClaudeSessionModelsReconciler();

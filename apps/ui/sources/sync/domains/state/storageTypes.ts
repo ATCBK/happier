@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { PermissionMode, ModelMode } from "@/sync/domains/permissions/permissionTypes";
 import { 
-    MiniMaxModelChoicesSchema,
     CliUpdateFactsSchema,
     createAgentRuntimeDescriptorV1Schema,
     createAcpConfigOptionOverridesV1Schema,
@@ -120,7 +119,6 @@ const MetadataObjectSchema = z.object({
         provider: z.string(),
         updatedAt: z.number(),
         currentModelId: z.string(),
-        miniMaxModelChoices: MiniMaxModelChoicesSchema.optional(),
         availableModels: z.array(z.object({
             id: z.string(),
             name: z.string(),
@@ -147,7 +145,6 @@ const MetadataObjectSchema = z.object({
         provider: z.string(),
         updatedAt: z.number(),
         currentModelId: z.string(),
-        miniMaxModelChoices: MiniMaxModelChoicesSchema.optional(),
         availableModels: z.array(z.object({
             id: z.string(),
             name: z.string(),
