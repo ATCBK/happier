@@ -4,7 +4,10 @@ import type {
     ProviderAccountUsageQuotaScopeV1,
     QualifiedConnectedAccountRef,
     QualifiedConnectedAccountServiceRef,
+    QualifiedConnectedAccountProfileV4,
 } from '@happier-dev/protocol';
+import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import type { ConnectedServiceRefreshCoordinator } from '../refresh/ConnectedServiceRefreshCoordinator';
 
 import type { ConnectedServiceAuthGroupSwitchCoordinator } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
 import {
@@ -20,6 +23,26 @@ type SwitchAfterClassifiedFailure = ConnectedServiceAuthGroupSwitchCoordinator<
 >[
     'switchAfterClassifiedFailure'
 ];
+
+/** Reuse the coordinator's non-forced freshness decision, never the superseded token's rejection. */
+export async function refreshExpiredConnectedAccountRequestAuthReplacement(input: Readonly<{
+    resolved: ConnectedAccountRequestAuthResolvedBinding;
+    signal: AbortSignal;
+    readAccounts(service: QualifiedConnectedAccountServiceRef, signal: AbortSignal): Promise<readonly QualifiedConnectedAccountProfileV4[]>;
+    refreshCoordinator: Pick<ConnectedServiceRefreshCoordinator, 'refreshQualifiedConnectedAccountCredentialForSpawnPreflight'>;
+    assertCurrent(): void | Promise<void>;
+}>): Promise<void> {
+    input.signal.throwIfAborted();
+    await input.assertCurrent();
+    const accounts = await input.readAccounts(input.resolved.account.service, input.signal);
+    input.signal.throwIfAborted();
+    await input.assertCurrent();
+    const profile = accounts.find(candidate => sameQualifiedConnectedAccountRef(candidate.ref, input.resolved.account));
+    if (!profile || profile.revisionSemantics !== 'revisioned' || profile.credentialRevision !== input.resolved.credentialRevision) return;
+    await input.refreshCoordinator.refreshQualifiedConnectedAccountCredentialForSpawnPreflight({ profile, allowEarlyRefresh: false });
+    input.signal.throwIfAborted();
+    await input.assertCurrent();
+}
 
 export type ConnectedAccountRequestAuthTemporaryRetry = Readonly<{
     service: QualifiedConnectedAccountServiceRef;

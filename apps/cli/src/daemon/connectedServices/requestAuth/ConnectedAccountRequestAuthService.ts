@@ -120,6 +120,12 @@ export type ConnectedAccountRequestAuthServiceDependencies = Readonly<{
         failure: Extract<ConnectedAccountAuthFailureRequestV1['normalizedFailure'], { class: 'authentication' }>;
         signal: AbortSignal;
     }>) => Promise<RequestAuthFailureOutcomeV1>;
+    /** A stale rejection cannot invalidate its replacement; only independent current expiry may refresh it. */
+    refreshExpiredReplacement?: (input: Readonly<{
+        subject: ConnectedAccountRequestAuthSubject;
+        resolved: ConnectedAccountRequestAuthResolvedBinding;
+        signal: AbortSignal;
+    }>) => Promise<void>;
     reportScopeFailure?: (input: Readonly<{
         subject: ConnectedAccountRequestAuthSubject;
         resolved: ConnectedAccountRequestAuthResolvedBinding;
@@ -324,8 +330,10 @@ function authFailureOperationKey(input: Readonly<{
     cacheKey: string;
     resolved: ConnectedAccountRequestAuthResolvedBinding;
     failingAccessTokenFingerprint: string | null | undefined;
+    kind: 'failure' | 'replacement_freshness';
 }>): string {
     return JSON.stringify([
+        input.kind,
         input.cacheKey,
         input.resolved.group?.groupId ?? null,
         input.resolved.group?.generation ?? null,
@@ -366,9 +374,10 @@ function resolvedMatchesBinding(
 function contextMatchesResolved(
     context: ConnectedAccountAuthFailureRequestV1['credentialContext'],
     resolved: ConnectedAccountRequestAuthResolvedBinding,
+    allowReplacedCredential = false,
 ): boolean {
     if (!sameQualifiedConnectedAccountRef(context.account, resolved.account)) return false;
-    if (context.credentialRevision !== resolved.credentialRevision) return false;
+    if (!allowReplacedCredential && context.credentialRevision !== resolved.credentialRevision) return false;
     if (!context.group && !resolved.group) return true;
     return context.group?.groupId === resolved.group?.groupId
         && context.group?.generation === resolved.group?.generation;
@@ -405,6 +414,7 @@ export function createConnectedAccountRequestAuthService(
     const leases = new Map<string, CachedBearerMaterial>();
     const fills = new Map<string, RequestAuthSharedOperation<CachedBearerMaterial>>();
     const authFailures = new Map<string, Readonly<{
+        kind: 'failure' | 'replacement_freshness';
         cacheKey: string;
         failingAccessTokenFingerprint: string;
         operation: RequestAuthSharedOperation<RequestAuthFailureOutcomeV1>;
@@ -679,6 +689,7 @@ export function createConnectedAccountRequestAuthService(
         subject: ConnectedAccountRequestAuthSubject,
         context: ConnectedAccountAuthFailureRequestV1['credentialContext'],
         signal: AbortSignal,
+        allowReplacedCredential = false,
     ): Promise<Readonly<{
         resolved: ConnectedAccountRequestAuthResolvedBinding;
         cacheKey: string;
@@ -708,7 +719,7 @@ export function createConnectedAccountRequestAuthService(
             );
             if (!subject.isCurrent()) return null;
             if (!resolved || !resolvedMatchesBinding(currentUse.binding, resolved)) continue;
-            if (!contextMatchesResolved(context, resolved)) continue;
+            if (!contextMatchesResolved(context, resolved, allowReplacedCredential)) continue;
             const cacheKey = leaseKey(resolved, currentUse.use.materialization, subject);
             return {
                 resolved,
@@ -716,6 +727,7 @@ export function createConnectedAccountRequestAuthService(
                 failureKey: authFailureOperationKey({
                     cacheKey,
                     resolved,
+                    kind: context.credentialRevision === resolved.credentialRevision ? 'failure' : 'replacement_freshness',
                     failingAccessTokenFingerprint:
                         context.failingAccessTokenFingerprint,
                 }),
@@ -764,7 +776,8 @@ export function createConnectedAccountRequestAuthService(
         if (!fingerprint) return false;
         for (const [failureKey, active] of authFailures) {
             if (
-                failureKey !== context.failureKey
+                active.kind === 'failure'
+                && failureKey !== context.failureKey
                 && active.cacheKey === context.cacheKey
                 && active.failingAccessTokenFingerprint === fingerprint
                 && !active.operation.signal.aborted
@@ -810,8 +823,10 @@ export function createConnectedAccountRequestAuthService(
                 input.subject,
                 request.credentialContext,
                 lifetime.signal,
+                request.normalizedFailure.class === 'authentication' && dependencies.refreshExpiredReplacement !== undefined,
             );
             if (!context) return { status: 'stale_context' };
+            const isReplacement = context.resolved.credentialRevision !== request.credentialContext.credentialRevision;
             if (request.normalizedFailure.class === 'insufficient_scope') {
                 if (!validateFailureLease(context, request.credentialContext)) return { status: 'stale_context' };
                 if (!dependencies.reportScopeFailure) return { status: 'denied' };
@@ -834,6 +849,7 @@ export function createConnectedAccountRequestAuthService(
                         }
                     },
                 );
+                if (isReplacement) return { status: 'stale_context' };
                 return await isFailureCallerCurrentAfterAwait(
                     input.subject,
                     request.credentialContext,
@@ -848,7 +864,7 @@ export function createConnectedAccountRequestAuthService(
                 authFailures.delete(context.failureKey);
             }
             if (
-                !validateFailureLease(context, request.credentialContext)
+                !isReplacement && !validateFailureLease(context, request.credentialContext)
                 && !hasActiveRecoveryForEvictedLease(
                     context,
                     request.credentialContext,
@@ -858,6 +874,12 @@ export function createConnectedAccountRequestAuthService(
             }
 
             const operation = createSharedOperation(async (ownerSignal) => {
+                if (isReplacement) {
+                    await startRequestAuthOperation(ownerSignal, () => dependencies.refreshExpiredReplacement!({
+                        subject: input.subject, resolved: context.resolved, signal: ownerSignal,
+                    }));
+                    return { status: 'stale_context' } as const;
+                }
                 leases.delete(context.cacheKey);
                 const outcome = await startRequestAuthOperation(
                     ownerSignal,
@@ -876,6 +898,7 @@ export function createConnectedAccountRequestAuthService(
                 }
             }, authFailureOperationDeadlineMs);
             const active = Object.freeze({
+                kind: isReplacement ? 'replacement_freshness' as const : 'failure' as const,
                 cacheKey: context.cacheKey,
                 failingAccessTokenFingerprint:
                     request.credentialContext.failingAccessTokenFingerprint!,
@@ -891,6 +914,7 @@ export function createConnectedAccountRequestAuthService(
                     }
                 },
             );
+            if (isReplacement) return { status: 'stale_context' };
             return await isFailureCallerCurrentAfterAwait(
                 input.subject,
                 request.credentialContext,

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
     applyConnectedAccountRequestAuthRecovery,
+    refreshExpiredConnectedAccountRequestAuthReplacement,
     type ConnectedAccountRequestAuthRecoveryInput,
 } from './ConnectedAccountRequestAuthRecovery';
 
@@ -43,6 +44,39 @@ function recoveryInput(
 }
 
 describe('ConnectedAccountRequestAuthRecovery', () => {
+    it.each(['cancelled', 'retired'] as const)('refuses freshness effects when the requester is %s during the account read', async kind => {
+        const controller = new AbortController();
+        let current = true;
+        await expect(refreshExpiredConnectedAccountRequestAuthReplacement({
+            resolved, signal: controller.signal,
+            readAccounts: async () => {
+                if (kind === 'cancelled') controller.abort();
+                else current = false;
+                return [];
+            },
+            refreshCoordinator: { refreshQualifiedConnectedAccountCredentialForSpawnPreflight: async () => {
+                throw new Error('Retired requester must not start credential health or refresh effects');
+            } },
+            assertCurrent() { if (!current) throw new Error('requester_retired'); },
+        })).rejects.toThrow(kind === 'cancelled' ? /abort/i : 'requester_retired');
+    });
+    it('does not assess replacement freshness after the source revision advances again or its account disappears', async () => {
+        const profile = {
+            ref: resolved.account, status: 'connected' as const, authenticationModeId: 'oauth',
+            revisionSemantics: 'revisioned' as const, credentialRevision: 'csr_1123456789ABCDEFGHJKMNPQRS',
+            configurationReady: false, configurationRevision: null, kind: null, expiresAt: null,
+            displayName: 'primary', scopes: [],
+        };
+        for (const accounts of [[], [profile]]) {
+            await expect(refreshExpiredConnectedAccountRequestAuthReplacement({
+                resolved, signal: new AbortController().signal, readAccounts: async () => accounts,
+                refreshCoordinator: { refreshQualifiedConnectedAccountCredentialForSpawnPreflight: async () => {
+                    throw new Error('A removed or superseded credential must not reach refresh');
+                } },
+                assertCurrent() {},
+            })).resolves.toBeUndefined();
+        }
+    });
     it('preserves a novel qualified service identity through request-time group recovery', async () => {
         const service = {
             pluginId: 'example.connected-accounts',

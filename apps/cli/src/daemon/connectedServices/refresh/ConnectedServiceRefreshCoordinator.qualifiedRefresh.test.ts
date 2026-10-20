@@ -1219,6 +1219,11 @@ describe('ConnectedServiceRefreshCoordinator qualified refresh integration', () 
       revisionSemantics: 'revisioned', credentialRevision: revision, configurationReady: true,
       configurationRevision: null, expiresAt: now + 3_600_000, scopes: [],
     };
+    const revisionBeforeFreshReplacement = revision;
+    await expect(coordinator.refreshQualifiedConnectedAccountCredentialForSpawnPreflight({
+      profile: { ...currentProfile, status: 'connected', expiresAt: now + 1 }, allowEarlyRefresh: false,
+    })).resolves.toEqual({ status: 'ready' });
+    expect(revision).toBe(revisionBeforeFreshReplacement);
     mutateCredentialHealth.mockClear();
     await expect(coordinator.refreshQualifiedConnectedAccountCredentialForSpawnPreflight({ profile: currentProfile }))
       .resolves.toEqual({ status: 'ready' });

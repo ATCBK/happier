@@ -696,6 +696,7 @@ import { createProviderRedactionLease } from '@/providers/spawn/redaction';
 import { createAgentProviderCatalogObservationService } from '@/providers/probe/agentCatalogObservation';
 import {
   applyConnectedAccountRequestAuthRecovery,
+  refreshExpiredConnectedAccountRequestAuthReplacement,
   type ConnectedAccountRequestAuthRecoveryInput,
   type ConnectedAccountRequestAuthTemporaryRetry,
   type ConnectedAccountRequestAuthTemporaryRetryRecordResult,
@@ -4086,6 +4087,28 @@ export async function startDaemonSessionControlRuntime(
               : null;
           },
         });
+      },
+      refreshExpiredReplacement: async ({ subject, resolved, signal }) => {
+        if (resolved.legacyServiceKeyedCompatibility === true) return;
+        const parentSessionId = subject.parentSessionId;
+        await withSessionAccountContext(parentSessionId ?? null, async (accountContext) => {
+          const refreshCoordinator = accountContext
+            ? accountContext.connectedServiceRefreshCoordinator
+            : params.getConnectedServiceRefreshCoordinator();
+          if (!refreshCoordinator) return;
+          const assertCurrent = async () => {
+            signal.throwIfAborted();
+            if (!subject.isCurrent()) throw new Error('request_auth_not_active');
+            if (parentSessionId) await assertSessionAccountCurrent(parentSessionId, accountContext);
+          };
+          await withSessionAccountHome(accountContext, () => refreshExpiredConnectedAccountRequestAuthReplacement({
+            resolved, signal, refreshCoordinator, assertCurrent,
+            readAccounts: async (service, signal) => (await listQualifiedConnectedAccountsV4({
+              token: (accountContext?.bootstrap.credentials ?? params.credentials).token,
+              service, signal,
+            })).accounts,
+          }));
+        }, undefined, signal);
       },
       refreshAfterAuthFailure: async ({
         subject,

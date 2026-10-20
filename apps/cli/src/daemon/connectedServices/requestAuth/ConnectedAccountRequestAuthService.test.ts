@@ -988,6 +988,100 @@ describe('ConnectedAccountRequestAuthService', () => {
         expect(recoveries).toBe(1);
     });
 
+    it('coalesces late failures against a replacement without evicting its bearer or changing group authority', async () => {
+        const replacementCheck = deferred<void>();
+        let current = resolved({ accountId: 'one', revision: revision1, generation: 7 });
+        let replacementChecks = 0;
+        let forcedRefreshes = 0;
+        const owner = createConnectedAccountRequestAuthService({
+            resolveCurrentBinding: () => current,
+            materializeBearer: async ({ resolved: binding }) => ({ accessToken: `token-${binding.credentialRevision}` }),
+            refreshAfterAuthFailure: async () => { forcedRefreshes++; return { status: 'current_changed' }; },
+            refreshExpiredReplacement: async () => { replacementChecks++; await replacementCheck.promise; },
+            reportQuotaFailure: async () => ({ status: 'current_unchanged' }),
+        });
+        const capability = subject(groupBinding());
+        const rejected = await owner.lookupRequestAuth({ subject: capability, purpose });
+        current = resolved({ accountId: 'one', revision: revision2, generation: 7 });
+        const replacement = await owner.lookupRequestAuth({ subject: capability, purpose });
+        const report = { subject: capability, request: { credentialContext: rejected.credentialContext,
+            normalizedFailure: { class: 'authentication' as const, evidence: structuredAuthEvidence } } };
+        const pending = Promise.all([owner.refreshAfterAuthFailure(report), owner.refreshAfterAuthFailure(report)]);
+        await vi.waitFor(() => expect(replacementChecks).toBe(1));
+        replacementCheck.resolve();
+        expect(await pending).toEqual([{ status: 'stale_context' }, { status: 'stale_context' }]);
+        expect((await owner.lookupRequestAuth({ subject: capability, purpose })).accessToken).toBe(replacement.accessToken);
+        expect(await owner.refreshAfterAuthFailure({ ...report, request: { ...report.request, credentialContext: {
+            ...rejected.credentialContext,
+            failingAccessTokenFingerprint: replacement.credentialContext.failingAccessTokenFingerprint,
+        } } })).toEqual({ status: 'stale_context' });
+        expect(forcedRefreshes).toBe(0);
+        current = resolved({ accountId: 'one', revision: revision2, generation: 8 });
+        expect(await owner.refreshAfterAuthFailure(report)).toEqual({ status: 'stale_context' });
+        current = resolved({ accountId: 'two', revision: revision2, generation: 7 });
+        expect(await owner.refreshAfterAuthFailure(report)).toEqual({ status: 'stale_context' });
+        expect(replacementChecks).toBe(2);
+    });
+
+    it('denies a cancelled freshness waiter and never discloses a lease after its subject retires', async () => {
+        const refresh = deferred<void>();
+        let revision = revision1;
+        let active = true;
+        let started = false;
+        const owner = createConnectedAccountRequestAuthService({
+            resolveCurrentBinding: () => resolved({ accountId: 'one', revision }),
+            materializeBearer: async () => ({ accessToken: 'bearer' }),
+            refreshExpiredReplacement: async () => { started = true; await refresh.promise; },
+            refreshAfterAuthFailure: async () => { throw new Error('A stale rejection cannot force refresh'); },
+            reportQuotaFailure: async () => ({ status: 'current_unchanged' }),
+        });
+        const capability = subject(accountBinding(), () => active);
+        const rejected = await owner.lookupRequestAuth({ subject: capability, purpose });
+        revision = revision2;
+        const controller = new AbortController();
+        const pending = owner.refreshAfterAuthFailure({ subject: capability, signal: controller.signal,
+            request: { credentialContext: rejected.credentialContext,
+                normalizedFailure: { class: 'authentication', evidence: structuredAuthEvidence } } });
+        await vi.waitFor(() => expect(started).toBe(true));
+        active = false;
+        controller.abort();
+        await expect(pending).resolves.toEqual({ status: 'denied' });
+        refresh.resolve();
+        await expect(owner.lookupRequestAuth({ subject: capability, purpose })).rejects.toMatchObject({ code: 'request_auth_not_active' });
+    });
+
+    it('recovers a current rejected token while an older revision assesses freshness of the same bearer', async () => {
+        const freshnessCheck = deferred<void>();
+        let revision = revision1;
+        let freshnessStarted = false;
+        let forcedRefreshes = 0;
+        const owner = createConnectedAccountRequestAuthService({
+            resolveCurrentBinding: () => resolved({ accountId: 'one', revision }),
+            materializeBearer: async () => ({ accessToken: 'unchanged-bearer' }),
+            refreshExpiredReplacement: async () => { freshnessStarted = true; await freshnessCheck.promise; },
+            refreshAfterAuthFailure: async () => { forcedRefreshes++; return { status: 'current_unchanged' }; },
+            reportQuotaFailure: async () => ({ status: 'current_unchanged' }),
+        });
+        const capability = subject(accountBinding());
+        const oldLease = await owner.lookupRequestAuth({ subject: capability, purpose });
+        revision = revision2;
+        const currentLease = await owner.lookupRequestAuth({ subject: capability, purpose });
+        const report = (lease: OAuthBearerLeaseV1) => owner.refreshAfterAuthFailure({ subject: capability,
+            request: { credentialContext: lease.credentialContext,
+                normalizedFailure: { class: 'authentication', evidence: structuredAuthEvidence } } });
+        const late = report(oldLease);
+        await vi.waitFor(() => expect(freshnessStarted).toBe(true));
+        const current = report(currentLease);
+        try {
+            await vi.waitFor(() => expect(forcedRefreshes).toBe(1));
+        } finally {
+            freshnessCheck.resolve();
+        }
+        await expect(late).resolves.toEqual({ status: 'stale_context' });
+        await expect(current).resolves.toEqual({ status: 'current_unchanged' });
+        expect(forcedRefreshes).toBe(1);
+    });
+
     it('returns denied for recovery deadline and caller cancellation while reserving stale_context for currentness', async () => {
         let materializations = 0;
         const authSignals: AbortSignal[] = [];

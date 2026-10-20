@@ -67,7 +67,7 @@ import { createConnectedAccountRequestAuthService } from '@/daemon/connectedServ
 import { createDaemonQualifiedRequestAuthCallbacks } from '@/daemon/connectedServices/requestAuth/createDaemonQualifiedRequestAuthCallbacks';
 import { createDaemonMcpRequestAuthForTest, type IssueMcpTestRequestAuth } from '@/daemon/connectedServices/requestAuth/createDaemonMcpRequestAuthForTest';
 import { ConnectedServiceRefreshCoordinator } from '@/daemon/connectedServices/refresh/ConnectedServiceRefreshCoordinator';
-import { applyConnectedAccountRequestAuthRecovery } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthRecovery';
+import { applyConnectedAccountRequestAuthRecovery, refreshExpiredConnectedAccountRequestAuthReplacement } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthRecovery';
 import { createDaemonControlApp } from '@/daemon/controlServer';
 import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
@@ -438,6 +438,11 @@ export async function exerciseMcpOAuthSocketRequestAuth(options?: Readonly<{ tes
   const callbacks = createDaemonQualifiedRequestAuthCallbacks({ recordScopeChallenge: established.recordScopeChallenge,
     assertSessionAccountCurrent: async () => { if (!active) throw new Error('Session retired'); } });
   const requestAuth = createConnectedAccountRequestAuthService({ ...callbacks,
+    refreshExpiredReplacement: async ({ subject, resolved, signal }) => refreshExpiredConnectedAccountRequestAuthReplacement({
+      resolved, signal, refreshCoordinator,
+      readAccounts: async (service, signal) => (await listQualifiedConnectedAccountsV4({ token, service, signal })).accounts,
+      assertCurrent: () => { if (!subject.isCurrent()) throw new Error('Session retired'); },
+    }),
     refreshAfterAuthFailure: async ({ resolved, failure, signal }) => {
       const recovery = await applyConnectedAccountRequestAuthRecovery({ resolved, failure, signal,
         refreshCredential: input => refreshCoordinator.refreshQualifiedConnectedAccountCredentialForRequestAuth(input),

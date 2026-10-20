@@ -1541,6 +1541,8 @@ export class ConnectedServiceRefreshCoordinator {
 
   async refreshQualifiedConnectedAccountCredentialForSpawnPreflight(input: Readonly<{
     profile: QualifiedConnectedAccountProfileV4;
+    /** A replaced request-auth token may refresh only after independent expiry. */
+    allowEarlyRefresh?: boolean;
   }>): Promise<QualifiedConnectedAccountSpawnPreflightResult> {
     const profile = input.profile;
     if (profile.status === 'needs_reauth') return { status: 'reconnect_required' };
@@ -1549,7 +1551,8 @@ export class ConnectedServiceRefreshCoordinator {
     // legacy spawn. Never reverse-project a device/OAuth mode into a V2 record.
     const expiresAt = typeof profile.expiresAt === 'number' && Number.isFinite(profile.expiresAt)
       ? profile.expiresAt : null;
-    let refreshNeeded = expiresAt !== null && expiresAt - this.params.now() <= this.params.refreshWindowMs;
+    let refreshNeeded = expiresAt !== null && expiresAt - this.params.now()
+      <= (input.allowEarlyRefresh === false ? 0 : this.params.refreshWindowMs);
     if (expiresAt === null || profile.status === 'refresh_failed_retryable') {
       const runtime = this.params.qualifiedConnectedAccountRuntime;
       if (!runtime || !this.shouldRunQualifiedOperation(profile.ref, 'credential_health')) {
