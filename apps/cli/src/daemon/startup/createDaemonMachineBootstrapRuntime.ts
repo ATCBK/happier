@@ -248,6 +248,7 @@ export function createDaemonMachineBootstrapRuntime(
     localServiceSummary?: Pick<LocalServicesDaemonRuntime, 'getSummary' | 'subscribeSummary' | 'refreshInventoryNow'>;
     machineResourceSummary?: MachineResourceSummary;
     resolveManagedPurposeBindingIntent?: BootstrapRuntime['resolveManagedPurposeBindingIntent'];
+    resolveManagedPurposeBindingIntentSelection?: BootstrapRuntime['resolveManagedPurposeBindingIntentSelection'];
     mcpServers?: BootstrapRuntime['mcpServers'];
     openTeamDirect?: BootstrapRuntime['openTeamDirect'];
     prepareRunTeamCredentialProviderBinding?: ExecutionRunTeamCredentialProviderBindingPreparer;
@@ -799,6 +800,9 @@ export function createDaemonMachineBootstrapRuntime(
           resolveManagedPurposeBindingIntent:
             params.resolveManagedPurposeBindingIntent,
         }
+      : {}),
+    ...(params.resolveManagedPurposeBindingIntentSelection
+      ? { resolveManagedPurposeBindingIntentSelection: params.resolveManagedPurposeBindingIntentSelection }
       : {}),
     ...(params.createAgentCatalogObservation
       ? { createAgentCatalogObservation: params.createAgentCatalogObservation }
