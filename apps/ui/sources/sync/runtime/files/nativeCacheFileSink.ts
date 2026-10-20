@@ -51,6 +51,7 @@ export async function shareNativeCacheFile(input: Readonly<{
     dialogTitle?: string;
     isCurrent?: () => boolean;
     onHandoff?: () => void;
+    action?: 'save' | 'open' | 'share';
 }>): Promise<NativeCacheFileShareResult> {
     try {
         const isCurrent = input.isCurrent ?? (() => true);
@@ -58,9 +59,11 @@ export async function shareNativeCacheFile(input: Readonly<{
             const { performAndroidFileAction } = await import('./nativeFileActions');
             if (!isCurrent()) return { status: 'canceled' };
             input.onHandoff?.();
-            await performAndroidFileAction({ fileUri: input.fileUri, name: input.name, action: 'share', mimeType: input.mimeType, dialogTitle: input.dialogTitle });
+            const action = input.action ?? 'share';
+            const result = await performAndroidFileAction({ fileUri: input.fileUri, name: input.name, action, mimeType: input.mimeType, dialogTitle: input.dialogTitle });
+            if (result.canceled) return { status: 'canceled' };
             // Android chooser completion does not prove the recipient finished reading.
-            return { status: 'shared', retainCacheFile: true };
+            return { status: 'shared', retainCacheFile: action !== 'save' };
         }
         const sharing = await import('expo-sharing');
         if (!isCurrent()) return { status: 'canceled' };

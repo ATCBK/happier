@@ -44,6 +44,9 @@ mod iroh;
 mod secure_storage;
 
 #[cfg(any(desktop, test))]
+mod desktop_downloads;
+
+#[cfg(any(desktop, test))]
 mod browser;
 
 #[cfg(any(desktop, test))]
@@ -105,6 +108,7 @@ pub fn run() {
             .manage(desktop_lifecycle::DesktopShutdownState::default())
             .manage(app_updates::PendingUpdate::default())
             .manage(system_tasks::SystemTasksState::default())
+            .manage(desktop_downloads::DesktopDownloadsState::default())
             .manage(window_sizing::WindowSizingState::default())
             .manage(activity_overlay::ActivityOverlayState::default())
             .manage(pet_overlay::DesktopPetOverlayState::default())
@@ -114,6 +118,10 @@ pub fn run() {
                 app_updates::desktop_fetch_update,
                 app_updates::desktop_download_update,
                 app_updates::desktop_install_update,
+                desktop_downloads::desktop_download_cache_create,
+                desktop_downloads::desktop_download_cache_write,
+                desktop_downloads::desktop_download_cache_close,
+                desktop_downloads::desktop_download_cache_remove,
                 desktop_dialog::desktop_pick_ssh_identity_file,
                 desktop_dialog::desktop_pick_personal_home_backup_archive,
                 desktop_dialog::desktop_save_personal_home_backup_archive,

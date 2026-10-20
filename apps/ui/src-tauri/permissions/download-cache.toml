@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-desktop-download-cache"
+description = "Creates, streams and removes only app-owned temporary download files."
+commands.allow = ["desktop_download_cache_create", "desktop_download_cache_write", "desktop_download_cache_close", "desktop_download_cache_remove"]

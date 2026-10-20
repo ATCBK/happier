@@ -363,6 +363,28 @@ test('protected raw workspace and provider HTTP tunnels retain their local capab
     assert.equal(provider.localCapability, 'a'.repeat(64));
 });
 
+test('native preview forwards its signed mux descriptor and observes terminal native custody', async () => {
+    const { native, calls } = createNativeFake();
+    let finish: () => void = () => undefined;
+    const terminal = new Promise<void>((resolve) => { finish = resolve; });
+    const service = createService({ ...native, waitMachineTunnelClosed: async (leaseId: string) => {
+        assert.equal(leaseId, 'machine-tcp_tunnel-lease');
+        await terminal;
+    } });
+    const nativeHttpLease = { openJson: '{"signed":"preview-mux"}' };
+    const lease = await service.startMachineTunnel({
+        endpointId: ENDPOINT_ID, handshakeJson: JSON.stringify({ flow: 'tcp_tunnel' }), nativeHttpLease,
+    });
+    assert.deepEqual((calls.machineRawStart[0] as { nativeHttpLease?: unknown }).nativeHttpLease, nativeHttpLease);
+    let closed = false;
+    const waiting = service.waitMachineTunnelClosed(lease.leaseId).then(() => { closed = true; });
+    await Promise.resolve();
+    assert.equal(closed, false);
+    finish();
+    await waiting;
+    assert.equal(closed, true);
+});
+
 test('the desktop iroh seam stays lifecycle-only: no byte or payload APIs at invoke seams', () => {
     const sources = [
         'src/main/commands/irohTunnel.ts',

@@ -14,8 +14,12 @@ export async function saveFileBytes(input: Readonly<{
     fileName: string;
     mimeType: string;
     isCurrent?: () => boolean;
+    onHandoff?: () => void;
+    action?: 'save' | 'open' | 'share';
 }>): Promise<'saved' | 'canceled'> {
     if (Platform.OS === 'web') {
+        if (input.isCurrent?.() === false) return 'canceled';
+        input.onHandoff?.();
         downloadWebFile(new Blob([new Uint8Array(input.bytes)], { type: input.mimeType }), input.fileName, async () => {});
         return 'saved';
     }
@@ -27,6 +31,7 @@ export async function saveFileBytes(input: Readonly<{
         await sink.close();
         const shared = await shareNativeCacheFile({
             fileUri: sink.fileUri, name: input.fileName, mimeType: input.mimeType, isCurrent: input.isCurrent,
+            action: input.action, onHandoff: input.onHandoff,
         });
         if (shared.status === 'canceled') return 'canceled';
         if (shared.status === 'unavailable') throw new Error(t('files.fileSharingUnavailable'));

@@ -139,11 +139,14 @@ describe('machine Iroh lifecycle availability and application endpoint ownership
     });
 
     it('keeps preview mux authorization native and releases the guest listener on suspension', async () => {
+        let close: () => void = () => undefined;
+        const terminal = new Promise<void>((resolve) => { close = resolve; });
         const native = {
             getAvailability: () => ({ available: true }),
             createEndpoint: vi.fn(),
             startMachineTunnel: vi.fn(async () => ({ machineTunnelId: 'preview-lease', localPort: 48127 })),
             stopMachineTunnel: vi.fn(async () => undefined),
+            waitMachineTunnelClosed: vi.fn(() => terminal),
         };
         nativeBoundary.current = native;
         nativeBoundary.ensureApplicationEndpoint.mockResolvedValue({ endpointHandle: 'shared-mobile-endpoint', endpointId: ENDPOINT_ID });
@@ -155,6 +158,13 @@ describe('machine Iroh lifecycle availability and application endpoint ownership
         expect(lease.localOrigin).toBe('http://127.0.0.1:48127');
         expect(lease).not.toHaveProperty('requestHeaders');
         expect(lease).not.toHaveProperty('webSocketProtocols');
+        let closed = false;
+        void lease.closed?.then(() => { closed = true; });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+        close();
+        await lease.closed;
+        expect(closed).toBe(true);
         irohMachineTransferRuntimeActivity.markSuspended();
         await lease.release();
         expect(native.stopMachineTunnel).toHaveBeenCalledWith('preview-lease');

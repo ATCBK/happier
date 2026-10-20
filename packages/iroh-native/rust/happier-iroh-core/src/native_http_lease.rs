@@ -28,6 +28,7 @@ pub struct NativeHttpLease {
     tunnel: Option<MachineTunnel>,
     task: Option<JoinHandle<()>>,
     shutdown: watch::Sender<bool>,
+    closed: watch::Receiver<()>,
 }
 
 struct MuxConfig {
@@ -424,26 +425,30 @@ impl NativeHttpLease {
             .local_addr()
             .map_err(|_| IrohError::LoopbackBindFailed)?;
         let (shutdown, shutdown_rx) = watch::channel(false);
+        let (finished, closed) = watch::channel(());
         let mut lease = Self {
             local_addr,
             tunnel: Some(MachineTunnel::start(endpoint, config).await?),
             task: None,
             shutdown,
+            closed,
         };
         let (websocket, config) =
             open_mux(lease.tunnel.as_ref().expect("owned inner tunnel"), &open).await?;
-        lease.task = Some(tokio::spawn(serve(
-            listener,
-            websocket,
-            config,
-            shutdown_rx,
-        )));
+        lease.task = Some(tokio::spawn(async move {
+            // Dropping the sole sender also notifies waiters on task abort or panic.
+            let _finished = finished;
+            serve(listener, websocket, config, shutdown_rx).await;
+        }));
         Ok(lease)
+    }
+    pub fn closed_signal(&self) -> watch::Receiver<()> {
+        self.closed.clone()
     }
     pub fn status(&self) -> MachineTunnelStatus {
         let mut status = self.tunnel.as_ref().expect("owned inner tunnel").status();
         status.local_port = self.local_addr.port();
-        status.connection_active &= self.task.as_ref().is_some_and(|task| !task.is_finished());
+        status.connection_active &= self.closed.has_changed().is_ok();
         status
     }
     pub async fn stop_and_wait(mut self) {
@@ -677,6 +682,15 @@ mod tests {
 
     #[tokio::test]
     async fn guest_http_and_websocket_bytes_use_the_native_machine_mux_and_release() {
+        exercise_guest_lease(false).await;
+    }
+
+    #[tokio::test]
+    async fn guest_lease_completion_observes_terminal_mux_loss_before_explicit_release() {
+        exercise_guest_lease(true).await;
+    }
+
+    async fn exercise_guest_lease(terminal_mux: bool) {
         let mut fixtures = JoinSet::new();
         let application = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let target = application.local_addr().unwrap();
@@ -781,7 +795,16 @@ mod tests {
             ws.next().await.unwrap().unwrap().into_data().as_ref(),
             payload.as_slice()
         );
+        let mut closed = lease.closed_signal();
+        assert!(closed.has_changed().is_ok());
+        if terminal_mux {
+            server.endpoint().close().await;
+            tokio::time::timeout(std::time::Duration::from_secs(10), closed.changed())
+                .await.expect("terminal mux must finish the guest listener").unwrap_err();
+            assert!(!lease.status().connection_active);
+        }
         lease.stop_and_wait().await;
+        assert!(closed.changed().await.is_err());
         assert!(TcpStream::connect(guest_addr).await.is_err());
         assert!(!matches!(ws.next().await, Some(Ok(Message::Binary(_)))));
         acceptor.stop_and_wait().await;

@@ -13,6 +13,11 @@
     "core:window:allow-set-badge-count",
     "core:window:allow-set-badge-label",
     "dialog:allow-open",
+    "allow-desktop-download-cache",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$TEMP/happier-downloads/**" }]
+    },
     {
       "identifier": "opener:allow-open-url",
       "allow": [
