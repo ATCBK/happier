@@ -14,18 +14,21 @@ import { askAboutRanges, type AskSelectionSessionTarget } from './askAboutRanges
 import { askSelectionContext } from './askSelectionContext';
 import { buildAskSelectionQuote, type AskSelectionRange, type FilesAskWithoutSessionTarget } from './askSelectionModel';
 import { askSelectionQuote, type AskSelectionTargetContext } from './askSelectionTarget';
+import { resolveAskSelectionAnchorSource, type AskSelectionSource } from './askSelectionSource';
 
 export { askAboutRanges } from './askAboutRanges';
 export type { AskSelectionTargetContext } from './askSelectionTarget';
+export type { AskSelectionSource } from './askSelectionSource';
 
 export type AskSelection = AskSelectionRange & Readonly<{ text: string; rect?: Rect | null }>;
-export type AskSelectionSource = 'file' | 'diff' | 'markdown' | 'terminal' | 'transcript';
 
 export type UseAskSelectionInput = Readonly<{
     scopeId: string;
     workspaceScope: WorkspaceScopeBase;
     filePath?: string;
     source: AskSelectionSource;
+    /** Markdown selection positions are source-file lines, not rendered rows. */
+    sourceLinesMapped?: boolean;
     getSelection: () => AskSelection | null;
     subscribeSelection?: (listener: () => void) => () => void;
     /** Full source text; diff surfaces also provide their canonical CodeLine table. */
@@ -45,7 +48,8 @@ export type UseAskSelectionInput = Readonly<{
 export function useAskSelection(input: UseAskSelectionInput) {
     const router = useRouter();
     const sourceId = React.useId();
-    const ownerKey = JSON.stringify([input.scopeId, buildWorkspaceCacheKey(input.workspaceScope), input.filePath ?? null, input.source]);
+    const ownerKey = JSON.stringify([input.scopeId, buildWorkspaceCacheKey(input.workspaceScope), input.filePath ?? null,
+        input.source, input.source === 'markdown' && input.sourceLinesMapped === true]);
     const [selectionState, setSelectionState] = React.useState(() => ({ ownerKey, selection: input.getSelection() }));
     const selection = selectionState.ownerKey === ownerKey ? selectionState.selection : null;
     const [unavailableReason, setUnavailableReason] = React.useState<string | null>(null);
@@ -100,16 +104,15 @@ export function useAskSelection(input: UseAskSelectionInput) {
         const selected = readSelection();
         if (!selected) return false;
         const text = selected.text || (params.getLinesText?.() ?? params.savedText ?? '').split('\n').slice(selected.startLine - 1, selected.endLine).join('\n');
-        const anchored = (params.source === 'file' || params.source === 'diff') && !!params.filePath;
-        if (anchored) {
+        const anchorSource = resolveAskSelectionAnchorSource(params);
+        if (anchorSource) {
             const result = await askAboutRanges({ workspaceScope: params.workspaceScope, filePath: params.filePath!,
                 ranges: [selected], savedText: params.savedText ?? params.getLinesText?.() ?? '',
-                text: params.getLinesText?.(), source: params.source === 'diff' ? 'diff' : 'file', lines: params.lines,
+                text: params.getLinesText?.(), source: anchorSource, lines: params.lines,
                 sessionTarget: params.sessionTarget, targetContext: getTargetContext(), sideRun: options?.sideRun });
             return result.created > 0;
         }
-        const quote = buildAskSelectionQuote({ text, filePath: params.filePath,
-            ...(params.filePath ? { startLine: selected.startLine, endLine: selected.endLine } : {}) });
+        const quote = buildAskSelectionQuote({ text, filePath: params.filePath });
         return askSelectionQuote({ workspaceScope: params.workspaceScope, sessionTarget: params.sessionTarget,
             quote, context: getTargetContext(), sideRun: options?.sideRun });
     }, [getTargetContext, readSelection]);
@@ -117,10 +120,11 @@ export function useAskSelection(input: UseAskSelectionInput) {
     const comment = React.useCallback(async () => {
         const params = latest.current;
         const selected = readSelection();
-        if (!selected || !params.filePath || (params.source !== 'file' && params.source !== 'diff')) return false;
+        const anchorSource = resolveAskSelectionAnchorSource(params);
+        if (!selected || !params.filePath || !anchorSource) return false;
         const result = await askAboutRanges({ workspaceScope: params.workspaceScope, filePath: params.filePath,
             ranges: [selected], savedText: params.savedText ?? params.getLinesText?.() ?? '', text: params.getLinesText?.(),
-            source: params.source, lines: params.lines, sessionTarget: null, includeInPrompt: false });
+            source: anchorSource, lines: params.lines, sessionTarget: null, includeInPrompt: false });
         params.onComment?.(result.drafts);
         return result.created > 0;
     }, [readSelection]);
@@ -135,5 +139,5 @@ export function useAskSelection(input: UseAskSelectionInput) {
     const menuItems = React.useMemo(() => input.sessionTarget ? [{ id: 'ask-in-side-run' as const,
         label: t('files.askSelection.sideRun'), run: () => ask({ sideRun: true }) }] : [], [ask, input.sessionTarget]);
     return { selection, ask, comment, copy, menuItems, remember, getTargetContext, unavailableReason,
-        canComment: !!input.filePath && (input.source === 'file' || input.source === 'diff') };
+        canComment: resolveAskSelectionAnchorSource(input) !== null };
 }

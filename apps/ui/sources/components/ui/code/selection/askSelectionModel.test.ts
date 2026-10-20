@@ -3,8 +3,15 @@ import { buildAskSelectionDrafts, buildAskSelectionQuote, resolveAskSelectionDes
 import { computeLineContentHash } from '@/utils/text/lineContentHash';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { ReviewCommentDraftMessageV1Schema } from '@happier-dev/protocol/messages/structured/reviewCommentsV1';
+import { resolveAskSelectionAnchorSource } from './askSelectionSource';
 
 describe('Ask selection context', () => {
+    it('uses file anchors only for Markdown selections with proven source-line mapping', () => {
+        expect(resolveAskSelectionAnchorSource({ source: 'markdown', filePath: 'notes.md', sourceLinesMapped: true })).toBe('file');
+        expect(resolveAskSelectionAnchorSource({ source: 'markdown', filePath: 'notes.md' })).toBeNull();
+        expect(resolveAskSelectionAnchorSource({ source: 'terminal', filePath: 'notes.md', sourceLinesMapped: true })).toBeNull();
+        expect(resolveAskSelectionAnchorSource({ source: 'file' })).toBeNull();
+    });
     it('anchors a dirty editor selection against saved lines and keeps the exact selection snapshot', () => {
         const [draft] = buildAskSelectionDrafts({ filePath: 'src/app.ts', source: 'file',
             text: 'new unsaved line\nfirst\nchanged second\nlast', savedText: 'first\nsecond\nlast',

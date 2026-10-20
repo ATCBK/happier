@@ -3,10 +3,11 @@ import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { buildReviewCommentDraftFromCodeLineRange } from '@/components/ui/code/reviewComments/buildReviewCommentDraftFromCodeLine';
 import { resolveCodeLineAnchor } from '@/components/ui/code/reviewComments/resolveCodeLineAnchor';
 import type { ReviewCommentDraft, ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import type { Settings } from '@/sync/domains/settings/settings';
 import { computeLineContentHash } from '@/utils/text/lineContentHash';
 
 export type AskSelectionRange = Readonly<{ startLine: number; endLine: number; body?: string; text?: string; side?: 'before' | 'after' }>;
-export type FilesAskWithoutSessionTarget = 'detached_run' | 'session';
+export type FilesAskWithoutSessionTarget = Settings['filesAskWithoutSessionTarget'];
 
 /** One quote format for transcript, terminal and file selections sent outside a Session. */
 export function buildAskSelectionQuote(input: Readonly<{

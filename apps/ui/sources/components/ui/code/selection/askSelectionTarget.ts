@@ -43,7 +43,8 @@ export async function askSelectionQuote(input: Readonly<{
     let detachedSupported = true;
     if (input.sideRun || (!sessionTarget && target === 'detached_run')) {
         const support = await createUiExecutionRunActionDeps(lifetime.scope).executionRunCheckProtocolV2?.(null,
-            { detachedScope: true, startAndWait: false, exactInputResults: true },
+            { detachedScope: true, startAndWait: false, exactInputResults: true,
+                runScopedAgentBindings: false, secretReferenceOverlay: false },
             { serverId: workspaceScope.serverId, targetMachineId: workspaceScope.machineId });
         if (!lifetime.isCurrent()) return false;
         detachedSupported = support?.ok === true || support?.errorCode !== 'execution_run_protocol_unsupported';
