@@ -75,7 +75,10 @@ func readNativeProcessCensus(opts censusOptions) (censusSnapshot, error) {
 	// PROC_PIDTASKINFO reports Mach absolute ticks (XNU fill_taskprocinfo),
 	// not nanoseconds on Apple Silicon. hw.tbfrequency is the platform's
 	// timebase frequency, exposed as uint64 by XNU kern_mib.c.
-	frequency, _ := unix.SysctlUint64("hw.tbfrequency")
+	var frequency uint64
+	if opts.wants("cpuTimeUs") {
+		frequency, _ = unix.SysctlUint64("hw.tbfrequency")
+	}
 	for _, info := range infos {
 		pid := int(info.Proc.P_pid)
 		if pid <= 0 || !censusWantsPid(opts, pid) {
@@ -97,22 +100,32 @@ func readNativeProcessCensus(opts censusOptions) (censusSnapshot, error) {
 		sid, sidErr := unix.Getsid(pid)
 		missing := applyCensusSessionId(&row, sid, sidErr)
 		gone := false
-		task := make([]byte, censusDarwinTaskInfoSize)
-		if n, err := censusDarwinProcInfo(2, pid, censusDarwinTaskInfo, task); err == nil && n == len(task) {
-			row.Memory = &censusMemory{Bytes: binary.LittleEndian.Uint64(task[8:]), Kind: "rss"}
-			cpu, err := censusTimebaseMicroseconds(binary.LittleEndian.Uint64(task[16:]), binary.LittleEndian.Uint64(task[24:]), frequency)
-			if err == nil {
-				row.CpuTimeUs = &cpu
+		if opts.wants("memory") || opts.wants("cpuTimeUs") {
+			task := make([]byte, censusDarwinTaskInfoSize)
+			if n, err := censusDarwinProcInfo(2, pid, censusDarwinTaskInfo, task); err == nil && n == len(task) {
+				if opts.wants("memory") {
+					row.Memory = &censusMemory{Bytes: binary.LittleEndian.Uint64(task[8:]), Kind: "rss"}
+				}
+				if opts.wants("cpuTimeUs") {
+					cpu, err := censusTimebaseMicroseconds(binary.LittleEndian.Uint64(task[16:]), binary.LittleEndian.Uint64(task[24:]), frequency)
+					if err == nil {
+						row.CpuTimeUs = &cpu
+					} else {
+						missing = append(missing, "cpuTimeUs")
+					}
+				}
 			} else {
-				missing = append(missing, "cpuTimeUs")
+				if errors.Is(err, syscall.ESRCH) {
+					gone = true
+				}
+				for _, field := range []string{"memory", "cpuTimeUs"} {
+					if opts.wants(field) {
+						missing = append(missing, field)
+					}
+				}
 			}
-		} else {
-			if errors.Is(err, syscall.ESRCH) {
-				gone = true
-			}
-			missing = append(missing, "memory", "cpuTimeUs")
 		}
-		if own && !gone {
+		if own && !gone && opts.wants("memory") {
 			rusage := make([]byte, censusDarwinRusageV0Size)
 			if _, err := censusDarwinProcInfo(9, pid, 0, rusage); err == nil {
 				row.Memory = &censusMemory{Bytes: binary.LittleEndian.Uint64(rusage[72:]), Kind: "footprint"}
@@ -124,16 +137,39 @@ func readNativeProcessCensus(opts censusOptions) (censusSnapshot, error) {
 					}
 				}
 			}
+		}
+		if own && !gone && (opts.wants("executablePath") || opts.wants("argv") || opts.wants("ownershipEnvironment")) {
 			args, err := sysctlBuffer([]uint32{ctlKern, 49, uint32(pid)}) // KERN_PROCARGS2
 			if err == nil {
-				row.ExecutablePath, row.Argv, row.OwnerTag, row.OwnershipEnvironment, err = decodeDarwinProcargs(args)
+				var executable, tag string
+				var argv []string
+				var environment map[string]string
+				executable, argv, tag, environment, err = decodeDarwinProcargs(args)
+				if opts.wants("executablePath") {
+					row.ExecutablePath = executable
+				}
+				if opts.wants("argv") {
+					row.Argv = argv
+				}
+				if opts.wants("ownershipEnvironment") {
+					row.OwnerTag, row.OwnershipEnvironment = tag, environment
+				}
 			}
 			if err != nil {
 				if errors.Is(err, syscall.ESRCH) {
 					gone = true
 				}
-				missing = append(missing, "executablePath", "argv", "ownerTag", "ownershipEnvironment")
+				for _, field := range []string{"executablePath", "argv", "ownershipEnvironment"} {
+					if opts.wants(field) {
+						missing = append(missing, field)
+						if field == "ownershipEnvironment" {
+							missing = append(missing, "ownerTag")
+						}
+					}
+				}
 			}
+		}
+		if own && !gone && opts.wants("cwd") {
 			vnode := make([]byte, 2*(censusDarwinVnodeInfoSize+censusDarwinPathSize))
 			if n, err := censusDarwinProcInfo(2, pid, censusDarwinVnodePathInfo, vnode); err == nil && n == len(vnode) {
 				if cwd, _, ok := cutCensusCString(vnode[censusDarwinVnodeInfoSize : censusDarwinVnodeInfoSize+censusDarwinPathSize]); ok {

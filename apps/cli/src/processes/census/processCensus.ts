@@ -39,7 +39,7 @@ export type ProcessCensusInput = Readonly<{
     freshness: ProcessCensusFreshness; pids?: readonly number[]; scope?: 'own_principal' | 'all';
     /** Existing custody authority supplies names; observation alone never grants ownership. */
     verifiedJobNames?: readonly string[];
-    /** Linux observations needed by this consumer. Empty also selects native identity-only reads; omitted preserves the full census. */
+    /** Observations needed by this consumer. Empty selects identity-only reads; omitted preserves the full census. */
     fields?: readonly ProcessCensusField[];
     /** Filtered reads include current target/reader ancestors for signal protection. */
     includeAncestors?: boolean;
@@ -85,6 +85,7 @@ export function createProcessCensusReader(dependencies: ProcessCensusDependencie
                     ...(requested ? [`--pids=${[...new Set([...requested, selfPid])].join(',')}`] : []),
                     ...(input.includeAncestors ? ['--include-ancestors=true'] : []),
                     ...(input.fields?.length === 0 ? ['--identity-only=true'] : []),
+                    ...(input.fields?.length ? [`--fields=${[...new Set(input.fields)].join(',')}`] : []),
                     ...verifiedJobNames.map(name => `--job=${name}`),
                 ] });
                 if (result.state === 'unavailable') return { status: 'unavailable', reason: result.reason === 'helper_missing' ? 'helper_missing' : 'read_failed' };

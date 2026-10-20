@@ -47,6 +47,33 @@ function fixture() {
 }
 
 describe('process census', () => {
+    it.each(['darwin', 'win32'] as const)('preserves native field demand for %s without enriching metrics-only reads', async platform => {
+        const calls: string[][] = [];
+        const self = { pid: 42, ppid: 1, start: { startTimeMs: 900 }, principal: { kind: 'uid', value: '1000' },
+            name: 'self', memory: { bytes: 128, kind: 'rss' }, cpuTimeUs: 10 };
+        const reader = createProcessCensusReader({ platform, selfPid: 42, helperExecutablePath: '/helper',
+            async execFile(_file, args) {
+                calls.push([...args]);
+                const identity = args.includes('--identity-only=true');
+                const metrics = args.includes('--fields=memory,cpuTimeUs');
+                return { stdout: JSON.stringify({ v: 1, capturedAtMs: 1000, logicalCpus: 1, rows: [{ ...self,
+                    ...(identity ? { memory: null, cpuTimeUs: null } : {}),
+                    ...(!identity && !metrics ? { argv: ['self'], cwd: '/work', ownerTag: 'v1.scope.session.id' } : {}),
+                }] }) };
+            },
+        });
+        const metrics = await reader({ freshness: 'fresh', scope: 'all', pids: [42], fields: ['memory', 'cpuTimeUs'] });
+        expect(metrics.status).toBe('ok');
+        if (metrics.status !== 'ok') throw new Error('Native metrics census unavailable');
+        expect(metrics.rows[0]).toEqual(self);
+        expect(calls[0]).toContain('--fields=memory,cpuTimeUs');
+        const identity = await reader({ freshness: 'fresh', fields: [] });
+        expect(identity.status === 'ok' && identity.rows[0]).toEqual({ ...self, memory: null, cpuTimeUs: null });
+        const full = await reader({ freshness: 'fresh' });
+        expect(full.status === 'ok' && full.rows[0]).toMatchObject({ argv: ['self'], cwd: '/work', ownerTag: 'v1.scope.session.id' });
+        expect(calls[2]?.some(arg => arg.startsWith('--fields=') || arg === '--identity-only=true')).toBe(false);
+    });
+
     it('reads exact filtered identity targets and their fresh protection ancestors without enriching unrelated rows', async () => {
         const { files, boundary } = fixture();
         files.set('/proc/42/stat', stat(42, 420).replace(' S 1 ', ' S 43 '));

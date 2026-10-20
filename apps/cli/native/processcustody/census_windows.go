@@ -207,18 +207,25 @@ func readNativeProcessCensus(opts censusOptions) (censusSnapshot, error) {
 		return snapshot, err
 	}
 	includeCensusAncestors(opts, parents)
-	// Full rows are needed to discover resident custody helpers even for a
-	// filtered identity read. Only selected rows get the expensive enrichment.
+	// A full census discovers resident custody helpers outside a PID filter.
+	// Restricted field reads observe only explicitly requested Jobs.
+	discoverJobs := !opts.IdentityOnly && opts.Fields == nil
 	jobCarriers := make([]censusRow, 0)
 	for _, entry := range entries {
 		row := censusWindowsToolhelpRow(entry)
 		selected := row.Pid > 0 && censusWantsPid(opts, row.Pid)
-		carrier := !opts.IdentityOnly && strings.EqualFold(row.Name, "happier-process-custody.exe")
+		carrier := discoverJobs && strings.EqualFold(row.Name, "happier-process-custody.exe")
 		if selected || carrier {
 			handle, openErr := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(row.Pid))
 			if openErr != nil {
 				if selected && !errors.Is(openErr, windows.ERROR_INVALID_PARAMETER) {
-					snapshot.Partial = append(snapshot.Partial, censusPartial{Pid: row.Pid, Missing: []string{"start", "principal", "memory", "cpuTimeUs"}})
+					missing := []string{"start", "principal"}
+					for _, field := range []string{"memory", "cpuTimeUs"} {
+						if opts.wants(field) {
+							missing = append(missing, field)
+						}
+					}
+					snapshot.Partial = append(snapshot.Partial, censusPartial{Pid: row.Pid, Missing: missing})
 				}
 			} else {
 				missing := make([]string, 0)
@@ -227,7 +234,11 @@ func readNativeProcessCensus(opts censusOptions) (censusSnapshot, error) {
 				row.Start, err = censusWindowsStart(creation)
 				if timesErr != nil || err != nil {
 					if selected {
-						snapshot.Partial = append(snapshot.Partial, censusPartial{Pid: row.Pid, Missing: []string{"start", "cpuTimeUs"}})
+						missing := []string{"start"}
+						if opts.wants("cpuTimeUs") {
+							missing = append(missing, "cpuTimeUs")
+						}
+						snapshot.Partial = append(snapshot.Partial, censusPartial{Pid: row.Pid, Missing: missing})
 					}
 				} else if censusWindowsFiletime(exit) == 0 {
 					row.Principal, _ = censusWindowsPrincipal(handle)
@@ -244,31 +255,41 @@ func readNativeProcessCensus(opts censusOptions) (censusSnapshot, error) {
 							windows.CloseHandle(handle)
 							continue
 						}
-						cpu, cpuErr := censusMicroseconds(censusWindowsFiletime(user), censusWindowsFiletime(kernel), 10)
-						if cpuErr == nil {
-							row.CpuTimeUs = &cpu
-						} else {
-							missing = append(missing, "cpuTimeUs")
+						if opts.wants("cpuTimeUs") {
+							cpu, cpuErr := censusMicroseconds(censusWindowsFiletime(user), censusWindowsFiletime(kernel), 10)
+							if cpuErr == nil {
+								row.CpuTimeUs = &cpu
+							} else {
+								missing = append(missing, "cpuTimeUs")
+							}
 						}
-						var memory censusWindowsMemoryCounters
-						memory.Cb = uint32(unsafe.Sizeof(memory))
-						if ok, _, _ := censusGetProcessMemoryInfo.Call(uintptr(handle), uintptr(unsafe.Pointer(&memory)), uintptr(memory.Cb)); ok != 0 {
-							row.Memory = &censusMemory{Bytes: uint64(memory.PrivateUsage), Kind: "private"}
-						} else {
-							missing = append(missing, "memory")
+						if opts.wants("memory") {
+							var memory censusWindowsMemoryCounters
+							memory.Cb = uint32(unsafe.Sizeof(memory))
+							if ok, _, _ := censusGetProcessMemoryInfo.Call(uintptr(handle), uintptr(unsafe.Pointer(&memory)), uintptr(memory.Cb)); ok != 0 {
+								row.Memory = &censusMemory{Bytes: uint64(memory.PrivateUsage), Kind: "private"}
+							} else {
+								missing = append(missing, "memory")
+							}
 						}
 						if isOwn {
-							row.ExecutablePath, err = censusWindowsExecutable(handle)
-							if err != nil {
-								missing = append(missing, "executablePath")
+							if opts.wants("executablePath") {
+								row.ExecutablePath, err = censusWindowsExecutable(handle)
+								if err != nil {
+									missing = append(missing, "executablePath")
+								}
 							}
-							row.CommandLine, row.Argv, err = censusWindowsCommandLine(handle)
-							if err != nil {
-								missing = append(missing, "argv", "commandLine")
+							if opts.wants("argv") {
+								row.CommandLine, row.Argv, err = censusWindowsCommandLine(handle)
+								if err != nil {
+									missing = append(missing, "argv", "commandLine")
+								}
 							}
-							row.OwnerTag, row.OwnershipEnvironment, err = censusWindowsEnvironment(row.Pid, row.Principal)
-							if err != nil {
-								missing = append(missing, "ownerTag", "ownershipEnvironment")
+							if opts.wants("ownershipEnvironment") {
+								row.OwnerTag, row.OwnershipEnvironment, err = censusWindowsEnvironment(row.Pid, row.Principal)
+								if err != nil {
+									missing = append(missing, "ownerTag", "ownershipEnvironment")
+								}
 							}
 							if carrier {
 								jobCarriers = append(jobCarriers, row)
@@ -290,8 +311,10 @@ func readNativeProcessCensus(opts censusOptions) (censusSnapshot, error) {
 		return snapshot, nil
 	}
 	names := make(map[string]bool)
-	for _, name := range censusWindowsJobNames(append(jobCarriers, snapshot.Rows...)) {
-		names[name] = true
+	if discoverJobs {
+		for _, name := range censusWindowsJobNames(append(jobCarriers, snapshot.Rows...)) {
+			names[name] = true
+		}
 	}
 	for _, name := range opts.JobNames {
 		names[name] = true

@@ -20,6 +20,35 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func diskScanAllowedDevices(root string) ([]string, error) {
+	var fs unix.Statfs_t
+	if unix.Statfs(root, &fs) != nil {
+		// The walk owns unreadable-root reporting.
+		return nil, nil
+	}
+	container := darwinVitalsAPFSContainer(fs)
+	if container == "" {
+		return nil, nil
+	}
+	mounts, err := readDarwinVitalsMounts()
+	if err != nil {
+		return nil, err
+	}
+	devices := []string{}
+	for _, mount := range mounts {
+		if mount.Flags&unix.MNT_LOCAL == 0 || darwinVitalsAPFSContainer(mount) != container {
+			continue
+		}
+		// Use the same REALDEVID-aware attributes as directory enumeration, not
+		// an fsid or a guessed relationship between BSD device names and dev_t.
+		meta, err := diskReadMetadata(nativeCString(mount.Mntonname[:]))
+		if err == nil && !diskAllowedDevice(devices, meta.device) {
+			devices = append(devices, meta.device)
+		}
+	}
+	return devices, nil
+}
+
 // tmutil's read-only public list reports local Time Machine snapshots, not bytes.
 // A failed/unknown observation remains absent instead of claiming measured zero.
 func diskReadLocalSnapshotCount(ctx context.Context, root string) *int64 {

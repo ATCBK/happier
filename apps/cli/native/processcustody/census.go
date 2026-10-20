@@ -69,6 +69,11 @@ type censusOptions struct {
 	JobNames         []string
 	IdentityOnly     bool
 	IncludeAncestors bool
+	Fields           map[string]bool
+}
+
+func (opts censusOptions) wants(field string) bool {
+	return !opts.IdentityOnly && (opts.Fields == nil || opts.Fields[field])
 }
 
 func parseCensusOptions(args []string, selfPid int) (censusOptions, error) {
@@ -79,6 +84,19 @@ func parseCensusOptions(args []string, selfPid int) (censusOptions, error) {
 			return opts, fmt.Errorf("invalid census option %q", arg)
 		}
 		switch key {
+		case "--fields":
+			opts.Fields = make(map[string]bool)
+			if value == "" {
+				continue
+			}
+			for _, field := range strings.Split(value, ",") {
+				switch field {
+				case "argv", "cwd", "executablePath", "ownershipEnvironment", "cgroup", "memory", "cpuTimeUs":
+					opts.Fields[field] = true
+				default:
+					return opts, fmt.Errorf("invalid census field %q", field)
+				}
+			}
 		case "--identity-only", "--include-ancestors":
 			if value != "true" && value != "false" {
 				return opts, fmt.Errorf("invalid census projection")

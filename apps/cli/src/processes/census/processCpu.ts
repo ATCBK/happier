@@ -1,26 +1,24 @@
 import type { ProcessCensusSnapshot, ProcessStartIdentity } from './processCensus';
+import { createCounterRateReader } from '@/daemon/vitals/readers/counterRates';
 
 export function createProcessCpuSampler() {
-  let previousAtMs: number | null = null;
-  let previousRows = new Map<number, { start: ProcessStartIdentity; cpuTimeUs: number }>();
-  return { sample(snapshot: Extract<ProcessCensusSnapshot, { status: 'ok' }>): ReadonlyMap<number, number> {
+  const readers = new Map<number, { start: ProcessStartIdentity; rate: ReturnType<typeof createCounterRateReader> }>();
+  return { sample(snapshot: Extract<ProcessCensusSnapshot, { status: 'ok' }>, intervalMs: number): ReadonlyMap<number, number> {
     const rates = new Map<number, number>();
-    const wallTimeMs = previousAtMs === null ? 0 : snapshot.capturedAtMs - previousAtMs;
-    if (wallTimeMs > 0 && snapshot.logicalCpus > 0) {
-      for (const row of snapshot.rows) {
-        const before = previousRows.get(row.pid);
-        if (!before || row.cpuTimeUs === null
-          || before.start.startTimeMs !== row.start.startTimeMs
-          || before.start.native !== row.start.native) continue;
-        const deltaUs = row.cpuTimeUs - before.cpuTimeUs;
-        if (deltaUs < 0) continue;
-        rates.set(row.pid, Math.min(100, deltaUs / (wallTimeMs * 1000 * snapshot.logicalCpus) * 100));
-      }
+    const observed = new Set<number>();
+    for (const row of snapshot.rows) {
+      if (observed.has(row.pid)) continue;
+      observed.add(row.pid);
+      if (row.cpuTimeUs === null) { readers.delete(row.pid); continue; }
+      const before = readers.get(row.pid);
+      const reader = before && before.start.startTimeMs === row.start.startTimeMs && before.start.native === row.start.native
+        ? before : { start: row.start, rate: createCounterRateReader() };
+      readers.set(row.pid, reader);
+      const rate = reader.rate({ monotonicMs: snapshot.capturedAtMs, counters: { cpu: row.cpuTimeUs } }, intervalMs);
+      if (rate && rate.elapsedMs > 0 && snapshot.logicalCpus > 0)
+        rates.set(row.pid, Math.min(100, rate.deltas.cpu / (rate.elapsedMs * 1000 * snapshot.logicalCpus) * 100));
     }
-    // A missing row or counter breaks its baseline; a PID is not a generation.
-    previousAtMs = snapshot.capturedAtMs;
-    previousRows = new Map(snapshot.rows.flatMap(row => row.cpuTimeUs === null ? []
-      : [[row.pid, { start: row.start, cpuTimeUs: row.cpuTimeUs }] as const]));
+    for (const pid of readers.keys()) if (!observed.has(pid)) readers.delete(pid);
     return rates;
   } };
 }

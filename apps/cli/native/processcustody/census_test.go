@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -37,14 +38,79 @@ func TestNativeIdentityOnlyIncludesReaderAncestors(t *testing.T) {
 	}
 }
 
+func TestNativeCensusMetricsProjection(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("native census platform")
+	}
+	fullOpts, err := parseCensusOptions([]string{"--scope=all", "--pids=" + fmt.Sprint(os.Getpid())}, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := readNativeProcessCensus(fullOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fullSelf censusRow
+	for _, row := range full.Rows {
+		if row.Pid == os.Getpid() {
+			fullSelf = row
+		}
+	}
+	if len(fullSelf.Argv) == 0 || fullSelf.ExecutablePath == "" {
+		t.Fatalf("full census lost its process details: %+v", fullSelf)
+	}
+	for _, fields := range []string{"memory,cpuTimeUs", "memory", "cpuTimeUs"} {
+		t.Run(fields, func(t *testing.T) {
+			opts, err := parseCensusOptions([]string{"--scope=all", "--pids=" + fmt.Sprint(os.Getpid()), "--fields=" + fields}, os.Getpid())
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := readNativeProcessCensus(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.Rows) != 1 {
+				t.Fatalf("filtered metrics read lost self: %+v", snapshot)
+			}
+			row := snapshot.Rows[0]
+			if row.Start != fullSelf.Start || !reflect.DeepEqual(row.Principal, fullSelf.Principal) || row.Name != fullSelf.Name || !reflect.DeepEqual(row.Ppid, fullSelf.Ppid) {
+				t.Fatalf("metrics projection changed identity: %+v", row)
+			}
+			if (row.Memory != nil) != strings.Contains(fields, "memory") || (row.CpuTimeUs != nil) != strings.Contains(fields, "cpuTimeUs") {
+				t.Fatalf("metrics projection lost requested resources: %+v", row)
+			}
+			if len(row.Argv) != 0 || row.CommandLine != "" || row.ExecutablePath != "" || row.Cwd != "" || row.OwnerTag != "" || len(row.OwnershipEnvironment) != 0 || len(row.Jobs) != 0 || len(snapshot.JobObservations) != 0 || len(snapshot.Partial) != 0 {
+				t.Fatalf("metrics projection enriched unrelated details: %+v", snapshot)
+			}
+		})
+	}
+}
+
 func TestCensusFilterIncludesReaderAndCaller(t *testing.T) {
 	opts, err := parseCensusOptions([]string{"--scope=own_principal", "--pids=42,43", "--caller-pid=99"}, 100)
 	if err != nil || !reflect.DeepEqual(opts.Pids, map[int]bool{42: true, 43: true, 99: true, 100: true}) || opts.CallerPid != 99 || opts.Scope != "own_principal" {
 		t.Fatalf("pid-filtered census must retain both self-presence witnesses: %+v %v", opts, err)
 	}
-	for _, args := range [][]string{{"--pids=0"}, {"--pids=42,no"}, {"--caller-pid=-1"}, {"--scope=everything"}, {"--unknown"}} {
+	for _, args := range [][]string{{"--pids=0"}, {"--pids=42,no"}, {"--caller-pid=-1"}, {"--scope=everything"}, {"--fields=memory,unknown"}, {"--unknown"}} {
 		if _, err := parseCensusOptions(args, 100); err == nil {
 			t.Fatalf("accepted malformed options %v", args)
+		}
+	}
+}
+
+func TestCensusFieldSelectionKeepsFullAndIdentityNeighbors(t *testing.T) {
+	for _, test := range []struct {
+		args         []string
+		memory, argv bool
+	}{
+		{nil, true, true},
+		{[]string{"--fields=memory,cpuTimeUs"}, true, false},
+		{[]string{"--fields="}, false, false},
+		{[]string{"--identity-only=true"}, false, false},
+	} {
+		opts, err := parseCensusOptions(test.args, 100)
+		if err != nil || opts.wants("memory") != test.memory || opts.wants("argv") != test.argv {
+			t.Fatalf("field projection changed for %v: %+v %v", test.args, opts, err)
 		}
 	}
 }

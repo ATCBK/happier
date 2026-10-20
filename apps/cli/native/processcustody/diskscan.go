@@ -491,6 +491,12 @@ func diskScanCommand(args []string, input io.Reader, output io.Writer) error {
 		return errors.New("invalid disk-scan request")
 	}
 	request.Root = diskNormalizePath(request.Root)
+	// Only the native volume boundary decides which device crossings belong to
+	// this APFS container. Every fresh, resumed and direct-relist command uses it.
+	request.AllowedDevices, err = diskScanAllowedDevices(request.Root)
+	if err != nil {
+		return err
+	}
 	for index := range request.AtomicRules {
 		rule := &request.AtomicRules[index]
 		if len(rule.Names) == 0 && len(rule.Paths) == 0 || rule.ManifestParentLevel < 0 {
