@@ -6,9 +6,14 @@ import { defineMachineProvisionerSchemas, MachineProvisionerCheckResultProtocolV
     MachineProvisionerBootstrapCarrierV1Schema, MachineProvisionerObservationV1Schema,
     MachineProvisionerPowerResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { db, getDbProviderFromEnv, initDbPostgres } from '@/storage/db';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inTx, readPostgresTransactionSqlState, type Tx } from '@/storage/inTx';
 import { readDatabaseTransactionConfigFromEnv } from '@/config/databaseTransactions';
 import { createDbMaintenanceClient } from '@/storage/prisma';
+import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
+import { machinesRoutes } from '@/app/api/routes/machines/machinesRoutes';
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER, signMachineInstallationProof } from '@happier-dev/protocol';
+import tweetnacl from 'tweetnacl';
+import { revokeMachineInTx } from '@/app/machines/machineMutations';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { createReleaseLessDeclarationV1 } from '@/app/plugins/availability/currentDeclaration';
 import { admitManagedAcquire } from './managedAcquire';
@@ -215,7 +220,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
         { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'admit', hotRecipient: true },
         { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'cancel', hotRecipient: true },
         { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'admit', admittedReplay: true },
-    ] as const)('$phase $selectionKind survives an unrelated $publicationAccount publication ($beforeFence, transient=$transientContention, zero=$zeroRetries, hot=$hotRecipient, replay=$admittedReplay)', async (scenario) => {
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report', foreignRegistration: true },
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report', publicationRegistration: true },
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report', staleRegistration: 'creation' },
+        { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report', staleRegistration: 'controller' },
+    ] as const)('$phase $selectionKind survives an unrelated $publicationAccount publication ($beforeFence, transient=$transientContention, zero=$zeroRetries, hot=$hotRecipient, replay=$admittedReplay, registration=$foreignRegistration, publicationRegistration=$publicationRegistration, retired=$staleRegistration)', async (scenario) => {
         const { selectionKind, publicationAccount, phase } = scenario;
         const beforeFence = 'beforeFence' in scenario && scenario.beforeFence;
         const growAudience = 'growAudience' in scenario && scenario.growAudience;
@@ -370,6 +379,149 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
             },
         });
         try {
+            if ('foreignRegistration' in scenario || 'publicationRegistration' in scenario || 'staleRegistration' in scenario) {
+                db.$transaction = originalTransaction;
+                if (!correlation) throw new Error('Registration requires a current managed admission');
+                await reportManagedAcquire({ ...correlation, result: { kind: 'bound', resource } });
+                const guestId = randomUUID();
+                const keys = tweetnacl.sign.keyPair();
+                const identity = { version: 1 as const, machineId: guestId, accountId: account.id, installationId: randomUUID() };
+                const payload = { id: guestId, metadata: encodePlainMachineStoredContent({ host: 'guest' }),
+                    dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, managedEnrollment: { ...correlation, resource },
+                    installationId: identity.installationId, installationPublicKey: Buffer.from(keys.publicKey).toString('base64url'),
+                    installationProof: signMachineInstallationProof({ payload: identity, privateKey: keys.secretKey }) };
+                const headers = { 'x-test-user-id': account.id, 'x-happier-account-stored-content-protocol': '4' };
+                if ('publicationRegistration' in scenario) {
+                    let scheduled = false;
+                    db.$transaction = new Proxy(originalTransaction, { apply(target, receiver, args: unknown[]) {
+                        const callback = args[0];
+                        if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+                        const result = Reflect.apply(target, receiver, [async (tx: Tx) => {
+                            const query = tx.$queryRawUnsafe.bind(tx);
+                            const publicationQuery = new Proxy(query, { async apply(owner, receiver, values: Parameters<typeof query>) {
+                                if (!scheduled && values[0].includes('FROM "Account"') && values[0].endsWith('FOR NO KEY UPDATE')) {
+                                    scheduled = true;
+                                    let ready!: (pid: number) => void;
+                                    const started = new Promise<number>(resolve => { ready = resolve; });
+                                    let settled = false;
+                                    writer = inTx(async peer => {
+                                        const [{ pid }] = await peer.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                                        ready(pid);
+                                        return markAccountChanged(peer, { accountId: account.id, kind: 'account', entityId: 'registration-peer' });
+                                    });
+                                    writerOutcome = Promise.allSettled([writer]).finally(() => { settled = true; });
+                                    const pid = await Promise.race([started, writer.then(() => { throw new Error('Publication missed rendezvous'); })]);
+                                    // Existing KEY SHARE lets the peer commit; exclusive
+                                    // admission makes it wait until registration commits.
+                                    while (!settled) {
+                                        const [{ blocked }] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                                            SELECT cardinality(pg_blocking_pids(${pid}::int)) > 0 AS blocked
+                                        `;
+                                        if (blocked) break;
+                                    }
+                                }
+                                return Reflect.apply(owner, receiver, values);
+                            } });
+                            return callback(new Proxy(tx, { get(owner, property, receiver) {
+                                return property === '$queryRawUnsafe' ? publicationQuery : Reflect.get(owner, property, receiver);
+                            } }));
+                        }, ...args.slice(1)]) as Promise<unknown>;
+                        return result.catch((error: unknown) => {
+                            console.info('QB146_REGISTRATION_TRANSACTION_ERROR', {
+                                prismaCode: typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined,
+                                sqlState: readPostgresTransactionSqlState(error),
+                            });
+                            throw error;
+                        });
+                    } });
+                    await withAuthenticatedTestApp(machinesRoutes, async app => {
+                        const response = await app.inject({ method: 'POST', url: '/v1/machines', headers, payload });
+                        console.info('QB146_PUBLICATION_REGISTRATION', { scheduled, status: response.statusCode });
+                        expect(scheduled).toBe(true);
+                        expect(response.statusCode, response.body).toBe(200);
+                        expect(await db.managedMachine.findUniqueOrThrow({ where: { id: correlation.managedId } }))
+                            .toMatchObject({ enrolledMachineId: guestId });
+                    });
+                    await writer;
+                    return;
+                }
+                if ('staleRegistration' in scenario) {
+                    let retired = false;
+                    db.$transaction = new Proxy(originalTransaction, { apply(target, receiver, args: unknown[]) {
+                        const callback = args[0];
+                        if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+                        return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                            const query = tx.$queryRawUnsafe.bind(tx);
+                            const admissionQuery = new Proxy(query, { async apply(owner, receiver, values: Parameters<typeof query>) {
+                                if (!retired && values[0].startsWith('SELECT "id" FROM "Account"')) {
+                                    retired = true;
+                                    // Commit at the actual database boundary after audience
+                                    // discovery but before registration admits that audience.
+                                    if (scenario.staleRegistration === 'creation') await cancelManagedCreation({
+                                        actorAccountId: account.id, input: { homeId, managedId: correlation.managedId, expectedIntentRevision: 0 },
+                                    });
+                                    else await inTx(peer => revokeMachineInTx(peer, { accountId: account.id, machineId: controller.machineId }));
+                                }
+                                return Reflect.apply(owner, receiver, values);
+                            } });
+                            return callback(new Proxy(tx, { get(owner, property, receiver) {
+                                return property === '$queryRawUnsafe' ? admissionQuery : Reflect.get(owner, property, receiver);
+                            } }));
+                        }, ...args.slice(1)]);
+                    } });
+                    await withAuthenticatedTestApp(machinesRoutes, async app => {
+                        const response = await app.inject({ method: 'POST', url: '/v1/machines', headers, payload });
+                        expect(retired).toBe(true);
+                        expect(response.statusCode, response.body).toBe(409);
+                        expect(await db.machine.findUnique({ where: { id: guestId } })).toBeNull();
+                        expect(await db.managedMachine.findUniqueOrThrow({ where: { id: correlation.managedId } }))
+                            .toMatchObject({ enrolledMachineId: null });
+                    });
+                    return;
+                }
+                const foreign = await db.account.create({ data: { encryptionMode: 'plain' } });
+                await db.$executeRaw`ANALYZE "Account"`;
+                let foreignCommits = 0;
+                const isolation: string[] = [];
+                // Interleave actual independent SQL commits after registration's
+                // domain/publication work. No route or admission logic is mocked.
+                db.$transaction = new Proxy(originalTransaction, { apply(target, receiver, args: unknown[]) {
+                    const callback = args[0];
+                    if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+                    return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                        const result = await callback(tx);
+                        const [mode] = await tx.$queryRaw<Array<{ isolation: string; readOnly: string }>>`
+                            SELECT current_setting('transaction_isolation') AS isolation,
+                                current_setting('transaction_read_only') AS "readOnly"
+                        `;
+                        if (mode.readOnly === 'on') return result;
+                        isolation.push(mode.isolation);
+                        await originalTransaction(async peer => {
+                            await peer.account.findUniqueOrThrow({ where: { id: foreign.id } });
+                            await peer.account.update({ where: { id: foreign.id }, data: { seq: { increment: 1 } } });
+                        }, { isolationLevel: 'Serializable' });
+                        foreignCommits++;
+                        return result;
+                    }, ...args.slice(1)]);
+                } });
+                try {
+                    await withAuthenticatedTestApp(machinesRoutes, async app => {
+                        for (const registration of ['create', 'repeat']) {
+                            const response = await app.inject({ method: 'POST', url: '/v1/machines', headers, payload });
+                            console.info('QB146_REGISTRATION', { registration, status: response.statusCode, foreignCommits, isolation });
+                            expect(response.statusCode, response.body).toBe(200);
+                            expect(response.json().machine.id).toBe(guestId);
+                            expect(await db.managedMachine.findUniqueOrThrow({ where: { id: correlation.managedId } }))
+                                .toMatchObject({ enrolledMachineId: guestId, intentRevision: 0, creationState: 'active' });
+                        }
+                    });
+                    expect(foreignCommits).toBeGreaterThanOrEqual(2);
+                } finally {
+                    db.$transaction = originalTransaction;
+                    await db.account.delete({ where: { id: foreign.id } });
+                }
+                return;
+            }
             if ('admittedReplay' in scenario) {
                 await characterizeAdmittedReplay(request);
                 return;
@@ -437,6 +589,94 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
             await db.machine.deleteMany({ where: { accountId: account.id } });
             await db.account.delete({ where: { id: account.id } });
             if (viewer) await db.account.delete({ where: { id: viewer.id } });
+        }
+    });
+
+    it('retains one complete installation identity when two registration fills race', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id,
+            metadata: encodePlainMachineStoredContent({ host: 'guest' }),
+            dataEncryptionKey: Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64') } });
+        const proposals = [0, 1].map(() => {
+            const keys = tweetnacl.sign.keyPair();
+            const identity = { version: 1 as const, machineId: machine.id, accountId: account.id, installationId: randomUUID() };
+            return { id: machine.id, metadata: machine.metadata, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+                installationId: identity.installationId, installationPublicKey: Buffer.from(keys.publicKey).toString('base64url'),
+                installationProof: signMachineInstallationProof({ payload: identity, privateKey: keys.secretKey }) };
+        });
+        let captured!: () => void, release!: () => void;
+        const firstRead = new Promise<void>(resolve => { captured = resolve; });
+        const released = new Promise<void>(resolve => { release = resolve; });
+        const transaction = db.$transaction;
+        const pids: number[] = [];
+        let paused = false;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            const options = args[1];
+            // Home configuration's read snapshot is not either registration writer.
+            if (typeof options === 'object' && options !== null && 'isolationLevel' in options
+                && options.isolationLevel === 'RepeatableRead') return Reflect.apply(target, receiver, args);
+            const index = pids.length;
+            pids.push(0);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                const [backend] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                pids[index] = backend.pid;
+                if (index === 0) {
+                    const find = tx.machine.findFirst.bind(tx.machine);
+                    const findCurrent = new Proxy(find, { async apply(owner, receiver, values: Parameters<typeof find>) {
+                        const row: unknown = await Reflect.apply(owner, receiver, values);
+                        if (!paused && values[0]?.where?.id === machine.id) {
+                            paused = true;
+                            captured();
+                            await released;
+                        }
+                        return row;
+                    } });
+                    const machines = new Proxy(tx.machine, { get(owner, property, receiver) {
+                        return property === 'findFirst' ? findCurrent : Reflect.get(owner, property, receiver);
+                    } });
+                    return callback(new Proxy(tx, { get(owner, property, receiver) {
+                        return property === 'machine' ? machines : Reflect.get(owner, property, receiver);
+                    } }));
+                }
+                return callback(tx);
+            }, ...args.slice(1)]);
+        } });
+        try {
+            await withAuthenticatedTestApp(machinesRoutes, async app => {
+                const register = (payload: typeof proposals[number]) => app.inject({ method: 'POST', url: '/v1/machines',
+                    headers: { 'x-test-user-id': account.id, 'x-happier-account-stored-content-protocol': '4' }, payload });
+                const first = register(proposals[0]);
+                const firstOutcome = Promise.allSettled([first]);
+                let secondOutcome: typeof firstOutcome | undefined;
+                try {
+                    await Promise.race([firstRead, first.then(() => { throw new Error('Registration never read its current Machine'); })]);
+                    let settled = false;
+                    secondOutcome = Promise.allSettled([register(proposals[1])]).finally(() => { settled = true; });
+                    while (!settled) {
+                        const [state] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                            SELECT ${pids[0]} = ANY(pg_blocking_pids(${pids[1] ?? 0}::int)) AS blocked
+                        `;
+                        if (state.blocked) break;
+                    }
+                } finally { release(); }
+                const outcomes = [...await firstOutcome, ...await secondOutcome ?? []];
+                const responses = outcomes.map(outcome => {
+                    if (outcome.status === 'rejected') throw outcome.reason;
+                    return outcome.value;
+                });
+                expect(responses.map(response => response.statusCode).sort()).toEqual([200, 400]);
+                const winningProposal = proposals[responses.findIndex(response => response.statusCode === 200)];
+                const retained = await db.machine.findUniqueOrThrow({ where: { id: machine.id } });
+                expect(retained.installationId).toBe(winningProposal.installationId);
+                expect(Buffer.from(retained.installationPublicKey!).toString('base64url')).toBe(winningProposal.installationPublicKey);
+            });
+        } finally {
+            release();
+            db.$transaction = transaction;
+            await db.machine.delete({ where: { id: machine.id } });
+            await db.account.delete({ where: { id: account.id } });
         }
     });
 });

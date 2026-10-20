@@ -20,7 +20,8 @@ import {
     mutateSessionDraft as mutateSessionDraftWithAuthentication,
     readSessionDraft as readSessionDraftWithAuthentication,
 } from '@/app/account/sessionDrafts/sessionDraftService';
-import { db } from '@/storage/db';
+import { db, initDbPostgres } from '@/storage/db';
+import { snapshotEnv, restoreEnv } from '@/testkit/env';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import {
     createEphemeralRunnerActivation as createEphemeralRunnerActivationWithAuthentication,
@@ -575,17 +576,52 @@ function materializationRequest(fixture: Awaited<ReturnType<typeof materializati
     };
 }
 
-describe('Runner activation and draft lifecycle (SQLite)', () => {
-    let harness: LightSqliteHarness;
-    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-activation-service-', initAuth: true,
-        env: {
+describe('Runner activation and draft lifecycle', () => {
+    let harness: LightSqliteHarness | undefined;
+    const initialEnv = snapshotEnv();
+    beforeAll(async () => {
+        const env = {
             HAPPIER_FEATURE_SESSIONS_EPHEMERAL_RUNNER__ENABLED: '1',
             HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED: '1',
             HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: '1',
             HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',
-        },
-    }); }, 120_000);
-    afterAll(async () => harness?.close());
+        };
+        if (process.env.HAPPIER_TEST_POSTGRES_DATABASE_URL) {
+            if (process.env.DATABASE_URL !== process.env.HAPPIER_TEST_POSTGRES_DATABASE_URL) {
+                throw new Error('Use only the disposable PostgreSQL DB-contract harness');
+            }
+            Object.assign(process.env, env);
+            process.env.HAPPIER_DB_TX_MAX_RETRIES = '0';
+            process.env.HANDY_MASTER_SECRET ??= randomUUID();
+            initDbPostgres();
+            await db.$connect();
+            await auth.init();
+        } else {
+            harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-activation-service-', initAuth: true, env });
+        }
+    }, 120_000);
+    afterAll(async () => {
+        try { if (harness) await harness.close(); else await db.$disconnect(); }
+        finally { restoreEnv(initialEnv); }
+    });
+
+    it('materializes a fresh Runner through its existing content admission', async () => {
+        const fixture = await materializationFixture();
+        const request = materializationRequest(fixture);
+        const result = await materializeEphemeralRunner({ creatorAccountId: fixture.account.id, request,
+            authentication: presentUserAuthentication, env: process.env });
+        expect(result).toMatchObject({ status: 'materialized', result: {
+            sessionId: fixture.created.activation.sessionId, machineId: fixture.created.activation.machineId,
+        } });
+        expect(await db.machine.findUniqueOrThrow({ where: { id: fixture.created.activation.machineId } }))
+            .toMatchObject({ kind: 'ephemeral_session_runner', installationId: fixture.claim.payload.installation.installationId });
+        expect(await materializeEphemeralRunner({ creatorAccountId: fixture.account.id, request,
+            authentication: presentUserAuthentication, env: process.env })).toEqual(result);
+    });
+
+    // The PostgreSQL entry point consumes the materialization admission contract
+    // above; the remaining cases retain their SQLite-specific lifecycle harness.
+    if (process.env.HAPPIER_TEST_POSTGRES_DATABASE_URL) return;
 
     it('uses the Home release ring for both artifact availability and activation admission', async () => {
         const fixture = await activationFixture();

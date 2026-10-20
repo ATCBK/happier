@@ -47,15 +47,16 @@ export function resolveMachineContentPublicKeyFingerprintForStorage(params: Read
     return isPlainMachineDataKeyMarker(params.dataEncryptionKey) ? null : params.contentPublicKeyFingerprint;
 }
 
-/** Ordinary registration publishes its owner; managed linking also publishes controller/child recipients. */
+/** Persistent registration fences its predicates; Runner creation keeps activation's content admission. */
 export async function acquireMachineRegistrationAccountsInTx(tx: Tx, input: Readonly<{
-    accountId: string; machineId: string; managedEnrollment?: ManagedEnrollmentCorrelationV1;
+    accountId: string; machineId: string; kind?: MachineKind; managedEnrollment?: ManagedEnrollmentCorrelationV1;
 }>): Promise<void> {
+    const intent = isPersistentMachine(input) ? 'exclusive' : 'content';
     if (input.managedEnrollment) {
         await acquireManagedMachinePublicationAccountsInTx(tx, input.managedEnrollment,
-            { additionalAccountIds: [input.accountId], additionalMachineIds: [input.machineId] });
+            { intent, additionalAccountIds: [input.accountId], additionalMachineIds: [input.machineId] });
     } else {
-        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true, intent });
     }
 }
 
