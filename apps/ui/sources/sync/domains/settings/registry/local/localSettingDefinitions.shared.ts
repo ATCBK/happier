@@ -131,6 +131,7 @@ const paneSlotStateSchema = z.object({
 });
 
 export const paneScopeStateSchema = z.object({
+    mainHidden: z._default(z.boolean(), false),
     right: paneSlotStateSchema,
     details: z.union([legacyPaneDetailsStateSchema, paneDetailsWorkspaceStateSchema]),
     bottom: paneSlotStateSchema,
@@ -143,6 +144,7 @@ export const paneScopeStateSchema = z.object({
  * migration after this schema boundary.
  */
 export const EMPTY_PERSISTED_PANE_SCOPE_STATE = Object.freeze({
+    mainHidden: false,
     right: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
     details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
     bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
