@@ -60,7 +60,7 @@ export function buildSessionFileDeepLink(params: {
     source?: ReviewCommentSource;
     anchor?: ReviewCommentAnchor;
 }): string {
-    const base = `/session/${params.sessionId}/file?path=${encodeURIComponent(params.filePath)}${params.serverId ? `&serverId=${encodeURIComponent(params.serverId)}` : ''}`;
+    const base = `/session/${encodeURIComponent(params.sessionId)}/file?path=${encodeURIComponent(params.filePath)}${params.serverId ? `&serverId=${encodeURIComponent(params.serverId)}` : ''}`;
     if (!params.anchor || !params.source) return base;
     const parts = Object.entries(serializeFileTargetAnchor(params.anchor, params.source))
         .map(([key, value]) => `${key}=${encodeURIComponent(value)}`);

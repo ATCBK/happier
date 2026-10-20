@@ -206,11 +206,10 @@ describe('useOpenProject', () => {
         workspaceRefs.current.push({ ...workspaceRefs.current[0]!, serverId: serverIdB, rootPath: '/other' });
         await refreshWorkspaceRefs();
         const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
-        expect(await hook.getCurrent()('wr_1', { serverId: serverIdB,
-            initialResource: { kind: 'file', path: 'README.md' } })).toBe(true);
+        expect(await hook.getCurrent()('wr_1', { serverId: serverIdB })).toBe(true);
         const href = new URL(routerPush.mock.calls[0][0], 'https://happier.invalid');
-        expect(href.pathname).toBe('/projects/wr_1/code');
-        expect(Object.fromEntries(href.searchParams)).toMatchObject({ serverId: serverIdB, worktreeId: '@root', initialFile: 'README.md' });
+        expect(href.pathname).toBe('/projects/wr_1/overview');
+        expect(Object.fromEntries(href.searchParams)).toMatchObject({ serverId: serverIdB, worktreeId: '@root' });
     });
 
     it('never restores a bare-id checkout preference when another Home owns the same id', async () => {
@@ -246,63 +245,14 @@ describe('useOpenProject', () => {
         expect(new URL(routerPush.mock.calls[0][0], 'https://happier.invalid').searchParams.get('worktreeId')).toBe('selected-worktree');
     });
 
-    it('opens an initial saved-workspace file in the project details owner', async () => {
+    it('refuses a file open without the mounted Workspace owner instead of falling back to the router', async () => {
         const hook = await renderHook(() => ({ open: useOpenProject(), pane: useAppPaneContext() }), { wrapper: PaneWrapper });
 
         expect(await hook.getCurrent().open('wr_1', {
             activeRootPath: '/repo',
             initialResource: { kind: 'file', path: 'src/index.ts' },
-        })).toBe(true);
-        // The destination instance admits its own resource after it receives its scope.
+        })).toBe(false);
         expect(hook.getCurrent().pane.state.scopes).toEqual({});
-        const href = new URL(routerPush.mock.calls[0][0], 'https://happier.invalid');
-        expect(href.pathname).toBe('/projects/wr_1/code');
-        expect(Object.fromEntries(href.searchParams)).toMatchObject({ serverId: serverIdA, worktreeId: '@root', initialFile: 'src/index.ts' });
-    });
-    it('admits accepted Project navigation through the mounted Workspace Action owner', async () => {
-        const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
-        const requests: unknown[] = [];
-        const release = registerMountedWorkspaceAction(async request => {
-            requests.push(request);
-            return { ok: true };
-        });
-        try {
-            const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
-            await expect(hook.getCurrent()('wr_1', {
-                activeRootPath: '/repo', initialResource: { kind: 'file', path: 'src/index.ts' },
-            })).resolves.toBe(true);
-            expect(requests).toEqual([expect.objectContaining({ actionId: 'workspace.tabs.open', input: expect.objectContaining({
-                href: expect.stringContaining('/projects/wr_1/code'),
-            }) })]);
-            expect(routerPush).not.toHaveBeenCalled();
-        } finally { release(); }
-    });
-    it('sends private same-Home file Find input to the mounted Workspace Action only', async () => {
-        const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
-        const requests: unknown[] = [];
-        const release = registerMountedWorkspaceAction(async request => { requests.push(request); return { ok: true }; });
-        const hook = await renderHook(() => useOpenProject(), { wrapper: PaneWrapper });
-        const find = { query: 'private needle', options: { matchCase: false, regex: false },
-            target: { kind: 'file' as const, path: 'src/index.ts' } };
-        const options = { initialResource: { kind: 'file' as const, path: 'src/index.ts', find } };
-        expect(await hook.getCurrent()('wr_1', options)).toBe(true);
-        expect(requests).toEqual([expect.objectContaining({ actionId: 'workspace.tabs.open', input: expect.objectContaining({
-            href: expect.not.stringContaining(find.query),
-            find: { query: find.query, options: find.options, target: expect.objectContaining({
-                kind: 'project-file', workspaceRefId: 'wr_1', machineId: 'machine-a', rootPath: '/repo', path: 'src/index.ts',
-            }) },
-        }) })]);
-        release();
-        routerPush.mockClear();
-        expect(await hook.getCurrent()('wr_1', options)).toBe(false);
         expect(routerPush).not.toHaveBeenCalled();
-        await act(async () => {
-            const otherHome = await homes.addHome({ name: 'Other Home', serverUrl: 'https://projects-open-other.test', accountId: 'account-a' });
-            homes.answer(otherHome, '/v1/account/project-rows/list', { body: { status: 'listed', coverage: 'complete', rows: [] } });
-            homes.answer(otherHome, '/v2/cursor', { body: { cursor: '0' } });
-            const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
-            await restoreConnectionToActiveServer({ token: homes.findByServerUrl('https://projects-open-other.test')!.token! });
-        });
-        expect(await hook.getCurrent()('wr_1', options)).toBe(false);
     });
 });

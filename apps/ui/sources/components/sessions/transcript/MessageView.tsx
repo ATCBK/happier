@@ -1499,15 +1499,17 @@ function ToolCallBlock(props: {
     sidechainIds: reviewSidechainIds,
   });
   const structuredPinHost = useRowActionHoverHost();
+  const messagesById = props.toolRouteCommon.messagesById;
+  const reducerState = props.toolRouteCommon.reducerState;
+  const toolRouteMessageId = resolveMessageRouteIdForDisplay({ message: props.message, messagesById, reducerState });
+  const toolSeq = resolveTranscriptMessageSeq(props.message);
   const { onJumpToAnchor: handleJumpToAnchor, openPath: handleOpenToolSessionMediaPath } = useTranscriptFileLinks({
     sessionId: props.sessionId, serverId: props.toolChromeCommon.serverId,
     canOpenFiles: props.interaction.canOpenFiles === true,
     workspacePath: props.messageDisplayCommon.workspacePath,
-    routeMessageId: buildMessageRouteId(props.message), seq: resolveTranscriptMessageSeq(props.message),
+    routeMessageId: toolRouteMessageId, seq: toolSeq,
   });
 	  const toolViewTimelineChromeMode = props.toolChromeCommon.toolViewTimelineChromeMode;
-  const messagesById = props.toolRouteCommon.messagesById;
-  const reducerState = props.toolRouteCommon.reducerState;
   if (!message.tool) {
     return null;
   }
@@ -1526,12 +1528,6 @@ function ToolCallBlock(props: {
     toolViewTimelineChromeMode,
     permissionDisabledReason: props.interaction.permissionDisabledReason,
   }), [message.tool, hasStructuredNode, toolViewTimelineChromeMode, props.interaction.permissionDisabledReason]);
-  const toolRouteMessageId = resolveMessageRouteIdForDisplay({
-        message: props.message,
-        messagesById,
-        reducerState,
-      });
-  const toolSeq = resolveTranscriptMessageSeq(props.message);
   const toolPinAction = resolveToolRowPinAction({
     sessionId: props.sessionId,
     seq: toolSeq,

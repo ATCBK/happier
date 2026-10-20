@@ -12,7 +12,6 @@ import {
 } from '@/components/terminal/terminalDetailsTabModel';
 import {
     createSessionCommitDetailsTab,
-    createSessionFileDetailsTab,
     createSessionScmReviewDetailsTab,
     createSessionScmStashDetailsTab,
     createSessionScmPullRequestDetailsTab,
@@ -32,11 +31,15 @@ import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { t } from '@/text';
 import type { DetailsTab, DetailsTabState } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { FILE_TARGET_ANCHOR_PARAM_KEYS, parseSessionFileDeepLinkAnchor, readFileTargetAnchorResource, serializeFileTargetAnchor, type FileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
+import { FILE_TARGET_ANCHOR_PARAM_KEYS, parseSessionFileDeepLinkAnchor, readFileTargetAnchorResource, readWorkspaceFileLinkView, serializeFileTargetAnchor, type FileTargetAnchor, type WorkspaceFileLinkView } from '@/utils/url/sessionFileDeepLink';
 import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import { readWorkspaceFileView } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileView';
+import { resolveFileChangesScope } from '@/components/workspaces/files/file/changes/fileChangesScope';
+import { serializeScmReviewTarget } from '@/utils/url/scmReviewTargetUrl';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 
 export type SessionPaneUrlDetailsTarget =
-    | Readonly<{ kind: 'file'; path: string; anchor?: FileTargetAnchor; anchorSource?: ReviewCommentSource }>
+    | Readonly<{ kind: 'file'; path: string; anchor?: FileTargetAnchor; anchorSource?: ReviewCommentSource; changes?: SessionScmReviewComparison } & WorkspaceFileLinkView>
     | Readonly<{ kind: 'commit'; sha: string }>
     | (Readonly<{ kind: 'scmReview' }> & SessionScmReviewTarget)
     | Readonly<{ kind: 'scmStash' }>
@@ -53,6 +56,7 @@ export type SessionPaneUrlDetailsTarget =
 export const SESSION_PANE_URL_PARAM_KEYS = [
     'right', 'bottom', 'details', 'path', 'sha', 'terminalInstanceId', 'discussionId', 'machineId',
     'comparison', 'comparisonId', 'turnId', 'checkpointReceiptId', 'evidence', 'head', 'base', 'commit', 'parent', 'view', 'explain', 'pullRequest', 'evidenceSessionId',
+    'fileView', 'blame', 'fileOpenAs',
     ...FILE_TARGET_ANCHOR_PARAM_KEYS,
 ] as const;
 export type SessionPaneUrlParamKey = (typeof SESSION_PANE_URL_PARAM_KEYS)[number];
@@ -66,7 +70,7 @@ export type SessionPaneUrlState = Readonly<{
 type PaneScopeStateLike = Readonly<{
     right: Readonly<{ isOpen: boolean; activeTabId: string | null }>;
     bottom: Readonly<{ isOpen: boolean; activeTabId: string | null }>;
-    details: Readonly<{ isOpen: boolean; tabs: ReadonlyArray<Readonly<{ key: string; kind: string; resource: unknown }>>; activeTabKey: string | null }>;
+    details: Readonly<{ isOpen: boolean; tabs: ReadonlyArray<Readonly<{ key: string; kind: string; resource: unknown }>>; activeTabKey: string | null; tabState?: Readonly<Record<string, unknown>> }>;
 }>;
 
 function readSingleStringParam(params: Readonly<Record<string, unknown>>, key: string): string | null {
@@ -136,33 +140,6 @@ function parseScmReviewTarget(params: Readonly<Record<string, unknown>>): Sessio
     };
 }
 
-function serializeScmReviewTarget(target: SessionScmReviewTarget): Record<string, string> {
-    const out: Record<string, string> = {};
-    if (target.evidenceSessionId) out.evidenceSessionId = target.evidenceSessionId;
-    const comparison = target.comparison;
-    if (comparison) {
-        out.comparison = comparison.kind;
-        if (comparison.comparisonId) out.comparisonId = comparison.comparisonId;
-        if (comparison.kind === 'turnCheckpoint') {
-            if (comparison.turnId) out.turnId = comparison.turnId;
-            if (comparison.checkpointReceiptId) out.checkpointReceiptId = comparison.checkpointReceiptId;
-            if (comparison.evidence) out.evidence = comparison.evidence;
-        }
-        if (comparison.kind === 'branch') {
-            out.head = comparison.head;
-            out.base = comparison.base;
-        }
-        if (comparison.kind === 'commit') {
-            out.commit = comparison.commit;
-            if (comparison.parent) out.parent = comparison.parent;
-        }
-        if (comparison.kind === 'pullRequest') out.pullRequest = JSON.stringify(comparison.locator);
-    }
-    if (target.view) out.view = target.view;
-    if (typeof target.explain === 'boolean') out.explain = String(target.explain);
-    return out;
-}
-
 /** A stored tab's comparison and view, validated by the same reader a link goes through. */
 export function readSessionScmReviewTarget(resource: unknown): SessionScmReviewTarget {
     const record = resource && typeof resource === 'object' ? resource as { comparison?: unknown; view?: unknown; explain?: unknown; evidenceSessionId?: unknown } : {};
@@ -183,7 +160,7 @@ export function parseSessionPaneUrlState(params: Readonly<Record<string, unknown
     const bottomTabId = bottomRaw === 'terminal' ? bottomRaw : null;
 
     const detailsRaw = readSingleStringParam(params, 'details')?.trim() ?? '';
-    const pathRaw = readSingleStringParam(params, 'path')?.trim() ?? '';
+    const pathRaw = readSingleStringParam(params, 'path') ?? '';
     const shaRaw = readSingleStringParam(params, 'sha')?.trim() ?? '';
     const terminalInstanceIdRaw = readSingleStringParam(params, 'terminalInstanceId')?.trim() ?? '';
     const discussionIdRaw = readSingleStringParam(params, 'discussionId')?.trim() ?? '';
@@ -193,8 +170,9 @@ export function parseSessionPaneUrlState(params: Readonly<Record<string, unknown
     let details: SessionPaneUrlDetailsTarget | null = null;
     if (detailsRaw === 'file' && pathRaw && isSafeWorkspaceRelativePath(pathRaw)) {
         const parsed = parseSessionFileDeepLinkAnchor(params);
-        details = { kind: 'file', path: pathRaw.trim(), ...(parsed ? { anchor: parsed.anchor } : {}),
-            ...(parsed?.source === 'diff' ? { anchorSource: parsed.source } : {}) };
+        const changes = parseScmReviewTarget(params).comparison;
+        details = { kind: 'file', path: pathRaw, ...(parsed ? { anchor: parsed.anchor } : {}),
+            ...(parsed?.source === 'diff' ? { anchorSource: parsed.source } : {}), ...(changes ? { changes } : {}), ...readWorkspaceFileLinkView(params) };
     }
     if (detailsRaw === 'commit' && shaRaw) {
         details = { kind: 'commit', sha: shaRaw };
@@ -245,6 +223,10 @@ export function serializeSessionPaneUrlState(state: SessionPaneUrlState): Record
         out.details = 'file';
         out.path = state.details.path;
         if (state.details.anchor) Object.assign(out, serializeFileTargetAnchor(state.details.anchor, state.details.anchorSource));
+        if (state.details.view) out.fileView = state.details.view;
+        if (state.details.blame !== undefined) out.blame = state.details.blame ? '1' : '0';
+        if (state.details.openAs) out.fileOpenAs = state.details.openAs;
+        if (state.details.changes) Object.assign(out, serializeScmReviewTarget({ comparison: state.details.changes }));
     }
     if (state.details?.kind === 'commit') {
         out.details = 'commit';
@@ -284,6 +266,7 @@ export function serializeSessionPaneUrlState(state: SessionPaneUrlState): Record
 function readActiveDetailsUrlTarget(
     detailsTabs: readonly unknown[],
     activeDetailsKey: string | null,
+    tabState?: Readonly<Record<string, unknown>>,
 ): SessionPaneUrlDetailsTarget | null {
     const selected = detailsTabs.find((tab) => tab && typeof tab === 'object' && 'key' in tab && tab.key === activeDetailsKey)
         ?? detailsTabs.at(-1)
@@ -295,11 +278,23 @@ function readActiveDetailsUrlTarget(
         : null;
 
     if (activeTab.kind === 'file') {
-        const path = typeof resource?.path === 'string' ? resource.path.trim() : '';
+        const path = typeof resource?.path === 'string' ? resource.path : '';
         if (!path || !isSafeWorkspaceRelativePath(path)) return null;
         const parsed = readFileTargetAnchorResource(activeTab.resource);
+        const initialChanges = readSessionScmReviewTarget({ comparison: resource?.changes }).comparison;
+        const fileView = readWorkspaceFileView(tabState?.[activeTab.key]);
+        const storedScope = fileView.changesScope;
+        const changes = storedScope ? resolveFileChangesScope({ storedScope, initialChanges }).selector : initialChanges;
+        const { view: openingView, ...linkView } = readWorkspaceFileLinkView(resource);
+        // A launch hint cannot keep replaying after a real page control changes the view.
+        // Preview has no opener-mode arm; omit the hint and retain it in tab memory.
+        const view = fileView.mode === 'diff' ? 'changes' : fileView.mode === 'file' ? 'view'
+            : fileView.mode === 'markdown' ? undefined : openingView;
         return { kind: 'file', path, ...(parsed ? { anchor: parsed.anchor } : {}),
-            ...(parsed?.source === 'diff' ? { anchorSource: parsed.source } : {}) };
+            ...(parsed?.source === 'diff' ? { anchorSource: parsed.source } : {}), ...(changes ? { changes } : {}),
+            ...linkView, ...(view ? { view } : {}),
+            ...(fileView.blame === undefined ? {} : { blame: fileView.blame }),
+        };
     }
 
     if (activeTab.kind === 'commit') {
@@ -349,15 +344,16 @@ function readActiveDetailsUrlTarget(
 export function buildActiveDetailsRouteParams(
     detailsTabs: readonly unknown[],
     activeDetailsKey: string | null,
+    tabState?: Readonly<Record<string, unknown>>,
 ): Record<string, string> {
-    const details = readActiveDetailsUrlTarget(detailsTabs, activeDetailsKey);
+    const details = readActiveDetailsUrlTarget(detailsTabs, activeDetailsKey, tabState);
     return details ? serializeSessionPaneUrlState({ details }) : {};
 }
 
 export function deriveSessionPaneUrlStateFromScopeState(scopeState: PaneScopeStateLike | null): SessionPaneUrlState | null {
     if (!scopeState) return null;
     const details = scopeState.details.isOpen && scopeState.details.activeTabKey
-        ? readActiveDetailsUrlTarget(scopeState.details.tabs, scopeState.details.activeTabKey)
+        ? readActiveDetailsUrlTarget(scopeState.details.tabs, scopeState.details.activeTabKey, scopeState.details.tabState)
         : null;
     // Retained sidebars are not a substitute destination for a Details tab the URL cannot name.
     if (scopeState.details.isOpen && scopeState.details.activeTabKey && !details) return null;
@@ -387,8 +383,15 @@ export function createSessionPaneDetailsTab(
     let tab: DetailsTab | null = null;
     switch (target.kind) {
         case 'file': {
-            const path = target.path.trim();
-            if (isSafeWorkspaceRelativePath(path)) tab = createSessionFileDetailsTab(path, target.anchor, target.anchorSource);
+            const path = target.path;
+            if (isSafeWorkspaceRelativePath(path)) {
+                const file = createWorkspaceFileDetailsTab(path, target.anchor, target.anchorSource, {
+                    ...(target.view ? { view: target.view } : {}),
+                    ...(target.blame === undefined ? {} : { blame: target.blame }),
+                    ...(target.openAs ? { openAs: target.openAs } : {}),
+                });
+                tab = target.changes ? { ...file, resource: { ...file.resource, changes: target.changes } } : file;
+            }
             break;
         }
         case 'commit':
@@ -451,7 +454,7 @@ export function applySessionPaneUrlState(
     if (!constructed) return;
     const { isPinned: _isPinned, isPreview: _isPreview, ...tab } = constructed;
     if (state.details.kind === 'file' || state.details.kind === 'commit' || state.details.kind === 'discussion') {
-        pane.openDetailsTab(tab, { present: false });
+        pane.openDetailsTab(tab, { present: false, ...(state.details.kind === 'file' && state.details.openAs ? { intent: state.details.openAs } : {}) });
     } else {
         pane.openDetailsTab(tab, { intent: 'pinned', present: false });
     }

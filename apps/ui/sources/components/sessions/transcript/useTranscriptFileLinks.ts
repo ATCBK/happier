@@ -47,5 +47,5 @@ export function useTranscriptFileLinks(params: Readonly<{
     const jumpToAnchor = React.useCallback<NonNullable<StructuredMessageRendererParams['onJumpToAnchor']>>((target) => {
         openPath(target.filePath, { anchor: target.anchor, anchorSource: target.source, view: target.source === 'diff' ? 'changes' : 'view' });
     }, [openPath]);
-    return { onMarkdownLinkPress, openPath, onJumpToAnchor: enabled ? jumpToAnchor : undefined };
+    return { canOpen: enabled, onMarkdownLinkPress, openPath, onJumpToAnchor: enabled ? jumpToAnchor : undefined };
 }

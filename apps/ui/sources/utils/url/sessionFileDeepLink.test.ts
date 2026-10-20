@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionFileDeepLink, buildWorkspaceFileLink, readWorkspaceFileLinkView, parseSearchFileTarget, parseSessionFileDeepLinkAnchor } from './sessionFileDeepLink';
 
 describe('sessionFileDeepLink', () => {
+    it('keeps Session identity characters out of file-link query parsing', () => {
+        const href = buildWorkspaceFileLink({ target: { kind: 'session', sessionId: 's?branch/one' }, path: 'src/a.ts' });
+        expect(parseSearchFileTarget(href)).toMatchObject({ sessionId: 's?branch/one', path: 'src/a.ts' });
+        expect(parseSearchFileTarget(buildSessionFileDeepLink({ sessionId: 's?branch/one', filePath: 'src/a.ts' })))
+            .toMatchObject({ sessionId: 's?branch/one', path: 'src/a.ts' });
+    });
     it('reads file-view launch intent without accepting unknown modes or changing anchor vocabulary', () => {
         expect(readWorkspaceFileLinkView({ fileView: 'changes', blame: '1', fileOpenAs: 'preview' }))
             .toEqual({ view: 'changes', blame: true, openAs: 'preview' });

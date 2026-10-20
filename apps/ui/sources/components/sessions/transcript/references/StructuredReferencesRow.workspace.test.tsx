@@ -34,6 +34,8 @@ const production = await (async () => {
             import('@/components/appShell/workspace/WorkspaceProvider'), import('@/components/appShell/panes/AppPaneProvider'),
             import('@/components/appShell/destinations/compactAppDestinationCatalog'), import('./StructuredReferencesRow'), import('@/sync/domains/state/storage'),
             import('../useTranscriptFileLinks'),
+            import('@/components/sessions/files/turnChanges/TranscriptTurnChangesCard'), import('@/scm/scmStatusFiles'),
+            import('@/utils/ui/toTestIdSafeValue'),
         ]);
     } finally { try { await disconnect?.(); } finally { await homes.dispose(); restore(); } }
 })();
@@ -54,12 +56,13 @@ it('opens a transcript file through the canonical Action into the qualified sess
         accountId: 'alice', currentAccount: true }, { key: 'other', serverUrl: 'https://transcript-files-other.test', accountId: 'alice' }], route: () => undefined });
     disposeHome = homes.dispose;
     disconnectHome = await homes.restoreActiveConnection();
-    const [{ WorkspaceProvider }, { AppPaneProvider }, { resolveCompactAppDestinations }, { StructuredReferencesRow }, { storage }, { useTranscriptFileLinks }] = production;
+    const [{ WorkspaceProvider }, { AppPaneProvider }, { resolveCompactAppDestinations }, { StructuredReferencesRow }, { storage }, { useTranscriptFileLinks },
+        { TranscriptTurnChangesCard }, { scmFileStatusFromChange }, { toTestIdSafeValue }] = production;
     const initial = storage.getState();
     const scope = initial.profileScope!;
     const targetServerId = homes.homes.other!.id;
     expect(targetServerId).not.toBe(scope.serverId);
-    storage.setState({ isDataReady: true });
+    storage.setState({ isDataReady: true, settings: { ...initial.settings, scmChangedFilesLayout: 'list' } });
     const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
         externalSessions: false, inbox: false, workflows: false, friends: false,
     } });
@@ -74,7 +77,11 @@ it('opens a transcript file through the canonical Action into the qualified sess
     } });
     const screen = await renderWithSessionTranscriptSource(<AppPaneProvider><WorkspaceProvider enabled catalog={catalog}>
         {owner => { navigation = owner; return <><HookProbe /><StructuredReferencesRow sessionId="s1" serverId={targetServerId}
-            references={[{ kind: 'file', path: 'src/a.ts' }]} fileOpenEnabled /></>; }}
+            references={[{ kind: 'file', path: 'src/a.ts' }]} fileOpenEnabled />
+            <TranscriptTurnChangesCard sessionId="s1" serverId={targetServerId} turnId="turn-4" fileOpenEnabled
+                files={[scmFileStatusFromChange({ path: 'src/turn.ts', changeKind: 'modified', added: 1, removed: 1 })]}
+                firstHunkAnchors={{ 'src/turn.ts': { kind: 'diffLine', side: 'after', startLine: 40, newLine: 40, oldLine: null } }} />
+        </>; }}
     </WorkspaceProvider></AppPaneProvider>, source);
     try {
         await vi.waitFor(async () => { await act(async () => {}); expect(navigation.active || navigation.ownsRoute).toBe(true); });
@@ -90,6 +97,22 @@ it('opens a transcript file through the canonical Action into the qualified sess
             const group = navigation.state.groups[navigation.state.focusedGroupId];
             expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
                 serverId: targetServerId, path: 'src/range.ts', source: 'file', anchor: 'range', startLine: '5', endLine: '8',
+            } });
+        });
+        await act(async () => { links.openPath('.happier/uploads/tools/t1/recording.webm'); });
+        await vi.waitFor(() => {
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
+                serverId: targetServerId, path: '.happier/uploads/tools/t1/recording.webm', fileView: 'view',
+            } });
+        });
+        await screen.pressByTestIdAsync('turn-changes-card:turn-4-toggle');
+        await screen.pressByTestIdAsync(`scm-change-row-${toTestIdSafeValue('src/turn.ts')}`);
+        await vi.waitFor(() => {
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
+                serverId: targetServerId, path: 'src/turn.ts', fileView: 'changes', source: 'diff', anchor: 'diffLine', startLine: '40',
+                comparison: 'turnCheckpoint', turnId: 'turn-4',
             } });
         });
         await act(async () => { links.onJumpToAnchor?.({ filePath: 'src/review.ts', source: 'diff',

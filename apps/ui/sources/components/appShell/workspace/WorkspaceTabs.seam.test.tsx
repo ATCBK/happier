@@ -89,6 +89,180 @@ afterEach(async () => {
 });
 
 describe('workspace tabs production composition', () => {
+    it.each(['web', 'ios'] as const)('opens a qualified Project file through useOpenProject and keeps Find private on %s', async platform => {
+        route.platform = platform; route.pathname = '/search'; route.params = {};
+        window.history.replaceState(null, '', '/search');
+        restoreBrowserLocks = installBrowserStorageLockBoundary();
+        installDisconnectedServerSocketBoundary();
+        const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-open-project-file.test',
+            accountId: 'alice', currentAccount: true }], route: () => undefined });
+        disposeHome = homes.dispose; disconnectHome = await homes.restoreActiveConnection();
+        const [{ storage }, { useOpenProject }, { applyProjectAccountRowsFixture }, { useAppPaneContext }] = await Promise.all([
+            import('@/sync/domains/state/storage'), import('@/components/projects/useOpenProject'),
+            import('@/dev/testkit/fixtures/projectAccountRows'), import('../panes/AppPaneProvider'),
+        ]);
+        const initial = storage.getState();
+        const scope = initial.profileScope!;
+        route.pathname = '/projects/shared-project/overview';
+        route.params = { workspaceRefId: 'shared-project', serverId: scope.serverId };
+        window.history.replaceState(null, '', `${route.pathname}?serverId=${encodeURIComponent(scope.serverId)}`);
+        storage.setState({ isDataReady: true });
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [
+            { id: 'shared-project', serverId: scope.serverId, machineId: 'studio', rootPath: '/repo', label: null, createdAtMs: 1 },
+            { id: 'shared-project', serverId: 'other-home', machineId: 'other-machine', rootPath: '/other', label: null, createdAtMs: 1 },
+        ] });
+        const [{ WorkspaceProvider }, , , , , , { AppPaneProvider }, , catalogModule] = production;
+        const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false } });
+        let openProject!: ReturnType<typeof useOpenProject>;
+        let pane!: ReturnType<typeof useAppPaneContext>;
+        let navigation!: WorkspaceNavigationContextValue;
+        function ProjectFileEntry() { openProject = useOpenProject(); pane = useAppPaneContext(); return null; }
+        const screen = await renderScreen(<AppPaneProvider><WorkspaceProvider enabled={platform === 'web'} phone={platform === 'ios'} catalog={catalog}>
+            {owner => { navigation = owner; return <ProjectFileEntry />; }}
+        </WorkspaceProvider></AppPaneProvider>);
+        const anchor = { kind: 'range' as const, filePath: 'src/entry.ts', startLine: 4, endLine: 9 };
+        const find = { query: 'private needle 🦦', options: { matchCase: true, regex: false },
+            target: { kind: 'file' as const, path: anchor.filePath, anchor } };
+        try {
+            const { invokeWorkspaceAction } = await import('./workspaceActionRuntime');
+            await vi.waitFor(async () => { await act(async () => {});
+                expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.list', input: {} })).toMatchObject({ ok: true });
+                expect(pane.fileFindSeedAccountBindings.get(scope.serverId)?.isCurrent()).toBe(true); });
+            let opened = false;
+            await act(async () => { opened = await openProject('shared-project', { serverId: scope.serverId,
+                activeRootPath: '/repo/feature', initialResource: { kind: 'file', path: anchor.filePath, anchor, anchorSource: 'diff', find } }); });
+            expect(opened).toBe(true);
+            const tab = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+            expect(tab.target).toMatchObject({ kind: 'project', params: { workspaceRefId: 'shared-project', serverId: scope.serverId,
+                activeRootPath: '/repo/feature', initialFile: anchor.filePath, source: 'diff', anchor: 'range', startLine: '4', endLine: '9', fileOpenAs: 'pinned' } });
+            expect(JSON.stringify(tab.target)).not.toContain(find.query);
+            expect(pane.fileFindSeedHandoff.peekCurrent({ host: 'project', id: 'shared-project',
+                scope: { serverId: scope.serverId, machineId: 'studio', rootPath: '/repo/feature' }, path: anchor.filePath })).toEqual(find);
+        } finally { await screen.unmount(); storage.setState(initial, true); }
+    });
+    it('keeps the canonical file opener when Search renders in the global modal outside Workspace context', async () => {
+        route.pathname = '/search'; route.params = {};
+        window.history.replaceState(null, '', '/search');
+        restoreBrowserLocks = installBrowserStorageLockBoundary();
+        installDisconnectedServerSocketBoundary();
+        const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-search-portal.test',
+            accountId: 'alice', currentAccount: true }], route: () => undefined });
+        disposeHome = homes.dispose; disconnectHome = await homes.restoreActiveConnection();
+        const [{ storage }, { applyProjectAccountRowsFixture }, { CommandPaletteProvider }, { useUniversalSearchRuntime },
+            { Modal }, { UniversalSearchModal }, { UniversalSearchController }, { useOptionalWorkspaceNavigation },
+            { InjectedAuthProvider }] = await Promise.all([
+            import('@/sync/domains/state/storage'), import('@/dev/testkit/fixtures/projectAccountRows'),
+            import('@/components/appShell/commandPalette/CommandPaletteProvider'), import('@/components/appShell/search/UniversalSearchRuntimeContext'),
+            import('@/modal'), import('@/components/appShell/search/UniversalSearchModal'), import('@/components/appShell/search/UniversalSearchController'),
+            import('./WorkspaceNavigationContext'), import('@/auth/context/AuthContext'),
+        ]);
+        const initial = storage.getState();
+        const scope = initial.profileScope!;
+        route.pathname = '/projects/portal-project/overview';
+        route.params = { workspaceRefId: 'portal-project', serverId: scope.serverId };
+        window.history.replaceState(null, '', `${route.pathname}?serverId=${encodeURIComponent(scope.serverId)}`);
+        storage.setState({ isDataReady: true });
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [{ id: 'portal-project', serverId: scope.serverId,
+            machineId: 'studio', rootPath: '/repo', label: null, createdAtMs: 1 }] });
+        const [{ WorkspaceProvider }, , , , , , { AppPaneProvider }, , catalogModule] = production;
+        const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false } });
+        let runtime!: ReturnType<typeof useUniversalSearchRuntime>;
+        let navigation!: WorkspaceNavigationContextValue;
+        function SearchOpener() { runtime = useUniversalSearchRuntime(); return null; }
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><AppPaneProvider>
+            <WorkspaceProvider enabled catalog={catalog}>{owner => { navigation = owner;
+                return <CommandPaletteProvider><SearchOpener /></CommandPaletteProvider>;
+            }}</WorkspaceProvider></AppPaneProvider></InjectedAuthProvider>);
+        let portal: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        try {
+            const { invokeWorkspaceAction } = await import('./workspaceActionRuntime');
+            await vi.waitFor(async () => { await act(async () => {});
+                expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.list', input: {} })).toMatchObject({ ok: true }); });
+            vi.mocked(Modal.show).mockClear();
+            await act(async () => runtime.open(undefined, { accountId: scope.accountId, serverId: scope.serverId,
+                machineId: 'studio', rootPath: '/repo', sessionId: null }, { source: 'files' }));
+            const opened = vi.mocked(Modal.show).mock.calls[0]?.[0];
+            expect(opened?.component).toBe(UniversalSearchModal);
+            let portalHasWorkspace = true;
+            function PortalHost() {
+                portalHasWorkspace = useOptionalWorkspaceNavigation() !== null;
+                return <UniversalSearchModal {...opened?.props as React.ComponentProps<typeof UniversalSearchModal>}
+                    onClose={() => {}} />;
+            }
+            portal = await renderScreen(<InjectedAuthProvider credentials={null}><PortalHost /></InjectedAuthProvider>);
+            expect(portalHasWorkspace).toBe(false);
+            const controller = portal.root.findByType(UniversalSearchController);
+            const openFile = controller.props.openWorkspaceFile as React.ComponentProps<typeof UniversalSearchController>['openWorkspaceFile'];
+            expect(openFile).toBeTypeOf('function');
+            let openedFile = false;
+            await act(async () => { openedFile = await openFile!({ kind: 'project', workspaceRefId: 'portal-project',
+                serverId: scope.serverId, machineId: 'studio', rootPath: '/repo', path: 'from-search.ts' }); });
+            expect(openedFile).toBe(true);
+            const tab = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+            expect(tab.target).toMatchObject({ kind: 'project', params: { workspaceRefId: 'portal-project', initialFile: 'from-search.ts' } });
+        } finally {
+            await act(async () => { portal?.unmount(); screen.unmount(); });
+            storage.setState(initial, true);
+        }
+    });
+    it('does not claim a file open or capture its origin while accepting a pending Action approval', async () => {
+        route.pathname = '/search'; route.params = {};
+        window.history.replaceState(null, '', '/search');
+        restoreBrowserLocks = installBrowserStorageLockBoundary();
+        installDisconnectedServerSocketBoundary();
+        const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
+        const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'alice', encryptionMode: 'plain' });
+        const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-file-approval.test', accountId: 'alice', currentAccount: true }], route: request => artifacts.handle(request.path, {
+                method: request.method, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
+            }) ?? undefined });
+        disposeHome = homes.dispose; disconnectHome = await homes.restoreActiveConnection();
+        const [{ storage }, { useWorkspaceFileOpener }, { useAppPaneContext }, { createSessionPaneScopeId }] = await Promise.all([
+            import('@/sync/domains/state/storage'), import('@/components/workspaces/files/useWorkspaceFileOpener'),
+            import('../panes/AppPaneProvider'), import('@/components/sessions/panes/sessionPaneScopeId'),
+        ]);
+        const initial = storage.getState();
+        const scope = initial.profileScope!;
+        storage.setState({ isDataReady: true });
+        storage.getState().applySessions([createSessionFixture({ id: 's1', serverId: scope.serverId })]);
+        route.pathname = '/session/s1'; route.params = { id: 's1', serverId: scope.serverId };
+        window.history.replaceState(null, '', `/session/s1?serverId=${scope.serverId}`);
+        const [{ WorkspaceProvider }, , , , , , { AppPaneProvider }, , catalogModule] = production;
+        const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: true, workflows: false, friends: false,
+        } });
+        let fileOpener!: ReturnType<typeof useWorkspaceFileOpener>;
+        let pane!: ReturnType<typeof useAppPaneContext>;
+        let navigation!: WorkspaceNavigationContextValue;
+        function FileLink() { fileOpener = useWorkspaceFileOpener(); pane = useAppPaneContext(); return null; }
+        const screen = await renderScreen(<AppPaneProvider><WorkspaceProvider enabled catalog={catalog}>
+            {owner => { navigation = owner; return <FileLink />; }}
+        </WorkspaceProvider></AppPaneProvider>);
+        try {
+            await vi.waitFor(async () => { await act(async () => {}); expect(fileOpener.canOpen).toBe(true); });
+            const settings = { ...storage.getState().settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {
+                'workspace.tabs.open': { approvalRequiredSurfaces: ['ui'] },
+            } }) };
+            homes.replaceAccountSettings('home', { settings, version: 2 });
+            await act(async () => { storage.getState().applySettingsForScope(scope, settings, 2); });
+            let opened: boolean | undefined;
+            await act(async () => { opened = await fileOpener.open({ kind: 'session', sessionId: 's1', serverId: scope.serverId, path: 'src/a.ts' }, {
+                origin: { transcript: { sessionAddress: { serverId: scope.serverId, sessionId: 's1' }, routeMessageId: 'local:m1', filePath: 'src/a.ts' } },
+            }); });
+            expect(artifacts.list()).toHaveLength(1);
+            expect(opened).toBe(true);
+            const scopeId = createSessionPaneScopeId('s1', scope.serverId);
+            expect(pane.overlayFocusReturnOwner.takeDetailsTabReturn(scopeId, 'file:src/a.ts', 'pane')).toBeNull();
+            await vi.waitFor(async () => { await act(async () => {});
+                const group = navigation.state.groups[navigation.state.focusedGroupId];
+                expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'inbox', params: {
+                    serverId: scope.serverId, workspacePathname: `/inbox/approvals/${artifacts.list()[0]!.id}`,
+                } });
+            });
+        } finally { await screen.unmount(); storage.setState(initial, true); }
+    });
+
     it.each(['web', 'ios'] as const)('opens a Project file from full Search through the workspace owner on %s', async platform => {
         route.platform = platform; route.pathname = '/search'; route.params = {};
         window.history.replaceState(null, '', '/search');

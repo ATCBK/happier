@@ -3,6 +3,24 @@ import { describe, expect, it, vi } from 'vitest';
 import { applySessionPaneUrlState, buildActiveDetailsRouteParams, createSessionPaneDetailsTab, deriveSessionPaneUrlStateFromScopeState, parseSessionPaneUrlState, reconcileSessionPaneScopeFromUrlState, serializeSessionPaneUrlState } from './sessionPaneUrlState';
 
 describe('sessionPaneUrlState', () => {
+    it('preserves literal file path spelling through parsing, construction and outward links', () => {
+        const path = ' leading /LICENSE ';
+        const state = parseSessionPaneUrlState({ details: 'file', path });
+        expect(state?.details).toEqual({ kind: 'file', path });
+        const tab = createSessionPaneDetailsTab({ kind: 'file', path })!;
+        expect(tab.resource).toMatchObject({ path });
+        expect(buildActiveDetailsRouteParams([tab], tab.key)).toMatchObject({ path });
+    });
+    it('reflects current file view rather than replaying the opening link after a user changes mode', () => {
+        const tab = createSessionPaneDetailsTab({ kind: 'file', path: 'src/a.ts', view: 'changes' })!;
+        const read = (mode: 'file' | 'diff' | 'markdown') => deriveSessionPaneUrlStateFromScopeState({
+            right: { isOpen: false, activeTabId: null }, bottom: { isOpen: false, activeTabId: null },
+            details: { isOpen: true, tabs: [tab], activeTabKey: tab.key, tabState: { [tab.key]: { view: { mode } } } },
+        })?.details;
+        expect(read('file')).toMatchObject({ view: 'view' });
+        expect(read('diff')).toMatchObject({ view: 'changes' });
+        expect(read('markdown')).not.toHaveProperty('view');
+    });
     it('uses the tab view Changes scope after file.view.set supersedes its opening link', () => {
         const tab = createSessionPaneDetailsTab({ kind: 'file', path: 'src/a.ts', changes: { kind: 'turnCheckpoint', turnId: 'turn-4' } })!;
         const state = { right: { isOpen: false, activeTabId: null }, bottom: { isOpen: false, activeTabId: null },

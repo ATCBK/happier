@@ -157,7 +157,7 @@ export const StructuredReferencesRow = React.memo((props: StructuredReferencesRo
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const transcriptSource = useSessionTranscriptSource();
-    const { openPath: openFile } = useTranscriptFileLinks({
+    const { openPath: openFile, canOpen: canOpenFile } = useTranscriptFileLinks({
         sessionId: props.sessionId, serverId: props.serverId,
         workspacePath: transcriptSource.useWorkspacePath(), canOpenFiles: props.fileOpenEnabled,
         routeMessageId: props.routeMessageId, seq: props.seq,
@@ -189,7 +189,7 @@ export const StructuredReferencesRow = React.memo((props: StructuredReferencesRo
                         </Text>
                     </>
                 );
-                return props.fileOpenEnabled && transcriptSource.navigate !== null ? (
+                return canOpenFile ? (
                     <Pressable
                         key={`file:${path}`}
                         testID={`linked-workspace-file:${path}`}
