@@ -9918,6 +9918,8 @@ const sessionFollowTranslations: Pick<Record<
             "executionRun": ({ title }) => `「${title}」での実行`,
             "sourceUnavailable": "利用できなくなりました",
             "followsThis": ({ title }) => `${title} がこのセッションをフォロー中`,
+            "ruleMatching": ({ facts }: { facts: string }) => `一致するセッション:${facts}`,
+            "ruleEvery": "見えるすべてのセッション",
             "managerOnly": "このセッションのマネージャーとして通知を受けます。コーディネーター設定で変更できます。"
         },
         "preferences": {

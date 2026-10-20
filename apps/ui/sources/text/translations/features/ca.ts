@@ -9929,6 +9929,8 @@ const sessionFollowTranslations: Pick<Record<
             "executionRun": ({ title }) => `Una execució a «${title}»`,
             "sourceUnavailable": "Ja no està disponible",
             "followsThis": ({ title }) => `${title} segueix aquesta sessió`,
+            "ruleMatching": ({ facts }: { facts: string }) => `Sessions que coincideixen amb ${facts}`,
+            "ruleEvery": "Totes les sessions que pot veure",
             "managerOnly": "N’és informada com a gestora d’aquesta sessió. Canvia-ho a la seva configuració de coordinadora."
         },
         "preferences": {

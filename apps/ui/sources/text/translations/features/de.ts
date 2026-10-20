@@ -9916,6 +9916,8 @@ const sessionFollowTranslations: Pick<Record<
             "executionRun": ({ title }) => `Ein Lauf in „${title}“`,
             "sourceUnavailable": "Nicht mehr verfügbar",
             "followsThis": ({ title }) => `${title} folgt dieser Session`,
+            "ruleMatching": ({ facts }: { facts: string }) => `Sessions passend zu ${facts}`,
+            "ruleEvery": "Jede Session, die sie sehen kann",
             "managerOnly": "Sie erfährt davon als Managerin dieser Session. Ändere das in ihrer Koordinator-Einrichtung."
         },
         "preferences": {

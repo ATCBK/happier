@@ -140,6 +140,8 @@ export const en = {
         "executionRun": ({ title }: { title: string }) => `A run in “${title}”`,
         "sourceUnavailable": "No longer available",
         "followsThis": ({ title }: { title: string }) => `${title} follows this`,
+        "ruleMatching": ({ facts }: { facts: string }) => `Sessions matching ${facts}`,
+        "ruleEvery": "Every session it can see",
         "managerOnly": "It hears about this session as its manager. Change that in its coordinator setup."
     },
     "preferences": {

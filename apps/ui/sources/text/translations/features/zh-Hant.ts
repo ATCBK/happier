@@ -9913,6 +9913,8 @@ const sessionFollowTranslations: Pick<Record<
             "executionRun": ({ title }) => `「${title}」中的一次執行`,
             "sourceUnavailable": "已無法使用",
             "followsThis": ({ title }) => `${title} 關注此工作階段`,
+            "ruleMatching": ({ facts }: { facts: string }) => `符合的工作階段：${facts}`,
+            "ruleEvery": "它能看到的所有工作階段",
             "managerOnly": "它以此工作階段管理者的身分接收動態。可在其協調者設定中變更。"
         },
         "preferences": {

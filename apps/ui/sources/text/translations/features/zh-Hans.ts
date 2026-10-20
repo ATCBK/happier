@@ -9913,6 +9913,8 @@ const sessionFollowTranslations: Pick<Record<
             "executionRun": ({ title }) => `“${title}”中的一次运行`,
             "sourceUnavailable": "已不可用",
             "followsThis": ({ title }) => `${title} 关注此会话`,
+            "ruleMatching": ({ facts }: { facts: string }) => `匹配的会话：${facts}`,
+            "ruleEvery": "它能看到的所有会话",
             "managerOnly": "它作为此会话的管理者接收动态。可在其协调者设置中更改。"
         },
         "preferences": {

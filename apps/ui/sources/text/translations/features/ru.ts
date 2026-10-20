@@ -9954,6 +9954,8 @@ const sessionFollowTranslations: Pick<Record<
             "executionRun": ({ title }) => `Запуск в «${title}»`,
             "sourceUnavailable": "Больше недоступно",
             "followsThis": ({ title }) => `${title} следит за этой сессией`,
+            "ruleMatching": ({ facts }: { facts: string }) => `Сессии по условию ${facts}`,
+            "ruleEvery": "Все доступные ей сессии",
             "managerOnly": "Она узнаёт об этом как менеджер этой сессии. Измените это в её настройке координатора."
         },
         "preferences": {
