@@ -70,11 +70,13 @@ it.each([
         await request.destination.writeBytes(new TextEncoder().encode('Selected bytes'));
         return { ok: true, name: relativePath.split('/').at(-1)!, sizeBytes: 14 };
     } });
-    const receipt = ArtifactActionOutputSchemasV1['artifact.publish_from_file'].parse(await execute({
+    const result = await execute({
         actionId: 'artifact.publish_from_file', input: { path, workspace: { machineId: 'source-machine', rootPath } },
         context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
             serverId: fixture.home.id, runtimeAccountId: account.accountId },
-    }));
+    });
+    expect(result).toMatchObject({ artifactId: expect.any(String), revision: expect.any(Object) });
+    const receipt = ArtifactActionOutputSchemasV1['artifact.publish_from_file'].parse(result);
     expect(fixture.boundary.readPlainBody(receipt.artifactId)).toBe('Selected bytes');
     expect((await account.readArtifact(receipt.artifactId))?.provenance?.source).toMatchObject({
         machineId: 'source-machine', rootPath, path: relativePath,
