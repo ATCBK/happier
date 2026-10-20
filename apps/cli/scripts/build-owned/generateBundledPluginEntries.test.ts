@@ -41,6 +41,7 @@ import { ConnectedServiceIdSchema } from '../../../../packages/protocol/src/conn
 import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY } from '../../../../packages/plugins/antigravity/src/connectedAccounts/builtInLegacyCompatibility.ts';
 import type { BundledPluginPackage } from './bundledPlugins/projectionFacts.ts';
 import { renderCliBundledAgentRegistrationBindingsTs } from './bundledPlugins/registry.ts';
+import { runAgentSkillDeliveryContract } from '@happier-dev/plugin-sdk/testing';
 
 const generatorSource = readFileSync(new URL('./generateBundledPluginEntries.ts', import.meta.url), 'utf8');
 const registryRendererSource = readFileSync(new URL('./bundledPlugins/registry.ts', import.meta.url), 'utf8');
@@ -62,6 +63,16 @@ function sourceBetween(startMarker: string, endMarker: string, source = generato
 }
 
 describe('bundled Agent skill delivery coverage', () => {
+  for (const { metadata, authored } of authoredAgentManifests) {
+    const ingestion = ingestPluginManifestV2(authored.PLUGIN_MANIFEST);
+    if (!ingestion.ok) throw new Error(`${metadata.pluginId}: ${JSON.stringify(ingestion.diagnostics)}`);
+    for (const agent of ingestion.manifest.contributes.agents ?? []) {
+      if ('skills' in agent.capabilities && agent.capabilities.skills?.delivery === 'session_dir') continue;
+      // Exercise every authored index/none declaration, including execution-only Agents.
+      // Native declarations still require their real launch suites below.
+      runAgentSkillDeliveryContract({ agent });
+    }
+  }
   it('requires every authored session_dir declaration to run the public skill contract kit', async () => {
     for (const { metadata, authored } of authoredAgentManifests) {
       const ingestion = ingestPluginManifestV2(authored.PLUGIN_MANIFEST);
