@@ -8949,12 +8949,6 @@ settingsSession: {
                     installedWithBuild: ({ build }: { build: string }) => `Installed • ${build}`,
                     notInstalled: 'Not installed',
                 },
-                language: {
-                    title: 'Language',
-                    subtitle: 'Optional BCP-47 language tag.',
-                    promptTitle: 'Language',
-                    promptBody: 'Enter a BCP-47 language tag (e.g. en, en-US).',
-                },
                 alerts: {
                     downloadFailedTitle: 'Download failed',
                     downloadFailedBody: ({ message }: { message: string }) =>
@@ -8984,6 +8978,8 @@ settingsSession: {
                     enableTitle: 'Enable hands-free',
                     silenceTitle: 'Silence timeout (ms)',
                     minSpeechTitle: 'Minimum speech (ms)',
+                    pushToTalkTitle: 'Push-to-talk',
+                    pushToTalkSubtitle: 'This provider transcribes a finished recording, so tap the mic again to send. Choose Device or Local neural speech recognition for hands-free.',
                 },
                 customBackendIdSubtitle: 'Enter a custom backend id.',
                 searchBackendsPlaceholder: 'Search backends',
@@ -9182,7 +9178,7 @@ settingsSession: {
             sttProvider: 'STT Provider',
             neuralStt: {
                 title: 'On-device STT',
-                webNotAvailableSubtitle: 'Not available on web. Use Device, OpenAI-compatible, or Gemini STT.',
+                webFallbackSubtitle: 'Runs in the mobile app only. In the browser, voice uses the browser’s speech recognition instead.',
             },
             sttBaseUrl: 'STT Base URL',
             sttBaseUrlTitle: 'Speech to text',

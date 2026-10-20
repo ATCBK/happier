@@ -9512,12 +9512,6 @@ settingsSession: {
             `Instalado • ${build}`,
           notInstalled: "Não instalado",
         },
-        language: {
-          title: "Idioma",
-          subtitle: "Tag de idioma BCP-47 opcional.",
-          promptTitle: "Idioma",
-          promptBody: "Digite uma tag de idioma BCP-47 (ex.: en, en-US).",
-        },
         alerts: {
           downloadFailedTitle: "Falha no download",
           downloadFailedBody: ({ message }: { message: string }) =>
@@ -9551,6 +9545,8 @@ settingsSession: {
           enableTitle: "Ativar mãos livres",
           silenceTitle: "Tempo de silêncio (ms)",
           minSpeechTitle: "Fala mínima (ms)",
+          pushToTalkTitle: "Pressione para falar",
+          pushToTalkSubtitle: "Este provedor transcreve uma gravação concluída; toque no microfone novamente para enviar. Para mãos livres, escolha o reconhecimento de voz do dispositivo ou o neural local.",
         },
         customBackendIdSubtitle: "Digite um id de backend personalizado.",
         searchBackendsPlaceholder: "Buscar backends",
@@ -9808,8 +9804,7 @@ settingsSession: {
       sttProvider: "Provedor STT",
       neuralStt: {
         title: "STT no dispositivo",
-        webNotAvailableSubtitle:
-          "Indisponível na web. Use STT do dispositivo, compatível com OpenAI ou Gemini STT.",
+        webFallbackSubtitle: "Funciona apenas no app móvel. No navegador, a voz usa o reconhecimento de fala do navegador.",
       },
       ttsBaseUrl: "Base URL TTS",
       ttsBaseUrlTitle: "Base URL TTS",

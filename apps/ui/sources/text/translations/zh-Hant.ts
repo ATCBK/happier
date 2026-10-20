@@ -7708,12 +7708,6 @@ settingsSession: {
                     installedWithBuild: ({ build }: { build: string }) => `已安裝 • ${build}`,
                     notInstalled: '未安裝',
                 },
-                language: {
-                    title: '語言',
-                    subtitle: '選填 BCP-47 語言標籤。',
-                    promptTitle: '語言',
-                    promptBody: '輸入 BCP-47 語言標籤（例如：en, en-US）。',
-                },
                 alerts: {
                     downloadFailedTitle: '下載失敗',
                     downloadFailedBody: ({ message }: { message: string }) => `無法下載此模型包。\n\n${message}`,

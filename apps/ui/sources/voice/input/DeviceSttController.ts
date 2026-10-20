@@ -1,5 +1,6 @@
 import { requestMicrophonePermission, showMicrophonePermissionDeniedAlert } from '@/utils/platform/microphonePermissions';
-import { computeTurnEndpointDelayMs, normalizeTurnEndpointPolicy } from '@/voice/input/TurnEndpointDetector';
+import { scheduleTurnEndpoint } from '@/voice/input/TurnEndpointDetector';
+import { isHandsFreeSttEnabled, resolveHandsFreeTurnEndpointPolicy } from '@/voice/local/localVoiceSettings';
 import { Platform } from 'react-native';
 
 type DeviceSttStatePatch = {
@@ -14,7 +15,7 @@ type DeviceSttHandle = {
   isFinal: boolean;
   pendingAutoStop: boolean;
   startedAt: number;
-  autoStopTimer: ReturnType<typeof setTimeout> | null;
+  cancelAutoStop: (() => void) | null;
   module: any;
   resolveEnd: () => void;
   endPromise: Promise<void>;
@@ -40,67 +41,27 @@ export function createDeviceSttController(deps: {
 
   const isDomRuntime = (): boolean => typeof window !== 'undefined' && typeof document !== 'undefined';
 
-  const isHandsFreeDeviceSttEnabled = (): boolean => {
-    const settings = deps.getSettings();
-    const voice = settings?.voice ?? null;
-    const providerId = voice?.providerId;
-    const adapter =
-      providerId === 'local_direct'
-        ? voice?.adapters?.local_direct
-        : voice?.adapters?.local_conversation ?? voice?.adapters?.local_direct;
-    const stt = adapter?.stt ?? null;
-    const provider =
-      typeof stt?.provider === 'string'
-        ? stt.provider
-        : stt?.useDeviceStt === true
-          ? 'device'
-          : 'openai_compat';
-    const useDeviceStt = provider === 'device';
-    const handsFreeEnabled = adapter?.handsFree?.enabled === true;
-    return useDeviceStt && handsFreeEnabled;
-  };
+  const isHandsFreeDeviceSttEnabled = (): boolean => isHandsFreeSttEnabled(deps.getSettings());
 
   const clearHandleTimer = () => {
-    if (!handle?.autoStopTimer) return;
-    clearTimeout(handle.autoStopTimer);
-    handle.autoStopTimer = null;
+    handle?.cancelAutoStop?.();
+    if (handle) handle.cancelAutoStop = null;
   };
 
   const scheduleHandsFreeStop = (sessionId: string, expectedHandle: DeviceSttHandle) => {
-    if (expectedHandle.autoStopTimer) {
-      clearTimeout(expectedHandle.autoStopTimer);
-      expectedHandle.autoStopTimer = null;
-    }
-
-    const settings = deps.getSettings();
-    const voice = settings?.voice ?? null;
-    const providerId = voice?.providerId;
-    const adapter =
-      providerId === 'local_direct'
-        ? voice?.adapters?.local_direct
-        : voice?.adapters?.local_conversation ?? voice?.adapters?.local_direct;
-    const policy = normalizeTurnEndpointPolicy({
-      silenceMs: adapter?.handsFree?.endpointing?.silenceMs ?? 450,
-      minSpeechMs: adapter?.handsFree?.endpointing?.minSpeechMs ?? 120,
+    expectedHandle.cancelAutoStop?.();
+    expectedHandle.cancelAutoStop = scheduleTurnEndpoint({
+      policy: resolveHandsFreeTurnEndpointPolicy(deps.getSettings()),
+      speechElapsedMs: Date.now() - expectedHandle.startedAt,
+      onEndpoint: () => {
+        expectedHandle.cancelAutoStop = null;
+        if (!handle || handle !== expectedHandle || handle.sessionId !== sessionId) return;
+        if (!isHandsFreeDeviceSttEnabled()) return;
+        if (handsFreeSessionId !== sessionId) return;
+        if (!deps.canAutoStopTurn(sessionId)) return;
+        deps.onAutoStopTurn(sessionId);
+      },
     });
-    const elapsedMs = Date.now() - expectedHandle.startedAt;
-    const waitMs = computeTurnEndpointDelayMs(policy, elapsedMs);
-
-    const triggerStop = () => {
-      expectedHandle.autoStopTimer = null;
-      if (!handle || handle !== expectedHandle || handle.sessionId !== sessionId) return;
-      if (!isHandsFreeDeviceSttEnabled()) return;
-      if (handsFreeSessionId !== sessionId) return;
-      if (!deps.canAutoStopTurn(sessionId)) return;
-      deps.onAutoStopTurn(sessionId);
-    };
-
-    if (waitMs <= 0) {
-      queueMicrotask(triggerStop);
-      return;
-    }
-
-    expectedHandle.autoStopTimer = setTimeout(triggerStop, waitMs);
   };
 
   const cleanupListeners = () => {
@@ -161,7 +122,7 @@ export function createDeviceSttController(deps: {
       isFinal: false,
       pendingAutoStop: false,
       startedAt: Date.now(),
-      autoStopTimer: null,
+      cancelAutoStop: null,
       module: ExpoSpeechRecognitionModule,
       resolveEnd: () => resolveEnd?.(),
       endPromise,
@@ -237,9 +198,7 @@ export function createDeviceSttController(deps: {
 
     const text = handle.transcript.trim();
     const subscriptions = handle.subscriptions;
-    if (handle.autoStopTimer) {
-      clearTimeout(handle.autoStopTimer);
-    }
+    handle.cancelAutoStop?.();
     handle = null;
 
     try {

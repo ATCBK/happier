@@ -8849,12 +8849,6 @@ settingsSession: {
                     installedWithBuild: ({ build }: { build: string }) => `Instal·lat • ${build}`,
                     notInstalled: 'No instal·lat',
                 },
-                language: {
-                    title: 'Idioma',
-                    subtitle: 'Etiqueta d’idioma BCP-47 opcional.',
-                    promptTitle: 'Idioma',
-                    promptBody: 'Introdueix una etiqueta d’idioma BCP-47 (p. ex. en, en-US).',
-                },
                 alerts: {
                     downloadFailedTitle: 'La descàrrega ha fallat',
                     downloadFailedBody: ({ message }: { message: string }) =>
@@ -8884,6 +8878,8 @@ settingsSession: {
                     enableTitle: 'Activa mans lliures',
                     silenceTitle: 'Temps de silenci (ms)',
                     minSpeechTitle: 'Parla mínima (ms)',
+                    pushToTalkTitle: 'Prem per parlar',
+                    pushToTalkSubtitle: 'Aquest proveïdor transcriu una gravació acabada; toca el micròfon de nou per enviar. Tria el reconeixement de veu del dispositiu o el neuronal local per al mode mans lliures.',
                 },
                 customBackendIdSubtitle: 'Introdueix un ID de backend personalitzat.',
                 searchBackendsPlaceholder: 'Cerca backends',
@@ -9083,7 +9079,7 @@ settingsSession: {
             sttProvider: 'Proveïdor STT',
             neuralStt: {
                 title: 'STT al dispositiu',
-                webNotAvailableSubtitle: 'No està disponible a la web. Fes servir Dispositiu, compatible amb OpenAI o STT de Gemini.',
+                webFallbackSubtitle: 'Només funciona a l’app mòbil. Al navegador, la veu fa servir el reconeixement de veu del navegador.',
             },
             sttBaseUrl: 'URL base STT',
             sttBaseUrlTitle: 'URL base STT',

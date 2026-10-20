@@ -9375,12 +9375,6 @@ settingsSession: {
             `Установлено • ${build}`,
           notInstalled: "Не установлено",
         },
-        language: {
-          title: "Язык",
-          subtitle: "Необязательный языковой тег BCP-47.",
-          promptTitle: "Язык",
-          promptBody: "Введите языковой тег BCP-47 (например: en, en-US).",
-        },
         alerts: {
           downloadFailedTitle: "Ошибка загрузки",
           downloadFailedBody: ({ message }: { message: string }) =>
@@ -9414,6 +9408,8 @@ settingsSession: {
           enableTitle: "Включить hands-free",
           silenceTitle: "Таймаут тишины (мс)",
           minSpeechTitle: "Минимальная речь (мс)",
+          pushToTalkTitle: "Нажмите, чтобы говорить",
+          pushToTalkSubtitle: "Этот провайдер распознаёт готовую запись — нажмите микрофон ещё раз, чтобы отправить. Для режима без рук выберите распознавание речи устройства или локальное нейронное.",
         },
         customBackendIdSubtitle: "Введите пользовательский id бэкенда.",
         searchBackendsPlaceholder: "Поиск бэкендов",
@@ -9669,8 +9665,7 @@ settingsSession: {
       sttProvider: "Провайдер STT",
       neuralStt: {
         title: "STT на устройстве",
-        webNotAvailableSubtitle:
-          "Недоступно в вебе. Используйте STT устройства, OpenAI-совместимый или Gemini STT.",
+        webFallbackSubtitle: "Работает только в мобильном приложении. В браузере используется распознавание речи браузера.",
       },
       ttsBaseUrl: "Базовый URL TTS",
       ttsBaseUrlTitle: "Текст в речь",

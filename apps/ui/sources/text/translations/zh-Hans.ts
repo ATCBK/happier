@@ -9096,12 +9096,6 @@ settingsSession: {
             `已安装 • ${build}`,
           notInstalled: "未安装",
         },
-        language: {
-          title: "语言",
-          subtitle: "可选的 BCP-47 语言标签。",
-          promptTitle: "语言",
-          promptBody: "输入 BCP-47 语言标签（例如：en, en-US）。",
-        },
         alerts: {
           downloadFailedTitle: "下载失败",
           downloadFailedBody: ({ message }: { message: string }) =>
@@ -9131,6 +9125,8 @@ settingsSession: {
           enableTitle: "启用免提",
           silenceTitle: "静默超时（毫秒）",
           minSpeechTitle: "最短语音（毫秒）",
+          pushToTalkTitle: "按键说话",
+          pushToTalkSubtitle: "此提供商会转写完成的录音，再次点按麦克风即可发送。如需免提，请选择设备或本地神经语音识别。",
         },
         customBackendIdSubtitle: "输入自定义后端 ID。",
         searchBackendsPlaceholder: "搜索后端",
@@ -9347,8 +9343,7 @@ settingsSession: {
       sttProvider: "STT 提供方",
       neuralStt: {
         title: "设备端 STT",
-        webNotAvailableSubtitle:
-          "Web 不可用。请使用设备、OpenAI 兼容或 Gemini STT。",
+        webFallbackSubtitle: "仅在移动应用中可用。在浏览器中，语音将改用浏览器的语音识别。",
       },
       ttsBaseUrl: "TTS 基础 URL",
       ttsBaseUrlTitle: "TTS 基础 URL",

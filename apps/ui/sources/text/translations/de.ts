@@ -8917,12 +8917,6 @@ settingsSession: {
                     installedWithBuild: ({ build }: { build: string }) => `Installiert • ${build}`,
                     notInstalled: 'Nicht installiert',
                 },
-                language: {
-                    title: 'Sprache',
-                    subtitle: 'Optionales BCP-47-Sprach-Tag.',
-                    promptTitle: 'Sprache',
-                    promptBody: 'Gib ein BCP-47-Sprach-Tag ein (z. B. en, en-US).',
-                },
                 alerts: {
                     downloadFailedTitle: 'Download fehlgeschlagen',
                     downloadFailedBody: ({ message }: { message: string }) =>
@@ -8952,6 +8946,8 @@ settingsSession: {
                     enableTitle: 'Freihändig aktivieren',
                     silenceTitle: 'Stille-Timeout (ms)',
                     minSpeechTitle: 'Mindestlänge der Sprache (ms)',
+                    pushToTalkTitle: 'Push-to-Talk',
+                    pushToTalkSubtitle: 'Dieser Anbieter transkribiert eine fertige Aufnahme – tippe erneut auf das Mikrofon, um zu senden. Für Freisprechen wähle Geräte- oder lokale neuronale Spracherkennung.',
                 },
                 customBackendIdSubtitle: 'Gib eine eigene Backend-ID ein.',
                 searchBackendsPlaceholder: 'Backends suchen',
@@ -9150,7 +9146,7 @@ settingsSession: {
             sttProvider: 'STT-Provider',
             neuralStt: {
                 title: 'STT auf dem Gerät',
-                webNotAvailableSubtitle: 'Im Web nicht verfügbar. Nutze Gerät, OpenAI-kompatibel oder Gemini-STT.',
+                webFallbackSubtitle: 'Läuft nur in der mobilen App. Im Browser nutzt die Sprachsteuerung stattdessen die Spracherkennung des Browsers.',
             },
             sttBaseUrl: 'STT-Basis-URL',
             sttBaseUrlTitle: 'Spracherkennung',

@@ -22,3 +22,32 @@ export function computeTurnEndpointDelayMs(policy: TurnEndpointPolicy, speechEla
     const elapsed = Math.max(0, Number.isFinite(speechElapsedMs) ? speechElapsedMs : 0);
     return Math.max(policy.silenceMs, policy.minSpeechMs - elapsed, 0);
 }
+
+/**
+ * Schedules the hands-free end-of-turn once the recognizer reports end of speech. Returns a cancel
+ * function; the callback never fires after cancellation.
+ */
+export function scheduleTurnEndpoint(params: {
+    policy: TurnEndpointPolicy;
+    speechElapsedMs: number;
+    onEndpoint: () => void;
+}): () => void {
+    let cancelled = false;
+    const fire = () => {
+        if (cancelled) return;
+        cancelled = true;
+        params.onEndpoint();
+    };
+    const waitMs = computeTurnEndpointDelayMs(params.policy, params.speechElapsedMs);
+    if (waitMs <= 0) {
+        queueMicrotask(fire);
+        return () => {
+            cancelled = true;
+        };
+    }
+    const timer = setTimeout(fire, waitMs);
+    return () => {
+        cancelled = true;
+        clearTimeout(timer);
+    };
+}

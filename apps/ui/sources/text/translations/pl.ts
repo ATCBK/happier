@@ -9401,12 +9401,6 @@ settingsSession: {
             `Zainstalowano • ${build}`,
           notInstalled: "Nie zainstalowano",
         },
-        language: {
-          title: "Język",
-          subtitle: "Opcjonalny znacznik języka BCP-47.",
-          promptTitle: "Język",
-          promptBody: "Wpisz znacznik języka BCP-47 (np. en, en-US).",
-        },
         alerts: {
           downloadFailedTitle: "Pobieranie nie powiodło się",
           downloadFailedBody: ({ message }: { message: string }) =>
@@ -9439,6 +9433,8 @@ settingsSession: {
           enableTitle: "Włącz tryb hands-free",
           silenceTitle: "Limit ciszy (ms)",
           minSpeechTitle: "Minimalna mowa (ms)",
+          pushToTalkTitle: "Naciśnij, aby mówić",
+          pushToTalkSubtitle: "Ten dostawca transkrybuje gotowe nagranie — dotknij mikrofonu ponownie, aby wysłać. Aby używać trybu bez rąk, wybierz rozpoznawanie mowy urządzenia lub lokalne neuronowe.",
         },
         customBackendIdSubtitle: "Wpisz niestandardowy identyfikator backendu.",
         searchBackendsPlaceholder: "Szukaj backendów",
@@ -9696,8 +9692,7 @@ settingsSession: {
       sttProvider: "Dostawca STT",
       neuralStt: {
         title: "STT na urządzeniu",
-        webNotAvailableSubtitle:
-          "Niedostępne w web. Użyj STT urządzenia, endpointu zgodnego z OpenAI lub Gemini STT.",
+        webFallbackSubtitle: "Działa tylko w aplikacji mobilnej. W przeglądarce głos korzysta z rozpoznawania mowy przeglądarki.",
       },
       ttsBaseUrl: "Bazowy URL TTS",
       ttsBaseUrlTitle: "Bazowy URL TTS",

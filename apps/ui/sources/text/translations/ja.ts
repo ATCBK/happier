@@ -9632,12 +9632,6 @@ settingsSession: {
             `インストール済み • ${build}`,
           notInstalled: "未インストール",
         },
-        language: {
-          title: "言語",
-          subtitle: "BCP-47 言語タグ（任意）",
-          promptTitle: "言語",
-          promptBody: "BCP-47 の言語タグを入力してください（例: en, en-US）。",
-        },
         alerts: {
           downloadFailedTitle: "ダウンロードに失敗しました",
           downloadFailedBody: ({ message }: { message: string }) =>
@@ -9670,6 +9664,8 @@ settingsSession: {
           enableTitle: "ハンズフリーを有効化",
           silenceTitle: "無音タイムアウト（ms）",
           minSpeechTitle: "最小発話（ms）",
+          pushToTalkTitle: "プッシュ・トゥ・トーク",
+          pushToTalkSubtitle: "このプロバイダーは録音完了後に文字起こしします。送信するにはもう一度マイクをタップしてください。ハンズフリーにはデバイスまたはローカルニューラル音声認識を選択してください。",
         },
         customBackendIdSubtitle: "カスタム backend ID を入力します。",
         searchBackendsPlaceholder: "backend を検索",
@@ -9925,8 +9921,7 @@ settingsSession: {
       sttProvider: "STTプロバイダー",
       neuralStt: {
         title: "端末内 STT",
-        webNotAvailableSubtitle:
-          "Web では利用できません。デバイス、OpenAI互換、または Gemini STT を使用してください。",
+        webFallbackSubtitle: "モバイルアプリでのみ動作します。ブラウザーではブラウザーの音声認識を使用します。",
       },
       ttsBaseUrl: "TTS ベースURL",
       ttsBaseUrlTitle: "TTS ベースURL",

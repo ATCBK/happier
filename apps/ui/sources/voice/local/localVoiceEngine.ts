@@ -7,6 +7,7 @@ import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, type RpcErrorCa
 import { createDeviceSttController } from '@/voice/input/DeviceSttController';
 import { createSherpaStreamingSttController } from '@/voice/input/SherpaStreamingSttController';
 import { MissingGeminiApiKeyError, MissingSttBaseUrlError, transcribeRecordedAudioWithProvider } from '@/voice/input/transcribeRecordedAudioWithProvider';
+import { resolveSttFailureCode } from '@/voice/input/sttRequestError';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { findVoiceConversationSessionId } from '@/voice/sessionBinding/voiceConversationSession';
 import { voiceAgentSessions } from '@/voice/agent/voiceAgentSessions';
@@ -28,8 +29,7 @@ import {
   resolveLocalVoiceError,
 } from './localVoiceState';
 import {
-  isHandsFreeDeviceSttEnabled,
-  isHandsFreeLocalNeuralSttEnabled,
+  isHandsFreeSttEnabled,
   isVoiceBargeInEnabled,
   resolveLocalSttProvider,
   resolveLocalVoiceAdapterSettings,
@@ -64,6 +64,13 @@ const deviceSttController = createDeviceSttController({
 const sherpaSttController = createSherpaStreamingSttController({
   setState: patchLocalVoiceState,
   getSettings: () => storage.getState().settings as any,
+  canAutoStopTurn: () => !inFlight,
+  onAutoStopTurn: (sessionId: string) => {
+    if (inFlight) return;
+    inFlight = stopSherpaSpeechRecognitionAndSend(sessionId).finally(() => {
+      inFlight = null;
+    });
+  },
 });
 
 function isUnsupportedVoiceAgentPrewarmError(error: unknown): boolean {
@@ -168,7 +175,7 @@ async function stopAndSendRecordedTurn(sessionId: string): Promise<void> {
       patchLocalVoiceState({ status: 'idle', sessionId, error: 'missing_stt_api_key' });
       throw error;
     }
-    patchLocalVoiceState({ status: 'idle', sessionId, error: 'stt_failed' });
+    patchLocalVoiceState({ status: 'idle', sessionId, error: resolveSttFailureCode(error) });
     return;
   }
 
@@ -194,7 +201,7 @@ async function stopDeviceSpeechRecognitionAndSend(sessionId: string): Promise<vo
 
   const text = await deviceSttController.stop(sessionId);
   if (!text) {
-    if (deviceSttController.isHandsFreeSession(sessionId) && isHandsFreeDeviceSttEnabled(storage.getState().settings)) {
+    if (deviceSttController.isHandsFreeSession(sessionId) && isHandsFreeSttEnabled(storage.getState().settings)) {
       await deviceSttController.start(sessionId);
       return;
     }
@@ -214,7 +221,7 @@ async function stopDeviceSpeechRecognitionAndSend(sessionId: string): Promise<vo
     }),
   );
 
-  if (deviceSttController.isHandsFreeSession(sessionId) && isHandsFreeDeviceSttEnabled(storage.getState().settings)) {
+  if (deviceSttController.isHandsFreeSession(sessionId) && isHandsFreeSttEnabled(storage.getState().settings)) {
     await deviceSttController.start(sessionId);
   }
 }
@@ -224,7 +231,7 @@ async function stopSherpaSpeechRecognitionAndSend(sessionId: string): Promise<vo
 
   const text = await sherpaSttController.stop(sessionId);
   if (!text) {
-    if (sherpaSttController.isHandsFreeSession(sessionId) && isHandsFreeLocalNeuralSttEnabled(storage.getState().settings)) {
+    if (sherpaSttController.isHandsFreeSession(sessionId) && isHandsFreeSttEnabled(storage.getState().settings)) {
       await sherpaSttController.start(sessionId);
       return;
     }
@@ -244,7 +251,7 @@ async function stopSherpaSpeechRecognitionAndSend(sessionId: string): Promise<vo
     }),
   );
 
-  if (sherpaSttController.isHandsFreeSession(sessionId) && isHandsFreeLocalNeuralSttEnabled(storage.getState().settings)) {
+  if (sherpaSttController.isHandsFreeSession(sessionId) && isHandsFreeSttEnabled(storage.getState().settings)) {
     await sherpaSttController.start(sessionId);
   }
 }
@@ -520,19 +527,21 @@ export async function stopLocalVoiceSession(): Promise<void> {
   }
 
   if (typeof activeSessionId === 'string' && activeSessionId.trim().length > 0) {
+    // Hang-up ends hands-free first so no auto-stop or re-arm can run while recognizers stop.
+    deviceSttController.clearHandsFreeSession(activeSessionId);
+    sherpaSttController.clearHandsFreeSession(activeSessionId);
+
     try {
       await deviceSttController.stop(activeSessionId);
     } catch {
       // ignore
     }
-    deviceSttController.clearHandsFreeSession(activeSessionId);
 
     try {
       await sherpaSttController.stop(activeSessionId);
     } catch {
       // ignore
     }
-    sherpaSttController.clearHandsFreeSession(activeSessionId);
 
     try {
       await voiceAgentSessions.stop(activeSessionId);

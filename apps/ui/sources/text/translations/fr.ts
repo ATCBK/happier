@@ -8904,12 +8904,6 @@ settingsSession: {
                     installedWithBuild: ({ build }: { build: string }) => `Installé • ${build}`,
                     notInstalled: 'Non installé',
                 },
-                language: {
-                    title: 'Langue',
-                    subtitle: 'Tag de langue BCP-47 optionnel.',
-                    promptTitle: 'Langue',
-                    promptBody: 'Saisis un tag de langue BCP-47 (ex. : en, en-US).',
-                },
                 alerts: {
                     downloadFailedTitle: 'Échec du téléchargement',
                     downloadFailedBody: ({ message }: { message: string }) =>
@@ -8939,6 +8933,8 @@ settingsSession: {
                     enableTitle: 'Activer le mains libres',
                     silenceTitle: 'Délai de silence (ms)',
                     minSpeechTitle: 'Parole minimale (ms)',
+                    pushToTalkTitle: 'Appuyer pour parler',
+                    pushToTalkSubtitle: 'Ce fournisseur transcrit un enregistrement terminé : touche à nouveau le micro pour envoyer. Pour le mode mains libres, choisis la reconnaissance vocale de l’appareil ou neuronale locale.',
                 },
                 customBackendIdSubtitle: 'Saisis un id de backend personnalisé.',
                 searchBackendsPlaceholder: 'Rechercher des backends',
@@ -9137,7 +9133,7 @@ settingsSession: {
             sttProvider: 'Provider STT',
             neuralStt: {
                 title: 'STT sur l’appareil',
-                webNotAvailableSubtitle: 'Indisponible sur le web. Utilise le STT de l’appareil, compatible OpenAI, ou Gemini.',
+                webFallbackSubtitle: 'Fonctionne uniquement dans l’app mobile. Dans le navigateur, la voix utilise la reconnaissance vocale du navigateur.',
             },
             sttBaseUrl: 'URL de base STT',
             sttBaseUrlTitle: 'Reconnaissance vocale',

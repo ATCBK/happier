@@ -248,12 +248,18 @@ Use device providers when you want the simplest local setup with no extra server
 
 Device STT uses built-in platform speech recognition where available.
 
-When **Device STT** is selected, Happier can also expose **hands-free** controls such as:
+In the web app, Device STT uses the browser's speech recognition. Some browsers, such as Firefox, don't provide it; there, Local voice shows that device speech recognition is unavailable, so choose OpenAI-compatible or Gemini STT instead.
 
-- **silence timeout**
-- **minimum speech duration**
+### Hands-free and push-to-talk
 
-These settings control when a spoken turn should be considered finished.
+**Hands-free** is available with **Device STT** and **Local neural STT**. These providers listen live and detect when you stop speaking, so Happier sends the turn and starts listening again without a tap. The hands-free settings are:
+
+- **silence timeout**: how long to wait after the recognizer detects the end of speech before sending the turn
+- **minimum speech duration**: the shortest turn Happier will send automatically
+
+Tapping the mic while hands-free is listening sends the current turn and ends hands-free listening.
+
+**OpenAI-compatible STT** and **Google Gemini STT** transcribe a finished recording, so they are push-to-talk: tap the mic to start, and tap again to send. The settings screen shows a push-to-talk note instead of the hands-free controls for these providers.
 
 ### Device TTS
 
@@ -306,6 +312,12 @@ You can configure:
 - optional language hint
 
 Use this when you want Google transcription quality without changing the rest of your Local voice pipeline.
+
+Gemini STT is push-to-talk. With Gemini 2.5 Flash models, Happier turns thinking off for transcription to keep latency low; other models use their default thinking settings.
+
+If your API key is restricted to the Happier iOS or Android app, Happier sends the app identity headers with Gemini requests. Android restrictions also need the app signing certificate SHA-1, which Happier reads from the **Android cert SHA-1** field in the Google Cloud TTS settings.
+
+If transcription fails, Local voice shows the reason, such as an invalid or restricted API key, a rate limit, or a timeout.
 
 ### Google Cloud TTS
 
@@ -385,7 +397,10 @@ You can configure:
 - **Download model**
 - **Remove downloaded assets**
 - **Check for updates**
-- **Language hint**
+
+The language comes from the model pack. The built-in streaming pack recognizes English.
+
+Local neural STT supports hands-free. It is available in the iOS and Android apps only. Because voice settings sync across your devices, choosing Local neural STT on your phone also applies to the web app. In the browser, Happier uses the browser's speech recognition (Device STT) instead, and shows a notice if the browser doesn't support speech recognition.
 
 This gives Local voice a fully on-device STT option without requiring an external server.
 
@@ -475,9 +490,9 @@ Check:
 
 Check:
 
-- that you are on a native build
-- that the Sherpa model pack has been downloaded
-- that the selected language or pack matches your use case
+- that you are on the iOS or Android app
+- that the Sherpa model pack has been downloaded (Settings → Voice → **Model files**)
+- that the model pack's language matches the language you speak
 
 ### Nothing is written into the target session
 
