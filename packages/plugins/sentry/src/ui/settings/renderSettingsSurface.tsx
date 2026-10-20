@@ -15,6 +15,7 @@
  */
 
 import { createTriageSourceSettingsSurface } from '@happier-dev/triage-sources/ui';
+import { decodeSentryInstanceConfiguration, encodeSentryInstanceConfiguration } from '../../instances/sentryInstanceConfiguration.js';
 
 import {
   SENTRY_ACTION_IDS,
@@ -30,4 +31,29 @@ export const renderSurface = createTriageSourceSettingsSurface({
   connectedAccountServiceLocalId: SENTRY_CONNECTED_ACCOUNT_ID,
   connectedAccountPurpose: SENTRY_CONNECTED_ACCOUNT_PURPOSE,
   sourceDisplayName: SENTRY_SOURCE_DISPLAY_NAME,
+  configuredInstanceKeyStability: 'locatorDerived',
+  scopeSelection: {
+    unitLabel: 'Projects',
+    listScopeUnitsLocalActionId: SENTRY_ACTION_IDS.listScopeUnits,
+    readSelection: (draft) => {
+      const decoded = decodeSentryInstanceConfiguration(draft.configuration.token);
+      return decoded.ok ? decoded.configuration.projectScope : null;
+    },
+    writeSelection: (draft, selection, units) => {
+      const decoded = decodeSentryInstanceConfiguration(draft.configuration.token);
+      if (!decoded.ok) return null;
+      try {
+        return {
+          ...draft,
+          configuration: { v: 1, token: encodeSentryInstanceConfiguration({
+            ...decoded.configuration,
+            projectScope: selection,
+            projectUnits: selection.kind === 'selected' ? units : undefined,
+          }) },
+        };
+      } catch {
+        return null;
+      }
+    },
+  },
 });

@@ -4,7 +4,7 @@
  * Two carriers, deliberately disjoint:
  *
  * - the **configuration token** holds only what the aggregate must preserve and
- *   never parse: organization id and the two fixed V1 query scopes. It carries
+ *   never parse: organization id and source-owned project selection. It carries
  *   no deployment origin, because a second origin authority can go stale after
  *   an explicit reconfiguration.
  * - the **`localInstanceKey`** holds exactly the routing/identity pair
@@ -12,8 +12,14 @@
  *   the expected origin survives, and a malformed key never routes.
  */
 
-import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 } from '@happier-dev/triage-protocol/v1';
-import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
+import {
+  MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1,
+  TriageSourceScopeSelectionV1Schema,
+  TriageSourceScopeUnitV1Schema,
+  type TriageSourceScopeSelectionV1,
+  type TriageSourceScopeUnitV1,
+} from '@happier-dev/triage-protocol/v1';
+import { createProtocolStoredReadSchema, defineProtocolArray, defineProtocolLiteral, defineProtocolObject, defineProtocolString, defineProtocolUnion } from '@happier-dev/plugin-sdk/protocol';
 
 import { SENTRY_SCOPE_SEPARATOR } from '../sentryContracts.js';
 
@@ -23,7 +29,8 @@ import { isSentryNumericId, type SentryInvokedInstanceV1 } from './sentryCollisi
 export type SentryInstanceConfigurationV1 = Readonly<{
   v: 1;
   organizationId: string;
-  projectScope: Readonly<{ kind: 'allAccessible' }>;
+  projectScope: TriageSourceScopeSelectionV1;
+  projectUnits?: readonly TriageSourceScopeUnitV1[];
   environmentScope: Readonly<{ kind: 'all' }>;
 }>;
 
@@ -38,32 +45,51 @@ export type SentryLocalInstanceKeyResultV1 =
 const REJECTED = Object.freeze({ ok: false as const });
 const SentryInstanceConfigurationV1Schema = defineProtocolObject({
   v: defineProtocolLiteral(1), organizationId: defineProtocolString(),
-  projectScope: defineProtocolObject({ kind: defineProtocolLiteral('allAccessible') }, { policy: 'closed' }),
+  projectScope: defineProtocolUnion([
+    TriageSourceScopeSelectionV1Schema,
+    defineProtocolObject({ kind: defineProtocolLiteral('allAccessible') }, { policy: 'closed' }),
+  ]),
+  projectUnits: defineProtocolArray(TriageSourceScopeUnitV1Schema).optional(),
   environmentScope: defineProtocolObject({ kind: defineProtocolLiteral('all') }, { policy: 'closed' }),
 }, { policy: 'closed' });
 const storedConfiguration = createProtocolStoredReadSchema(SentryInstanceConfigurationV1Schema);
 
-export function encodeSentryInstanceConfiguration(
-  configuration: SentryInstanceConfigurationV1,
-): string {
-  if (configuration.v !== 1) {
-    throw new Error('Only version 1 Sentry instance configuration can be encoded.');
+function normalizeConfiguration(
+  value: ReturnType<typeof storedConfiguration.parse>,
+): SentryInstanceConfigurationV1 | null {
+  if (!isSentryNumericId(value.organizationId)) return null;
+  const projectScope = value.projectScope.kind === 'allAccessible'
+    ? { kind: 'all' as const } : value.projectScope;
+  if (projectScope.kind === 'selected' && !projectScope.unitIds.every(isSentryNumericId)) return null;
+  let projectUnits: readonly TriageSourceScopeUnitV1[] | undefined;
+  if (projectScope.kind === 'selected' && value.projectUnits !== undefined) {
+    const selectedIds = new Set(projectScope.unitIds);
+    const byId = new Map<string, TriageSourceScopeUnitV1>();
+    for (const unit of value.projectUnits) {
+      if (!selectedIds.has(unit.id)) continue;
+      // Entry identity remains organization-wide; projects have no distinct collisionScope join.
+      byId.set(unit.id, {
+        id: unit.id, label: unit.label,
+        ...(unit.secondaryText === undefined ? {} : { secondaryText: unit.secondaryText }),
+      });
+    }
+    projectUnits = [...byId.values()];
   }
-  if (!isSentryNumericId(configuration.organizationId)) {
-    throw new Error('A Sentry instance configuration requires the numeric organization id.');
-  }
-  if (
-    configuration.projectScope.kind !== 'allAccessible'
-    || configuration.environmentScope.kind !== 'all'
-  ) {
-    throw new Error('V1 fixes the Sentry project and environment scopes.');
-  }
-  const token = JSON.stringify({
-    v: 1,
-    organizationId: configuration.organizationId,
-    projectScope: { kind: 'allAccessible' },
+  return {
+    v: 1, organizationId: value.organizationId, projectScope,
     environmentScope: { kind: 'all' },
-  });
+    ...(projectUnits === undefined ? {} : { projectUnits }),
+  };
+}
+
+export function encodeSentryInstanceConfiguration(
+  configuration: Omit<SentryInstanceConfigurationV1, 'projectScope'> & Readonly<{
+    projectScope: SentryInstanceConfigurationV1['projectScope'] | Readonly<{ kind: 'allAccessible' }>;
+  }>,
+): string {
+  const normalized = normalizeConfiguration(SentryInstanceConfigurationV1Schema.parse(configuration));
+  if (normalized === null) throw new Error('A Sentry configuration requires immutable numeric organization and project ids.');
+  const token = JSON.stringify(normalized);
   if (new TextEncoder().encode(token).byteLength > MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1) {
     throw new Error('The Sentry instance configuration exceeds the bounded token size.');
   }
@@ -84,16 +110,11 @@ export function decodeSentryInstanceConfiguration(
   }
   const result = storedConfiguration.safeParse(parsed);
   if (!result.success) return REJECTED;
-  const { organizationId } = result.data;
-  if (!isSentryNumericId(organizationId)) return REJECTED;
+  const configuration = normalizeConfiguration(result.data);
+  if (configuration === null) return REJECTED;
   return Object.freeze({
     ok: true as const,
-    configuration: Object.freeze({
-      v: 1 as const,
-      organizationId,
-      projectScope: Object.freeze({ kind: 'allAccessible' as const }),
-      environmentScope: Object.freeze({ kind: 'all' as const }),
-    }),
+    configuration: Object.freeze(configuration),
   });
 }
 

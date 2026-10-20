@@ -25,12 +25,15 @@ import {
 
 import { assertRoutableSentryInstance } from '../api/sentryRoutes.js';
 import type { SentryInvokedInstanceV1 } from '../instances/sentryCollisionScope.js';
+import { isSentryNumericId } from '../instances/sentryCollisionScope.js';
 
 export type SentryScanRequestInputV1 = Readonly<{
   instance: SentryInvokedInstanceV1;
   /** Frozen for the whole pass; `min(scanLimit, 100)`. */
   nativeLimit: number;
   cursor?: string;
+  /** Omission scans all accessible projects; a selection is non-empty. */
+  projectIds?: readonly string[];
 }>;
 
 export const SENTRY_SCAN_QUERY = '';
@@ -55,7 +58,13 @@ export function buildSentryScanIssuesUrl(input: SentryScanRequestInputV1): strin
   );
   url.searchParams.set('query', SENTRY_SCAN_QUERY);
   url.searchParams.set('statsPeriod', SENTRY_SCAN_STATS_PERIOD);
-  url.searchParams.set('project', SENTRY_SCAN_PROJECT_SCOPE);
+  if (input.projectIds === undefined) url.searchParams.set('project', SENTRY_SCAN_PROJECT_SCOPE);
+  else {
+    if (input.projectIds.length === 0 || !input.projectIds.every(isSentryNumericId)) {
+      throw new Error('A selected Sentry scan requires immutable numeric project ids.');
+    }
+    for (const projectId of input.projectIds) url.searchParams.append('project', projectId);
+  }
   url.searchParams.set('sort', SENTRY_SCAN_SORT);
   url.searchParams.set('limit', String(input.nativeLimit));
   url.searchParams.append('collapse', 'stats');

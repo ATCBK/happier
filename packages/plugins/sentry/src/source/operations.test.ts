@@ -123,6 +123,24 @@ function configuredInstance(origin: string) {
 }
 
 describe('Sentry Triage source operations', () => {
+  it('keeps valid project choices with explicit partial evidence and does not render provider refusal as emptiness', async () => {
+    const register = vi.fn();
+    await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
+    const list = register.mock.calls.find(([id]) => id === 'sentry/list-projects')?.[1];
+    expect(list).toBeTypeOf('function');
+    const current = configuredInstance('https://us.sentry.io');
+    const draft = { v: 1, binding: current.binding, localInstanceKey: current.localInstanceKey,
+      keyStability: 'locatorDerived', configuration: current.configuration };
+    const partialHost = host({ responses: [{ status: 200, headers: {}, body: [
+      { id: '9001', name: 'Checkout' }, { id: 'mutable-slug', name: 'Unreadable project' },
+    ] }] });
+    expect(TriageListScopeUnitsResultV1Schema.parse(await list({ v: 1, draft }, partialHost.context)))
+      .toMatchObject({ kind: 'page', status: 'partial', units: [{ id: '9001', label: 'Checkout' }], failure: { class: 'unsupportedContract' } });
+    const refusedHost = host({ responses: [{ status: 403, headers: {}, body: {} }] });
+    expect(TriageListScopeUnitsResultV1Schema.parse(await list({ v: 1, draft }, refusedHost.context)))
+      .toMatchObject({ kind: 'failed', failure: { class: 'permission' } });
+  });
+
   it('exposes searchable project pages and provider-silent configured selection through the registered Action', async () => {
     const harness = host({ responses: [{
       status: 200,
@@ -184,6 +202,10 @@ describe('Sentry Triage source operations', () => {
     }, harness.context));
     expect(first.kind).toBe('page');
     if (first.kind !== 'page') throw new Error('expected a continuation');
+    expect(first.observations[0]).toMatchObject({
+      localRef: { collisionScope: `https://us.sentry.io${SENTRY_SCOPE_SEPARATOR}${ORGANIZATION_ID}` },
+      snapshot: { scopeUnitId: '9001' },
+    });
     const last = TriageScanResultV1Schema.parse(await scan({
       v: 1, instance, page: { kind: 'continuation', continuation: first.continuation },
     }, harness.context));

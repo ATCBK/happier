@@ -51,6 +51,7 @@ import {
 export type SentryScanPageInputV1 = Readonly<{
   client: SentryApiClientV1;
   configured: SentryInvokedInstanceV1;
+  projectIds?: readonly string[];
   organizationSlug: string | null;
   page:
     | Readonly<{ kind: 'initial'; scanLimit: number }>
@@ -133,6 +134,7 @@ export async function executeSentryScanPage(
     url = buildSentryScanIssuesUrl({
       instance: input.configured,
       nativeLimit,
+      ...(input.projectIds === undefined ? {} : { projectIds: input.projectIds }),
       ...(position === null ? {} : { cursor: position.cursor }),
     });
   } catch {

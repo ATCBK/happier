@@ -4,16 +4,19 @@ import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
-import { TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1 } from '@happier-dev/triage-protocol/v1';
+import { TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1, TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1, TriageSourceAdministrationActionInputV1Schema } from '@happier-dev/triage-protocol/v1';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   SENTRY_ACTION_IDS,
+  SENTRY_CONNECTED_ACCOUNT_PURPOSE,
   SENTRY_PLUGIN_ID,
+  SENTRY_SCOPE_SEPARATOR,
   SENTRY_SOURCE_DISPLAY_NAME,
 } from '../../sentryContracts.js';
 
 import { renderSurface } from './renderSettingsSurface.js';
+import { decodeSentryInstanceConfiguration } from '../../instances/sentryInstanceConfiguration.js';
 
 /**
  * What Sentry contributes to the shared PRs & Issues settings page.
@@ -34,16 +37,25 @@ const mounted: PluginUiTestkit[] = [];
 
 async function executeAction(
   { action, input }: Readonly<{ action: unknown; input: unknown }>,
+  discovery?: JsonValue,
 ): Promise<JsonValue> {
   recorded.push({ action, input });
   const ref = action as Readonly<{ pluginId?: string; localId?: string }>;
   if (ref.localId === SENTRY_ACTION_IDS.listInstances) {
-    return { kind: 'complete', candidates: [], failures: [] };
+    return discovery ?? { kind: 'complete', candidates: [], failures: [] };
+  }
+  if (ref.localId === SENTRY_ACTION_IDS.listScopeUnits) return {
+    kind: 'page', status: 'complete', selection: { kind: 'all' },
+    units: [{ id: '9001', label: 'Checkout' }],
+  };
+  if (ref.localId === TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1.localId) {
+    TriageSourceAdministrationActionInputV1Schema.parse(input);
+    return { kind: 'active', sourceInstanceId: '2f1c9c4e-8c1f-4a53-9c2a-4c9a7b1d3e05' };
   }
   return { kind: 'read', status: 'complete', instances: [] };
 }
 
-async function mountSettings(): Promise<PluginUiTestkit> {
+async function mountSettings(discovery?: JsonValue): Promise<PluginUiTestkit> {
   let fixture!: PluginUiTestkit;
   await act(async () => {
     fixture = await createPluginUiTestkit({
@@ -53,7 +65,7 @@ async function mountSettings(): Promise<PluginUiTestkit> {
       surfaceContext: createSurfaceContextFixture(),
       adapter: createPluginUiRnwSemanticSurfaceAdapter(),
       handlers: {
-        executeAction: async ({ action, input }) => await executeAction({ action, input }),
+        executeAction: async ({ action, input }) => await executeAction({ action, input }, discovery),
       },
     });
   });
@@ -67,6 +79,33 @@ afterEach(async () => {
 });
 
 describe('the mounted Sentry PRs & Issues settings page', () => {
+  it('configures project selection through the shared control while retaining the organization binding', async () => {
+    const draft = {
+      v: 1, binding: { purpose: SENTRY_CONNECTED_ACCOUNT_PURPOSE, account: {
+        service: { pluginId: SENTRY_PLUGIN_ID, localId: 'sentry-account' }, accountId: 'account-1',
+      } },
+      localInstanceKey: `https://us.sentry.io${SENTRY_SCOPE_SEPARATOR}7701`,
+      keyStability: 'locatorDerived', locator: { v: 1, displayLabel: 'Organization' },
+      configuration: { v: 1, token: JSON.stringify({
+        v: 1, organizationId: '7701', projectScope: { kind: 'allAccessible' }, environmentScope: { kind: 'all' },
+      }) },
+    };
+    const page = await mountSettings({ kind: 'complete', candidates: [draft], failures: [] });
+    await act(async () => { await page.press(await page.getByRole('button', { name: 'Add Organization to PRs & Issues' })); });
+    expect(recorded.some(({ action }) => (action as { localId: string }).localId === TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1.localId)).toBe(false);
+    await act(async () => { await page.press(await page.getByRole('radio', { name: 'Selected…' })); });
+    await act(async () => { await page.press(await page.getByRole('checkbox', { name: 'Checkout' })); });
+    await act(async () => { await page.press(await page.getByRole('button', { name: 'Save selection' })); });
+    const request = TriageSourceAdministrationActionInputV1Schema.parse(recorded.find(({ action }) => (
+      (action as { localId: string }).localId === TRIAGE_SOURCES_ADMINISTER_ACTION_REF_V1.localId
+    ))?.input);
+    expect(request).toMatchObject({ kind: 'create', draft: { binding: draft.binding, localInstanceKey: draft.localInstanceKey, locator: draft.locator } });
+    if (request.kind !== 'create') throw new Error('expected configuration creation');
+    expect(decodeSentryInstanceConfiguration(request.draft.configuration.token)).toMatchObject({
+      ok: true, configuration: { organizationId: '7701', projectScope: { kind: 'selected', unitIds: ['9001'] }, projectUnits: [{ id: '9001', label: 'Checkout' }] },
+    });
+  });
+
   it('asks its own plugin what it can reach, and the target for the rest', async () => {
     await mountSettings();
 

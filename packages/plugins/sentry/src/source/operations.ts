@@ -197,7 +197,7 @@ function buildDraft(input: Readonly<{
         token: encodeSentryInstanceConfiguration({
           v: 1,
           organizationId: input.organization.organizationId,
-          projectScope: { kind: 'allAccessible' },
+          projectScope: { kind: 'all' },
           environmentScope: { kind: 'all' },
         }),
       }),
@@ -475,6 +475,8 @@ export async function scanSentrySource(
   const page = await executeSentryScanPage({
     client,
     configured: routed.instance,
+    ...(configuration.configuration.projectScope.kind === 'selected'
+      ? { projectIds: configuration.configuration.projectScope.unitIds } : {}),
     // The mutable organization slug is locator presentation only and is never
     // recovered from configuration or a response to route a request.
     organizationSlug: null,

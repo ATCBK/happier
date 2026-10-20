@@ -74,6 +74,25 @@ const ABOVE_ASSIGNEE = Object.freeze([
 ]);
 
 describe('mapSentryIssueForInvokedInstance', () => {
+  it('joins immutable project membership without changing organization-wide issue identity', () => {
+    const raw = issuesListPage1.body[0]!;
+    const result = map(raw);
+    if (!result.ok) throw new Error('expected a mapped issue');
+    const observation = TriageSourceScanObservationV1Schema.parse(toTriagePresentObservation(result.snapshot));
+    expect(observation).toMatchObject({
+      localRef: { collisionScope: 'https://us.sentry.io\u001f7701', entryId: raw.id },
+      snapshot: { scopeUnitId: raw.project.id },
+    });
+    for (const id of [undefined, 'mutable-project-slug', '9'.repeat(129)]) {
+      const unknownProject = map({ ...raw, project: { ...raw.project, id } });
+      if (!unknownProject.ok) throw new Error('project metadata must not discard a valid issue');
+      const projected = TriageSourceScanObservationV1Schema.parse(toTriagePresentObservation(unknownProject.snapshot));
+      expect(projected).toMatchObject({ localRef: observation.localRef });
+      if (projected.kind !== 'present') throw new Error('expected a present issue');
+      expect(projected.snapshot.scopeUnitId).toBeUndefined();
+    }
+  });
+
   it('preserves escalating and regressed in nativeLabel rather than collapsing them', () => {
     const escalating = map(issuesListPage1.body[0]);
     const regressed = map(issuesListPage2.body[0]);
