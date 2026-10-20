@@ -14,7 +14,7 @@ export type FrontDoorRuntimeActionExecute = (
 ) => Promise<unknown>;
 export type UiActionOperation = Pick<UiActionExecutorContext,
   'signal' | 'presentUserConfirmation' | 'defaultSessionId' | 'actionRequestId' | 'onTransportIssued' | 'isPluginSettingsIntentCurrent'
-  | 'executionRunTargetMachineId' | 'executionRunLaunchOrigin' | 'externalActionTarget'>;
+  | 'executionRunTargetMachineId' | 'executionRunLaunchOrigin' | 'externalActionTarget' | 'openRoute'>;
 
 /** Retain typed refusal and pending custody instead of exposing either as a completed effect. */
 export function requireActionSuccess(result: ActionExecuteResult): asserts result is Extract<ActionExecuteResult, { ok: true }> {
@@ -95,6 +95,7 @@ export function createFrontDoorUiActionExecutor(
       ...(options?.executionRunTargetMachineId ? { executionRunTargetMachineId: options.executionRunTargetMachineId } : {}),
       ...(options?.executionRunLaunchOrigin ? { executionRunLaunchOrigin: options.executionRunLaunchOrigin } : {}),
       ...(options?.externalActionTarget ? { externalActionTarget: options.externalActionTarget } : {}),
+      ...(options?.openRoute ? { openRoute: options.openRoute } : {}),
     });
     requireActionSuccess(result);
     return result.result;

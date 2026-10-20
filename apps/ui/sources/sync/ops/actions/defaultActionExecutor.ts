@@ -259,6 +259,7 @@ import {
     sessionRespondToPermission,
     sessionRespondToUserAction,
     sessionAbort,
+    sessionSwitch,
     resumeSession,
 } from '@/sync/ops/sessions';
 import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
@@ -1571,10 +1572,11 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       ]);
       accountContext.assertCurrent();
       throwIfAborted(context.signal);
-      return await executeVoiceConversationAction(actionId, input, { isCurrent: () => accountContext.accountLifetime.isCurrent() && !context.signal?.aborted, navigate: async (href) => {
+      return await executeVoiceConversationAction(actionId, input, { signal: context.signal, isCurrent: () => accountContext.accountLifetime.isCurrent() && !context.signal?.aborted, navigate: async (href) => {
         accountContext.assertCurrent();
         throwIfAborted(context.signal);
         const destination = href as Parameters<typeof router.push>[0];
+        if (opts?.openRoute) { await opts.openRoute(resolveHref(destination)); return; }
         await openWorkspaceHrefOrElse(resolveHref(destination), () => router.push(destination));
       } });
     },
@@ -1993,6 +1995,14 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       await withAccountLifetime(signal, signal => sessionStopWithServerScope(sessionId, { serverId, signal,
         ...(accountContext ? { scope: accountContext.accountLifetime.scope,
           isCurrent: accountContext.accountLifetime.isCurrent } : {}) })),
+
+    sessionControlSwitch: async ({ sessionId, to, serverId, signal }) => withAccountLifetime(signal, async signal => {
+      const switched = await sessionSwitch(sessionId, to, { serverId, signal,
+        ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}) });
+      return switched === true ? { switched: true } : {
+        ok: false, errorCode: 'session_control_unavailable', error: 'session_control_unavailable',
+      };
+    }),
 
     sessionArchiveSet: async ({ sessionId, archived, serverId }) => {
       const result = archived
