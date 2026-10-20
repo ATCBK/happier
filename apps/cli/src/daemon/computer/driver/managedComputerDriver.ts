@@ -139,7 +139,8 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
     const grants = await requireCaptureGrant(target);
     const result = target.kind === 'display' ? await native.call('get_desktop_state', { max_image_dimension: 0 })
       : await native.call('get_window_state', { pid: target.pid, window_id: target.windowId,
-        include_screenshot: true, include_accessibility_tree: process.platform !== 'darwin' || grants?.input === 'granted', max_image_dimension: 0 });
+        include_screenshot: true, include_accessibility_tree: process.platform !== 'darwin' || grants?.input === 'granted', max_image_dimension: 0,
+        full_output: true });
     const observation = target.kind === 'display' ? decodeDesktopCapture(result) : decodeCapture(result, target);
     captureBinding = { captureId: observation.captureId, target, geometry: observation.geometry,
       ...(target.kind === 'display' ? { nativeScale: process.platform === 'darwin' ? desktopStateSchema.parse(result.structuredContent).scale_factor : 1 } : {}) };
@@ -174,7 +175,7 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
         if (size.data.width !== observation.geometry.nativeWidth || size.data.height !== observation.geometry.nativeHeight
           || size.data.scale_factor !== observation.nativeScale) return { status: 'failed', code: 'stale_capture' };
       } else {
-        const current = await native.call('get_window_state', { ...nativeTarget, include_screenshot: false, include_accessibility_tree: true });
+        const current = await native.call('get_window_state', { ...nativeTarget, include_screenshot: false, include_accessibility_tree: true, full_output: true });
         if (context?.signal?.aborted) return { status: 'interrupted', completion: 'known' };
         if (current.isError) return { status: 'failed', code: nativeRefusalCode(current) };
         const state = nativeStateSchema.safeParse(current.structuredContent);
