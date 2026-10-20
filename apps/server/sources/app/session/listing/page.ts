@@ -7,7 +7,7 @@ import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { readCurrentSessionIdsInTx, readmitSessionRowsInTx } from "@/app/session/access/sessionReadAdmission";
-import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
+import { buildSessionAccessWhere, resolveEffectiveSessionAccessWhere, type SessionCollectiveAccessSnapshot } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/session/access/sessionRecipients";
 import {
@@ -65,6 +65,7 @@ export type SessionListReadSource = Readonly<{
      */
     allowProjectionFallback: boolean;
     qualifiedTeamIds?: ReadonlySet<string>;
+    collectiveAccessSnapshot?: SessionCollectiveAccessSnapshot;
     discussionReader?: Tx;
 }>;
 
@@ -86,7 +87,7 @@ type FindV2SessionListRowsParams = Readonly<{
 
 export async function findV2SessionListRows(params: FindV2SessionListRowsParams): Promise<V2SessionListRowCompat[]> {
     const { userId, orderBy, take, cursor } = params;
-    const readFrom = async (reader: Pick<Tx, "session">, visibilityWhere: Prisma.SessionWhereInput) => {
+    const readFrom = async (reader: Pick<Tx, "session">, visibilityWhere: Prisma.SessionWhereInput, collectiveAccessSnapshot?: SessionCollectiveAccessSnapshot) => {
         const read = (
             select: SessionListRowSelect,
             page: Readonly<{ cursor?: V2SessionListMeaningfulActivityCursor; take?: number }> = {},
@@ -127,20 +128,21 @@ export async function findV2SessionListRows(params: FindV2SessionListRowsParams)
             }
             return admitted.slice(0, take);
         };
-        const readCurrent = () => readWithAdmission(createV2SessionListRowSelect({ userId }));
+        const projectionContext = { userId, mode: params.source?.accessMode, collectiveAccessSnapshot };
+        const readCurrent = () => readWithAdmission(createV2SessionListRowSelect(projectionContext));
         return params.source && !params.source.allowProjectionFallback
             ? await readCurrent()
             : await runWithSessionListProjectionFallback(
                 readCurrent,
-                () => readWithAdmission(createV2SessionListLegacyRowSelect({ userId })),
+                () => readWithAdmission(createV2SessionListLegacyRowSelect(projectionContext)),
             );
     };
 
-    if (params.source) return await readFrom(params.source.reader, params.source.baseWhere);
-    return await readSnapshotWithCurrentAdmission(async (tx) => await readFrom(
-        tx,
-        await buildSessionAccessWhere({ tx, accountId: userId, capability: "readTranscript", mode: "effective_access_v1", authentication: params.authentication }),
-    ), async (tx, captured) => await readmitSessionRowsInTx(tx, {
+    if (params.source) return await readFrom(params.source.reader, params.source.baseWhere, params.source.collectiveAccessSnapshot);
+    return await readSnapshotWithCurrentAdmission(async (tx) => {
+        const access = await resolveEffectiveSessionAccessWhere({ tx, accountId: userId, capability: "readTranscript", mode: "effective_access_v1", authentication: params.authentication });
+        return await readFrom(tx, access.where, access.collectiveAccessSnapshot);
+    }, async (tx, captured) => await readmitSessionRowsInTx(tx, {
         accountId: userId, authentication: params.authentication,
     }, captured));
 }

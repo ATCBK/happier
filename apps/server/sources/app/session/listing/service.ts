@@ -466,6 +466,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
             accessMode: "effective_access_v1",
             allowProjectionFallback: false,
             qualifiedTeamIds: accessResolution.qualifiedTeamIds,
+            collectiveAccessSnapshot: accessResolution.collectiveAccessSnapshot,
             discussionReader: tx,
         };
         const page = await listSessionRowsForAccount({

@@ -13,6 +13,7 @@ import {
     buildSessionAccessProjectionSelectForAccounts,
     projectEffectiveSessionAccess,
     type EffectiveSessionAccess,
+    type SessionAccessProjectionContext,
 } from "@/app/session/access/sessionAccess";
 import { resolveEffectiveSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { applySessionTranscriptPublicationCeilingToProjection, resolveSessionTranscriptPublicationCeiling } from "@/app/session/sessionTranscriptPublicationPolicy";
@@ -29,9 +30,9 @@ import {
 import { projectSessionFollowFacts } from "./followFacts";
 
 /** Select only the requesting Account's private relations beside canonical access facts. */
-export function createSessionPersonalProjectionSelect(accountId: string) {
+export function createSessionPersonalProjectionSelect(accountId: string, context: SessionAccessProjectionContext = {}) {
     return {
-        ...buildSessionAccessProjectionSelect(accountId),
+        ...buildSessionAccessProjectionSelect(accountId, context),
         archivedAt: true,
         responsibleAccountId: true,
         latestReadyEventSeq: true,
