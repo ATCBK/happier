@@ -835,6 +835,7 @@ export type SessionControlActionResultById = {
                 working: number;
                 needsYou: number;
                 stalled: number;
+                archived?: number | undefined;
             } | undefined;
             archivedAt?: number | null | undefined;
             pendingCount?: number | undefined;
@@ -1302,6 +1303,7 @@ export type SessionControlActionResultById = {
                 working: number;
                 needsYou: number;
                 stalled: number;
+                archived?: number | undefined;
             } | undefined;
             pendingReviewRuns?: number | undefined;
         } | undefined;
@@ -1358,6 +1360,7 @@ export type SessionControlActionResultById = {
                             working: number;
                             needsYou: number;
                             stalled: number;
+                            archived?: number | undefined;
                         } | undefined;
                         archivedAt?: number | null | undefined;
                         pendingCount?: number | undefined;
@@ -1825,6 +1828,7 @@ export type SessionControlActionResultById = {
                             working: number;
                             needsYou: number;
                             stalled: number;
+                            archived?: number | undefined;
                         } | undefined;
                         pendingReviewRuns?: number | undefined;
                     } | undefined;

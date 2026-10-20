@@ -493,6 +493,37 @@ export type LocalServicesActionsActionResultById = {
                 label?: string | undefined;
             } | undefined;
             result?: unknown;
+            operationCredentialUses?: {
+                v: 1;
+                kind: 'connected_account' | 'team_resource';
+                label: string | null;
+                owner: {
+                    kind: 'account';
+                    accountId: string;
+                } | {
+                    kind: 'team';
+                    teamId: string;
+                } | null;
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+                why: {
+                    kind: 'purpose_binding';
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                    target: 'account' | 'group' | 'listed_account';
+                };
+                currentness: {
+                    kind: 'current_at_materialization';
+                    resourceRevision?: number | undefined;
+                };
+            }[] | undefined;
             error?: {
                 errorCode: string;
                 error: string;
@@ -522,7 +553,7 @@ export type LocalServicesActionsActionResultById = {
                 } | {
                     kind: 'managedControllerRequest';
                     path: string;
-                    category: 'transport' | 'status' | 'schema' | 'currentness';
+                    category: 'currentness' | 'transport' | 'status' | 'schema';
                     status?: number | undefined;
                     code?: string | undefined;
                 } | undefined;

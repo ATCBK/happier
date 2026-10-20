@@ -5452,6 +5452,38 @@ export type ActionApprovalRequestCreatedResult = {
     readonly actionId: string;
 };
 export type ActionExecuteResult = Readonly<{
+    operationCredentialUses?: readonly {
+        v: 1;
+        kind: 'team_resource' | 'connected_account';
+        label: string | null;
+        owner: {
+            kind: 'account';
+            accountId: string;
+        } | {
+            kind: 'team';
+            teamId: string;
+        } | null;
+        service: {
+            pluginId: string;
+            localId: string;
+        };
+        why: {
+            kind: 'purpose_binding';
+            purpose: {
+                consumer: {
+                    pluginId: string;
+                    localId: string;
+                };
+                purpose: string;
+            };
+            target: 'group' | 'account' | 'listed_account';
+        };
+        currentness: {
+            kind: 'current_at_materialization';
+            resourceRevision?: number | undefined;
+        };
+    }[] | undefined;
+}> & (Readonly<{
     ok: true;
     result: unknown;
 }> | Readonly<{
@@ -5462,7 +5494,7 @@ export type ActionExecuteResult = Readonly<{
     goalControlFailure?: {
         phase: 'native_effect' | 'provider_completion' | 'tail_drain' | 'missing_matching_publication' | 'host_publication_rejected';
     } | undefined;
-}>;
+}>);
 export type ExecutionRunChildChoiceV1 = {
     v: 1;
     agentTargetKey: string;

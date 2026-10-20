@@ -208,6 +208,37 @@ export type ProjectExecutionActionResultById = {
                 label?: string | undefined;
             } | undefined;
             result?: unknown;
+            operationCredentialUses?: {
+                v: 1;
+                kind: 'connected_account' | 'team_resource';
+                label: string | null;
+                owner: {
+                    kind: 'account';
+                    accountId: string;
+                } | {
+                    kind: 'team';
+                    teamId: string;
+                } | null;
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+                why: {
+                    kind: 'purpose_binding';
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                    target: 'account' | 'group' | 'listed_account';
+                };
+                currentness: {
+                    kind: 'current_at_materialization';
+                    resourceRevision?: number | undefined;
+                };
+            }[] | undefined;
             error?: {
                 errorCode: string;
                 error: string;
@@ -237,7 +268,7 @@ export type ProjectExecutionActionResultById = {
                 } | {
                     kind: 'managedControllerRequest';
                     path: string;
-                    category: 'status' | 'transport' | 'schema' | 'currentness';
+                    category: 'status' | 'currentness' | 'transport' | 'schema';
                     status?: number | undefined;
                     code?: string | undefined;
                 } | undefined;
@@ -481,6 +512,37 @@ export type ProjectExecutionActionResultById = {
                 label?: string | undefined;
             } | undefined;
             result?: unknown;
+            operationCredentialUses?: {
+                v: 1;
+                kind: 'connected_account' | 'team_resource';
+                label: string | null;
+                owner: {
+                    kind: 'account';
+                    accountId: string;
+                } | {
+                    kind: 'team';
+                    teamId: string;
+                } | null;
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+                why: {
+                    kind: 'purpose_binding';
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                    target: 'account' | 'group' | 'listed_account';
+                };
+                currentness: {
+                    kind: 'current_at_materialization';
+                    resourceRevision?: number | undefined;
+                };
+            }[] | undefined;
             error?: {
                 errorCode: string;
                 error: string;
@@ -510,7 +572,7 @@ export type ProjectExecutionActionResultById = {
                 } | {
                     kind: 'managedControllerRequest';
                     path: string;
-                    category: 'status' | 'transport' | 'schema' | 'currentness';
+                    category: 'status' | 'currentness' | 'transport' | 'schema';
                     status?: number | undefined;
                     code?: string | undefined;
                 } | undefined;
@@ -754,6 +816,37 @@ export type ProjectExecutionActionResultById = {
                 label?: string | undefined;
             } | undefined;
             result?: unknown;
+            operationCredentialUses?: {
+                v: 1;
+                kind: 'connected_account' | 'team_resource';
+                label: string | null;
+                owner: {
+                    kind: 'account';
+                    accountId: string;
+                } | {
+                    kind: 'team';
+                    teamId: string;
+                } | null;
+                service: {
+                    pluginId: string;
+                    localId: string;
+                };
+                why: {
+                    kind: 'purpose_binding';
+                    purpose: {
+                        consumer: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        purpose: string;
+                    };
+                    target: 'account' | 'group' | 'listed_account';
+                };
+                currentness: {
+                    kind: 'current_at_materialization';
+                    resourceRevision?: number | undefined;
+                };
+            }[] | undefined;
             error?: {
                 errorCode: string;
                 error: string;
@@ -783,7 +876,7 @@ export type ProjectExecutionActionResultById = {
                 } | {
                     kind: 'managedControllerRequest';
                     path: string;
-                    category: 'status' | 'transport' | 'schema' | 'currentness';
+                    category: 'status' | 'currentness' | 'transport' | 'schema';
                     status?: number | undefined;
                     code?: string | undefined;
                 } | undefined;

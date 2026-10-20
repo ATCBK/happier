@@ -196,6 +196,7 @@ export type SessionTargetingActionResultById = {
                 working: number;
                 needsYou: number;
                 stalled: number;
+                archived?: number | undefined;
             } | undefined;
             pendingReviewRuns?: number | undefined;
         }[];
@@ -231,6 +232,7 @@ export type SessionTargetingActionResultById = {
                 working: number;
                 needsYou: number;
                 stalled: number;
+                archived?: number | undefined;
             } | undefined;
             archivedAt?: number | null | undefined;
             pendingCount?: number | undefined;
@@ -571,6 +573,7 @@ export type SessionTargetingActionResultById = {
             working: number;
             needsYou: number;
             stalled: number;
+            archived?: number | undefined;
         } | undefined;
         pendingReviewRuns?: number | undefined;
     } | {

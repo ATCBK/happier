@@ -601,6 +601,7 @@ export type SkillsActionResultById = {
                 pluginId: string;
                 occurrenceId: string;
             };
+            inLibrary?: string | undefined;
             outsideReferences?: string[] | undefined;
             siblingSkills?: {
                 path: string;

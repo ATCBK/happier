@@ -1609,7 +1609,24 @@ const SCM_GIT_ACTION_SPECS_REPOSITORY = [
   }),
 ] as const;
 
-const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
+const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS: readonly [
+  ScmActionSpecDefinition<'scm.diffSummary.result.list', typeof ScmDiffSummaryResultListInputSchema, typeof ScmDiffSummaryResultListResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.result.clear', typeof ScmDiffSummaryResultClearInputSchema, typeof ScmDiffSummaryResultClearResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.commitPlan.accept', typeof ScmCommitPlanAcceptInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.commitPlan.stop', typeof ScmCommitPlanControlInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.commitPlan.includeHookChanges', typeof ScmCommitPlanIncludeHookChangesInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.commitPlan.cancel', typeof ScmCommitPlanControlInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.commitPlan.recover', typeof ScmCommitPlanControlInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.reviewed.mark', typeof ScmReviewedMarkInputSchema, typeof ScmReviewedMarkResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.reviewed.unmark', typeof ScmReviewedMarkInputSchema, typeof ScmReviewedMarkResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.result.read', typeof ScmDiffSummaryResultReadInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.result.edit', typeof ScmDiffSummaryResultEditInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.result.undo', typeof ScmDiffSummaryResultRevisionInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.result.delete', typeof ScmDiffSummaryResultRevisionInputSchema, typeof ScmDiffSummaryResultDeleteResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.refine', typeof ScmDiffSummaryRefineInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.addOutputs', typeof ScmDiffSummaryAddOutputsInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+  ScmActionSpecDefinition<'scm.diffSummary.discuss', typeof ScmDiffSummaryDiscussInputSchema, typeof ScmDiffSummaryResultResponseSchema>,
+] = [
   defineScmActionSpec({
     id: 'scm.diffSummary.result.list', approval: {result: 'required'}, title: 'List saved change explanations',
     description: 'Read permitted saved results, storage usage and available seven-day cost records from the selected machine.',
