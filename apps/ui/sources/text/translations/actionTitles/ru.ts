@@ -2,8 +2,12 @@ import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ru = {
     workspace_files_link_get: "Получить ссылку на файл рабочей области",
-    code_definition_get: "Найти определение по имени",
-    code_references_list: "Найти текстовые ссылки",
+    code_definition_get: "Перейти к определению",
+    code_references_list: "Найти ссылки",
+    code_hover_get: "Показать информацию о символе",
+    code_symbols_list: "Показать символы файла",
+    code_diagnostics_list: "Проверить проблемы файла",
+    code_restart: "Перезапустить языковые серверы",
     file_editor_save: 'Сохранить изменения открытого файла',
     file_editor_resolve: 'Разрешить конфликт открытого файла',
     workspace_tabs_close: "Закрыть вкладку рабочей области",

@@ -20,6 +20,7 @@ export const surfaceFamilyLabels = {
     session_terminals: 'Session terminals',
     workspace_layout: 'Workspace layout',
     workspace_file_search: fileContentSearchTranslations.en.textInFiles,
+    code_intelligence: 'Code intelligence',
     scope: 'Scope',
     connected_services_configuration: 'Connected accounts',
     capability_rules: 'Capability rules',

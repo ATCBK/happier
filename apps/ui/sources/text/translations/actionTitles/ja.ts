@@ -2,8 +2,12 @@ import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ja = {
     workspace_files_link_get: "ワークスペースのファイルリンクを取得",
-    code_definition_get: "名前で定義を検索",
-    code_references_list: "テキストの参照を検索",
+    code_definition_get: "定義に移動",
+    code_references_list: "参照を検索",
+    code_hover_get: "シンボル情報を取得",
+    code_symbols_list: "ファイルのシンボルを一覧表示",
+    code_diagnostics_list: "ファイルの問題を確認",
+    code_restart: "言語サーバーを再起動",
     file_editor_save: '開いているファイルの編集を保存',
     file_editor_resolve: '開いているファイルの競合を解決',
     workspace_tabs_close: "ワークスペースのタブを閉じる",

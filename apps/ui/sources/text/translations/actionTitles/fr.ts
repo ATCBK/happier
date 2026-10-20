@@ -2,8 +2,12 @@ import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const fr = {
     workspace_files_link_get: "Obtenir le lien du fichier de l’espace de travail",
-    code_definition_get: "Rechercher la définition par nom",
-    code_references_list: "Rechercher les références textuelles",
+    code_definition_get: "Aller à la définition",
+    code_references_list: "Rechercher les références",
+    code_hover_get: "Afficher les informations du symbole",
+    code_symbols_list: "Lister les symboles du fichier",
+    code_diagnostics_list: "Vérifier les problèmes du fichier",
+    code_restart: "Redémarrer les serveurs de langage",
     file_editor_save: 'Enregistrer les modifications du fichier ouvert',
     file_editor_resolve: 'Résoudre le conflit du fichier ouvert',
     workspace_tabs_close: "Fermer l’onglet de l’espace de travail",

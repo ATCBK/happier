@@ -2,8 +2,12 @@ import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const ca = {
     workspace_files_link_get: "Obtén l’enllaç del fitxer de l’espai de treball",
-    code_definition_get: "Cerca la definició pel nom",
-    code_references_list: "Cerca referències de text",
+    code_definition_get: "Ves a la definició",
+    code_references_list: "Cerca referències",
+    code_hover_get: "Mostra informació del símbol",
+    code_symbols_list: "Llista els símbols del fitxer",
+    code_diagnostics_list: "Comprova els problemes del fitxer",
+    code_restart: "Reinicia els servidors de llenguatge",
     file_editor_save: 'Desa els canvis del fitxer obert',
     file_editor_resolve: 'Resol el conflicte del fitxer obert',
     workspace_tabs_close: "Tanca la pestanya de l’espai de treball",

@@ -2,8 +2,12 @@ import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const zhHans = {
     workspace_files_link_get: "获取工作区文件链接",
-    code_definition_get: "按名称查找定义",
-    code_references_list: "查找文本引用",
+    code_definition_get: "转到定义",
+    code_references_list: "查找引用",
+    code_hover_get: "获取符号信息",
+    code_symbols_list: "列出文件符号",
+    code_diagnostics_list: "检查文件问题",
+    code_restart: "重启语言服务器",
     file_editor_save: '保存已打开文件的编辑',
     file_editor_resolve: '解决已打开文件的冲突',
     workspace_tabs_close: "关闭工作区标签页",

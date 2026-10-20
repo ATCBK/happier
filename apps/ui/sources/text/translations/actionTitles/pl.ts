@@ -2,8 +2,12 @@ import type { ActionTitleTranslation } from '../actionPresentationTranslations';
 
 export const pl = {
     workspace_files_link_get: "Pobierz link do pliku w obszarze roboczym",
-    code_definition_get: "Znajdź definicję według nazwy",
-    code_references_list: "Znajdź odwołania tekstowe",
+    code_definition_get: "Przejdź do definicji",
+    code_references_list: "Znajdź odwołania",
+    code_hover_get: "Pokaż informacje o symbolu",
+    code_symbols_list: "Wyświetl symbole pliku",
+    code_diagnostics_list: "Sprawdź problemy pliku",
+    code_restart: "Uruchom ponownie serwery językowe",
     file_editor_save: 'Zapisz zmiany otwartego pliku',
     file_editor_resolve: 'Rozwiąż konflikt otwartego pliku',
     workspace_tabs_close: "Zamknij kartę obszaru roboczego",
