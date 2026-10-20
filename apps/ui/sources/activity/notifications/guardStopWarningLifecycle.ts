@@ -1,0 +1,128 @@
+import { GuardStopWarningPushDataV1Schema, isGuardStopWarningCurrentV1 } from '@happier-dev/protocol/activity/webhookPayload';
+import type { GuardStopWarningPushDataV1 } from '@happier-dev/protocol/activity/webhookPayload';
+import type { MachineGuardViewV1 } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import type { ActivityInteractionCommand } from '@/activity/actions/resolveActivityInteractionCommand';
+import { fetchMachineGuardViewViaAction } from '@/sync/domains/machines/guard/machineGuardRpc';
+import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
+import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
+import { resolveNotificationSavedHome } from './resolveNotificationSavedHome';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { machineGuardStore } from '@/sync/domains/machines/guard/machineGuardStore';
+
+/** A successful Guard read owns absence; a missing terminal projection remains unknown. */
+function warningCurrent(warning: GuardStopWarningPushDataV1, view: MachineGuardViewV1): boolean | null {
+    if (warning.rule === 'idle_terminals') {
+        if (!view.idleTerminals) return null;
+        const row = view.idleTerminals.find(item => item.terminalId === warning.terminalId && item.terminalKey === warning.terminalKey);
+        return isGuardStopWarningCurrentV1(warning, { machineId: warning.machineId,
+            terminalId: row?.terminalId, terminalKey: row?.terminalKey,
+            state: row?.status === 'stops_at' ? { v: 1, kind: 'stopping', stopAt: row.stopAt, rule: 'idle_terminals' } : undefined });
+    }
+    const row = view.idle.find(item => item.sessionRef === warning.sessionId);
+    return isGuardStopWarningCurrentV1(warning, { machineId: warning.machineId, sessionId: row?.sessionRef,
+        state: row?.status === 'stops_at' ? { v: 1, kind: 'stopping', stopAt: row.stopAt, rule: warning.rule } : undefined });
+}
+
+/** Direct controls never replay a withdrawn or replaced warning on the same Session/terminal. */
+export async function executeGuardStopWarningAction(command: Extract<ActivityInteractionCommand, { kind: 'executeAction' }>, signal?: AbortSignal) {
+    const warning = command.guardWarning;
+    const serverId = command.target.serverId;
+    if (!warning || !serverId || signal?.aborted) return null;
+    const binding = await resolveServerCredentialAccountScope(serverId);
+    if (binding.kind !== 'bound' || signal?.aborted) return null;
+    const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+    if (signal?.aborted) return null;
+    const key = { serverId, expectedAccountId: binding.scope.accountId, machineId: warning.machineId, ...(signal ? { signal } : {}) };
+    const current = await fetchMachineGuardViewViaAction(key);
+    if (!current.ok || warningCurrent(warning, current.value) !== true || signal?.aborted) return null;
+    return createFrontDoorActionExecute()(command.actionId, command.payload, {
+        surface: 'ui', serverId, expectedAccountId: binding.scope.accountId,
+        ...(command.defaultSessionId ? { defaultSessionId: command.defaultSessionId } : {}), ...(signal ? { signal } : {}),
+    });
+}
+
+/** Reuse the delivered OS request id; the payload occurrence id is not Expo's dismissal handle. */
+export async function reconcileGuardStopWarningNotifications(params: Readonly<{
+    notifications?: Pick<ExpoNotificationsModule, 'getPresentedNotificationsAsync' | 'dismissNotificationAsync'>;
+    session?: Readonly<{ serverId: string; sessionId: string }>;
+}> = {}): Promise<void> {
+    const notifications = params.notifications ?? await loadExpoNotifications();
+    const presented = await notifications.getPresentedNotificationsAsync();
+    for (const notification of presented) {
+        const parsed = GuardStopWarningPushDataV1Schema.safeParse(notification.request.content.data);
+        if (!parsed.success) continue;
+        const warning = parsed.data;
+        const home = resolveNotificationSavedHome({ serverId: warning.serverId, serverUrl: warning.serverUrl ?? '' });
+        if (!home || params.session && (!areServerProfileIdentifiersEquivalent(params.session.serverId, home.id) || warning.rule === 'idle_terminals'
+            || warning.sessionId !== params.session.sessionId)) continue;
+        const binding = await resolveServerCredentialAccountScope(home.id);
+        if (binding.kind !== 'bound') continue;
+        const current = await fetchMachineGuardViewViaAction({ serverId: home.id, expectedAccountId: binding.scope.accountId, machineId: warning.machineId });
+        if (!current.ok || warningCurrent(warning, current.value) !== false) continue;
+        const admitted = await resolveServerCredentialAccountScope(home.id);
+        if (admitted.kind !== 'bound' || admitted.scope.accountId !== binding.scope.accountId) continue;
+        await notifications.dismissNotificationAsync(notification.request.identifier);
+    }
+}
+
+/** Delivered warnings demand the existing daemon watch only for their lifetime. */
+export function observeGuardStopWarningNotifications(notifications: ExpoNotificationsModule, onError: (error: unknown) => void) {
+    let disposed = false;
+    let refreshing = false;
+    let refreshRequested = false;
+    const demands = new Map<string, () => void>();
+    const refresh = () => {
+        if (disposed) return;
+        refreshRequested = true;
+        if (refreshing) return;
+        refreshing = true;
+        void (async () => {
+            try {
+                while (refreshRequested && !disposed) {
+                    refreshRequested = false;
+                    const wanted = new Set<string>();
+                    const presented = await notifications.getPresentedNotificationsAsync();
+                    for (const notification of presented) {
+                        if (disposed) return;
+                        const parsed = GuardStopWarningPushDataV1Schema.safeParse(notification.request.content.data);
+                        if (!parsed.success) continue;
+                        const warning = parsed.data;
+                        const home = resolveNotificationSavedHome({ serverId: warning.serverId, serverUrl: warning.serverUrl ?? '' });
+                        if (!home) continue;
+                        const binding = await resolveServerCredentialAccountScope(home.id);
+                        if (binding.kind !== 'bound' || disposed) continue;
+                        const key = { serverId: home.id, expectedAccountId: binding.scope.accountId, machineId: warning.machineId };
+                        const id = JSON.stringify([key.serverId, key.expectedAccountId, key.machineId]);
+                        if (!demands.has(id)) {
+                            const stopObserving = machineGuardStore.observeView(key, refresh);
+                            const stopDemanding = machineGuardStore.demandView(key);
+                            demands.set(id, () => { stopObserving(); stopDemanding(); });
+                        }
+                        const current = machineGuardStore.getView(key);
+                        if (current.status === 'ready' && !current.pending && current.view && warningCurrent(warning, current.view) === false) {
+                            // The async OS operation must still belong to the saved Home and Account.
+                            const admittedHome = resolveNotificationSavedHome({ serverId: warning.serverId, serverUrl: warning.serverUrl ?? '' });
+                            const admitted = await resolveServerCredentialAccountScope(home.id);
+                            if (disposed) return;
+                            if (admittedHome?.id === home.id && admitted.kind === 'bound' && admitted.scope.accountId === key.expectedAccountId) {
+                                await notifications.dismissNotificationAsync(notification.request.identifier);
+                                continue;
+                            }
+                        }
+                        wanted.add(id);
+                    }
+                    for (const [id, release] of demands) if (!wanted.has(id)) { release(); demands.delete(id); }
+                }
+            } catch (error) { onError(error); }
+            finally { refreshing = false; }
+        })();
+    };
+    const arrival = notifications.addNotificationReceivedListener(refresh);
+    refresh();
+    return { refresh, dispose: () => {
+        disposed = true;
+        arrival.remove();
+        for (const release of demands.values()) release();
+        demands.clear();
+    } };
+}

@@ -33,6 +33,7 @@ import { isUnsafeNotificationServerUrl, parseNotificationTap } from '../notifica
 // The same saved-Home rule names the Home of an arriving foreground notification.
 import { resolveNotificationSavedHome as findSavedServerProfile } from '../resolveNotificationSavedHome';
 import type { ActivityInteractionCommand } from '@/activity/actions/resolveActivityInteractionCommand';
+import { executeGuardStopWarningAction, reconcileGuardStopWarningNotifications } from '../guardStopWarningLifecycle';
 
 type ExpoNotificationsWithClear = ExpoNotificationsModule & Readonly<{
     clearLastNotificationResponseAsync?: () => Promise<void>;
@@ -79,7 +80,7 @@ function resolveNotificationCommandRoute(command: ActivityInteractionCommand): s
         case 'openMachine':
             return command.route;
         case 'executeAction':
-            return createActivitySurfaceSessionRoute(command.defaultSessionId, command.target.serverId);
+            return command.route ?? createActivitySurfaceSessionRoute(command.defaultSessionId, command.target.serverId);
         case 'ignore':
         default:
             return null;
@@ -317,6 +318,16 @@ export function useNotificationResponseRouting(params: Readonly<{
 
             const route = resolveNotificationCommandRoute(command);
             if (!route) return;
+            if (command.kind === 'executeAction' && command.guardWarning) {
+                fireAndForget((async () => {
+                    const result = await executeGuardStopWarningAction(command, cancellation.signal);
+                    if (cancellation.signal.aborted) return;
+                    if (result && !result.ok) Modal.alert(t('common.error'), result.error);
+                    await reconcileGuardStopWarningNotifications();
+                    if (!cancellation.signal.aborted) router.push(admitInternalRouteHref(route));
+                })(), { tag: 'RootLayout.guardNotificationAction' });
+                return;
+            }
 
             const serverUrl = resolveNotificationCommandServerUrl(command);
             const serverId = resolveNotificationCommandServerId(command);

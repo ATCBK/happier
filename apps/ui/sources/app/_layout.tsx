@@ -8,7 +8,7 @@ import { Slot, Stack, usePathname, useRouter } from 'expo-router';
 import { ctx } from 'expo-router/_ctx';
 import { registerWorkspaceRouteContext } from '@/components/appShell/workspace/workspaceRouteContext';
 import {
-    PUSH_NOTIFICATION_BUNDLED_SOUND_FILES, PUSH_NOTIFICATION_ACTION_IDS, PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS, PUSH_NOTIFICATION_CATEGORY_IDS, resolveAndroidNotificationSoundName, } from '@happier-dev/protocol/push/pushNotificationActions';
+    PUSH_NOTIFICATION_BUNDLED_SOUND_FILES, PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS, resolveAndroidNotificationSoundName, } from '@happier-dev/protocol/push/pushNotificationActions';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { AuthProvider, ConcurrentSessionCacheRuntime } from '@/auth/context/AuthContext';
 import { WebServerOverrideGate } from '@/components/navigation/root/RootLayoutRedirectGate';
@@ -66,6 +66,7 @@ import { WebCryptoStartupGate } from '@/components/web/WebCryptoStartupGate';
 import { consumeRestartBugReportIntent } from '@/utils/system/restartBugReportIntent';
 import { getCurrentReactOwnerHint, getUnexpectedPrimitiveViewChildInfo } from '@/utils/system/debugUnexpectedTextNodeCapture';
 import { resolveForegroundNotificationBehavior } from '@/activity/notifications/resolveForegroundNotificationBehavior';
+import { configureNotificationCategories } from '@/activity/notifications/configureNotificationCategories';
 import { resolveBootCredentials } from '@/boot/resolveBootCredentials';
 import { runAppBootSequence, type AppBootReadyState } from '@/boot/runAppBootSequence';
 import { prepareSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
@@ -437,40 +438,13 @@ function configureAndroidNotificationChannels(Notifications: ExpoNotificationsMo
     }
 }
 
-function configureNotificationCategories(Notifications: ExpoNotificationsModule): void {
-    if (Platform.OS === 'web') return;
-
-    // Expo docs recommend avoiding ':' and '-' in category identifiers.
-    // Our category ids live in `@happier-dev/protocol` so the CLI push payload and app registration stay in sync.
-    void Notifications.setNotificationCategoryAsync(PUSH_NOTIFICATION_CATEGORY_IDS.permissionRequestV1, [
-        {
-            identifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
-            buttonTitle: t('notifications.actions.allow'),
-            options: { opensAppToForeground: true },
-        },
-        {
-            identifier: PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1,
-            buttonTitle: t('notifications.actions.deny'),
-            options: { opensAppToForeground: true, isDestructive: true },
-        },
-    ]).catch(() => {});
-
-    void Notifications.setNotificationCategoryAsync(PUSH_NOTIFICATION_CATEGORY_IDS.userActionRequestV1, [
-        {
-            identifier: PUSH_NOTIFICATION_ACTION_IDS.userActionOpenV1,
-            buttonTitle: t('notifications.actions.answer'),
-            options: { opensAppToForeground: true },
-        },
-    ]).catch(() => {});
-}
-
 void (async () => {
     if (embedWindowContext) return;
     try {
         const Notifications = await loadExpoNotifications();
         configureForegroundNotificationHandler(Notifications);
         configureAndroidNotificationChannels(Notifications);
-        configureNotificationCategories(Notifications);
+        if (Platform.OS !== 'web') configureNotificationCategories(Notifications);
     } catch {
         // Native notification modules are optional in local dev clients; startup must still render.
     }

@@ -9,6 +9,8 @@ import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerS
 import { resolveIncomingActivityRemoteAlert } from './remoteAlerts/activityRemoteAlertRouting';
 import { resolveIncomingMachineRemoteAlert } from './remoteAlerts/machineRemoteAlertRouting';
 import { machinePageHref } from '@/components/machines/page/machinePageHref';
+import { GuardStopWarningPushDataV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { resolveNotificationSavedHome } from './resolveNotificationSavedHome';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -70,6 +72,14 @@ export function parseNotificationTap(params: Readonly<{
     const data = readNotificationData({ response: params.response });
     const notificationId = readNotificationId({ response: params.response });
     const dedupeKey = notificationId ? `${notificationId}:${actionIdentifier}` : null;
+    if (isRecord(data) && data.topic === 'guard_stop_warning') {
+        const warning = GuardStopWarningPushDataV1Schema.safeParse(data);
+        if (!warning.success) return { command: { kind: 'ignore', reason: 'malformed' }, dedupeKey };
+        const home = resolveNotificationSavedHome({ serverId: warning.data.serverId, serverUrl: warning.data.serverUrl ?? '' });
+        if (!home) return { command: { kind: 'ignore', reason: 'unknown_server' }, dedupeKey };
+        return { command: resolveActivityInteractionCommand({ actionIdentifier, defaultActionIdentifier: params.defaultActionIdentifier,
+            data: { ...warning.data, serverId: home.id, serverUrl: home.serverUrl }, requireKnownIdentity: false }), dedupeKey };
+    }
 
     const machineAlert = resolveIncomingMachineRemoteAlert(data);
     if (machineAlert.kind !== 'not_machine_alert') {

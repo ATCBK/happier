@@ -8,6 +8,50 @@ import type { MachineGuardWatchResultV1 } from '@happier-dev/protocol/machines/g
 async function settle() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
 
 describe('Guard last-good freshness', () => {
+    it('refreshes demanded ranges and filters when an earlier-day Undo leaves Today unchanged', async () => {
+        const watches: Array<ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>>> = [];
+        const yesterday = Date.UTC(2026, 9, 19, 12);
+        let asOf = Date.UTC(2026, 9, 20, 12);
+        let entries: ReturnType<typeof createMachineGuardViewFixture>['recentActivity'] = [{
+            v: 1, id: 'yesterday', at: yesterday, kind: 'stopped_session', rule: 'idle_sessions', outcome: 'done',
+            attribution: { kind: 'unknown' },
+            wayBack: [{ label: 'resume', actionId: 'session.open', input: { sessionId: 'session' } }],
+        }];
+        const store = createMachineGuardStore({
+            viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
+            watchClient: () => {
+                const reply = createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>();
+                watches.push(reply); return reply.promise;
+            },
+            activityClient: async () => ({ ok: true, value: {
+                entries, counts: { stopped: entries.length, cleanedUp: 0, needsLook: 0, others: 0 }, asOf,
+            } }),
+        });
+        const key = { machineId: 'machine', serverId: 'home', expectedAccountId: 'owner', range: '7d' as const, filter: 'all' as const };
+        const filtered = { ...key, range: '30d' as const, filter: 'stopped' as const };
+        const releaseView = store.demandView(key);
+        const release = store.demandActivity(key);
+        const releaseFiltered = store.demandActivity(filtered);
+        try {
+            await settle();
+            expect(store.getActivity(key).list?.entries[0]?.wayBack).toHaveLength(1);
+            expect(watches).toHaveLength(1);
+            asOf += 1;
+            entries = entries.map(({ wayBack: _wayBack, ...entry }) => ({ ...entry, undoneAt: asOf }));
+            watches[0]!.resolve({ ok: true, value: { changed: true, since: 2, view: createMachineGuardViewFixture() } });
+            await settle();
+            expect(store.getActivity(key).list?.entries).toEqual(entries);
+            expect(store.getActivity(filtered).list?.entries).toEqual(entries);
+            release(); releaseFiltered();
+            const retained = store.getActivity(key).list;
+            asOf += 1;
+            watches.at(-1)!.resolve({ ok: true, value: { changed: true, since: 3, view: createMachineGuardViewFixture() } });
+            await settle();
+            expect(store.getActivity(key).list).toBe(retained);
+            expect(store.getActivity(filtered).list?.asOf).toBe(asOf - 1);
+        } finally { release(); releaseFiltered(); releaseView(); store.reset(); }
+    });
+
     it('keeps standalone Activity ranges live through one shared Guard watch until the final release', async () => {
         const watches: Array<{ signal?: AbortSignal; reply: ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>> }> = [];
         let entries: ReturnType<typeof createMachineGuardViewFixture>['recentActivity'] = [];

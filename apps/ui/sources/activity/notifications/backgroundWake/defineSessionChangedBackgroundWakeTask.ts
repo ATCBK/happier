@@ -10,6 +10,7 @@ import { resolveIncomingMachineRemoteAlert } from '../remoteAlerts/machineRemote
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 import { readExactHomeAccountSettings } from '@/activity/delivery/useExactHomeAccountSettings';
 import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
+import { reconcileGuardStopWarningNotifications } from '../guardStopWarningLifecycle';
 
 declare const require: (id: string) => unknown;
 
@@ -175,6 +176,8 @@ export async function applySessionChangedBackgroundWakePayload(params: Readonly<
         }, () => reconcile(wake))
         : await reconcile(wake);
     if (!reconciled) return { action: 'ignore', reason: 'session_unavailable' };
+    if (wake.serverId) await reconcileGuardStopWarningNotifications({ notifications: params.notifications,
+        session: { serverId: wake.serverId, sessionId: wake.sessionId } });
     return {
         action: 'reconciled',
         sessionId: wake.sessionId,

@@ -59,8 +59,9 @@ export function createMachineGuardStore(clients: MachineGuardClients) {
         },
         failRefresh: state => ({ ...applyView(state, { kind: 'status', status: 'error' }), pending: false }),
         applySnapshot: applyView,
-        onWatchSnapshot: (input, update, previous) => {
-            if (update.kind === 'view' && JSON.stringify(previous.view?.recentActivity) !== JSON.stringify(update.view.recentActivity)) refreshActivity(input);
+        onWatchSnapshot: (input, update) => {
+            // The watch cursor covers journal changes outside the view's Today projection too.
+            if (update.kind === 'view') refreshActivity(input);
         },
         watch: async ({ input, state, watchClient, signal, nowMs }) => {
             const answer = await watchClient({ ...input, since: state.since, signal });

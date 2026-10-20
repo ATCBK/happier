@@ -44,6 +44,9 @@ import { buildActivityLocalNotificationContent } from '../buildActivityLocalNoti
 import { sendExpoLocalNotification } from '../channels/sendExpoLocalNotification';
 import { sendTauriLocalNotification } from '../channels/sendTauriLocalNotification';
 import { GuardStopWarningDesktopBanners } from './GuardStopWarningDesktopBanners';
+import { observeGuardStopWarningNotifications } from '../guardStopWarningLifecycle';
+import { loadExpoNotifications } from '@/utils/platform/loadExpoNotifications';
+import { AppState } from 'react-native';
 import { isActivityLocalNotificationMutedForWake, subscribeActivityLocalNotifications, type ActivityLocalNotificationEvent } from './activityLocalNotificationBus';
 import { isSessionFollowStalledOccurrenceCurrentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
 import { resolveActivityStalledEventIdentityV1 } from '@happier-dev/protocol/activity/eventIdentity';
@@ -125,6 +128,20 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
     const localSettings = useActivityLocalNotificationLocalSettings();
     const audienceSource = useActivityAttentionSource();
     const resolveAccountSettings = useExactHomeAccountSettings(audienceSource.audienceScopes);
+    React.useEffect(() => {
+        if (Platform.OS === 'web') return;
+        let disposed = false;
+        let cleanup: (() => void) | undefined;
+        fireAndForget(loadExpoNotifications().then(notifications => {
+            if (disposed) return;
+            const watcher = observeGuardStopWarningNotifications(notifications, error => {
+                fireAndForget(Promise.reject(error), { tag: 'ActivityLocalNotificationRuntime.guardReconcile' });
+            });
+            const subscription = AppState.addEventListener('change', state => { if (state === 'active') watcher.refresh(); });
+            cleanup = () => { subscription.remove(); watcher.dispose(); };
+        }), { tag: 'ActivityLocalNotificationRuntime.guardReconcile' });
+        return () => { disposed = true; cleanup?.(); };
+    }, []);
 
     // The closed-app `session_changed` wake exists for exactly this runtime: it
     // hydrates the woken Home so the Activity event below can be presented

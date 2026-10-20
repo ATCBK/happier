@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { isUnsafeNotificationServerUrl, parseNotificationTap } from './notificationRouting';
+import { buildGuardStopWarningPushDataV1 } from '@happier-dev/protocol/activity/webhookPayload';
+import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol/push/pushNotificationActions';
 
 const serverProfiles = await import('@/sync/domains/server/serverProfiles');
 
@@ -35,6 +37,31 @@ async function clearProfiles(): Promise<void> {
 describe('activity remote alert taps', () => {
     beforeEach(clearProfiles);
     afterEach(clearProfiles);
+
+    it('admits exact Guard warning Actions on their saved Home, including standalone terminals', async () => {
+        const home = await serverProfiles.upsertServerProfile({ serverUrl: 'https://guard.example.test', name: 'Guard' });
+        const other = await serverProfiles.upsertServerProfile({ serverUrl: 'https://other.example.test', name: 'Other' });
+        await serverProfiles.setActiveServerId(other.id, { scope: 'device' });
+        for (const warning of [
+            { topic: 'guard_stop_warning', machineId: 'machine', sessionId: 'session', rule: 'idle_sessions', stopAt: 300_000 },
+            { topic: 'guard_stop_warning', machineId: 'machine', terminalId: 'terminal', terminalKey: 'key', rule: 'idle_terminals', stopAt: 300_000 },
+        ] as const) {
+            const data = { ...buildGuardStopWarningPushDataV1(warning), serverUrl: home.serverUrl };
+            for (const [identifier, action] of [[PUSH_NOTIFICATION_ACTION_IDS.guardKeepRunningV1, 'keepRunning'],
+                [PUSH_NOTIFICATION_ACTION_IDS.guardStopNowV1, 'stopNow']] as const) {
+                const parsed = parseNotificationTap({ response: { ...tapResponse(data), actionIdentifier: identifier },
+                    defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER });
+                expect(parsed?.command).toMatchObject({ kind: 'executeAction', actionId: data.actions[action].actionId,
+                    payload: { ...data.actions[action].input, serverId: home.id }, target: { serverId: home.id } });
+            }
+            expect(parseNotificationTap({ response: { ...tapResponse({ ...data, serverUrl: 'https://unknown.example.test' }),
+                actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.guardStopNowV1 }, defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER })?.command)
+                .toMatchObject({ kind: 'ignore', reason: 'unknown_server' });
+            expect(parseNotificationTap({ response: { ...tapResponse({ ...data, notificationId: 'wrong' }),
+                actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.guardStopNowV1 }, defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER })?.command)
+                .toMatchObject({ kind: 'ignore', reason: 'malformed' });
+        }
+    });
 
     it('opens the alert Session on its own Home even while another Home is active', async () => {
         const acme = await serverProfiles.upsertServerProfile({ serverUrl: 'https://acme.example.test', name: 'Acme' });

@@ -1,5 +1,6 @@
 import type { ActionId } from '@happier-dev/protocol';
-import { MachineVitalsPushRoutingDataV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { GuardStopWarningPushDataV1Schema, readGuardStopWarningPushActionV1, MachineVitalsPushRoutingDataV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import type { GuardStopWarningPushDataV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import { machinePageHref, machineResourceAlertTab } from '@/components/machines/page/machinePageHref';
 import { beginMachinePageTabIntent } from '@/components/machines/page/machinePageIntent';
 import type { MachinePageTabParams } from '@/components/machines/page/machinePageTabQuery';
@@ -75,6 +76,8 @@ export type ActivityInteractionCommand =
         actionId: ActionId;
         payload: unknown;
         defaultSessionId: string;
+        route?: string;
+        guardWarning?: GuardStopWarningPushDataV1;
         target: ActivityInteractionTargetContext;
         identity: ActivityInteractionIdentity | null;
         surface: Readonly<{
@@ -268,6 +271,27 @@ export function resolveActivityInteractionCommand(params: Readonly<{
     surfaceName?: string | null;
 }>): ActivityInteractionCommand {
     const actionIdentifier = params.actionIdentifier.trim() || params.defaultActionIdentifier;
+    if (isRecord(params.data) && params.data.topic === 'guard_stop_warning') {
+        const warning = GuardStopWarningPushDataV1Schema.safeParse(params.data);
+        if (!warning.success) return { kind: 'ignore', reason: 'malformed' };
+        const parsed = parseActivityInteraction(params);
+        if (!parsed) return { kind: 'ignore', reason: 'unknown_action' };
+        const data = warning.data;
+        if (!data.serverId) return { kind: 'ignore', reason: 'unknown_server' };
+        const sessionId = data.rule === 'idle_terminals' ? '' : data.sessionId;
+        const target = { serverId: data.serverId, sessionId: sessionId || null, serverUrl: data.serverUrl ?? null };
+        const route = sessionId ? createActivitySurfaceSessionRoute(sessionId, data.serverId)
+            : machinePageHref({ door: 'rail', target: { machineId: data.machineId, serverId: data.serverId }, tab: { id: 'guard' } });
+        if (parsed.guardAction && params.directActionsEnabled !== false) {
+            const action = readGuardStopWarningPushActionV1(data, parsed.guardAction, { serverId: data.serverId });
+            if (!action) return { kind: 'ignore', reason: 'malformed' };
+            return { kind: 'executeAction', actionId: action.actionId, payload: action.input,
+                defaultSessionId: sessionId, route, guardWarning: data, target, identity: null,
+                surface: { name: params.surfaceName ?? null, interaction: actionIdentifier } };
+        }
+        return sessionId ? openSessionCommand({ identity: null, target }) : { kind: 'openMachine',
+            machineId: data.machineId, serverId: data.serverId, serverUrl: data.serverUrl ?? null, tab: { id: 'guard' }, route };
+    }
     if (isRecord(params.data) && params.data.topic === 'resource_limit') {
         const parsed = MachineVitalsPushRoutingDataV1Schema.safeParse(params.data);
         if (!parsed.success) return { kind: 'ignore', reason: 'malformed' };

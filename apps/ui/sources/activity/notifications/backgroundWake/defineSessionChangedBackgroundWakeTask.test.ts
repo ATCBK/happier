@@ -48,6 +48,7 @@ describe('session_changed background wake consumer', () => {
         expect(await applySessionChangedBackgroundWakePayload({
             payload: { data: { type: 'session_changed', serverId: 'srv_a', sessionId: 'session-1' } },
             reconcile,
+            notifications: { getPresentedNotificationsAsync: async () => [], dismissNotificationAsync: async () => {} },
         })).toEqual({ action: 'reconciled', serverId: 'srv_a', sessionId: 'session-1' });
         expect(reconcile).toHaveBeenCalledWith({
             type: 'session_changed', serverId: 'srv_a', sessionId: 'session-1',

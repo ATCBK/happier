@@ -1,5 +1,5 @@
 import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol/push/pushNotificationActions';
-import { WorkflowRunUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { GuardStopWarningPushDataV1Schema, WorkflowRunUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
 
 import { normalizeServerUrl } from '@/sync/domains/server/activeServerSwitch';
 import { coerceRelativeRoute } from '@/utils/path/routeUtils';
@@ -112,6 +112,16 @@ export function parseActivityInteraction(params: Readonly<{
 }>): ParsedActivityInteraction | null {
     const actionIdentifier = params.actionIdentifier.trim() || params.defaultActionIdentifier;
     const isDefaultTap = actionIdentifier === params.defaultActionIdentifier;
+    if (isRecord(params.data) && params.data.topic === 'guard_stop_warning') {
+        const warning = GuardStopWarningPushDataV1Schema.safeParse(params.data);
+        if (!warning.success) return null;
+        const guardAction = actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.guardKeepRunningV1 ? 'keepRunning'
+            : actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.guardStopNowV1 ? 'stopNow' : undefined;
+        if (!isDefaultTap && !guardAction) return null;
+        return { actionIdentifier, isDefaultTap, isOpenAction: isDefaultTap, route: resolveRoute(params.data),
+            serverUrl: resolveServerUrl(params.data), permissionAction: null, workflowRun: null,
+            ...(guardAction ? { guardAction } : {}) };
+    }
     const permissionAction =
         actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1
             ? ('allow' as const)
