@@ -2,7 +2,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { getActionSpec, resolveActionExecutionPlacementForInput, isActionSpecSurfacedOn, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { clientActionUnavailable } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { isActionExecutableFromStandaloneMcp } from '@happier-dev/protocol/actions/actionToolExposure';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -43,6 +42,7 @@ import {
 import { configuration } from '@/configuration';
 import { fetchServerFeaturesSnapshot, type CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
+import { logger } from '@/ui/logger';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -106,6 +106,15 @@ export function createExternalMcpServer(params: Readonly<{
     const sessionId = normalizeId(params.defaultSessionId);
     return sessionId ? { serverId, sessionId } : null;
   })();
+  const daemonRelayUnavailable = (actionId: string, cause: 'target_absent' | 'request_failed') => {
+    logger.warnLocalFile('[happierMCP] Client Action daemon relay unavailable', {
+      actionId,
+      serverId,
+      ...(defaultSessionAddress ? { sessionId: defaultSessionAddress.sessionId } : {}),
+      cause,
+    });
+    return { ok: false as const, errorCode: 'daemon_unavailable', error: 'daemon_unavailable' };
+  };
   const executor = usesApiToken
     ? createCliActionExecutorFromCredentials({
         credentials: params.credentials,
@@ -211,7 +220,7 @@ export function createExternalMcpServer(params: Readonly<{
             }
             // Delegate before local admission: this exact Home's daemon owns
             // the one approval decision and its connected-client delivery.
-            if (daemonControlTarget === null) return clientActionUnavailable(actionId);
+            if (daemonControlTarget === null) return daemonRelayUnavailable(actionId, 'target_absent');
             const admittedActionId = SignedRootActionIdSchema.safeParse(actionId);
             if (!admittedActionId.success) return { ok: false as const, errorCode: 'unsupported_action', error: 'unsupported_action' };
             const sessionId = context?.defaultSessionId && context.defaultSessionId !== 'cli-global'
@@ -253,7 +262,7 @@ export function createExternalMcpServer(params: Readonly<{
               }
             }
             return !result.ok && result.errorCode === 'daemon_unavailable'
-              ? clientActionUnavailable(actionId) : result;
+              ? daemonRelayUnavailable(actionId, 'request_failed') : result;
           },
         };
       })();
