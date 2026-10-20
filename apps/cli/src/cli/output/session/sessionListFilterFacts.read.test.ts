@@ -23,7 +23,7 @@ const tag = (tagId: string) => normalizeSessionListFilterV1({ homeServerIds: ['h
 const all = normalizeSessionListFilterV1({ homeServerIds: ['home'], startedBy: ['you', 'agents', 'triggers'] });
 afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); });
 
-function boundary(serverId = ref.serverId) {
+function boundary(serverId = ref.serverId, extraRows: readonly ReturnType<typeof createPlainProjectAccountRefRow>[] = []) {
   const state = { projectKey: 'bob-project', tagIds: ['bob-tag'], unavailable: false };
   // Only Account HTTP is substituted; row admission, snapshots and matching stay real.
   const get = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
@@ -39,7 +39,7 @@ function boundary(serverId = ref.serverId) {
     if (state.unavailable) return { status: 403, data: { error: 'forbidden' } } as never;
     const projectKey = config?.headers?.Authorization === `Bearer ${alice.token}` ? 'alice-project' : state.projectKey;
     return { status: 200, data: { status: 'listed', coverage: 'complete',
-      rows: [createPlainProjectAccountRefRow({ ...ref, serverId, projectKey })] } } as never;
+      rows: [createPlainProjectAccountRefRow({ ...ref, serverId, projectKey }), ...extraRows] } } as never;
   });
   return { state, get, post };
 }
@@ -50,15 +50,16 @@ function input(filters = [project('bob-project'), tag('bob-tag')]) {
 }
 
 describe('captured Account current filter facts', () => {
-  it('reads portable Project and tag facts from a captured local Home profile', async () => {
+  it.each(['portable', 'local'] as const)('reads portable Project and tag facts from a captured local Home profile (%s filter)', async qualifier => {
     await withConfiguredDaemonTestHome({ prefix: 'follow-facts-portable-home-' }, async () => {
       const profileId = 'stack_agent-qa-coord-n1__id_default';
       const homeId = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
       await seedTestServerProfile({ id: profileId, homeId, serverUrl: 'https://bob-home.test' });
-      boundary(homeId);
-      const projectFilter = normalizeSessionListFilterV1({ homeServerIds: [homeId],
-        projects: { include: [{ serverId: homeId, projectKey: 'bob-project' }], exclude: [] } });
-      const tagFilter = normalizeSessionListFilterV1({ homeServerIds: [homeId], tagIds: [{ serverId: homeId, tagId: 'bob-tag' }] });
+      boundary(homeId, [createPlainProjectAccountRefRow({ ...ref, serverId: profileId, projectKey: 'old-local-project' })]);
+      const filterHome = qualifier === 'local' ? profileId : homeId;
+      const projectFilter = normalizeSessionListFilterV1({ homeServerIds: [filterHome],
+        projects: { include: [{ serverId: filterHome, projectKey: 'bob-project' }], exclude: [] } });
+      const tagFilter = normalizeSessionListFilterV1({ homeServerIds: [filterHome], tagIds: [{ serverId: filterHome, tagId: 'bob-tag' }] });
       const facts = await readCliSessionListFilterFactsV1({ ...input([projectFilter, tagFilter]), serverId: profileId });
       expect(facts?.serverId).toBe(homeId);
       expect(matchSessionListFilterV1(projectFilter, facts!)).toBe('match');

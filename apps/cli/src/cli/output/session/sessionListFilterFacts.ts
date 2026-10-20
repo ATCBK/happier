@@ -14,6 +14,7 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 
 type PreparedSessionListFilterFacts = Readonly<{ workspaceRefs?: readonly WorkspaceRefV1[]; tagIds?: readonly string[] }>;
 
@@ -23,7 +24,8 @@ export async function readCliSessionListTagAssignmentsV1(input: Readonly<{
   filters: readonly SessionListFilterV1[]; serverHttpBaseUrl?: string; signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'GET' | 'POST'; path: string; body?: unknown }>) => Readonly<Record<string, string>> | null;
 }>): Promise<ReadonlyMap<string, readonly string[]> | undefined> {
-  if (!input.filters.some(filter => filter.tagIds.some(tag => tag.serverId === input.serverId))) return undefined;
+  const homes = [...new Set(input.filters.flatMap(filter => filter.tagIds.map(tag => tag.serverId)))];
+  if (!(await Promise.all(homes.map(home => isServerProfileHomeIdentity(input.serverId, home)))).some(admitted => admitted)) return undefined;
   const ids = [...new Set(input.sessionIds)];
   const assignments = new Map<string, readonly string[]>();
   for (let offset = 0; offset < ids.length; offset += SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS) {
@@ -51,24 +53,30 @@ export async function readCliSessionListFilterFactsV1(input: CliSessionAwareness
   isCurrent: () => Promise<boolean>; filters: readonly SessionListFilterV1[];
 }>): Promise<SessionListFilterFactsV1 | null> {
   if (input.signal.aborted || readAccountIdFromToken(input.credentials.token) !== input.accountId || !await input.isCurrent()) return null;
-  const projectsRequired = input.filters.some(filter => filter.projects
-    && [...filter.projects.include, ...filter.projects.exclude].some(project => project.serverId === input.serverId));
+  const serverId = await resolveServerProfileHomeIdentityId(input.serverId) ?? input.serverId;
+  const projectHomes = [...new Set(input.filters.flatMap(filter => filter.projects
+    ? [...filter.projects.include, ...filter.projects.exclude].map(project => project.serverId) : []))];
+  const projectsRequired = (await Promise.all(projectHomes.map(home => isServerProfileHomeIdentity(input.serverId, home))))
+    .some(admitted => admitted);
   const [projects, tags] = await Promise.allSettled([
-    projectsRequired ? readProjectAccountRows({ credentials: input.credentials, serverId: input.serverId, signal: input.signal,
+    projectsRequired ? readProjectAccountRows({ credentials: input.credentials, serverId, signal: input.signal,
       sessionCustody: { accountId: input.accountId, serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl,
         isCurrent: input.isCurrent } }) : Promise.resolve(undefined),
-    readCliSessionListTagAssignmentsV1({ ...input, sessionIds: [input.row.id] }),
+    readCliSessionListTagAssignmentsV1({ ...input, serverId, sessionIds: [input.row.id] }),
   ]);
   if (input.signal.aborted || !await input.isCurrent()) return null;
-  const workspaceRefs = projects.status === 'fulfilled' ? projects.value?.workspaceRefs : undefined;
+  // Profile aliases qualify caller filters, never stored Workspace identities.
+  const workspaceRefs = projects.status === 'fulfilled' ? projects.value?.workspaceRefs.filter(ref => ref.serverId === serverId) : undefined;
   const tagIds = tags.status === 'fulfilled' ? tags.value?.get(input.row.id) : undefined;
-  return projectCliSessionListFilterFactsV1({ ...input, viewerAccountId: input.accountId,
-    preparedFacts: { workspaceRefs, tagIds } });
+  return projectCliSessionListFilterFactsV1({ ...input, serverId, viewerAccountId: input.accountId,
+    preparedFacts: { workspaceRefs, tagIds },
+    workspaceContext: { normalizeServerId: id => id === input.serverId ? serverId : id } });
 }
 
 /** Current authorized facts shared by list/preview and occurrence evaluation; never persisted. */
 export function projectCliSessionListFilterFactsV1(input: CliSessionAwarenessParams & Readonly<{
   serverId: string; viewerAccountId?: string; workspaceRefs?: readonly WorkspaceRefV1[];
+  workspaceContext?: SessionListFilterFactsV1['workspaceContext'];
   preparedFacts?: PreparedSessionListFilterFacts;
 }>): SessionListFilterFactsV1 {
   const row = input.row;
@@ -97,6 +105,7 @@ export function projectCliSessionListFilterFactsV1(input: CliSessionAwarenessPar
     status: readSessionAwarenessPresentationV1(projectCliSessionAwarenessV1(input)),
     ...(ownerMetadata ? { source: linked?.ok ? linked.transcriptStorage : 'persisted' } : {}),
     workspaceRefs: input.preparedFacts?.workspaceRefs ?? input.workspaceRefs,
+    ...(input.workspaceContext ? { workspaceContext: input.workspaceContext } : {}),
     ...(input.preparedFacts?.tagIds === undefined ? {} : { tagIds: input.preparedFacts.tagIds }),
   };
 }
