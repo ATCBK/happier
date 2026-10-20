@@ -145,6 +145,11 @@ function buildRuns(
   return runs;
 }
 
+/** A run's identity as a list key: an account can belong to several pools, so the account's own key alone repeats across runs. */
+function runKey(run: Run): string {
+  return run.pool ? `pool:${run.pool.key}` : `account:${run.cells[0]!.account.key}`;
+}
+
 /**
  * The runs that sit alone in a two-up row: an account outside any framed pool, with no second account after
  * it before a framed pool (which takes the whole row) or the end.
@@ -274,7 +279,7 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
       ) : runs.length > 0 ? (
       <View style={styles.bar} accessibilityRole="list">
         {runs.map((run) => (
-          <React.Fragment key={run.pool?.key ?? run.cells[0]!.account.key}>
+          <React.Fragment key={runKey(run)}>
             <View
               testID={isFramedRun(run) ? `${props.testID}.pool.${run.pool!.groupId}` : undefined}
               style={[
@@ -351,15 +356,15 @@ function CapacityPooledBar(props: Readonly<{
   /** Too narrow for a label under each segment: the accounts are listed beneath the one bar, a row each. */
   listed: boolean;
 }>) {
-  const label = (cell: Cell, listed: boolean) => (
-    <CapacityCell key={cell.account.key} cell={cell} name={props.nameOf(cell.account)} nowMs={props.nowMs}
+  const label = (run: Run, cell: Cell, listed: boolean) => (
+    <CapacityCell key={`${runKey(run)}:${cell.account.key}`} cell={cell} name={props.nameOf(cell.account)} nowMs={props.nowMs}
       pooled staleSaidOnce={props.staleSaidOnce} {...(listed ? { listed } : {})} testID={`${props.testID}.cell.${cell.account.accountId}`} />
   );
   return (
     <>
       <View style={styles.pooledBar} accessibilityRole="list" testID={`${props.testID}.pooled`}>
         {props.runs.map((run) => (
-          <View key={run.pool?.key ?? run.cells[0]!.account.key}
+          <View key={runKey(run)}
             testID={isFramedRun(run) ? `${props.testID}.pool.${run.pool!.groupId}` : undefined}
             style={[styles.pooledRun, { flexGrow: run.cells.length, minWidth: run.cells.length * POOLED_SEGMENT_MIN_WIDTH_PX }]}>
             <View style={[styles.pooledTrack, isFramedRun(run) ? styles.pooledTrackPool : null]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -373,13 +378,13 @@ function CapacityPooledBar(props: Readonly<{
                 );
               })}
             </View>
-            {props.listed ? null : <View style={styles.pooledLabels}>{run.cells.map((cell) => label(cell, false))}</View>}
+            {props.listed ? null : <View style={styles.pooledLabels}>{run.cells.map((cell) => label(run, cell, false))}</View>}
           </View>
         ))}
       </View>
       {props.listed ? (
         <View style={styles.pooledList} accessibilityRole="list" testID={`${props.testID}.accounts`}>
-          {props.runs.flatMap((run) => run.cells.map((cell) => label(cell, true)))}
+          {props.runs.flatMap((run) => run.cells.map((cell) => label(run, cell, true)))}
         </View>
       ) : null}
     </>
@@ -499,6 +504,9 @@ function CapacityCell(
       accessibilityRole="text"
       style={[
         styles.cell,
+        // A listed row stacks in a column: it takes its content's height (a "used up" note under the name),
+        // never an equal share of the list that lets the note run into the next row.
+        props.listed ? styles.cellListed : null,
         props.basis ? { flexBasis: props.basis, flexGrow: 1 } : null,
       ]}
       accessibilityLabel={[
@@ -587,6 +595,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   halfSpacer: { flexBasis: '47%', flexGrow: 1 },
   cell: { flex: 1, minWidth: 0, gap: theme.space.s6 },
+  cellListed: { flexGrow: 0, flexShrink: 0, flexBasis: 'auto' },
   cellHead: {
     flexDirection: 'row',
     alignItems: 'center',
