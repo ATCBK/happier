@@ -5,6 +5,7 @@ import { sealProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { readProviderAccountUsagePageProjection, writeProviderAccountUsagePageProjection } from './pageProjectionStorage';
 import { logger } from '@/utils/logging/log';
+import { ProviderAccountUsagePayloadInvariantError } from './types';
 
 const recordKey = { providerId: 'test', accountSubjectId: 'account', subjectKind: 'account' as const, quotaScope: 'account' as const };
 const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
@@ -20,7 +21,8 @@ const value = { recordId: snapshot.recordId, encoding: PROVIDER_ACCOUNT_USAGE_PA
 function databaseBoundary() {
     const findUnique = vi.fn().mockResolvedValue({ metadata: { materialFingerprint: 'retained', pageProjection: value } });
     const count = vi.fn().mockResolvedValue(1);
-    const findFirst = vi.fn().mockResolvedValue({ id: frontier.id, observedAt: new Date(frontier.observedAtMs) });
+    const findFirst = vi.fn().mockImplementation(async args => args.select.observedAt
+        ? { id: frontier.id, observedAt: new Date(frontier.observedAtMs) } : null);
     const update = vi.fn().mockResolvedValue({});
     // Prisma is the genuine database boundary. The integration suite owns SQL,
     // transaction/source admission and exact immutable witness verification.
@@ -71,7 +73,8 @@ describe('B page projection persistence', () => {
         const db = databaseBoundary();
         const params = { accountId: 'owner', recordId: snapshot.recordId, projection: demand };
         expect(await readProviderAccountUsagePageProjection(params, db.storage)).toEqual({ projection: value, complete: true });
-        db.count.mockReset().mockResolvedValueOnce(1).mockResolvedValueOnce(2);
+        db.findFirst.mockResolvedValueOnce({ id: frontier.id, observedAt: new Date(frontier.observedAtMs) })
+            .mockResolvedValueOnce({ id: 'tail', observedAt: new Date(2) });
         expect(await readProviderAccountUsagePageProjection(params, db.storage)).toEqual({ projection: value, complete: false });
         db.count.mockReset().mockResolvedValue(2);
         expect(await readProviderAccountUsagePageProjection(params, db.storage)).toEqual({ projection: null, complete: false });
@@ -134,6 +137,21 @@ describe('B page projection persistence', () => {
         });
         expect(await writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage)).toEqual(value);
         expect(transferredBytes).toBe(new TextEncoder().encode(JSON.stringify(metadata)).length);
+        expect(db.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects retained coverage belonging to another record even when its range and frontier match', async () => {
+        const db = databaseBoundary();
+        const alternateKey = { ...recordKey, accountSubjectId: 'another-account' };
+        const alternate = { ...snapshot, recordKey: alternateKey, recordId: buildProviderAccountUsageRecordId(alternateKey) };
+        const wrongRecord = { ...value, recordId: alternate.recordId,
+            content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
+                recordId: alternate.recordId, range: demand.range,
+                history: { entries: [{ ...frontier, snapshot: alternate }], nextCursor: null },
+            }) }) };
+        db.findUnique.mockResolvedValue({ metadata: { pageProjection: wrongRecord } });
+        await expect(writeProviderAccountUsagePageProjection({ accountId: 'owner', value }, db.storage))
+            .rejects.toBeInstanceOf(ProviderAccountUsagePayloadInvariantError);
         expect(db.update).not.toHaveBeenCalled();
     });
 

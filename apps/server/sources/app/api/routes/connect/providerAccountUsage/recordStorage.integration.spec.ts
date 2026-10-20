@@ -29,6 +29,7 @@ import {
     readProviderAccountUsageRecord,
     readProviderAccountUsageHistory,
     readProviderAccountUsageHistoryWitness,
+    hasProviderAccountUsageHistory,
     projectProviderAccountUsageRecordV4,
     requestProviderAccountUsageRefresh,
     updateProviderAccountUsageRecordIfCurrent,
@@ -175,6 +176,83 @@ describe("provider account usage record storage (integration)", () => {
         ]);
         expect(await readProviderAccountUsageHistoryWitness({ accountId: account.id, recordId: first.recordId,
             witness: { id: pinned.id, observedAtMs: pinned.observedAtMs } })).toEqual(pinned);
+    });
+
+    it('validates each distinct projection prefix once and seeks only the remaining tail', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });
+        const first = createUsageSnapshot({ fetchedAt: Date.now() - 3000 });
+        const write = (snapshot: typeof first) => writeProviderAccountUsageRecordWithPolicy({ accountId: account.id,
+            recordId: first.recordId, recordKey: first.recordKey, payloadMode: 'plain_json_v1', status: 'ok',
+            snapshot, fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs });
+        await write(first);
+        await write({ ...first, fetchedAtMs: first.fetchedAtMs + 1000, planLabel: 'changed entitlement' });
+        const params = { accountId: account.id, recordId: first.recordId };
+        const range = { startAtMs: first.fetchedAtMs, endAtMs: first.fetchedAtMs + 2000 };
+        const history = await readProviderAccountUsageHistory({ ...params, history: { range, pageSize: 100 } });
+        const [oldest, last] = history.entries;
+        if (!oldest || !last) throw new Error('Expected two accepted observations');
+        expect(await hasProviderAccountUsageHistory(params, db)).toBe(true);
+        const absent = { ...params, accountId: account.id + '-absent' };
+        expect(await hasProviderAccountUsageHistory(absent, db)).toBe(false);
+        expect(await readProviderAccountUsageHistory({ ...absent, history: { range, pageSize: 100 } }))
+            .toEqual({ entries: [], nextCursor: null });
+        expect(await readProviderAccountUsageHistoryWitness({ ...absent, witness: { id: last.id, observedAtMs: last.observedAtMs } })).toBeNull();
+        const demand = { range, resolution: 'accepted_observations' as const };
+        const projection = { recordId: first.recordId, encoding: PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING, demand,
+            observationCount: 2, frontier: { id: last.id, observedAtMs: last.observedAtMs },
+            content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
+                recordId: first.recordId, range, history: { entries: history.entries.map(entry => ({ id: entry.id,
+                    observedAtMs: entry.observedAtMs, snapshot: entry.record.snapshot! })), nextCursor: null },
+            }) }) };
+        await db.providerAccountUsageRecord.update({ where: { accountId_recordId: params }, data: { metadata: { pageProjection: projection } } });
+        const held = { demand, frontier: projection.frontier, observationCount: 2, contentMode: 'plain' as const };
+        let countedRows = 0;
+        // Observe the real database boundary's aggregate work. Recounting a
+        // validated prefix on each polling read multiplied retained-row scans.
+        const storage = { providerAccountUsageRecord: db.providerAccountUsageRecord,
+            providerAccountUsageHistory: new Proxy(db.providerAccountUsageHistory, {
+                get(target, property, receiver) {
+                    if (property === 'count') return async (args: Pick<NonNullable<Parameters<typeof target.count>[0]>, 'where'>) => {
+                        const count = await target.count(args);
+                        countedRows += count;
+                        return count;
+                    };
+                    return Reflect.get(target, property, receiver);
+                },
+            }) };
+        const read = (heldProjection = held) => readProviderAccountUsagePageProjection({ ...params, projection: demand, heldProjection }, storage);
+        expect(await read()).toMatchObject({ projection, complete: true, prefix: { complete: true } });
+        expect(countedRows).toBe(2);
+        countedRows = 0;
+        expect(await writeProviderAccountUsagePageProjection({ accountId: account.id, value: projection }, storage)).toEqual(projection);
+        expect(countedRows).toBe(2);
+        const retained = await db.providerAccountUsageHistory.findUniqueOrThrow({ where: { id: last.id } });
+        await db.providerAccountUsageHistory.create({ data: { ...params, id: 'zzzz-later-at-same-time',
+            observedAt: retained.observedAt, payload: retained.payload! } });
+        expect(await read()).toMatchObject({ projection, complete: false, prefix: { complete: false } });
+        expect(await read({ ...held, observationCount: 1, frontier: { id: oldest.id, observedAtMs: oldest.observedAtMs } }))
+            .toMatchObject({ projection, complete: false, prefix: { held: { observationCount: 1 }, complete: false } });
+        await db.providerAccountUsageHistory.create({ data: { ...params, id: 'backdated',
+            observedAt: new Date(first.fetchedAtMs + 500), payload: retained.payload! } });
+        expect(await read()).toEqual({ projection: null, complete: false });
+        await db.providerAccountUsageHistory.delete({ where: { id: 'backdated' } });
+        await db.providerAccountUsageHistory.delete({ where: { id: oldest.id } });
+        expect(await read()).toEqual({ projection: null, complete: false });
+        await db.providerAccountUsageHistory.deleteMany({ where: params });
+        expect(await hasProviderAccountUsageHistory(params, db)).toBe(false);
+        const empty = { ...projection, observationCount: 0, frontier: null,
+            content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
+                recordId: first.recordId, range, history: { entries: [], nextCursor: null },
+            }) }) };
+        await db.providerAccountUsageRecord.update({ where: { accountId_recordId: params }, data: { metadata: { pageProjection: empty } } });
+        const emptyRead = (endAtMs: number) => readProviderAccountUsagePageProjection({ ...params,
+            projection: { ...demand, range: { ...range, endAtMs } },
+            heldProjection: { ...held, observationCount: 0, frontier: null } }, storage);
+        expect(await emptyRead(range.endAtMs)).toMatchObject({ projection: empty, complete: true, prefix: { complete: true } });
+        await db.providerAccountUsageHistory.create({ data: { ...params, id: 'outside-original-range',
+            observedAt: new Date(range.endAtMs), payload: retained.payload! } });
+        expect(await emptyRead(range.endAtMs)).toMatchObject({ projection: empty, complete: true, prefix: { complete: true } });
+        expect(await emptyRead(range.endAtMs + 1)).toMatchObject({ projection: empty, complete: false, prefix: { complete: false } });
     });
 
     it('reads existing uncompacted history with unknown persisted fields but keeps writes canonical', async () => {
