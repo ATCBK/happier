@@ -62,6 +62,7 @@ export async function withUserScopedRpcSocket<R>(
   run: (socket: RpcSocket, connect: () => Promise<void>, signal?: AbortSignal) => Promise<R>,
 ): Promise<R> {
   params.signal?.throwIfAborted();
+  const connectionOptions = { ...params, clientPurpose: 'scoped-rpc' };
   if (params.reattachOnReconnect) {
     let current: Readonly<{ socket: RpcSocket; signal: AbortController }> | null = null;
     const abortCurrent = () => { current?.signal.abort(); };
@@ -72,7 +73,7 @@ export async function withUserScopedRpcSocket<R>(
     const supervisor = createManagedConnectionSupervisor({
       ...DEFAULT_MANAGED_CONNECTION_POLICY,
       createTransport: () => {
-        const connection = createUserScopedSocketConnection(params);
+        const connection = createUserScopedSocketConnection(connectionOptions);
         const signal = new AbortController();
         current = { socket: connection.socket, signal };
         return { ...connection.transport, destroy: async () => {
@@ -108,7 +109,7 @@ export async function withUserScopedRpcSocket<R>(
       await supervisor.stop();
     }
   }
-  const connection = createUserScopedSocketConnection(params);
+  const connection = createUserScopedSocketConnection(connectionOptions);
   const connect = async () => {
     params.signal?.throwIfAborted();
     let onAbort = () => {};

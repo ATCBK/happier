@@ -38,13 +38,14 @@ export function createSessionScopedSocket(opts: { token: string; sessionId: stri
     return createSessionScopedSocketConnection(opts).socket;
 }
 
-export function createUserScopedSocketConnection(opts: { token: string; serverUrl?: string; connectTimeoutMs?: number; authorityCeiling?: 'account_automation' }): SessionSocketConnection {
+export function createUserScopedSocketConnection(opts: { token: string; serverUrl?: string; connectTimeoutMs?: number; authorityCeiling?: 'account_automation'; clientPurpose?: string }): SessionSocketConnection {
     const serverUrl = opts.serverUrl ? normalizeServerHttpBaseUrl(opts.serverUrl) : resolveServerHttpBaseUrl();
     const transports = resolveServerSocketIoTransports();
     return createHappierSocket({
         endpoint: serverUrl,
         token: opts.token,
         clientType: 'user-scoped',
+        clientPurpose: opts.clientPurpose,
         authExtras: {
             ...buildCurrentCliClientCompatibilitySocketAuth('session-runner'),
             ...buildTerminalAuthorityCeiling({ token: opts.token, serverHttpBaseUrl: serverUrl }),

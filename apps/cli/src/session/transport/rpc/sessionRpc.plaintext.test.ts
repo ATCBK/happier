@@ -162,7 +162,7 @@ describe('execution-run caller authority at the Socket.IO boundary', () => {
     };
     await expect(startExecutionRunStream(request)).resolves.toMatchObject({ ok: true, data: { streamId: 'voice-stream' } });
     expect(vi.mocked(io).mock.calls.at(-1)?.[1]?.auth).toMatchObject({
-      token: 'account-token', authorityCeiling: 'account_automation',
+      token: 'account-token', authorityCeiling: 'account_automation', clientPurpose: 'scoped-rpc',
     });
   });
 
@@ -618,6 +618,7 @@ describe('execution wait transport recovery', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sockets).toHaveLength(2);
     expect(sockets[1]?.emitted[0]?.data.params).toMatchObject({ runId: 'run-original', condition: 'change', after: running });
+    expect(vi.mocked(io).mock.calls.every(([, options]) => options?.auth?.clientPurpose === 'scoped-rpc')).toBe(true);
     sockets[1]?.delayedAck?.({ ok: true, result: { ok: true, status: 'succeeded', disposition: 'snapshot', result: terminal.result } });
     await vi.advanceTimersByTimeAsync(0);
     expect(snapshots).toEqual([running, terminal.result]);
