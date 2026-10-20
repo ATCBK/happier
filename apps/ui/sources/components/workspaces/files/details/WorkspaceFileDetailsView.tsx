@@ -895,7 +895,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
         mode: isEditingFile ? 'edit' : headerModel.modes.find(option => option.displayMode === displayMode)?.id ?? 'view',
         changesScope: fileView.changesScope, blame: fileView.blame ?? false,
         availableModes: [...headerModel.modes.map(option => option.id), ...(headerModel.editUnavailableReason === null ? ['edit' as const] : [])],
-        blameAvailable: scmSnapshot?.capabilities.readBlame === true,
+        blameAvailable: scmSnapshot?.capabilities?.readBlame === true,
         changesScopeAvailable: scope !== null,
         set: patch => {
             if (patch.mode === 'edit') handleStartEditingFile();
@@ -930,7 +930,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
             appliedInitialView.current.blame = owner.blame === requested.blame || owner.set({ blame: requested.blame });
         }
     }, [initialViewKey, isActive, fileContent, hasRenderableDiff, persistedDraft?.isEditingFile,
-        headerModel.editUnavailableReason, scmSnapshot?.capabilities.readBlame]);
+        headerModel.editUnavailableReason, scmSnapshot?.capabilities?.readBlame]);
 
     const onStageFile = React.useCallback(() => {
         void handleStage(true);
