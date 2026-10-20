@@ -78,7 +78,7 @@ User guide: [Remote hosts (SSH)](/apps/remote-hosts).
 
 Lume, Cua local sandboxes and newly created Cua Spaces are under development for 0.3. They are not released managed Machine support. The selected computer must have the native runtime installed and be reachable; a phone or browser controls that computer rather than running the guest itself.
 
-Lume requires a Mac and a qualified image with a private SSH setup path. Storage and the Happier-generated VM name identify the guest together. Cua creation selects the local namespace, runtime and image explicitly; it does not fall back to Fleet. Runtime and image determine supported power operations, disk retention and display capture. Native installation and image licenses must be checked separately; an installed SDK does not grant permission to redistribute every native component.
+Lume requires a Mac and a qualified image with a private SSH setup path. Storage and the Happier-generated VM name identify the guest together. Cua creation selects the local runtime and image explicitly. Runtime and image determine supported power operations, disk retention and display capture. Native installation and image licenses must be checked separately; an installed SDK does not grant permission to redistribute every native component.
 
 In 0.3 development source, a custom Lume image can declare its prepared Linux or macOS SSH account explicitly. It must support Lume's native default-password setup path; choosing an operating system does not infer a login or qualify an arbitrary image. Setup checks the observed guest operating system before installing the controller-held public key. CPU, memory, disk size and storage remain reviewed inputs rather than guessed hardware presets.
 
@@ -114,13 +114,9 @@ lifetime without changing that setup. AWS/GCP no-TTL and finite Modal lifetimes
 are distinct choices, not a shared promise of indefinite compute. Existing
 Spaces use ordinary connection setup, without managed deletion authority.
 
-Cua Fleet uses a selected gateway account and a private resource-specific guest
-token. A pending claim retains its identity while binding; retry and inspection
-do not acquire another claim or renew its lease. Native expiry is independent of
-Happier connectivity. Release deletes only the acquired claim and its private
-Secret, never the shared Fleet pool. Real BYOC and Fleet installation and cleanup
-still need qualification against authorized native resources; this is not
-released managed Machine support.
+Cua Cloud and Fleets ended on 2026-10-18, so remote Cua compute is BYOC on your
+own cloud account. Real BYOC installation and cleanup still need qualification
+against authorized native resources; this is not released managed Machine support.
 
 #### Managed sandbox creation (0.3 development)
 
