@@ -10,6 +10,7 @@ import {
     readEmbedDraft,
     readEmbedDraftIssue,
     setEmbedNewChat,
+    setEmbedConnectedServices,
     setEmbedSessions,
     type EmbedDraft,
 } from './embedDraft';
@@ -62,14 +63,29 @@ describe('embed draft', () => {
     });
 
     it('creates the token with the one parent grant derivation and the embed configuration', () => {
-        const value = setEmbedNewChat(setEmbedSessions(draft(), CREATE), true);
+        const connectedServices = { v: 2 as const, bindingsByServiceId: {
+            'happier.agent.claude/claude-subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
+        } };
+        const value = setEmbedNewChat(setEmbedConnectedServices(setEmbedSessions(draft(), CREATE), connectedServices), true);
 
         const grant = buildEmbedGrant(value);
 
         expect(grant).toEqual(buildEmbedParentGrantV1(value.access, value.config));
         expect(grant.create?.placement).toEqual({ folderId: 'folder-leads', tagIds: ['tag-inbound'] });
         expect(grant.actions?.ids).toContain('session.spawn_new');
+        expect(grant.create?.connectedServices).toEqual(connectedServices);
         expect(value.config.newChat).toEqual({ enabled: true });
+    });
+
+    it('stores an explicit Connected Service override in the creation grant and restores Account-default inheritance when omitted', () => {
+        const created = setEmbedSessions(draft(), CREATE);
+        const connectedServices = { v: 2 as const, bindingsByServiceId: {
+            'happier.agent.claude/claude-subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
+        } };
+        const bound = setEmbedConnectedServices(created, connectedServices);
+        expect(bound.access.create?.connectedServices).toEqual(connectedServices);
+        expect(setEmbedConnectedServices(bound, undefined).access.create).not.toHaveProperty('connectedServices');
+        expect(setEmbedConnectedServices({ ...created, access: { ...created.access, create: null } }, connectedServices)).toEqual({ ...created, access: { ...created.access, create: null } });
     });
 
     it('sends only the configuration for presentation edits, including the new-chat choice', () => {
