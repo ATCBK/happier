@@ -92,6 +92,52 @@ function diagnosticBatch(overrides: Record<string, unknown> = {}): Record<string
 }
 
 describe('WebIframeEngine diagnostics wiring', () => {
+    it('binds later preview documents to their own embedding pane even when both panes share an origin', async () => {
+        const host = installTestWindow();
+        const frames: Array<EventTarget & { postMessage: (data: string) => void }> = [];
+        const screens: Array<Awaited<ReturnType<typeof renderScreen>>> = [];
+        const observed = [vi.fn(), vi.fn()];
+        const bindings: unknown[] = [];
+        try {
+            for (let index = 0; index < 2; index += 1) {
+                const frame = Object.assign(new EventTarget(), {
+                    parent: { postMessage: (data: string) => queueMicrotask(() => dispatchMessage(host, {
+                        data, origin: 'https://preview.example.test', source: frame as unknown as WindowProxy,
+                    })) },
+                    location: { href: `https://preview.example.test/page-${index}` },
+                    navigation: { canGoBack: index === 0, canGoForward: index === 1 },
+                    postMessage: (data: string) => {
+                        const message = JSON.parse(data);
+                        if (message.kind === 'browser.collector.bind') bindings.push(message.config.viewId);
+                        queueMicrotask(() => dispatchMessage(frame, {
+                            data, origin: 'https://app.example.test', source: frame.parent as unknown as WindowProxy,
+                        }));
+                    },
+                });
+                frames.push(frame);
+                const identity = { browserSessionId: 'bs', viewId: `pane-${index}`, navigationGeneration: 1,
+                    collectorId: `collector-${index}`, nonce: `nonce-${index}` };
+                screens.push(await renderScreen(<WebIframeEngine title="Preview" url="https://preview.example.test/" sandbox="allow-scripts allow-same-origin"
+                    onNavigationStateChange={observed[index]}
+                    diagnostics={{ ...identity, collectorVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', webPostMessageTargetOrigin: 'https://app.example.test', onEvents: vi.fn() }}
+                    automation={{ ...identity, capabilityVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', adapterKind: 'localPreview', supportedActions: ['click'], controlService: createBrowserAutomationControlService({ nowMs: Date.now }) }}
+                />, { createNodeMock: (node) => node.type === 'iframe' ? { contentWindow: frame } : null }));
+            }
+            await act(async () => {
+                const data = JSON.stringify({ v: 1, kind: 'browser.collector.bind.request' });
+                dispatchMessage(host, { data, origin: 'https://evil.example.test', source: frames[0] as unknown as WindowProxy });
+                dispatchMessage(host, { data, origin: 'https://preview.example.test', source: host });
+            });
+            expect(bindings).toEqual([]);
+            await act(async () => {
+                for (const frame of frames) new Function('window', 'document', buildCooperativeNavigationRuntimeScript('null'))(frame, { readyState: 'complete' });
+            });
+            expect(observed[0]).toHaveBeenLastCalledWith({ loading: false, canGoBack: true, canGoForward: false });
+            expect(observed[1]).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: true });
+            expect(bindings).toEqual(['pane-0', 'pane-1']);
+        } finally { for (const screen of screens) await screen.unmount(); }
+    });
+
     it.each(['pagehide', 'load'] as const)('admits an isolated cooperative preview only after its exact-source and nonce handshake, drives the real collector and retires on %s', async (retirement) => {
         const host = installTestWindow();
         const button = Object.assign(new EventTarget(), { getAttribute: () => null, innerText: 'Click' });

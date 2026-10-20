@@ -82,6 +82,18 @@ fallback use this admission rather than another person's cached URL. Native dire
 still needs the actual registered native descriptor and its signed grant; a Browser target
 alone cannot create that capability.
 
+If an acquired native preview connection ends, the current 0.3 source releases that
+viewer lease and requests fresh server-preview access through the same Home and
+Account. Where that server route is available, the pane resumes there with its
+in-preview path preserved. This remains development-source behavior; native-device
+validation is separate.
+
+Cooperative web previews in unreleased 0.3 builds stream the page after checking its
+HTML head for script policy, including compressed responses. Each pane keeps its own
+navigation identity when following links, even when several panes open the same
+service. Preview admission remains separate from that identity, and the page's
+original Content Security Policy still applies.
+
 In 0.3 development, private and public preview cookies use `SameSite=None; Secure;
 HttpOnly; Partitioned` within the preview's own host and path. This lets a preview embedded
 under another site retain its admission. Browsers that support

@@ -1,6 +1,8 @@
+import { COOPERATIVE_NAVIGATION_BIND_KIND, COOPERATIVE_NAVIGATION_BIND_REQUEST_KIND } from './cooperative.js';
+
 /**
  * The cooperative preview's navigation reporter. It is the only part of the collector that every
- * in-frame document of a bound relay preview carries: it reports history position, loading and title to
+ * in-frame document of a relay preview carries: it reports history position, loading and title to
  * the exact host that embedded it, and obeys back, forward and stop from that host only. It never
  * admits page automation or diagnostics; the full runtime still does that for the document loaded
  * with the pane's own navigation identity.
@@ -19,7 +21,7 @@ export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
     }
 
     function reportNavigationState() {
-      if (!window.parent || typeof window.parent.postMessage !== 'function') return;
+      if (!config || !window.parent || typeof window.parent.postMessage !== 'function') return;
       var navigation = window.navigation;
       try {
         window.parent.postMessage(JSON.stringify({
@@ -39,11 +41,25 @@ export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
     }
 
     function handleNavigationCommand(event) {
-      if (event.source !== window.parent || event.origin !== config.webPostMessageTargetOrigin) return;
+      if (event.source !== window.parent) return;
       var message = event.data;
       if (typeof message === 'string') {
         try { message = JSON.parse(message); } catch (_error) { return; }
       }
+      if (!config) {
+        if (!message || message.v !== 1 || message.kind !== '${COOPERATIVE_NAVIGATION_BIND_KIND}'
+            || Object.keys(message).length !== 3 || !message.config) return;
+        var binding = message.config;
+        if (event.origin !== binding.webPostMessageTargetOrigin || !/^https?:\\/\\//.test(event.origin)
+            || typeof binding.browserSessionId !== 'string' || typeof binding.viewId !== 'string'
+            || !Number.isSafeInteger(binding.navigationGeneration) || !binding.collector
+            || typeof binding.collector.collectorId !== 'string' || typeof binding.collector.nonce !== 'string') return;
+        // Only the real embedding window supplies identity, and only for this document's navigation reporter.
+        config = binding;
+        reportNavigationState();
+        return;
+      }
+      if (event.origin !== config.webPostMessageTargetOrigin) return;
       if (!message || message.v !== 1 || message.kind !== 'browser.collector.navigate'
           || message.browserSessionId !== config.browserSessionId || message.viewId !== config.viewId
           || message.navigationGeneration !== config.navigationGeneration
@@ -57,9 +73,17 @@ export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
       }
     }
 
+    function requestBinding() {
+      if (!config && window.parent && typeof window.parent.postMessage === 'function') {
+        // The request carries no identity or page content. The parent verifies its own frame before replying.
+        window.parent.postMessage(JSON.stringify({ v: 1, kind: '${COOPERATIVE_NAVIGATION_BIND_REQUEST_KIND}' }), '*');
+      }
+      reportNavigationState();
+    }
+
     window.addEventListener('message', handleNavigationCommand);
     window.addEventListener('load', reportNavigationState);
-    window.addEventListener('pageshow', reportNavigationState);
+    window.addEventListener('pageshow', requestBinding);
     if (window.navigation && typeof window.navigation.addEventListener === 'function') {
       window.navigation.addEventListener('currententrychange', reportNavigationState);
       window.navigation.addEventListener('navigate', function (event) {
@@ -72,6 +96,6 @@ export const INJECTED_COOPERATIVE_NAVIGATION_RUNTIME = `
         reportNavigationState();
       });
     }
-    reportNavigationState();
+    requestBinding();
   })(config);
 `;

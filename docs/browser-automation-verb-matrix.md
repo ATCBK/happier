@@ -240,9 +240,16 @@ control service and reverse-dispatch path. Guest `pagehide` and a second documen
 reuse an old readiness message. Ordinary preview requests, opaque path-mode frames and arbitrary
 external sites do not gain collector access or a weaker sandbox.
 
+Later iframe documents install the navigation-only reporter and bind to their exact parent pane
+through `browser.collector.bind.request` / `browser.collector.bind`. The existing per-view identity
+and nonce validate its reports and commands; shared preview admission cookies never choose a view.
+Binding does not install the page automation owner in a later document.
+
 The proxy preserves header and meta CSP policies. A restrictive script policy returns
 `collector_blocked_by_csp`; when scripts cannot run, the parent obtains that decision through an
 authorized, exact-origin metadata-only probe rather than reading or cloning the guest document.
+HTML head admission and compression decoding are incremental; the HTML shell and body stream
+without waiting for the upstream response to end.
 These are current 0.3 development-source contracts, not loaded-runtime certification.
 
 An agent's Session-owned Chromium profile is its browser workspace. Ephemeral

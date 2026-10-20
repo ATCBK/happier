@@ -191,6 +191,8 @@ the total `sizeBytes` and `eof`; a read beyond EOF returns the available bytes,
 including an empty result. An offset without a length is invalid. The predecessor
 `readFile` RPC alias delegates to this same owner. Current 0.3 UI and daemon ship
 together; ranged requests add no older-daemon negotiation path.
+The read fails if the open file's size changes while its slice is being read;
+clients validate the returned slice length and EOF against its total size.
 
 Endpoint identity continuity follows the authority that depends on it. A Home endpoint is durable
 first-contact descriptor authority, so lost or changed Home key material fails closed through the
@@ -685,16 +687,19 @@ viewer ever published the hosted preview. Other revocation failures retain the l
 Web panes opt in to the [cooperative collector bootstrap](./browser-automation-verb-matrix.md#browser-context-and-model-images-development)
 on isolated host-origin previews. The server adapter authorizes loader requests through the same
 preview access route, strips collector configuration before forwarding upstream, and transforms
-only opted-in HTML responses. It decodes supported upstream compression using the preview's
-existing response-body budget, preserves CSP, and leaves non-HTML transport bytes streaming.
+HTML responses for those pane navigations. It decodes supported upstream compression using the preview's
+existing response-body budget, retains only the HTML head for CSP admission, then streams the shell
+and subsequent body without waiting for EOF. Non-HTML transport bytes remain streaming.
 Same-preview redirects retain the navigation identity; external redirects never receive it.
 The injected loader tag is root-relative: it is requested from the document it is injected into, so it carries no scheme
 that a TLS terminator could get wrong, and the CSP admission compares against that document's own https preview origin.
 The loader and UI/native/desktop injection share one collector generator rather than copies.
-The pane's own document also sets a relay-owned binding cookie (never forwarded to or settable by
-the application). Later in-frame HTML documents of that preview carry only the navigation
-reporter, selected by that cookie on iframe document requests: it reports history position, loading
-and its page URL to the embedding host and obeys back, forward and stop from that host only, while
+Later admitted iframe HTML documents carry only the navigation reporter. It requests its identity
+from its actual embedding pane; the host checks the exact iframe window and preview origin before
+returning the current collector identity. No origin-wide cookie selects a pane. Retired development
+collector cookies remain stripped from upstream requests; preview admission cookies keep their
+separate access role. The reporter sends history position, loading and its page URL to the embedding
+host and obeys back, forward and stop from that host only, while
 page automation and diagnostics stay with the pane's own document. A web iframe offers
 Back, Forward and Stop for relay previews through that reporter; every other framed page keeps Reload.
 
@@ -791,6 +796,11 @@ host iframe on Tauri. Native admission reads the captured requester Account's ef
 TCP preferences before minting and before dialing. The logical view identity bounds lease custody;
 server-only `previewToken` admissions are removed from native navigation.
 An unavailable native carrier falls back to the canonical server URL where one exists. A native
+guest's terminal mux signal also retires an already-acquired UI lease and enters that same fallback
+owner, preserving the current in-preview path. `waitMachineTunnelClosed` observes the guest task's
+existing lifetime through the native lifecycle boundary; it adds no polling or retry timer. Native
+bindings without terminal observation cannot serve this guest-preview path and use server fallback.
+A native
 viewer obtains a fresh one-use URL through the same access route's strict `server_preview` mode
 when it enters active fallback, rather than replaying an expired snapshot admission. This mode
 uses current registration authorization (Session READ or the exact current Service witness),

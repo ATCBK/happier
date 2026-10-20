@@ -1,7 +1,6 @@
 import type { LocalServicePreviewResourceV1 } from "@happier-dev/protocol";
 import type { LocalServicePreviewHttpHeaders } from "./httpAdapter.js";
 import { isSafeLocalServiceHeaderField } from "./requestTarget.js";
-import { COOPERATIVE_COLLECTOR_BINDING_COOKIE } from "../../browser/collector/cooperative.js";
 
 function headerName(value: string): string {
     return value.trim().toLowerCase();
@@ -22,7 +21,8 @@ export function readPreviewHeader(headers: LocalServicePreviewHttpHeaders, name:
 
 /** Cookies the relay owns for a preview; they never reach, or are set by, the previewed application. */
 export function isPreviewAuthorityCookie(name: string): boolean {
-    return name === "happier_preview_token" || name === "happier_public_token" || name === COOPERATIVE_COLLECTOR_BINDING_COOKIE;
+    // Retired development collector cookies can still be in a browser jar; never disclose them upstream.
+    return name === "happier_preview_token" || name === "happier_public_token" || name === "happier_preview_collector";
 }
 
 export function previewTargetUrl(preview: LocalServicePreviewResourceV1): URL {

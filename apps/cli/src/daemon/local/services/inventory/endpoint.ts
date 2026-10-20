@@ -178,7 +178,7 @@ export function createLocalServiceEndpointEnricher(
         if (entry.classification?.kind === 'happier') return null;
         const host = endpointHostForEntry(entry);
         if (!host) return null;
-        const cacheKey = `${host}:${entry.port}`;
+        const cacheKey = JSON.stringify([entry.id, host, entry.port]);
         const now = params.now();
         const cached = readCached(cache, cacheKey, now);
         // An inconclusive cached observation must never refuse an explicit Open.

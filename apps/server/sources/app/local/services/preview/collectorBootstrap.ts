@@ -1,18 +1,16 @@
-import { Readable } from 'node:stream';
 import { STATUS_CODES } from 'node:http';
-import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
-import { parse, type DefaultTreeAdapterMap } from 'parse5';
+import type { DefaultTreeAdapterMap } from 'parse5';
 import { INJECTED_CONSOLE_TEXT_MAX_LENGTH, INJECTED_OWNER_VALUE_MAX_LENGTH } from '@happier-dev/protocol/browser/diagnostics/egress/classifier';
 import { SAFE_TELEMETRY_HEADER_NAMES } from '@happier-dev/protocol/browser/diagnostics/egress/headers';
 import { buildCooperativeNavigationRuntimeScript, buildInjectedBrowserDiagnosticsRuntimeScript } from '@happier-dev/peer-mediation/browser/collector/build';
 import {
     COOPERATIVE_COLLECTOR_QUERY, COOPERATIVE_COLLECTOR_STATE_QUERY, COOPERATIVE_COLLECTOR_LOADER_PATH,
-    COOPERATIVE_COLLECTOR_NAVIGATION_QUERY, COOPERATIVE_COLLECTOR_BINDING_COOKIE,
-    type CooperativeCollectorConfig, parseCooperativeCollectorConfig, stripCooperativeCollectorQuery, buildCooperativeCollectorNavigationUrl,
+    COOPERATIVE_COLLECTOR_NAVIGATION_QUERY,
+    parseCooperativeCollectorConfig, stripCooperativeCollectorQuery, buildCooperativeCollectorNavigationUrl,
 } from '@happier-dev/peer-mediation/browser/collector/cooperative';
 import type { LocalServicePreviewHttpResponseHeaders } from '@happier-dev/peer-mediation/localServices/preview/httpAdapter';
 import type { ProxyLocalServicePreviewHttpRequestInput } from './httpAdapter';
-import { scopedLocalServiceViewerTokenCookie } from '../viewerCookie';
+import { createCollectorHtmlStream } from './collectorHtmlStream';
 
 function header(headers: LocalServicePreviewHttpResponseHeaders, name: string): string {
     const value = headers[name];
@@ -45,8 +43,7 @@ function permitsLoader(policy: string, loader: URL): boolean {
     });
 }
 
-function htmlAdmission(html: string, policy: string, loader: URL): { allowed: boolean; offset: number } {
-    const tree = parse(html, { sourceCodeLocationInfo: true });
+function htmlAdmission(tree: DefaultTreeAdapterMap['document'], policy: string, loader: URL): { allowed: boolean; offset: number } {
     const element = tree.childNodes.find((node) => 'tagName' in node && node.tagName === 'html');
     const head = element && 'childNodes' in element ? element.childNodes.find((node) => 'tagName' in node && node.tagName === 'head') : undefined;
     let allowed = permitsLoader(policy, loader);
@@ -61,38 +58,13 @@ function htmlAdmission(html: string, policy: string, loader: URL): { allowed: bo
     if (head) visit(head);
     const location = head && 'tagName' in head ? head.sourceCodeLocation : undefined;
     const rootLocation = element && 'tagName' in element ? element.sourceCodeLocation : undefined;
-    return { allowed, offset: location?.endTag?.startOffset ?? location?.startTag?.endOffset ?? rootLocation?.startTag?.endOffset ?? 0 };
-}
-
-async function decodeBody(chunks: Uint8Array[], encoding: string, maxBytes: number | undefined): Promise<Buffer> {
-    const decoder = encoding === 'gzip' ? createGunzip() : encoding === 'deflate' ? createInflate() : encoding === 'br' ? createBrotliDecompress() : null;
-    if (!decoder) return Buffer.concat(chunks);
-    const bytes: Uint8Array[] = [];
-    let size = 0;
-    for await (const chunk of Readable.from(chunks).pipe(decoder)) {
-        size += chunk.length;
-        if (maxBytes !== undefined && size > maxBytes) {
-            decoder.destroy();
-            throw new Error('response_body_too_large');
-        }
-        bytes.push(chunk);
-    }
-    return Buffer.concat(bytes);
-}
-
-/**
- * An in-frame document request carries no per-navigation query. The pane's binding cookie, set by the
- * document that did, names the pane it belongs to; only an iframe document request is eligible.
- */
-function readBoundCollectorConfig(input: ProxyLocalServicePreviewHttpRequestInput): CooperativeCollectorConfig | null {
-    if (input.request.method !== 'GET' || input.preview.originMode !== 'host' || input.request.headers['sec-fetch-dest'] !== 'iframe') return null;
-    const cookies = input.request.headers.cookie;
-    for (const entry of (typeof cookies === 'string' ? cookies : (cookies ?? []).join(';')).split(';')) {
-        const [name, ...value] = entry.trim().split('=');
-        if (name !== COOPERATIVE_COLLECTOR_BINDING_COOKIE) continue;
-        try { return parseCooperativeCollectorConfig(decodeURIComponent(value.join('='))); } catch { return null; }
-    }
-    return null;
+    const body = element && 'childNodes' in element ? element.childNodes.find((node) => 'tagName' in node && node.tagName === 'body') : undefined;
+    const bodyLocation = body && 'tagName' in body ? body.sourceCodeLocation : undefined;
+    const doctypeEnd = tree.childNodes.find((node) => node.nodeName === '#documentType')?.sourceCodeLocation?.endOffset;
+    // An implicit head/root has no tag location. Keep the doctype before the loader,
+    // otherwise an otherwise standards-mode page would switch to quirks mode.
+    return { allowed, offset: location?.endTag?.startOffset ?? location?.endOffset
+        ?? bodyLocation?.startTag?.startOffset ?? rootLocation?.startTag?.endOffset ?? doctypeEnd ?? 0 };
 }
 
 /**
@@ -115,9 +87,12 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
     const query = new URLSearchParams(input.request.search);
     const probe = query.get(COOPERATIVE_COLLECTOR_STATE_QUERY) === '1';
     const hasCollectorConfig = query.has(COOPERATIVE_COLLECTOR_QUERY);
-    const boundConfig = hasCollectorConfig || probe ? null : readBoundCollectorConfig(input);
-    if (!hasCollectorConfig && !probe && !boundConfig) return input;
-    const config = boundConfig ?? parseCooperativeCollectorConfig(query.get(COOPERATIVE_COLLECTOR_QUERY));
+    // Later iframe documents learn their identity from their actual embedding frame, never a cookie.
+    const navigationOnly = !hasCollectorConfig && input.preview.originMode === 'host' &&
+        (input.request.headers['sec-fetch-dest'] === 'iframe' || (input.request.path === COOPERATIVE_COLLECTOR_LOADER_PATH
+            && query.get(COOPERATIVE_COLLECTOR_NAVIGATION_QUERY) === '1'));
+    if (!hasCollectorConfig && !probe && !navigationOnly) return input;
+    const config = parseCooperativeCollectorConfig(query.get(COOPERATIVE_COLLECTOR_QUERY));
     const respond = async (status: number, body: string, headers: LocalServicePreviewHttpResponseHeaders) => {
         input.response.writeHead(status, STATUS_CODES[status] ?? '', { 'cache-control': 'no-store', ...headers });
         await input.response.write(Buffer.from(body));
@@ -127,16 +102,16 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
         await respond(400, JSON.stringify({ state: 'runtime_unavailable' }), { 'content-type': 'application/json' });
         return null;
     }
-    if (config && input.request.path === COOPERATIVE_COLLECTOR_LOADER_PATH) {
-        if (input.request.method !== 'GET' || query.get('n') !== config.collector.nonce) {
+    if ((config || navigationOnly) && input.request.path === COOPERATIVE_COLLECTOR_LOADER_PATH) {
+        if (input.request.method !== 'GET' || (config && query.get('n') !== config.collector.nonce)) {
             await respond(400, JSON.stringify({ state: 'collector_mismatch' }), { 'content-type': 'application/json' });
             return null;
         }
-        const runtimeConfig = JSON.stringify({
+        const runtimeConfig = config ? JSON.stringify({
             ...config, cooperativePreview: true,
             ...(config.ownerConsoleValueCapture ? { consoleTextMaxLength: INJECTED_CONSOLE_TEXT_MAX_LENGTH } : {}),
             ...(config.ownerDiagnosticsValueCapture ? { ownerValueMaxLength: INJECTED_OWNER_VALUE_MAX_LENGTH, safeTelemetryHeaderNames: [...SAFE_TELEMETRY_HEADER_NAMES] } : {}),
-        }).replace(/</g, '\\u003c');
+        }).replace(/</g, '\\u003c') : 'null';
         const script = query.get(COOPERATIVE_COLLECTOR_NAVIGATION_QUERY) === '1'
             ? buildCooperativeNavigationRuntimeScript(runtimeConfig)
             : buildInjectedBrowserDiagnosticsRuntimeScript(runtimeConfig);
@@ -169,13 +144,14 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
     if (config) {
         loader.searchParams.set('n', config.collector.nonce);
         loader.searchParams.set(COOPERATIVE_COLLECTOR_QUERY, JSON.stringify(config));
-        // An in-frame document reports and obeys navigation only; the pane's own document keeps the full collector.
-        if (boundConfig) loader.searchParams.set(COOPERATIVE_COLLECTOR_NAVIGATION_QUERY, '1');
     }
+    if (navigationOnly) loader.searchParams.set(COOPERATIVE_COLLECTOR_NAVIGATION_QUERY, '1');
     let status = 0;
     let message = '';
     let headers: LocalServicePreviewHttpResponseHeaders = {};
     let collectHtml = false;
+    let htmlStream: ReturnType<typeof createCollectorHtmlStream> | undefined;
+    let state = 'runtime_unavailable';
     let transportUnavailable = false;
     let probeRedirect: string | undefined;
     const chunks: Uint8Array[] = [];
@@ -186,7 +162,29 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
         }, response: {
         writeHead(code, statusMessage, value) {
             status = code; message = statusMessage; headers = value;
-            collectHtml = config !== null && code === 200 && /^text\/html(?:;|$)/i.test(header(value, 'content-type'));
+            collectHtml = (config !== null || navigationOnly) && code === 200 && /^text\/html(?:;|$)/i.test(header(value, 'content-type'));
+            if (collectHtml) {
+                const encoding = header(headers, 'content-encoding').trim().toLowerCase();
+                const charset = /charset\s*=\s*["']?([^;"'\s]+)/i.exec(header(headers, 'content-type'))?.[1] ?? 'utf-8';
+                let decoder: TextDecoder | undefined;
+                try { decoder = new TextDecoder(charset); } catch { /* Unsupported charsets stream unchanged. */ }
+                if (decoder && ['', 'identity', 'gzip', 'deflate', 'br'].includes(encoding)) {
+                    htmlStream = createCollectorHtmlStream({ encoding, decoder, maxBytes: input.preview.policy?.maxResponseBodyBytes,
+                        admitHead(html, tree) {
+                            const admission = htmlAdmission(tree, header(headers, 'content-security-policy'), loader);
+                            state = admission.allowed ? 'collector_available' : 'collector_blocked_by_csp';
+                            const nextHeaders: Record<string, string | readonly string[]> = { ...headers, 'x-happier-collector-state': state };
+                            for (const name of ['content-encoding', 'content-length', 'etag', 'content-md5', 'digest']) delete nextHeaders[name];
+                            nextHeaders['content-type'] = 'text/html; charset=utf-8';
+                            nextHeaders['cache-control'] = 'no-store';
+                            if (!probe) input.response.writeHead(status, message, nextHeaders);
+                            const tag = `<script defer src="${(loader.pathname + loader.search).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`;
+                            return admission.allowed ? html.slice(0, admission.offset) + tag + html.slice(admission.offset) : html;
+                        },
+                        write: (chunk) => { if (!probe) return input.response.write(chunk); },
+                    });
+                } else if (!probe) input.response.writeHead(status, message, { ...headers, 'x-happier-collector-state': state });
+            }
             if (!collectHtml) {
                 const location = header(value, 'location');
                 if (code >= 300 && code < 400 && location) {
@@ -195,7 +193,7 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                         if (next.origin === origin) {
                             // Redirects within the admitted preview retain this navigation's identity;
                             // an external destination must never receive it.
-                            const admitted = new URL(config && !boundConfig ? buildCooperativeCollectorNavigationUrl(next.href, config) : next.href);
+                            const admitted = new URL(config ? buildCooperativeCollectorNavigationUrl(next.href, config) : next.href);
                             if (probe) {
                                 admitted.search += `${admitted.search ? '&' : '?'}${COOPERATIVE_COLLECTOR_STATE_QUERY}=1`;
                                 probeRedirect = admitted.pathname + admitted.search + admitted.hash;
@@ -208,29 +206,12 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
             }
         },
         async write(chunk) {
-            if (collectHtml || (probe && transportUnavailable)) chunks.push(chunk);
+            if (htmlStream) await htmlStream.write(chunk);
+            else if (probe && transportUnavailable) chunks.push(chunk);
             else if (!probe) await input.response.write(chunk);
         },
         async end() {
-            let state = 'runtime_unavailable';
-            let output: Buffer | undefined;
-            if (collectHtml) {
-                const encoding = header(headers, 'content-encoding').trim().toLowerCase();
-                const charset = /charset\s*=\s*["']?([^;"'\s]+)/i.exec(header(headers, 'content-type'))?.[1] ?? 'utf-8';
-                if (['', 'identity', 'gzip', 'deflate', 'br'].includes(encoding)) {
-                    const body = await decodeBody(chunks, encoding, input.preview.policy?.maxResponseBodyBytes);
-                    let html: string | undefined;
-                    try { html = new TextDecoder(charset, { fatal: true }).decode(body); } catch { /* Preserve unsupported encodings without injection. */ }
-                    if (html !== undefined) {
-                        const admission = htmlAdmission(html, header(headers, 'content-security-policy'), loader);
-                        state = admission.allowed ? 'collector_available' : 'collector_blocked_by_csp';
-                        if (admission.allowed) {
-                            const tag = `<script defer src="${(loader.pathname + loader.search).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`;
-                            output = Buffer.from(html.slice(0, admission.offset) + tag + html.slice(admission.offset));
-                        }
-                    }
-                }
-            }
+            await htmlStream?.end();
             if (probe) {
                 // Preserve the proxy's typed refusal, not an application's error body. The existing
                 // transport callback is authoritative; status or JSON supplied by the app is not.
@@ -240,24 +221,8 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                     ...(parentOrigin ? { 'access-control-allow-origin': parentOrigin, 'access-control-allow-credentials': 'true' } : {}), 'vary': 'Origin' });
                 return;
             }
-            if (collectHtml) {
-                const nextHeaders: Record<string, string | readonly string[]> = { ...headers, 'x-happier-collector-state': state };
-                if (output) {
-                    for (const name of ['content-encoding', 'content-length', 'etag', 'content-md5', 'digest']) delete nextHeaders[name];
-                    nextHeaders['content-type'] = 'text/html; charset=utf-8';
-                    nextHeaders['cache-control'] = 'no-store';
-                    // The pane's own document binds later in-frame documents to this identity.
-                    if (config && hasCollectorConfig) {
-                        const binding = scopedLocalServiceViewerTokenCookie({ name: COOPERATIVE_COLLECTOR_BINDING_COOKIE, path: '/', value: JSON.stringify(config) });
-                        const existing = nextHeaders['set-cookie'];
-                        nextHeaders['set-cookie'] = [...(Array.isArray(existing) ? existing : existing ? [existing] : []), binding];
-                    }
-                }
-                input.response.writeHead(status, message, nextHeaders);
-                await input.response.write(output ?? Buffer.concat(chunks));
-            }
             await input.response.end();
         },
-        destroy: (error) => input.response.destroy(error),
+        destroy(error) { htmlStream?.destroy(error); input.response.destroy(error); },
     } };
 }

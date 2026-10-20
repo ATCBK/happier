@@ -4,7 +4,18 @@ import {
     buildLocalServiceEndpointUrl,
     createLocalServiceEndpointEnricher,
 } from './endpoint';
-import type { NormalizedLocalServiceInventoryEntry } from './scanner';
+import { normalizeLocalServiceScan, type NormalizedLocalServiceInventoryEntry } from './scanner';
+
+function listenerEntry(pid: number, processStartTimeMs: number, now = 2_000): NormalizedLocalServiceInventoryEntry {
+    const snapshot = normalizeLocalServiceScan({
+        machineId: 'machine-a', now, previous: null, workspaces: [], ownership: [],
+        listeners: [{ address: '127.0.0.1', port: 8443, protocol: 'tcp', pid }],
+        processes: new Map([[pid, { pid, processStartTimeMs, command: 'server' }]]),
+    });
+    const listener = snapshot.entries[0];
+    if (!listener) throw new Error('Expected a normalized listener');
+    return listener;
+}
 
 function entry(overrides: Partial<NormalizedLocalServiceInventoryEntry> = {}): NormalizedLocalServiceInventoryEntry {
     return {
@@ -28,6 +39,68 @@ function entry(overrides: Partial<NormalizedLocalServiceInventoryEntry> = {}): N
 }
 
 describe('local service endpoint facts', () => {
+    it.each([
+        { replacement: 'another process', pid: 202, start: 1_000 },
+        { replacement: 'the same PID with a new start time', pid: 101, start: 1_500 },
+    ])('reprobes a port taken over by $replacement before the cache expires', async ({ pid, start }) => {
+        let scheme = 'http';
+        const enricher = createLocalServiceEndpointEnricher({
+            now: () => 2_000, timeoutMs: 50, concurrency: 1,
+            successTtlMs: 1_000, failureTtlMs: 1_000,
+            probe: async (input) => input.scheme === scheme,
+        });
+        const original = listenerEntry(101, 1_000);
+        expect(await enricher.resolve(original)).toMatchObject({ scheme: 'http', probeState: 'ready' });
+
+        scheme = 'https';
+        const replacement = listenerEntry(pid, start);
+        expect(await enricher.resolve(replacement)).toMatchObject({ scheme: 'https', probeState: 'ready' });
+    });
+
+    it('does not reuse a failed observation for a replacement listener during inventory enrichment', async () => {
+        let ready = false;
+        const enricher = createLocalServiceEndpointEnricher({
+            now: () => 2_000, timeoutMs: 50, concurrency: 1,
+            successTtlMs: 1_000, failureTtlMs: 1_000,
+            probe: async () => ready,
+        });
+        const snapshot = {
+            v: 1 as const, machineId: 'machine-a', generatedAt: 2_000, refreshState: 'idle' as const,
+            entries: [listenerEntry(101, 1_000)], diagnostics: [],
+        };
+        expect((await enricher.enrich(snapshot)).entries[0]?.endpoint).toMatchObject({
+            scheme: 'unknown', probeState: 'unknown', reasonCode: 'endpoint_probe_failed',
+        });
+
+        ready = true;
+        const replacement = await enricher.enrich({ ...snapshot, entries: [listenerEntry(202, 1_500)] });
+        expect(replacement.entries[0]?.endpoint).toMatchObject({ scheme: 'https', probeState: 'ready' });
+    });
+
+    it.each(['http', 'unknown'])('reuses a cached %s observation for an unchanged listener', async (scheme) => {
+        let now = 2_000;
+        let observedScheme = scheme;
+        const enricher = createLocalServiceEndpointEnricher({
+            now: () => now, timeoutMs: 50, concurrency: 1,
+            successTtlMs: 1_000, failureTtlMs: 1_000,
+            probe: async (input) => input.scheme === observedScheme,
+        });
+        const snapshot = {
+            v: 1 as const, machineId: 'machine-a', generatedAt: now, refreshState: 'idle' as const,
+            entries: [listenerEntry(101, 1_000, now)], diagnostics: [],
+        };
+        const first = await enricher.enrich(snapshot);
+        expect(first.entries[0]?.endpoint?.scheme).toBe(scheme);
+
+        now += 1;
+        observedScheme = 'https';
+        const refreshed = await enricher.enrich({
+            ...snapshot, generatedAt: now, entries: [listenerEntry(101, 1_000, now)],
+        });
+        expect(refreshed.entries[0]?.endpoint).toEqual(first.entries[0]?.endpoint);
+        expect(refreshed.entries[0]?.endpoint?.probedAt).toBe(2_000);
+    });
+
     it('preserves internal listener inventory without probing a Happier control endpoint', async () => {
         const probes: number[] = [];
         const enricher = createLocalServiceEndpointEnricher({

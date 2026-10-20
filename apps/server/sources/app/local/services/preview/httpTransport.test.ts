@@ -1,4 +1,4 @@
-import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
 import { connect } from "node:net";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
@@ -17,6 +17,8 @@ import { registerLocalServicePreviewRoutes } from "@/app/api/routes/local/servic
 import { registerLocalServicePublicRoutes } from "@/app/api/routes/local/services/public/registerRoutes";
 import { proxyLocalServicePreviewWebSocketUpgrade } from "./websocketAdapter";
 import { runInNewContext } from 'node:vm';
+import { createLocalServicePublicRuntime } from '../public/runtime';
+import { LocalServicePublicExposureV1Schema, LocalServicePublicPreviewSnapshotV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -85,7 +87,208 @@ async function echoRequest(request: import("node:http").IncomingMessage, respons
     }
 }
 
+describe('public preview sharing and withdrawal through real routes', () => {
+    async function publicApp(fixture: Awaited<ReturnType<typeof upstream>>) {
+        let now = 1_000;
+        let auditAvailable = true;
+        let nextExposure = 0;
+        const runtime = createLocalServicePublicRuntime({
+            publicBaseUrl: 'https://home.example.test', hostOriginBaseDomain: 'preview.example.test', tokenSecret: 'fixture-key',
+            policy: { enabled: true, allowedModes: ['secret_link', 'authenticated'], maxTtlMs: 60_000, maxConcurrentExposures: 2,
+                dnsTlsRequired: false, auditRequired: true, rateLimitProfileIds: ['default'] },
+            nowMs: () => now, generateExposureId: () => `share-${++nextExposure}`, auditSinkDurable: true,
+            recordAuditEvent() { if (!auditAvailable) throw new Error('audit boundary unavailable'); },
+            checkRateLimit: () => true, resolvePreview: () => fixture.preview,
+        });
+        const app = Fastify();
+        // Account identity and access live outside this process; all route/runtime/transport logic stays real.
+        app.decorate('authenticate', async (request: object) => {
+            Object.assign(request, { userId: 'owner', authAuthority: 'present_user' });
+        });
+        registerLocalServicePublicRoutes(app as never, {
+            ...runtime, resolvePreview: () => fixture.preview, getStatus: runtime.getSnapshot,
+            authorizeSessionAccess: ({ userId }) => userId === 'owner', openTunnel: fixture.openTunnel,
+        });
+        const create = async (mode: 'secret_link' | 'authenticated' = 'secret_link') => {
+            const response = await app.inject({ method: 'POST', url: '/v1/local-services/public', payload: {
+                machineId: fixture.preview.machineId, sessionId: fixture.preview.sessionId, previewId: fixture.preview.previewId,
+                mode, ttlMs: 60_000, rateLimitProfileId: 'default', confirmation: { acknowledged: true },
+            } });
+            expect(response.statusCode).toBe(201);
+            return LocalServicePublicExposureV1Schema.parse(response.json().exposure);
+        };
+        const status = async () => {
+            const response = await app.inject({ method: 'POST', url: '/v1/local-services/public/status', payload: {
+                machineId: fixture.preview.machineId, sessionId: fixture.preview.sessionId, previewId: fixture.preview.previewId,
+            } });
+            expect(response.statusCode).toBe(200);
+            return LocalServicePublicPreviewSnapshotV1Schema.parse(response.json().snapshot);
+        };
+        const visit = async (url: string) => {
+            const parsed = new URL(url);
+            const response = await app.inject({ url: `${parsed.pathname}${parsed.search}`, headers: { host: parsed.host } });
+            expect(response.statusCode).toBe(303);
+            expect(String(response.headers.location).includes('publicToken')).toBe(false);
+            const cookie = String(response.headers['set-cookie']);
+            expect(cookie.includes('HttpOnly')).toBe(true);
+            expect(cookie.includes('Secure')).toBe(true);
+            expect(cookie.includes('Partitioned')).toBe(true);
+            expect(cookie.includes('Domain=')).toBe(false);
+            return { host: parsed.host, cookie: cookie.split(';')[0]! };
+        };
+        const revoke = (exposure: ReturnType<typeof LocalServicePublicExposureV1Schema.parse>) => app.inject({
+            method: 'DELETE', url: `/v1/local-services/public/${exposure.exposureId}`, payload: {
+                machineId: fixture.preview.machineId, sessionId: fixture.preview.sessionId, previewId: fixture.preview.previewId,
+                exposureId: exposure.exposureId,
+            },
+        });
+        return { app, runtime, create, status, visit, revoke,
+            expire() { now = 61_000; }, failAudit() { auditAvailable = false; } };
+    }
+
+    it('keeps the owner-opened copied link usable by two cookie jars until expiry or revoke', async () => {
+        const seen: { credential: boolean; search: string }[] = [];
+        const fixture = await upstream((request, response) => {
+            seen.push({ credential: Boolean(request.headers.cookie?.includes('happier_public_token')), search: request.url ?? '' });
+            response.end('application');
+        });
+        const test = await publicApp(fixture);
+        try {
+            const exposure = await test.create();
+            const ownerJar = await test.visit(exposure.publicUrl);
+            const firstCopy = (await test.status()).exposures[0]!.publicUrl;
+            expect(firstCopy === exposure.publicUrl).toBe(true);
+            const visitorJar = await test.visit(firstCopy);
+            const repeatCopy = (await test.status()).exposures[0]!.publicUrl;
+            expect(repeatCopy === firstCopy).toBe(true);
+            for (const jar of [ownerJar, visitorJar, await test.visit(repeatCopy)]) {
+                const response = await test.app.inject({ url: `/v1/local-services/public/${exposure.exposureId}/asset?valid=1`, headers: jar });
+                expect(response.statusCode).toBe(200);
+                expect(response.body).toBe('application');
+            }
+            expect(seen).toEqual(Array.from({ length: 3 }, () => ({ credential: false, search: '/asset?valid=1' })));
+            const second = await test.create();
+            const wrongJar = await test.app.inject({ url: `/v1/local-services/public/${second.exposureId}/asset`, headers: { ...ownerJar, host: new URL(second.publicUrl).host } });
+            expect(wrongJar.statusCode).toBe(403);
+            expect((await test.revoke(second)).statusCode).toBe(200);
+            expect((await test.app.inject({ url: new URL(second.publicUrl).pathname + new URL(second.publicUrl).search,
+                headers: { host: new URL(second.publicUrl).host } })).statusCode).toBe(403);
+            test.expire();
+            for (const headers of [ownerJar, visitorJar]) expect((await test.app.inject({ url: `/v1/local-services/public/${exposure.exposureId}/asset`, headers })).statusCode).toBe(403);
+            expect((await test.app.inject({ url: new URL(firstCopy).pathname + new URL(firstCopy).search,
+                headers: { host: ownerJar.host } })).statusCode).toBe(403);
+            expect((await test.status()).exposures.find((item) => item.exposureId === exposure.exposureId)?.state).toBe('expired');
+        } finally { await test.app.close(); }
+    });
+
+    it.each(['revoke', 'expire'] as const)('closes retained HTTP and WebSocket transports on %s even when auditing fails', async (action) => {
+        const fixture = await upstream((_request, response) => {
+            response.writeHead(200, { 'content-type': 'text/event-stream' });
+            response.write('data: retained\n\n');
+        });
+        const upstreamServer = servers.at(-1)!;
+        const upgrades: import('node:stream').Duplex[] = [];
+        upstreamServer.on('upgrade', (request, socket) => {
+            upgrades.push(socket);
+            const accept = createHash('sha1').update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+            socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+        });
+        const test = await publicApp(fixture);
+        const clients: import('node:net').Socket[] = [];
+        let request: ReturnType<typeof httpRequest> | undefined;
+        try {
+            const exposure = await test.create();
+            const jar = await test.visit(exposure.publicUrl);
+            await test.app.listen({ port: 0, host: '127.0.0.1' });
+            const address = test.app.server.address();
+            if (!address || typeof address === 'string') throw new Error('missing proxy TCP address');
+            const response = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+                request = httpRequest({ host: '127.0.0.1', port: address.port, path: `/v1/local-services/public/${exposure.exposureId}/stream`, headers: jar }, resolve);
+                request.on('error', reject); request.end();
+            });
+            response.on('error', () => {});
+            response.resume();
+            const httpClosed = new Promise<void>((resolve) => response.once('close', resolve));
+            const ws = connect(address.port, '127.0.0.1'); clients.push(ws);
+            await once(ws, 'connect');
+            ws.write(`GET /v1/local-services/public/${exposure.exposureId}/socket HTTP/1.1\r\nHost: ${jar.host}\r\nCookie: ${jar.cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+            const [handshake] = await once(ws, 'data');
+            expect(String(handshake).includes('101 Switching Protocols')).toBe(true);
+            const wsClosed = once(ws, 'close');
+            test.failAudit();
+            if (action === 'revoke') {
+                const revoked = await test.revoke(exposure);
+                expect(revoked.json().reasonCode).toBe('audit_sink_unavailable');
+            } else test.expire();
+            const snapshot = await test.status();
+            expect(snapshot.exposures[0]?.state).toBe(action === 'revoke' ? 'revoked' : 'expired');
+            expect(snapshot.diagnostics.some((item) => item.details?.reasonCode === 'audit_sink_unavailable')).toBe(true);
+            await Promise.all([httpClosed, wsClosed]);
+            expect((await test.app.inject({ url: `/v1/local-services/public/${exposure.exposureId}/asset`, headers: jar })).statusCode).toBe(403);
+        } finally {
+            request?.destroy();
+            for (const socket of clients) socket.destroy();
+            for (const socket of upgrades) socket.destroy();
+            // Destroying retained requests also closes their upstream tunnel sockets.
+            test.runtime.revokeExposure('share-1', { actorId: 'owner' });
+            test.app.server.closeAllConnections();
+            await test.app.close();
+        }
+    });
+});
+
 describe("preview native HTTP transport", () => {
+    it.each(['identity', 'gzip', 'deflate', 'br'] as const)('delivers the cooperative HTML shell before upstream EOF (%s)', async (encoding) => {
+        const { createGzip, createDeflate, createBrotliCompress, constants } = await import('node:zlib');
+        let finish: (() => void) | undefined;
+        let shellDelivered = false;
+        let headersDelivered = false;
+        const fixture = await upstream((_request, response) => {
+            response.setHeader('content-type', 'text/html; charset=utf-8');
+            response.setHeader('content-security-policy', "script-src 'self'");
+            const compressor = encoding === 'gzip' ? createGzip() : encoding === 'deflate' ? createDeflate()
+                : encoding === 'br' ? createBrotliCompress() : null;
+            if (compressor) { response.setHeader('content-encoding', encoding); compressor.pipe(response); }
+            const output = compressor ?? response;
+            finish = () => { output.end('<p>tail</p></body></html>'); };
+            output.write('<!doctype html><html><head><title>Stream</title></head><body>shell');
+            if (compressor) compressor.flush(encoding === 'br' ? constants.BROTLI_OPERATION_FLUSH : constants.Z_SYNC_FLUSH);
+        });
+        const config = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
+            collector: { collectorId: 'c', nonce: 'n', version: '1.0.0' }, webPostMessageTargetOrigin: 'https://app.example.test' };
+        const chunks: Uint8Array[] = [];
+        const running = proxyLocalServicePreviewHttpRequest({ ...fixture,
+            request: { method: 'GET', path: '/', search: `?__happierCollector=${encodeURIComponent(JSON.stringify(config))}`, headers: { host: 'preview.example.test' } },
+            response: { writeHead() { headersDelivered = true; }, write(chunk) {
+                chunks.push(chunk);
+                shellDelivered = Buffer.concat(chunks).toString().includes('shell');
+            }, end() {}, destroy() {} } });
+        try {
+            await expect.poll(() => shellDelivered, { timeout: 5000 }).toBe(true);
+            expect(headersDelivered).toBe(true);
+            expect(Buffer.concat(chunks).toString()).toContain('collector-loader.js');
+            expect(Buffer.concat(chunks).toString()).not.toContain('tail');
+        } finally { finish?.(); await running; }
+        expect(Buffer.concat(chunks).toString()).toContain('tail');
+    });
+
+    it('preserves standards mode when a cooperative document omits its html and head tags', async () => {
+        const fixture = await upstream((_request, response) => {
+            response.setHeader('content-type', 'text/html');
+            response.end('<!doctype html><body>shell</body>');
+        });
+        const config = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
+            collector: { collectorId: 'c', nonce: 'n', version: '1.0.0' }, webPostMessageTargetOrigin: 'https://app.example.test' };
+        const chunks: Uint8Array[] = [];
+        await proxyLocalServicePreviewHttpRequest({ ...fixture,
+            request: { method: 'GET', path: '/', search: `?__happierCollector=${encodeURIComponent(JSON.stringify(config))}`, headers: { host: 'preview.example.test' } },
+            response: { writeHead() {}, write(chunk) { chunks.push(chunk); }, end() {}, destroy() {} } });
+        const { parse } = await import('parse5');
+        const html = Buffer.concat(chunks).toString();
+        expect(html).toContain('collector-loader.js');
+        expect(parse(html).mode).toBe('no-quirks');
+    });
+
     it.each([
         { collector: true, configured: true, publicExposure: false },
         { collector: false, configured: true, publicExposure: false },
@@ -297,7 +500,7 @@ describe("preview native HTTP transport", () => {
         } finally { await app.close(); }
     });
 
-    it('carries the navigation reporter into every in-frame document of a bound relay preview and obeys only its own pane', async () => {
+    it('binds every in-frame document to its embedding pane across two panes on one preview origin', async () => {
         const upstreamCookies: Array<string | undefined> = [];
         const fixture = await upstream((request, response) => {
             upstreamCookies.push(request.headers.cookie);
@@ -319,7 +522,7 @@ describe("preview native HTTP transport", () => {
             return src ? new URL(src, 'http://preview.example.test') : null;
         };
         // The guest realm: the loader's bytes run against a window whose Navigation API is the browser boundary.
-        const runLoader = (body: string, navigation: Record<string, unknown>) => {
+        const runLoader = (body: string, navigation: Record<string, unknown>, binding = config) => {
             const messages: Array<Record<string, unknown>> = [];
             const parent = { postMessage: (data: string) => messages.push(JSON.parse(data)) };
             const called: string[] = [];
@@ -329,6 +532,12 @@ describe("preview native HTTP transport", () => {
                 localStorage: { length: 0 }, sessionStorage: { length: 0 } });
             runInNewContext(body, { window: guest, document: { title: 'Other', readyState: 'complete', documentElement: { nodeType: 1 }, querySelectorAll: () => [] },
                 console: { log() {}, info() {}, warn() {}, error() {}, debug() {} }, performance: { getEntriesByType: () => [] }, Event, URL });
+            if (messages.some((message) => message.kind === 'browser.collector.bind.request')) {
+                const bind = new Event('message');
+                Object.defineProperties(bind, { data: { value: JSON.stringify({ v: 1, kind: 'browser.collector.bind', config: binding }) },
+                    origin: { value: binding.webPostMessageTargetOrigin }, source: { value: parent } });
+                guest.dispatchEvent(bind);
+            }
             const send = (origin: string, source: unknown, command: string, nonce = config.collector.nonce) => {
                 const event = new Event('message');
                 const data = JSON.stringify({ v: 1, kind: 'browser.collector.navigate', browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1, collectorId: 'c', nonce, command });
@@ -339,12 +548,14 @@ describe("preview native HTTP transport", () => {
         };
         try {
             const entry = await app.inject({ method: 'GET', url: `/?__happierCollector=${encodeURIComponent(JSON.stringify(config))}`, headers: { ...frame, cookie: authorized } });
-            const binding = [entry.headers['set-cookie']].flat().map(String).find((cookie) => cookie.startsWith('happier_preview_collector='));
-            expect(binding).toBeDefined();
-            expect(binding).toContain('HttpOnly');
-            const bound = `${authorized}; ${binding!.split(';')[0]}`;
+            const secondConfig = { ...config, viewId: 'pane-b', collector: { ...config.collector, nonce: 'pane-b-nonce' } };
+            const second = await app.inject({ method: 'GET', url: `/?__happierCollector=${encodeURIComponent(JSON.stringify(secondConfig))}`, headers: { ...frame, cookie: authorized } });
+            for (const initial of [entry, second]) expect([initial.headers['set-cookie']].flat().map(String)
+                .some((cookie) => cookie.startsWith('happier_preview_collector='))).toBe(false);
+            // An older document may have left the other pane's cookie in this shared jar. It has no authority.
+            const bound = `${authorized}; happier_preview_collector=${encodeURIComponent(JSON.stringify(secondConfig))}`;
 
-            // An in-frame link navigation carries no per-navigation query; the pane binding scopes it.
+            // A link navigation carries no per-navigation query. The reporter asks its actual parent.
             const other = await app.inject({ method: 'GET', url: '/other?app=1', headers: { ...frame, cookie: bound } });
             const loaderUrl = loaderOf(other.body);
             expect(loaderUrl).not.toBeNull();
@@ -354,8 +565,12 @@ describe("preview native HTTP transport", () => {
             const loader = await app.inject({ method: 'GET', url: loaderUrl!.pathname + loaderUrl!.search, headers: { host: frame.host, cookie: bound } });
             expect(loader.statusCode).toBe(200);
             const reporter = runLoader(loader.body, { canGoBack: true, canGoForward: false });
+            expect(reporter.messages[0]).toEqual({ v: 1, kind: 'browser.collector.bind.request' });
             expect(reporter.messages).toContainEqual({ v: 1, kind: 'browser.collector.navigation', browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1,
                 collectorId: 'c', nonce: 'pane_nonce', loading: false, canGoBack: true, canGoForward: false, url: 'http://preview.example.test/other?app=1', title: 'Other' });
+            const otherPane = runLoader(loader.body, { canGoBack: false, canGoForward: true }, secondConfig);
+            expect(otherPane.messages).toContainEqual(expect.objectContaining({ kind: 'browser.collector.navigation', viewId: 'pane-b', nonce: 'pane-b-nonce', canGoForward: true }));
+            expect(reporter.messages.some((message) => message.viewId === 'pane-b')).toBe(false);
             // An in-frame document is not re-admitted to page automation: it only reports and obeys navigation.
             expect(reporter.messages.some((message) => message.kind === 'browser.collector.ready')).toBe(false);
             reporter.send('https://evil.example.test', reporter.parent, 'back');
@@ -374,8 +589,8 @@ describe("preview native HTTP transport", () => {
             first.guest.navigation.dispatchEvent(Object.assign(new Event('navigate'), { destination: { sameDocument: false } }));
             expect(first.messages.at(-1)).toMatchObject({ kind: 'browser.collector.navigation', loading: true });
 
-            // No binding, no injection; sub-resources and top-level navigations are never touched.
-            expect(loaderOf((await app.inject({ method: 'GET', url: '/other', headers: { ...frame, cookie: authorized } })).body)).toBeNull();
+            // Only admitted iframe documents get the parent-bound reporter; assets/top-level pages do not.
+            expect(loaderOf((await app.inject({ method: 'GET', url: '/other', headers: { ...frame, cookie: authorized } })).body)).not.toBeNull();
             expect((await app.inject({ method: 'GET', url: '/asset.js', headers: { host: frame.host, 'sec-fetch-dest': 'script', cookie: bound } })).body).toBe('window.asset=1');
             expect(loaderOf((await app.inject({ method: 'GET', url: '/other', headers: { host: frame.host, 'sec-fetch-dest': 'document', cookie: bound } })).body)).toBeNull();
         } finally { await app.close(); }

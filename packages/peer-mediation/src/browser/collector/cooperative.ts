@@ -6,12 +6,19 @@ export const COOPERATIVE_COLLECTOR_STATE_QUERY = '__happierCollectorState';
 export const COOPERATIVE_COLLECTOR_LOADER_PATH = '/__happier/collector-loader.js';
 /** Marks a loader request that serves only the navigation reporter to an in-frame document. */
 export const COOPERATIVE_COLLECTOR_NAVIGATION_QUERY = '__happierCollectorNavigation';
-/**
- * Binds the pane's collector identity to its preview origin. The document loaded with the pane's own
- * query sets it, so later in-frame documents (which carry no query) can report navigation to the same
- * host. It is scoped like the preview admission cookie and never reaches the upstream application.
- */
-export const COOPERATIVE_COLLECTOR_BINDING_COOKIE = 'happier_preview_collector';
+export const COOPERATIVE_NAVIGATION_BIND_REQUEST_KIND = 'browser.collector.bind.request';
+export const COOPERATIVE_NAVIGATION_BIND_KIND = 'browser.collector.bind';
+
+/** No identity is disclosed until the host matches the request to its exact preview frame. */
+export function isCooperativeNavigationBindRequest(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const message = value as Record<string, unknown>;
+    return message.v === 1 && message.kind === COOPERATIVE_NAVIGATION_BIND_REQUEST_KIND && Object.keys(message).length === 2;
+}
+
+export function buildCooperativeNavigationBindMessage(config: CooperativeCollectorConfig): string {
+    return JSON.stringify({ v: 1, kind: COOPERATIVE_NAVIGATION_BIND_KIND, config });
+}
 
 export const COOPERATIVE_NAVIGATION_STATE_KIND = 'browser.collector.navigation';
 export const COOPERATIVE_NAVIGATION_COMMAND_KIND = 'browser.collector.navigate';

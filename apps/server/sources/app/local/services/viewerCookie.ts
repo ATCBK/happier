@@ -1,8 +1,6 @@
-import type { COOPERATIVE_COLLECTOR_BINDING_COOKIE } from '@happier-dev/peer-mediation/browser/collector/cooperative';
-
 /** HTTPS preview cookies stay host-only and scoped to their top-level viewer site. */
 export function scopedLocalServiceViewerTokenCookie(input: Readonly<{
-    name: 'happier_preview_token' | 'happier_public_token' | typeof COOPERATIVE_COLLECTOR_BINDING_COOKIE;
+    name: 'happier_preview_token' | 'happier_public_token';
     path: string;
     value: string;
 }>): string {

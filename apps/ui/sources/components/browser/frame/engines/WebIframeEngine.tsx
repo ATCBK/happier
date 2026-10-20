@@ -26,6 +26,7 @@ import { createWebIframeAutomationOwner } from '../../adapters/automation';
 import {
     COOPERATIVE_COLLECTOR_STATE_QUERY, buildCooperativeCollectorNavigationUrl, buildCooperativeNavigationCommandMessage,
     cooperativeCollectorIdentity, isCooperativeCollectorMessage, parseCooperativeCollectorConfig, parseCooperativeNavigationState,
+    isCooperativeNavigationBindRequest, buildCooperativeNavigationBindMessage,
     type CooperativeNavigationCommand,
 } from '@happier-dev/peer-mediation/browser/collector/cooperative';
 import { withoutPreviewAdmission } from '@/sync/domains/local/services/preview/url';
@@ -281,6 +282,10 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
                 || event.source !== iframeRef.current.contentWindow || typeof event.data !== 'string') return;
             let message: unknown;
             try { message = JSON.parse(event.data); } catch { return; }
+            if (isCooperativeNavigationBindRequest(message)) {
+                iframeRef.current.contentWindow.postMessage(buildCooperativeNavigationBindMessage(cooperativeNavigation.config), cooperativeNavigation.sourceOrigin);
+                return;
+            }
             const state = parseCooperativeNavigationState(message, cooperativeNavigation.config);
             if (!state || normalizePostMessageOrigin(state.url) !== cooperativeNavigation.sourceOrigin) return;
             frameUrlRef.current = state.url;
@@ -363,6 +368,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
                     const message: unknown = JSON.parse(event.data);
                     if (isCooperativeCollectorMessage(message, 'browser.collector.ready', cooperativeNavigation.config)
                         || isCooperativeCollectorMessage(message, 'browser.collector.retire', cooperativeNavigation.config)
+                        || isCooperativeNavigationBindRequest(message)
                         || parseCooperativeNavigationState(message, cooperativeNavigation.config)) return;
                 } catch { /* The diagnostics parser reports malformed messages below. */ }
             }
