@@ -22,6 +22,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   directory: string;
   endpoints: readonly string[];
   nativeLaunches: readonly (readonly string[])[];
+  nativeProcessExits: readonly string[];
   resume(): Promise<unknown>;
   failRead(): void;
   failResume(message: string): void;
@@ -46,7 +47,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   initialProviderBinding?: CodexProviderBindingEngineConfigV1;
   processEnv?: Readonly<Record<string, string | undefined>>;
   skills?: AgentSessionOpenRequest['skills'];
-  startupInstructions?: AgentSessionOpenRequest['startupInstructions'] | null;
+  startupInstructions?: Extract<AgentSessionOpenRequest, { kind: 'create' }>['startupInstructions'] | null;
   appServerTransport?: 'daemonProxy';
   rejectExtraRootsSet?: boolean;
   nativeSpawnFailure?: Error;
@@ -73,6 +74,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const endpoints: string[] = [];
   const nativeLaunches: (readonly string[])[] = [];
+  const nativeProcessExits: string[] = [];
   let named = false;
   let materialized = false;
   let goal: Record<string, unknown> | null = null;
@@ -265,13 +267,14 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
           await new Promise<void>((resolve) => nativeWebSockets.close(() => resolve()));
           await new Promise<void>((resolve, reject) => nativeServer.close((error) => error ? reject(error) : resolve()));
           settleExit({ termination: { observed: { kind: 'exit', exitCode: 0 } } });
+          nativeProcessExits.push(endpoint);
           nativeServers.delete(nativeWebSockets);
         },
       };
     },
   } as unknown as ExecService;
   try {
-    await run({ runtime, requests, exec: nativeExec, directory: root, endpoints, nativeLaunches, emitNotification,
+    await run({ runtime, requests, exec: nativeExec, directory: root, endpoints, nativeLaunches, nativeProcessExits, emitNotification,
       failNextRevert: (outcome) => { revertFailure = outcome; },
       failRead: () => { rejectRead = true; }, failResume: (message) => { resumeFailure = message; }, async openConfiguredSession(providerSessionId, mcpServers = options.mcpServers) {
       // Exec and host SDK services are genuine external boundaries; native/runtime/client logic stays real.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildConnectedServiceCredentialRecord, StrictJsonValueSchema } from '@happier-dev/protocol';
-import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentExecutionRunConversationEventV1, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createCodexNativeAppServerSessionRuntime } from './native.js';
 import { startCodexAppServerRuntime } from './runtime.js';
@@ -16,6 +16,57 @@ vi.mock('node:os', async importOriginal => {
 });
 
 describe('native Codex attachment preparation', () => {
+  it.skipIf(process.platform === 'win32')('keeps the primary turn active when a completed execution run releases its process', async () => {
+    const nativeTurns = new Map<string, { complete(): void; isOpen(): boolean }>();
+    await withFixture(async ({ openConfiguredSession, openConfiguredRun, endpoints, nativeProcessExits }) => {
+      const primary = await openConfiguredSession();
+      const primaryEvents: AgentSessionRuntimeEvent[] = [];
+      primary.watch(event => primaryEvents.push(AgentSessionRuntimeEventSchema.parse(event)));
+      await expect(primary.send({
+        inputIds: ['primary-input'], input: { text: 'Keep working on the primary task.' },
+        delivery: { kind: 'newTurn', turnId: 'primary-turn' },
+      })).resolves.toMatchObject({ status: 'admitted' });
+
+      const child = await openConfiguredRun();
+      const childEvents: AgentExecutionRunConversationEventV1[] = [];
+      child.watch(event => childEvents.push(event));
+      await expect(child.send({
+        inputIds: ['child-input'], input: { text: 'Complete the delegated task.' },
+        delivery: { kind: 'newTurn', turnId: 'child-turn' },
+      })).resolves.toMatchObject({ status: 'admitted' });
+      await vi.waitFor(() => expect(nativeTurns.has('provider-turn-2')).toBe(true));
+      nativeTurns.get('provider-turn-2')!.complete();
+      await vi.waitFor(() => expect(childEvents).toContainEqual(expect.objectContaining({
+        kind: 'turn-complete', turnId: 'child-turn',
+      })));
+      await child.dispose();
+
+      expect(endpoints).toHaveLength(2);
+      expect(nativeProcessExits).toEqual([endpoints[1]]);
+      expect(nativeTurns.get('provider-turn-1')?.isOpen()).toBe(true);
+      expect(primaryEvents.some(event => event.kind === 'turn-complete')).toBe(false);
+      nativeTurns.get('provider-turn-1')!.complete();
+      await vi.waitFor(() => expect(primaryEvents).toContainEqual(expect.objectContaining({
+        kind: 'turn-complete', turnId: 'primary-turn',
+      })));
+      await expect(primary.send({
+        inputIds: ['primary-followup'], input: { text: 'Continue after the child finished.' },
+        delivery: { kind: 'newTurn', turnId: 'primary-followup-turn' },
+      })).resolves.toMatchObject({ status: 'admitted' });
+      expect(nativeProcessExits).toEqual([endpoints[1]]);
+    }, {
+      onTurnStart: ({ socket, params, turnId }) => {
+        // Deliver each native completion only to its process's connection.
+        nativeTurns.set(turnId, {
+          complete: () => socket.send(JSON.stringify({ method: 'turn/completed', params: {
+            threadId: params.threadId, turn: { id: turnId, status: 'completed' },
+          } })),
+          isOpen: () => socket.readyState === socket.OPEN,
+        });
+      },
+    });
+  });
+
   it('materializes the fresh native thread before any input even without startup instructions', async () => {
     await withFixture(async ({ openConfiguredSession, resume, requests }) => {
       const session = await openConfiguredSession();
