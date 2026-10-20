@@ -85,6 +85,15 @@ function readDevFlag(): boolean {
     return typeof __DEV__ !== 'undefined' && __DEV__ === true;
 }
 
+function resolveCaptureEnabled(enabled: boolean | undefined): boolean {
+    // The CDP QA harness sets this before loading the app. Explicit timing runs
+    // must override even export-time tuning without exposing production configure().
+    const mode = (globalThis as unknown as { __HAPPIER_PERF_CAPTURE_MODE__?: unknown }).__HAPPIER_PERF_CAPTURE_MODE__;
+    if (mode === 'timing') return false;
+    if (mode === 'counts') return true;
+    return enabled === true;
+}
+
 function normalizePositiveNumber(value: unknown, fallback: number): number {
     return typeof value === 'number' && Number.isFinite(value) && value > 0
         ? Math.trunc(value)
@@ -166,7 +175,7 @@ export class SyncPerformanceTelemetry {
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(options?: SyncPerformanceTelemetryOptions) {
-        this.enabled = options?.enabled === true;
+        this.enabled = resolveCaptureEnabled(options?.enabled);
         this.slowThresholdMs = normalizePositiveNumber(options?.slowThresholdMs, DEFAULT_SLOW_THRESHOLD_MS);
         this.flushIntervalMs = normalizePositiveNumber(options?.flushIntervalMs, DEFAULT_FLUSH_INTERVAL_MS);
         this.now = options?.now ?? defaultNow;
@@ -176,7 +185,7 @@ export class SyncPerformanceTelemetry {
 
     configure(options: SyncPerformanceTelemetryOptions): void {
         this.clearFlushTimer();
-        this.enabled = options.enabled === true;
+        this.enabled = resolveCaptureEnabled(options.enabled);
         this.slowThresholdMs = normalizePositiveNumber(options.slowThresholdMs, this.slowThresholdMs);
         this.flushIntervalMs = normalizePositiveNumber(options.flushIntervalMs, this.flushIntervalMs);
         this.emitSummary = options.emitSummary ?? this.emitSummary;
@@ -407,6 +416,7 @@ export function installSyncPerformanceTelemetryGlobal(
 ): void {
     const target = globalThis as unknown as {
         __HAPPIER_SYNC_PERFORMANCE__?: {
+            isEnabled: () => boolean;
             configure?: (options: SyncPerformanceTelemetryGlobalConfigureOptions) => void;
             snapshot: () => SyncPerformanceTelemetrySummary;
             flush: () => SyncPerformanceTelemetrySummary | null;
@@ -415,6 +425,7 @@ export function installSyncPerformanceTelemetryGlobal(
         };
     };
     target.__HAPPIER_SYNC_PERFORMANCE__ = {
+        isEnabled: () => telemetry.isEnabled(),
         snapshot: () => {
             return telemetry.snapshot();
         },

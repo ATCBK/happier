@@ -8,6 +8,28 @@ import {
 } from './syncPerformanceTelemetry';
 
 describe('sync performance telemetry', () => {
+    it('honors explicit pre-boot timing/count capture modes over build tuning and exposes observed enablement', () => {
+        const target = globalThis as typeof globalThis & { __HAPPIER_PERF_CAPTURE_MODE__?: string; __HAPPIER_SYNC_PERFORMANCE__?: { isEnabled?: () => boolean } };
+        const previousMode = target.__HAPPIER_PERF_CAPTURE_MODE__;
+        const previousApi = target.__HAPPIER_SYNC_PERFORMANCE__;
+        try {
+            target.__HAPPIER_PERF_CAPTURE_MODE__ = 'timing';
+            const telemetry = createSyncPerformanceTelemetry({ enabled: true });
+            telemetry.configure({ enabled: true });
+            installSyncPerformanceTelemetryGlobal(telemetry);
+            expect(telemetry.isEnabled()).toBe(false);
+            expect(target.__HAPPIER_SYNC_PERFORMANCE__?.isEnabled?.()).toBe(false);
+            target.__HAPPIER_PERF_CAPTURE_MODE__ = 'counts';
+            telemetry.configure({ enabled: false });
+            expect(telemetry.isEnabled()).toBe(true);
+            target.__HAPPIER_PERF_CAPTURE_MODE__ = 'invalid';
+            telemetry.configure({ enabled: false });
+            expect(telemetry.isEnabled()).toBe(false);
+        } finally {
+            if (previousMode === undefined) delete target.__HAPPIER_PERF_CAPTURE_MODE__; else target.__HAPPIER_PERF_CAPTURE_MODE__ = previousMode;
+            if (previousApi === undefined) delete target.__HAPPIER_SYNC_PERFORMANCE__; else target.__HAPPIER_SYNC_PERFORMANCE__ = previousApi;
+        }
+    });
     afterEach(() => {
         vi.useRealTimers();
     });

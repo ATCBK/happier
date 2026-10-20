@@ -3,7 +3,6 @@ import type { SyncPerformanceTelemetry } from '../runtime/syncPerformanceTelemet
 
 export function observeStoragePerformance<T>(store: UseBoundStore<StoreApi<T>>, telemetry: SyncPerformanceTelemetry): UseBoundStore<StoreApi<T>> {
     const selectors = new WeakMap<(state: T) => unknown, (state: T) => unknown>();
-    let nextSelectorId = 0;
     const identity = (state: T) => state;
 
     // Observe actual Zustand notifications, including writes through the
@@ -17,10 +16,11 @@ export function observeStoragePerformance<T>(store: UseBoundStore<StoreApi<T>>, 
         if (!telemetry.isEnabled()) return store(select);
         let observed = selectors.get(select);
         if (!observed) {
-            // Names are static function identifiers; ids distinguish different
-            // anonymous selectors. Weak keys retain no unmounted closures.
+            // Weak keys preserve wrapper identity without retaining abandoned closures.
             const name = select.name.replace(/[^a-zA-Z0-9_]/g, '') || 'anonymous';
-            const event = `sync.store.storage.selector.${name}.${++nextSelectorId}`;
+            // Inline closures are recreated on every render. Aggregate by name,
+            // not function identity; anonymous selectors deliberately share a bucket.
+            const event = `sync.store.storage.selector.${name}`;
             let initialized = false;
             let previous: T | U;
             observed = (state) => {
