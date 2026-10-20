@@ -847,9 +847,8 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
                 },
             };
 
-            // StructuredReferencesRow resolves its pane scope through
-            // AppPaneProvider (multi-Home-qualified opening), so the harness
-            // provides the same provider the row's own tests use.
+            // Rendering references does not grant file-opening authority;
+            // actionable file journeys are covered with the real Workspace owner.
             const screen = await renderScreen(
                 <AppPaneProvider>
                     <MessageView message={message} metadata={null} sessionId="s1" />
@@ -861,7 +860,7 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         },
     );
 
-    it('keeps structured review jump handlers stable across equivalent parent renders', async () => {
+    it('keeps structured review jumps inert without a mounted workspace owner', async () => {
         const { MessageView } = await import('./MessageView');
         const { ReviewCommentsMessageCard } = await import('../reviews/messages/ReviewCommentsMessageCard');
 
@@ -901,110 +900,7 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
             />
         );
         const screen = await renderScreen(renderMessage());
-        const firstJumpHandler = screen.tree.root.findByType(ReviewCommentsMessageCard as any).props.onJumpToAnchor;
-
-        await screen.update(renderMessage());
-
-        const secondJumpHandler = screen.tree.root.findByType(ReviewCommentsMessageCard as any).props.onJumpToAnchor;
-        expect(secondJumpHandler).toBe(firstJumpHandler);
-    });
-
-    it('keeps the committed router authoritative through an abandoned same-session structured-row render', async () => {
-        const { MessageView } = await import('./MessageView');
-        const { AppSessionTranscriptSourceProvider } = await import('./source/appSessionTranscriptSource');
-        const { ReviewCommentsMessageCard } = await import('../reviews/messages/ReviewCommentsMessageCard');
-        const interaction = deriveTranscriptInteraction({
-            kind: 'session',
-            access: OWNER_SESSION_ACCESS,
-            isSessionActive: true,
-        });
-        const routerA = vi.fn();
-        const routerB = vi.fn();
-        const neverSettles = new Promise<never>(() => {});
-        const message: any = {
-            kind: 'user-text',
-            id: 'm-review-comments',
-            localId: 'local-1',
-            text: 'review prompt',
-            displayText: 'Review comments (1)',
-            meta: {
-                happier: {
-                    kind: 'review_comments.v1',
-                    payload: {
-                        sessionId: 's1',
-                        comments: [{
-                            id: 'c1',
-                            filePath: 'src/foo.ts',
-                            source: 'file',
-                            body: 'Please refactor',
-                            createdAt: 1,
-                            anchor: { kind: 'fileLine', startLine: 12 },
-                            snapshot: { selectedLines: ['const x = 1;'], beforeContext: [], afterContext: [] },
-                        }],
-                    },
-                },
-            },
-        };
-        const updatedMessage = {
-            ...message,
-            displayText: 'Review comments (updated)',
-        };
-        const SuspendAfterRow = (props: Readonly<{ shouldSuspend: boolean }>) => {
-            if (props.shouldSuspend) throw neverSettles;
-            return null;
-        };
-        const renderMessage = (messageValue: typeof message, shouldSuspend = false) => wrapWithSessionTranscriptSource(
-            <React.Suspense fallback={null}>
-                <MessageView
-                    message={messageValue}
-                    metadata={null}
-                    sessionId="s1"
-                    interaction={interaction}
-                />
-                <SuspendAfterRow shouldSuspend={shouldSuspend} />
-            </React.Suspense>,
-            createStructuredTranscriptSource({ interaction, navigate: structuredRouterState.push }),
-        );
-        let tree!: renderer.ReactTestRenderer;
-
-        structuredRouterState.push = routerA;
-        await act(async () => {
-            tree = renderer.create(renderMessage(message), {
-                unstable_isConcurrent: true,
-            } as unknown as renderer.TestRendererOptions);
-        });
-        const committedAJump = tree.root.findByType(ReviewCommentsMessageCard as any).props.onJumpToAnchor;
-
-        structuredRouterState.push = routerB;
-        await act(async () => {
-            React.startTransition(() => {
-                tree.update(renderMessage(updatedMessage, true));
-            });
-            await Promise.resolve();
-        });
-
-        committedAJump({
-            filePath: 'src/foo.ts',
-            source: 'file',
-            anchor: { kind: 'fileLine', startLine: 12 },
-        });
-        expect(routerA).toHaveBeenCalledTimes(1);
-        expect(routerB).not.toHaveBeenCalled();
-
-        await act(async () => {
-            tree.update(renderMessage(updatedMessage));
-        });
-        const committedBJump = tree.root.findByType(ReviewCommentsMessageCard as any).props.onJumpToAnchor;
-        committedBJump({
-            filePath: 'src/foo.ts',
-            source: 'file',
-            anchor: { kind: 'fileLine', startLine: 12 },
-        });
-        expect(routerB).toHaveBeenCalledTimes(1);
-
-        await act(async () => {
-            tree.unmount();
-        });
+        expect(screen.tree.root.findByType(ReviewCommentsMessageCard as any).props.onJumpToAnchor).toBeUndefined();
     });
 
     it('does not render the MarkdownView for structured user messages', async () => {

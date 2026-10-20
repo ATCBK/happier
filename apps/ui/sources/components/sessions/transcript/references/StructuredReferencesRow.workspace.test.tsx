@@ -3,11 +3,13 @@ import * as React from 'react';
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createTestSessionTranscriptSource, installBrowserStorageLockBoundary, renderWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, createTestSessionTranscriptSource, installBrowserStorageLockBoundary, renderWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 import { parseSessionFileDeepLinkAnchor } from '@/utils/url/sessionFileDeepLink';
+import { deriveTranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
+import type { UserTextMessage } from '@happier-dev/session-core/messages';
 
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -16,7 +18,6 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: () => '/search' }).module);
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
-vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 // The vendor streaming renderer is not exercised by this file-reference journey.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: () => { throw new Error('Unexpected Markdown in reference journey'); },
@@ -37,6 +38,8 @@ const production = await (async () => {
             import('../useTranscriptFileLinks'),
             import('@/components/sessions/files/turnChanges/TranscriptTurnChangesCard'), import('@/scm/scmStatusFiles'),
             import('@/utils/ui/toTestIdSafeValue'),
+            import('../MessageView'),
+            import('@/auth/context/AuthContext'), import('@/modal'),
         ]);
     } finally { try { await disconnect?.(); } finally { await homes.dispose(); restore(); } }
 })();
@@ -125,6 +128,13 @@ it('opens a transcript file through the canonical Action into the qualified sess
                 serverId: targetServerId, path: 'src/absolute%25?name#L2.ts', fileView: 'view',
             } });
         });
+        await act(async () => { expect(links.openPath('/repo/ ')).toBe(true); });
+        await vi.waitFor(() => {
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
+                serverId: targetServerId, path: ' ', fileView: 'view',
+            } });
+        });
         await act(async () => {
             expect(links.openPath('/repo-neighbor/secret.ts')).toBe(false);
             expect(links.openPath('../secret.ts')).toBe(false);
@@ -146,13 +156,6 @@ it('opens a transcript file through the canonical Action into the qualified sess
                 serverId: targetServerId, path: 'src/range.ts', source: 'file', anchor: 'range', startLine: '5', endLine: '8',
             } });
         });
-        await act(async () => { links.openPath('.happier/uploads/tools/t1/recording.webm'); });
-        await vi.waitFor(() => {
-            const group = navigation.state.groups[navigation.state.focusedGroupId];
-            expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
-                serverId: targetServerId, path: '.happier/uploads/tools/t1/recording.webm', fileView: 'view',
-            } });
-        });
         await screen.pressByTestIdAsync('turn-changes-card:turn-4-toggle');
         await screen.pressByTestIdAsync(`scm-change-row-${toTestIdSafeValue('src/turn.ts')}`);
         await vi.waitFor(() => {
@@ -160,14 +163,6 @@ it('opens a transcript file through the canonical Action into the qualified sess
             expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
                 serverId: targetServerId, path: 'src/turn.ts', fileView: 'changes', source: 'diff', anchor: 'diffLine', startLine: '40',
                 comparison: 'turnCheckpoint', turnId: 'turn-4',
-            } });
-        });
-        await act(async () => { links.onJumpToAnchor?.({ filePath: 'src/review.ts', source: 'diff',
-            anchor: { kind: 'diffLine', side: 'after', startLine: 12, newLine: 12, oldLine: null } }); });
-        await vi.waitFor(() => {
-            const group = navigation.state.groups[navigation.state.focusedGroupId];
-            expect(navigation.state.tabs[group.activeTabId].target).toMatchObject({ kind: 'session', params: {
-                serverId: targetServerId, path: 'src/review.ts', fileView: 'changes', source: 'diff', anchor: 'diffLine', startLine: '12',
             } });
         });
     } finally { await screen.unmount(); storage.setState(initial, true); }
@@ -183,4 +178,82 @@ it('keeps public file references inert without a workspace owner', async () => {
         expect(chip?.props.onPress).toBeUndefined();
         expect(chip?.props.accessibilityRole).toBe('text');
     } finally { await screen.unmount(); }
+});
+
+it('opens rendered MessageView review anchors and tool video evidence through the qualified Action owner', async () => {
+    restoreLocks = installBrowserStorageLockBoundary();
+    installDisconnectedServerSocketBoundary();
+    const homes = await serveActionHomes({ homes: [
+        { key: 'other', serverUrl: 'https://transcript-media-other.test', accountId: 'alice' },
+        { key: 'home', serverUrl: 'https://transcript-media.test', accountId: 'alice', currentAccount: true },
+    ], route: () => undefined });
+    disposeHome = homes.dispose;
+    disconnectHome = await homes.restoreActiveConnection();
+    const [{ WorkspaceProvider }, { AppPaneProvider }, { resolveCompactAppDestinations }, , { storage }, , , , , { MessageView },
+        { InjectedAuthProvider }, { ModalProvider }] = production;
+    const initial = storage.getState();
+    const targetServerId = homes.homes.other!.id;
+    expect(targetServerId).not.toBe(initial.profileScope!.serverId);
+    storage.setState({ isDataReady: true });
+    const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+        externalSessions: false, inbox: false, workflows: false, friends: false,
+    } });
+    const source = createTestSessionTranscriptSource({ sessionId: 's1', serverId: targetServerId, workspacePath: '/repo',
+        interaction: deriveTranscriptInteraction({ kind: 'session', access: createSessionFixture().access, isSessionActive: true }),
+        navigate: () => { throw new Error('Message file evidence must use the workspace Action'); },
+    });
+    const videoPath = '.happier/uploads/tools/t1/recording.webm';
+    const anchor = { kind: 'diffLine', side: 'after', startLine: 12, newLine: 12, oldLine: null } as const;
+    const message = { kind: 'user-text', id: 'review-media', localId: 'local-review-media', createdAt: 1, text: 'Review with video evidence',
+        meta: {
+            happier: { kind: 'review_comments.v1', payload: { sessionId: 's1', comments: [{
+                id: 'review-jump', filePath: 'src/review.ts', source: 'diff', body: 'Review this change', createdAt: 1,
+                anchor, snapshot: { selectedLines: ['const value = 1;'], beforeContext: [], afterContext: [] },
+            }] } },
+            happierMedia: { kind: 'session_media.v1', payload: { media: [{ id: 'recording', role: 'output', category: 'tool-artifact',
+                mediaKind: 'video', mimeType: 'video/webm', name: 'recording.webm', path: videoPath, sizeBytes: 2048,
+                origin: { source: 'tool-output' },
+            }] } },
+        },
+    } satisfies UserTextMessage;
+    const actionRuntime = await import('@/components/appShell/workspace/workspaceActionRuntime');
+    const actionObservation = vi.spyOn(actionRuntime, 'executeWorkspaceUiAction');
+    let navigation!: WorkspaceNavigationContextValue;
+    const screen = await renderWithSessionTranscriptSource(<InjectedAuthProvider credentials={null}><ModalProvider><AppPaneProvider><WorkspaceProvider enabled catalog={catalog}>
+        {owner => { navigation = owner; return <MessageView message={message} metadata={null} sessionId="s1" serverId={targetServerId} />; }}
+    </WorkspaceProvider></AppPaneProvider></ModalProvider></InjectedAuthProvider>, source);
+    try {
+        await vi.waitFor(async () => { await act(async () => {}); expect(navigation.active || navigation.ownsRoute).toBe(true); });
+        await screen.pressByTestIdAsync('review-comments-jump:review-jump');
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            const target = navigation.state.tabs[group.activeTabId].target;
+            expect(target).toMatchObject({ kind: 'session', params: { serverId: targetServerId, path: 'src/review.ts', fileView: 'changes' } });
+            expect(parseSessionFileDeepLinkAnchor(target.params)).toEqual({ source: 'diff', anchor: { ...anchor, lineHash: undefined } });
+        });
+        expect(actionObservation.mock.results.some(result => result.type === 'return')).toBe(true);
+        expect(navigation.active || navigation.ownsRoute).toBe(true);
+        actionObservation.mockClear();
+        await screen.pressByTestIdAsync(`message-session-media-inline-video:${videoPath}`);
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            expect(screen.findByTestId('media-stage')).not.toBeNull();
+            for (let node = screen.findByTestId('media-stage-open-file'); node; node = node.parent) {
+                expect(node.props.pointerEvents).not.toBe('none');
+            }
+        });
+        expect(actionObservation).not.toHaveBeenCalled();
+        await screen.pressByTestIdAsync('media-stage-open-file');
+        const action = actionObservation.mock.results.at(-1);
+        expect(action?.type).toBe('return');
+        if (action?.type === 'return') expect(await action.value).toMatchObject({ ok: true });
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            const group = navigation.state.groups[navigation.state.focusedGroupId];
+            const target = navigation.state.tabs[group.activeTabId].target;
+            expect(target).toMatchObject({ kind: 'session', params: { serverId: targetServerId, path: videoPath, fileView: 'view' } });
+            expect(parseSessionFileDeepLinkAnchor(target.params)).toBeNull();
+        });
+    } finally { actionObservation.mockRestore(); await screen.unmount(); storage.setState(initial, true); }
 });

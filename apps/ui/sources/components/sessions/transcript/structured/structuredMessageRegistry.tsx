@@ -2,7 +2,8 @@ import React from 'react';
 import type { core } from 'zod/mini';
 import { t } from '@/text';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { FileReviewNoteV1Schema, type FileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
+import { FileReviewNoteV1Schema } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
+import { FileReviewNoteLine, projectFileReviewNoteText } from '@/components/sessions/files/review/FileReviewNoteLine';
 
 import { ReviewCommentsV1Schema } from '@/sync/domains/input/reviewComments/reviewCommentMeta';
 import { ReviewCommentsMessageCard, projectReviewCommentsFindText } from '@/components/sessions/reviews/messages/ReviewCommentsMessageCard';
@@ -93,16 +94,6 @@ function renderUserTextStructuredCard(
     return renderCard(messageText);
 }
 
-function fileReviewNoteDisplayText(note: FileReviewNoteV1): string {
-    if (note.action === 'mixed') return note.operations.map(fileReviewNoteDisplayText).join('; ');
-    const paths = note.paths.join(', ');
-    if (note.action === 'discard') return t('fileReviewNote.discard', { paths, count: note.changeCount ?? null });
-    if (note.action === 'restore') return t('fileReviewNote.restore', { paths });
-    if (note.undoes === 'discard') return t('fileReviewNote.undoDiscard', { paths });
-    if (note.undoes === 'restore') return t('fileReviewNote.undoRestore', { paths });
-    return t('fileReviewNote.undo', { paths });
-}
-
 function legacyCompletionUpdate(payload: ExecutionRunCompletionV1, sessionId: string): WorkerUpdateV1 {
     return {
         v: 1, workerKind: 'execution_run', workerId: payload.runId, ownerState: payload.status,
@@ -116,8 +107,8 @@ const structuredMessageRegistryEntries: readonly (StructuredMessageRegistryEntry
     {
         kind: 'file_review_note.v1',
         schema: FileReviewNoteV1Schema,
-        render: (payload) => <StructuredFindText blockId="structured-file-review-note" style={transcriptMarkdownTextStyle} text={fileReviewNoteDisplayText(payload)} />,
-        projectFindText: (payload) => [{ id: 'structured-file-review-note', text: fileReviewNoteDisplayText(payload) }],
+        render: (payload, params) => <FileReviewNoteLine note={payload} sessionId={params.sessionId} serverId={params.serverId} />,
+        projectFindText: (payload, params) => [{ id: 'structured-file-review-note', text: projectFileReviewNoteText(payload, params.sessionId) }],
     },
     {
         kind: 'voice_note.v1',

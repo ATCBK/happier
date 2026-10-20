@@ -5,7 +5,7 @@ import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { readPressFocusReturnTarget } from '@/keyboard/focusReturn';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
-import { isAbsoluteLocalPath, resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
+import { isAbsoluteLocalPath, normalizeRelativeLocalPath, resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
 import { resolveWorkspaceFileReference } from '@/utils/workspaceFileReferences/resolveWorkspaceFileReference';
 import { useOptionalSessionTranscriptSource } from './source/SessionTranscriptSourceContext';
 import type { StructuredMessageRendererParams } from './structured/structuredMessageRegistry';
@@ -28,7 +28,7 @@ export function useTranscriptFileLinks(params: Readonly<{
         if (!enabled) return false;
         const filePath = isAbsoluteLocalPath(path.replace(/\\/g, '/'))
             ? params.workspacePath ? resolvePathRelativeToRoot({ path, root: params.workspacePath, preservePathSpelling: true }) : null
-            : path;
+            : normalizeRelativeLocalPath(path);
         if (filePath === null || !isSafeWorkspaceRelativePath(filePath)) return false;
         const { event, ...openOptions } = options ?? {};
         fireAndForget(open({
