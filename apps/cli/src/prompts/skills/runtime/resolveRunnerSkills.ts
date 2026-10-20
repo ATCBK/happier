@@ -45,7 +45,8 @@ export type ResolveRunnerSkillsInput = Readonly<{
   operationContext?: SavedSecretOperationContextV1;
 }>;
 export type RunnerSkillsResult = Readonly<{
-  reach?: Readonly<{ context: ReachContextV1; rules: readonly SkillRuleV1[] }>;
+  reach?: Readonly<{ context: ReachContextV1; rules: readonly SkillRuleV1[];
+    catalog?: Readonly<{ revision: number | 'absent'; authority: 'active' | 'inactive' }> }>;
   delivery?: AgentSessionSkillDelivery; plan: SessionSkillPlanV1;
   indexItems: readonly SkillLibraryItemV1[]; unavailable?: true;
   unavailableReason?: string;
@@ -151,7 +152,7 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
       settings, skillIds: requiredPluginIds, serverHttpBaseUrl: input.operationContext?.serverHttpBaseUrl,
       isCurrent: async () => { await current(); return true; } }));
     await current();
-    reach = { context, rules };
+    reach = { context, rules, catalog: { revision: rulesRead.revision, authority: rulesRead.authority } };
     unavailableReason = 'skill_plan_unavailable';
     const additionalProjectDirectories = await resolveAgentNativeSkillDirectories(input.agentId, {
       catalog: input.contributes, sessionMetadata: input.sessionMetadata,

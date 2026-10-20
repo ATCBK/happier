@@ -87,12 +87,36 @@ describe('capability selection settled-turn apply', () => {
     try {
       f.change('server'); f.settle();
       await f.sync.flushAfterSettledTurn();
-      expect(log).toHaveBeenCalledWith('[CapabilitySelection] Requesting runner refresh', {
+      expect(log).toHaveBeenCalledWith('[CapabilitySelection] Requesting runner refresh', expect.objectContaining({
         sessionId: 'session', changes: { mcpSelection: true, skillsSelection: false, mcpRules: false, skillRules: false },
-      });
+      }));
     } finally {
       await f.sync.dispose(); log.mockRestore();
     }
+  });
+
+  it.each([false, true])('diagnoses selected-set changes without treating an unknown baseline as empty (pending: %s)', async pending => {
+    const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const context = { machineId: 'machine', machinePlatform: 'posix' as const, directory: '/repo', projectKey: null, agentId: 'fixture' };
+    const rules = (ids: string[]): SkillRuleV1[] => ids.map(skillId => ({ id: `rule-${skillId}`, skillId,
+      target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }));
+    let current = { context, rules: rules(['beta', 'alpha']), catalog: { revision: 3, authority: 'active' as const } };
+    const f = fixture(undefined, {
+      ...(!pending ? { initialSkillRules: current } : {}), readSkillRules: () => current,
+    }, createTestMetadata(pending ? { capabilitySelectionApplyV1: { skills: { source: 'rules', reason: 'next_turn' } } } : {}));
+    try {
+      current = { context, rules: rules(['gamma', 'beta']), catalog: { revision: 4, authority: 'active' } };
+      f.settle(); await f.sync.flushAfterSettledTurn();
+      expect(f.requests).toHaveLength(1);
+      expect(log).toHaveBeenCalledWith('[CapabilitySelection] Requesting runner refresh', expect.objectContaining({
+        ruleBaselines: expect.objectContaining({ skills: {
+          source: pending ? 'pending' : 'launch', unknown: pending, observedAvailable: true,
+          appliedCatalog: pending ? null : { revision: 3, authority: 'active' },
+          observedCatalog: { revision: 4, authority: 'active' },
+          addedIds: pending ? null : ['gamma'], removedIds: pending ? null : ['alpha'],
+        } }),
+      }));
+    } finally { await f.sync.dispose(); log.mockRestore(); }
   });
 
   it('retires a pending restart HTTP observation on disposal without publishing a failure or resending', async () => {

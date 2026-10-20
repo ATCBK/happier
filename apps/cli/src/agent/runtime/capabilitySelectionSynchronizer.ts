@@ -3,11 +3,9 @@ import type { DaemonControlRequestOptions } from '@/daemon/controlClient';
 import { readCapabilityLaunchRestartFromMetadataV1, readSessionCapabilityAgentFactsV1, resolveCapabilityApplyTimingV1, type CapabilityApplyTimingInputV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import type { RestartSessionRunnerRequestV1, RestartSessionRunnerResultV1 } from '@happier-dev/protocol';
 import type { SessionSkillsReapplyRunner } from '@/prompts/skills/runtime/reapplySessionSkills';
-import type { RunnerSkillsTransports } from '@/prompts/skills/runtime/resolveRunnerSkills';
+import type { RunnerSkillsTransports, RunnerSkillsResult } from '@/prompts/skills/runtime/resolveRunnerSkills';
 import type { RunnerMcpRuleObservation } from '@/mcp/runtime/resolveRunnerMcpServers';
 import { logger } from '@/ui/logger';
-import type { ReachContextV1 } from '@happier-dev/protocol/reach/resolveReachV1';
-import type { SkillRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { realpathReachRules } from '@/mcp/servers/createRealpathNormalizer';
 import { areSessionCapabilitySelectionsEquivalentV1, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
@@ -16,7 +14,16 @@ import { readAppliedSessionCapabilitySelectionFromMetadataV1, readSessionCapabil
   clearCapabilitySelectionApplyV1, readPendingCapabilityRuleApplyV1,
   type CapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 
-type SkillRuleObservation = Readonly<{ context: ReachContextV1; rules: readonly SkillRuleV1[] }>;
+type SkillRuleObservation = NonNullable<RunnerSkillsResult['reach']>;
+
+function describeRuleSelectionChange(applied: string | null, observed: string | null) {
+  if (applied === null || observed === null) return { addedIds: null, removedIds: null };
+  // These private strings come only from the canonical selected-ID projections below.
+  const before: readonly string[] = JSON.parse(applied);
+  const after: readonly string[] = JSON.parse(observed);
+  const beforeIds = new Set(before), afterIds = new Set(after);
+  return { addedIds: [...afterIds].filter(id => !beforeIds.has(id)), removedIds: [...beforeIds].filter(id => !afterIds.has(id)) };
+}
 
 export type CapabilitySelectionSynchronizerInput = Readonly<{
   session: Readonly<{
@@ -62,13 +69,20 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   // Explicit launch resolution is positive evidence even if an earlier runner's
   // pending status survives. A preserved-process attach reading today's rules
   // still cannot infer native application from that observation alone.
-  const appliedRuleBaseline = (kind: 'mcp' | 'skills', launch: string | null, observed: string | null = null) =>
-    launch ?? (readPendingCapabilityRuleApplyV1(initialMetadata, kind) ? null : observed);
-  let appliedSkillRules = appliedRuleBaseline('skills',
+  const appliedRuleBaseline = (kind: 'mcp' | 'skills', launch: string | null, observed: string | null = null) => {
+    if (launch !== null) return { selection: launch, source: 'launch' as const };
+    if (readPendingCapabilityRuleApplyV1(initialMetadata, kind)) return { selection: null, source: 'pending' as const };
+    return { selection: observed, source: 'observed' as const };
+  };
+  const skillBaseline = appliedRuleBaseline('skills',
     input.initialSkillRules ? ruleSelection(input.initialSkillRules, applied) : null,
     initialRules ? ruleSelection(initialRules, applied) : null);
+  let appliedSkillRules = skillBaseline.selection;
   let desiredSkillRules = initialRules ? ruleSelection(initialRules, desired) : appliedSkillRules;
   let skillRulesAvailable = initialRules != null;
+  let appliedSkillRuleSource = skillBaseline.source;
+  let observedSkillCatalog = initialRules?.catalog ?? null;
+  let appliedSkillCatalog = appliedSkillRules === null ? null : observedSkillCatalog;
   const mcpRuleSelection = (observation: RunnerMcpRuleObservation, selection: SessionCapabilitySelectionV1) => {
     const resolved = resolveSessionCapabilitiesV1({ context: observation.context,
       mcp: { ...observation.settings, bindings: realpathReachRules(observation.settings.bindings) },
@@ -80,10 +94,14 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   // Only the launch resolver establishes the applied server set. In particular,
   // an unavailable launch or preserved-process refusal is not today's empty set.
   // A retained pending status cannot invalidate that positive launch evidence.
-  const appliedMcpRules = appliedRuleBaseline('mcp', initialMcpRules
+  const mcpBaseline = appliedRuleBaseline('mcp', initialMcpRules
     ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null);
+  const appliedMcpRules = mcpBaseline.selection;
   let desiredMcpRules = initialMcpRules ? mcpRuleSelection(initialMcpRules, desired) : appliedMcpRules;
   let mcpRulesAvailable = initialMcpRules != null;
+  const appliedMcpRuleSource = mcpBaseline.source;
+  const appliedMcpCatalog = appliedMcpRules === null ? null : initialMcpRules?.catalog ?? null;
+  let observedMcpCatalog = initialMcpRules?.catalog ?? null;
 
   const observe = () => {
     const next = readSessionCapabilitySelectionFromMetadataV1(input.session.getMetadataSnapshot());
@@ -97,6 +115,7 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
       const nextRules = ruleSelection(rules, desired);
       if (nextRules !== desiredSkillRules) blocked = false;
       desiredSkillRules = nextRules;
+      observedSkillCatalog = rules.catalog ?? null;
     }
     skillRulesAvailable = rules != null;
     const mcpRules = input.readMcpRules?.();
@@ -104,6 +123,7 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
       const nextRules = mcpRuleSelection(mcpRules, desired);
       if (nextRules !== desiredMcpRules) blocked = false;
       desiredMcpRules = nextRules;
+      observedMcpCatalog = mcpRules.catalog ?? null;
     }
     mcpRulesAvailable = mcpRules != null;
   };
@@ -142,6 +162,11 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     if (lifetime.signal.aborted || !input.isStarted() || restartAccepted) return;
     const captured = desired;
     const capturedSkillRules = desiredSkillRules;
+    const capturedMcpRules = desiredMcpRules;
+    const capturedSkillCatalog = observedSkillCatalog;
+    const capturedMcpCatalog = observedMcpCatalog;
+    const capturedSkillRulesAvailable = skillRulesAvailable;
+    const capturedMcpRulesAvailable = mcpRulesAvailable;
     const agent = readSessionCapabilityAgentFactsV1(input.session.getMetadataSnapshot()) ?? input.agent;
     const kinds = pending();
     const changes = {
@@ -189,6 +214,8 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
         }));
         applied = { ...applied, skills: captured.skills };
         appliedSkillRules = capturedSkillRules;
+        appliedSkillCatalog = capturedSkillCatalog;
+        appliedSkillRuleSource = 'observed';
         kinds.skills = false;
       }
     }
@@ -207,6 +234,14 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
       sessionId: input.session.sessionId,
       changes: { mcpSelection: kinds.mcp && changes.mcpSelection, skillsSelection: kinds.skills && changes.skillsSelection,
         mcpRules: kinds.mcp && changes.mcpRules, skillRules: kinds.skills && changes.skillRules },
+      ruleBaselines: {
+        skills: { source: appliedSkillRuleSource, unknown: appliedSkillRules === null, observedAvailable: capturedSkillRulesAvailable,
+          appliedCatalog: appliedSkillCatalog, observedCatalog: capturedSkillCatalog,
+          ...describeRuleSelectionChange(appliedSkillRules, capturedSkillRules) },
+        mcp: { source: appliedMcpRuleSource, unknown: appliedMcpRules === null, observedAvailable: capturedMcpRulesAvailable,
+          appliedCatalog: appliedMcpCatalog, observedCatalog: capturedMcpCatalog,
+          ...describeRuleSelectionChange(appliedMcpRules, capturedMcpRules) },
+      },
     });
     const result = await requestRestart({
       sessionId: input.session.sessionId, mode: 'force_current_cli', reason: 'capability_selection_change',
