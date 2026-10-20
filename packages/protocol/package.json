@@ -7,6 +7,16 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./approvals/targetActionApprovalRequestTransition": {
+      "happier-source": "./src/approvals/targetActionApprovalRequestTransition.ts",
+      "types": "./dist/approvals/targetActionApprovalRequestTransition.d.ts",
+      "default": "./dist/approvals/targetActionApprovalRequestTransition.js"
+    },
+    "./actions/targetActionApprovalDecision": {
+      "happier-source": "./src/actions/targetActionApprovalDecision.ts",
+      "types": "./dist/actions/targetActionApprovalDecision.d.ts",
+      "default": "./dist/actions/targetActionApprovalDecision.js"
+    },
     "./mcp/remoteUrlV1": {
       "happier-source": "./src/mcp/remoteUrlV1.ts",
       "types": "./dist/mcp/remoteUrlV1.d.ts",
