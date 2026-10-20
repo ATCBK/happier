@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { setImmediate } from 'node:timers/promises';
 import { logger } from '@/ui/logger';
 
 import { ConnectedAccountAuthFailureRequestV1Schema, ConnectedAccountQuotaFailureRequestV1Schema, OAuthBearerLeaseV1Schema, RequestAuthFailureOutcomeV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
@@ -11,8 +12,7 @@ export type ConnectedAccountRequestAuthErrorCode =
     | 'request_auth_not_active'
     | 'request_auth_purpose_forbidden'
     | 'request_auth_binding_unavailable'
-    | 'request_auth_credential_unavailable'
-    | 'request_auth_currentness_unstable';
+    | 'request_auth_credential_unavailable';
 
 /** Host-file diagnostics only; never include arbitrary exception text or transport data. */
 export type ConnectedAccountRequestAuthDiagnostic = Readonly<{
@@ -173,8 +173,6 @@ export type ConnectedAccountRequestAuthService = Readonly<{
     }>) => void;
 }>;
 
-const MAX_CURRENTNESS_RETRIES = 8;
-const MAX_CACHED_CREDENTIAL_LEASES = 64;
 // A legacy Claude recovery may perform two sequential provider calls, each with the
 // canonical 120-second ceiling, plus bounded account projection work. The generated
 // client owns a slightly larger 310-second transport ceiling.
@@ -585,11 +583,6 @@ export function createConnectedAccountRequestAuthService(
                 throw new ConnectedAccountRequestAuthError('request_auth_credential_unavailable');
             }
             leases.set(key, cached);
-            while (leases.size > MAX_CACHED_CREDENTIAL_LEASES) {
-                const oldestKey = leases.keys().next().value as string | undefined;
-                if (oldestKey === undefined) break;
-                leases.delete(oldestKey);
-            }
             return cached;
         }, (operation) => {
             if (fills.get(pendingKey) === operation) fills.delete(pendingKey);
@@ -607,7 +600,7 @@ export function createConnectedAccountRequestAuthService(
             deadlineMs: operationDeadlineMs,
         });
         try {
-            for (let attempt = 0; attempt < MAX_CURRENTNESS_RETRIES; attempt += 1) {
+            while (true) {
                 phase = 'binding_before';
                 const before = await resolveAuthorizedBinding(
                     input.subject,
@@ -632,9 +625,15 @@ export function createConnectedAccountRequestAuthService(
                 if (
                     leaseKey(after.resolved, after.use.materialization, input.subject) !== beforeKey
                     || !sameResolvedBinding(before.resolved, after.resolved)
-                ) continue;
+                ) {
+                    // Let containing-operation cancellation run even when the
+                    // binding authority can resolve entirely from local state.
+                    await startRequestAuthOperation(lifetime.signal, () => setImmediate());
+                    continue;
+                }
                 if (isExpired(material, nowMs())) {
                     if (leases.get(beforeKey) === material) leases.delete(beforeKey);
+                    await startRequestAuthOperation(lifetime.signal, () => setImmediate());
                     continue;
                 }
 
@@ -657,7 +656,6 @@ export function createConnectedAccountRequestAuthService(
                     },
                 });
             }
-            throw new ConnectedAccountRequestAuthError('request_auth_currentness_unstable');
         } catch (error) {
             logger.debug('[CONNECTED ACCOUNT] Request-auth lookup refused', {
                 phase,

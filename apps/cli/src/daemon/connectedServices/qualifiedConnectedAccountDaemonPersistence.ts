@@ -121,8 +121,6 @@ export type QualifiedConnectedAccountAttemptTransactionAdapters = Readonly<{
   listPending?(service: Readonly<{ pluginId: string; localId: string }>): Promise<readonly PendingConnectedAccountAttemptTransaction[]>;
 }>;
 
-const MAX_ATTEMPT_CONFIGURATION_RECORDS = 64;
-
 type ConfigurationRecord = ReturnType<
   typeof parseConnectedAccountConfigurationRecordContent
 >;
@@ -464,7 +462,6 @@ export function createQualifiedConnectedAccountDaemonPersistence(
           input.attemptId !== input.snapshot.attemptId
           || !sameService(input.service, input.snapshot.service)
           || oauthTransactions.has(input.attemptId)
-          || oauthTransactions.size >= MAX_ATTEMPT_CONFIGURATION_RECORDS
         ) {
           throw new Error('Connected-account OAuth transaction identity is unavailable');
         }
@@ -744,15 +741,6 @@ export function createQualifiedConnectedAccountDaemonPersistence(
             return Object.freeze({
               status: 'conflict' as const,
               code: 'connected_account_configuration_changed',
-            });
-          }
-          if (
-            current === null
-            && attemptConfigurations.size >= MAX_ATTEMPT_CONFIGURATION_RECORDS
-          ) {
-            return Object.freeze({
-              status: 'unavailable' as const,
-              code: 'connected_account_attempt_configuration_capacity_exhausted',
             });
           }
           try {

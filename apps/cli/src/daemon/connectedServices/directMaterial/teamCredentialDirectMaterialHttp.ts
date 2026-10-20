@@ -7,8 +7,6 @@ import { TeamCredentialResourceErrorV1Schema } from '@happier-dev/protocol/teams
 
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
-const REQUEST_TIMEOUT_MS = 15_000;
-
 export class TeamCredentialDirectMaterialHttpTransportError extends Error {
   constructor() {
     super('team_credential_direct_material_transport_unavailable');
@@ -31,7 +29,6 @@ function route(params: Readonly<{ serverUrl?: string; teamId: string; resourceId
 function config(token: string, signal?: AbortSignal) {
   return {
     headers: { Authorization: `Bearer ${token}` },
-    timeout: REQUEST_TIMEOUT_MS,
     ...(signal ? { signal } : {}),
   };
 }

@@ -270,14 +270,15 @@ export class InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry<
             return {
                 kind: 'loser',
                 waitForOwner: async (waitOptions) => {
-                    const timeoutMs = waitOptions?.timeoutMs ?? this.options.leaseTimeoutMs ?? 30_000;
+                    const timeoutMs = waitOptions?.timeoutMs ?? this.options.leaseTimeoutMs;
                     let timeout: ReturnType<typeof setTimeout> | null = null;
                     const outcome = await Promise.race([
                         pending.promise,
                         new Promise<LeaseOutcome<TServiceIdentity>>(
                             (_resolve, reject) => {
-                            timeout = setTimeout(() => reject(new ConnectedServiceAuthGroupSwitchLeaseExpiredError()), timeoutMs);
-                            timeout.unref?.();
+                                if (timeoutMs === undefined) return;
+                                timeout = setTimeout(() => reject(new ConnectedServiceAuthGroupSwitchLeaseExpiredError()), timeoutMs);
+                                timeout.unref?.();
                             },
                         ),
                     ]).finally(() => {

@@ -2,8 +2,6 @@ import type { ConnectedServiceId, ConnectedServiceUsageSourceV1 } from '@happier
 
 import { ConnectedServiceCurrentSourceHydrationConflictError } from './currentSourceHydration';
 
-const MAX_CURRENT_SOURCE_HYDRATION_ATTEMPTS = 3;
-
 export async function activateConnectedServiceQuotaAutomationAfterProviderAccountUsageHydration<
   TCoordinator extends Readonly<{
     scheduleCurrentSourceRefresh: (sources: readonly ConnectedServiceUsageSourceV1[]) => unknown;
@@ -11,6 +9,7 @@ export async function activateConnectedServiceQuotaAutomationAfterProviderAccoun
   TLoopHandle,
 >(input: Readonly<{
   enabled: boolean;
+  isCurrent?: () => boolean;
   quotaFetchers: readonly Readonly<{ serviceId: ConnectedServiceId }>[];
   awaitReadiness: () => Promise<void>;
   hydrate: (input: Readonly<{ serviceIds: readonly ConnectedServiceId[] }>) => Promise<Readonly<{
@@ -26,20 +25,26 @@ export async function activateConnectedServiceQuotaAutomationAfterProviderAccoun
 > {
   if (!input.enabled) return { status: 'disabled' };
   const serviceIds = [...new Set(input.quotaFetchers.map((fetcher) => fetcher.serviceId))];
+  const assertCurrent = () => {
+    if (input.isCurrent?.() === false) {
+      throw Object.assign(new Error('Daemon is shutting down'), { code: 'daemon_shutting_down' });
+    }
+  };
   try {
+    assertCurrent();
     await input.awaitReadiness();
     let hydration: Awaited<ReturnType<typeof input.hydrate>> | undefined;
-    for (let attempt = 1; attempt <= MAX_CURRENT_SOURCE_HYDRATION_ATTEMPTS; attempt += 1) {
+    while (!hydration) {
+      assertCurrent();
       try {
         hydration = await input.hydrate({ serviceIds });
-        break;
       } catch (error) {
-        const shouldRetry = error instanceof ConnectedServiceCurrentSourceHydrationConflictError
-          && attempt < MAX_CURRENT_SOURCE_HYDRATION_ATTEMPTS;
-        if (!shouldRetry) throw error;
+        if (!(error instanceof ConnectedServiceCurrentSourceHydrationConflictError)) throw error;
+        // Retry from current Home truth while allowing daemon quiescing to run.
+        await setImmediate();
       }
     }
-    if (!hydration) throw new Error('Connected-service quota hydration did not settle');
+    assertCurrent();
     const coordinator = input.createCoordinator();
     coordinator.scheduleCurrentSourceRefresh(hydration.refreshSources);
     const loopHandle = input.startLoop(coordinator);
@@ -49,3 +54,5 @@ export async function activateConnectedServiceQuotaAutomationAfterProviderAccoun
     return { status: 'quota_policy_disabled', error };
   }
 }
+import { setImmediate } from 'node:timers/promises';
+
