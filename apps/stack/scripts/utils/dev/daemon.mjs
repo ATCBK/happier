@@ -25,6 +25,11 @@ const inFlightDevDaemonStarts = new Map();
  * (`buildSourceRuntimeBundle`, esbuild, no whole-package typecheck, no CLI dist
  * publication). It is selected and recorded through the existing
  * `sourceRuntimeLaunchUpdate` seam of `startLocalDaemonWithAuth`.
+ *
+ * `reuseSelected: true` reads only the retained generation and never compiles or
+ * waits on a build, dependency or admission lock, so startup and recovery cannot be
+ * held up by other sessions; with no retained generation it throws and the reload
+ * coordinator's first build supplies one. The default builds current source.
  */
 export async function prepareDevDaemonSourceRuntime({
   sourceRuntimeOptions,
@@ -43,7 +48,7 @@ export async function prepareDevDaemonSourceRuntime({
     env,
     devStartup: true,
     reuseSelected,
-    waitForSourceChanges: reuseSelected === 'if-available',
+    waitForSourceChanges: false,
   });
   logger.log(`[local] daemon: ${built.lastGreen ? 'retained' : 'captured'} source generation ${built.identity} ready`);
   return {
@@ -212,13 +217,13 @@ export async function startDevDaemon({
       let active = inFlightDevDaemonStarts.get(scope);
       if (!active) {
         const start = Promise.resolve().then(async () => {
-          // Startup and recovery boot the retained source generation immediately;
-          // an explicit restart loads the current source. The reload coordinator
-          // owns every later refresh.
+          // Startup, recovery and restart boot the retained source generation without
+          // building; the reload coordinator's initial refresh owns every build and
+          // moves the daemon to current source.
           const sourceRuntimeLaunchUpdate = await prepareDevDaemonSourceRuntimeImpl({
             sourceRuntimeOptions,
             env,
-            reuseSelected: restart ? false : 'if-available',
+            reuseSelected: true,
           });
           return await startLocalDaemonWithAuthImpl({
             cliBin,

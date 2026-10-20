@@ -210,12 +210,12 @@ test('dev daemon source generation is the Stack source-runtime daemon bundle, re
   const requests = [];
   const buildSourceRuntimeBundleImpl = async (options) => {
     requests.push(options);
-    return { entrypoint: '/b/index.mjs', cliDir: '/b/cli', env: { A: '1' }, identity: 'gen-1', lastGreen: options.reuseSelected === 'if-available' };
+    return { entrypoint: '/b/index.mjs', cliDir: '/b/cli', env: { A: '1' }, identity: 'gen-1', lastGreen: options.reuseSelected === true };
   };
   const sourceRuntimeOptions = { repoDir: '/repo', stackBaseDir: '/stacks/dev' };
 
   const retained = await prepareDevDaemonSourceRuntime(
-    { sourceRuntimeOptions, env: {}, reuseSelected: 'if-available' },
+    { sourceRuntimeOptions, env: {}, reuseSelected: true },
     { buildSourceRuntimeBundleImpl, logger: quietLogger },
   );
   const current = await prepareDevDaemonSourceRuntime(
@@ -230,12 +230,24 @@ test('dev daemon source generation is the Stack source-runtime daemon bundle, re
   assert.equal(consumed.entrypoint, '/b/index.mjs');
   assert.equal(consumed.cliDir, '/b/cli');
   assert.deepEqual(requests.map((r) => [r.component, r.repoDir, r.stackBaseDir, r.reuseSelected, r.waitForSourceChanges]), [
-    ['daemon', '/repo', '/stacks/dev', 'if-available', true],
+    ['daemon', '/repo', '/stacks/dev', true, false],
     ['daemon', '/repo', '/stacks/dev', false, false],
   ]);
 });
 
-test('startDevDaemon launches the prepared source generation and never admits a CLI dist', async () => {
+test('the real source-runtime owner refuses to build when startup asks for a retained generation and none exists', async (t) => {
+  const stackBaseDir = await mkdtemp(join(tmpdir(), 'hs-daemon-no-retained-'));
+  t.after(async () => rm(stackBaseDir, { recursive: true, force: true }));
+  await assert.rejects(
+    () => prepareDevDaemonSourceRuntime(
+      { sourceRuntimeOptions: { repoDir: join(stackBaseDir, 'repo'), stackBaseDir }, env: {}, reuseSelected: true },
+      { logger: quietLogger },
+    ),
+    /selected source daemon bundle is unavailable/,
+  );
+});
+
+test('startDevDaemon launches the retained source generation and never builds, waits on build locks or admits a CLI dist', async () => {
   let launch = null;
   const prepared = [];
   await startDevDaemon(
@@ -257,7 +269,7 @@ test('startDevDaemon launches the prepared source generation and never admits a 
       startLocalDaemonWithAuthImpl: async (args) => { launch = args; },
     },
   );
-  assert.deepEqual(prepared, ['if-available']);
+  assert.deepEqual(prepared, [true]);
   assert.deepEqual(launch.sourceRuntimeLaunchUpdate, sourceGeneration('gen-1'));
   assert.equal(launch.admitPriorDistImmediately, undefined);
   assert.equal(launch.forceRestart, false);
@@ -275,7 +287,7 @@ test('startDevDaemon launches the prepared source generation and never admits a 
       startLocalDaemonWithAuthImpl: async (args) => { launch = args; },
     },
   );
-  assert.equal(prepared[1], false, 'an explicit restart loads current source, not the retained generation');
+  assert.equal(prepared[1], true, 'even a restart only boots the retained generation; the first reload moves it to current source');
   assert.equal(launch.forceRestart, true);
 });
 
