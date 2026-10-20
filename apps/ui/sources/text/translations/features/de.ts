@@ -3065,6 +3065,8 @@ const fileViewerTranslations = { de: {
         pdfFitPage: "Seite einpassen",
         pdfZoom: "Zoom",
         downloading: ({ loaded, total }) => `${loaded} von ${total} MB werden geladen`,
+        loadStopped: ({ name }) => `Laden von ${name} angehalten`,
+        loadAgain: 'Erneut laden',
         videoCantPlayTitle: "Dieses Video kann hier nicht abgespielt werden",
         audioCantPlayTitle: "Dieses Audio kann hier nicht abgespielt werden",
         mediaCantPlayBody: "Dieses Gerät unterstützt die Kodierung nicht. Lade die Datei herunter oder öffne sie in deiner Standard-App.",

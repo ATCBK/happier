@@ -3073,6 +3073,8 @@ const fileViewerTranslations = { pt: {
         pdfFitPage: "Ajustar à página",
         pdfZoom: "Zoom",
         downloading: ({ loaded, total }) => `Baixando ${loaded} de ${total} MB`,
+        loadStopped: ({ name }) => `O carregamento de ${name} foi interrompido`,
+        loadAgain: 'Carregar novamente',
         videoCantPlayTitle: "Este vídeo não pode ser reproduzido aqui",
         audioCantPlayTitle: "Este áudio não pode ser reproduzido aqui",
         mediaCantPlayBody: "Este dispositivo não suporta a codificação. Baixe-o ou abra-o no app padrão.",

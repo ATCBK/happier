@@ -39,6 +39,8 @@ export type FileViewerTranslations = Readonly<{
     downloading: (
       params: Readonly<{ loaded: string; total: string }>,
     ) => string;
+    loadStopped: (params: Readonly<{ name: string }>) => string;
+    loadAgain: string;
     videoCantPlayTitle: string;
     audioCantPlayTitle: string;
     mediaCantPlayBody: string;
@@ -126,6 +128,8 @@ export const fileViewerTranslationsEnglish = {
       pdfZoom: 'Zoom',
       downloading: ({ loaded, total }) =>
         `Downloading ${loaded} of ${total} MB`,
+      loadStopped: ({ name }) => `Stopped loading ${name}`,
+      loadAgain: 'Load again',
       videoCantPlayTitle: "This video can't play here",
       audioCantPlayTitle: "This audio can't play here",
       mediaCantPlayBody:

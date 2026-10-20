@@ -3071,6 +3071,8 @@ const fileViewerTranslations = { fr: {
         pdfFitPage: "Ajuster à la page",
         pdfZoom: "Zoom",
         downloading: ({ loaded, total }) => `Téléchargement : ${loaded} sur ${total} Mo`,
+        loadStopped: ({ name }) => `Chargement de ${name} arrêté`,
+        loadAgain: 'Recharger',
         videoCantPlayTitle: "Cette vidéo ne peut pas être lue ici",
         audioCantPlayTitle: "Cet audio ne peut pas être lu ici",
         mediaCantPlayBody: "Cet appareil ne prend pas en charge son encodage. Téléchargez-le ou ouvrez-le dans votre app par défaut.",
