@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';
@@ -43,12 +43,23 @@ const privateHomeAgent = {
     ...agent,
     id: 'private-home-fixture',
     capabilities: { ...agent.capabilities,
-        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' } },
+        skills: { delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'unsupported' } },
 } satisfies AgentContribution;
 runAgentSkillDeliveryContract({
     agent: privateHomeAgent,
     async openSession(request) {
         const privateHome = mkdtempSync(join(tmpdir(), 'happier-skills-kit-private-home-'));
+        mkdirSync(join(privateHome, '.agents', 'skills'), { recursive: true });
+        mkdirSync(join(privateHome, '.gemini'), { recursive: true });
+        for (const item of request.skills?.items ?? []) {
+            const source = join(request.skills!.skillsRoot, item.name);
+            const destination = join(privateHome, '.agents', 'skills', item.name);
+            if (process.platform === 'win32') cpSync(source, destination, { recursive: true });
+            else symlinkSync(source, destination, 'dir');
+        }
+        writeFileSync(join(privateHome, '.gemini', 'settings.json'), JSON.stringify({
+            skills: { disabled: request.skills?.nativeDisables.map(item => item.name) ?? [] },
+        }));
         boundaries.reset();
         boundaries.recordLaunch({ argv: ['--stdio', '--config', join(privateHome, '.gemini', 'settings.json')],
             env: { HOME: privateHome, GEMINI_CLI_HOME: privateHome, XDG_CONFIG_HOME: join(privateHome, '.config') } });

@@ -283,9 +283,9 @@ for (const agentId of ['copilot', 'qwen', 'codebuddy', 'devin']) {
   let observer: ReturnType<typeof createAgentLaunchObserver>;
   beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'happier-bundled-acp-skill-kit-')); await mkdir(join(dir, 'native-home')); observer = createAgentLaunchObserver({ home: join(dir, 'native-home') }); });
   afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
-  it(`keeps the lazy ${agentId} declaration on the index path until its vendor probe passes`, () => {
-    expect('skills' in agent.capabilities ? agent.capabilities.skills?.delivery : undefined).toBe('none');
-    if ('runtime' in agent && agent.runtime.kind === 'acp') expect(agent.runtime.definition?.skills).toBeUndefined();
+  it(`projects the probed ${agentId} native carrier through the lazy declaration`, () => {
+    expect('skills' in agent.capabilities ? agent.capabilities.skills?.delivery : undefined).toBe('session_dir');
+    if ('runtime' in agent && agent.runtime.kind === 'acp') expect(agent.runtime.definition?.skills?.sessionDelivery).toBeDefined();
   });
   runAgentSkillDeliveryContract({ agent, async openSession(request) {
     const boundaries = observer.boundaries as AgentLaunchObserverBoundaries; boundaries.reset();

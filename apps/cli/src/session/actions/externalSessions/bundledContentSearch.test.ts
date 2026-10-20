@@ -56,6 +56,57 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 
 describe('bundled conversation content search', () => {
+    it('admits Auggie body hits through the registered candidate RPC and strict consumer schema', async () => {
+        const { createEnvKeyScope } = await import('@/testkit/env/envScope');
+        const env = createEnvKeyScope(['HOME', 'USERPROFILE']);
+        const root = await mkdtemp(join(tmpdir(), 'auggie-content-rpc-'));
+        const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
+        const { createAdmittedPluginRuntimeFixture } = await import('@/plugins/testkit/admittedRuntime');
+        let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+        let registration: ReturnType<typeof registerMachineExternalSessionsRpcHandlers> | undefined;
+        try {
+            env.patch({ HOME: root, USERPROFILE: root });
+            fixture.activeServerDir = join(root, 'server');
+            const { buildAuggieNativeSession } = await import('../../../../../../packages/plugins/auggie/src/agent/surfaces/sessions/external/__fixtures__/nativeSession.test-support');
+            const directory = join(root, '.augment', 'sessions');
+            await mkdir(directory, { recursive: true });
+            await writeFile(join(directory, 'native-session.json'), JSON.stringify(buildAuggieNativeSession(['quartz RPC-only phrase 東京 café'])));
+            // Integration H publishes the whole reader batch once. Consume the
+            // actual authored declaration through its canonical projector here.
+            const { PLUGIN_MANIFEST } = await import('@happier-dev/plugins-auggie/manifest');
+            const { loadBundledPluginLocatorResult } = await import('@/plugins/projection/registry/builtIn/locators');
+            const { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } = await import('@/plugins/projection/registry/sources/generatedBundledPluginManifests');
+            const { BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS } = await import('@/plugins/projection/registry/sources/generatedBundledPlugins');
+            const { projectLoadedPluginContributes } = await import('@/plugins/projection/registry/resolvePluginContributions');
+            const { projectBuiltInAgents } = await import('@/plugins/projection/registry/builtIn/agents');
+            const projected = projectLoadedPluginContributes({ provenance: 'first_party', loadResult: {
+                loadedPlugins: loadBundledPluginLocatorResult(BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.map(locator =>
+                    locator.pluginId === 'happier.agent.auggie' ? { ...locator, manifest: PLUGIN_MANIFEST } : locator)).loadedPlugins,
+                diagnosticsByPluginId: {},
+            } });
+            const contributes = createResolvedContributionRegistry({ ...resolveBuiltInContributions(), ...projected,
+                agents: projectBuiltInAgents({ manifestAgents: projected.agents ?? [], registrationBindings: BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS }),
+                providers: projected.providers ?? [] });
+            expect(resolveExternalSessionSourceFromAgentProjection(contributes, 'auggie', { kind: 'auggieHome' }))
+                .toMatchObject({ ok: true, declaration: { contentSearch: true } });
+            runtime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: join(root, 'happier'),
+                controller: pluginReloadController, runtimeOptions: { contributes, pluginIds: ['happier.agent.auggie'] } });
+            const rpc = new RpcHandlerManager({ scopePrefix: 'fixture-machine', encryptionMode: 'plain' });
+            registration = registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpc });
+            const result = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
+                method: 'fixture-machine:daemon.externalSessions.candidates.list', timeoutMs: null,
+                params: { machineId: 'fixture-machine', agentId: 'auggie', source: { kind: 'auggieHome' },
+                    searchTarget: 'content', searchTerm: 'quartz RPC-only phrase 東京 café', limit: 50 },
+            }));
+            expect(result).toMatchObject({ ok: true, contentCoverage: 'complete', candidates: [{ remoteSessionId: 'native-session',
+                match: { snippet: expect.stringContaining('quartz RPC-only phrase 東京 café'), sourceItemId: expect.any(String), messageIndex: 0 } }] });
+        } finally {
+            await registration?.dispose();
+            await runtime?.dispose();
+            env.restore();
+            await rm(root, { recursive: true, force: true });
+        }
+    });
     it('publishes both source capabilities and admits a real bundled Claude content Action', async () => {
         const contributes = createResolvedContributionRegistry(resolveBuiltInContributions());
         for (const [agentId, source] of [

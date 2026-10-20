@@ -151,6 +151,25 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
         };
         const assertDelivery = async () => {
             const launch = input.observeLaunch();
+            if (ownsPrivateHome(launch)) {
+                const candidates = ['.agents', '.gemini'].map(root => join(launch.env.GEMINI_CLI_HOME!, root, 'skills', 'contract-skill'));
+                const delivered = [];
+                for (const candidate of candidates) {
+                    try {
+                        await lstat(candidate);
+                        delivered.push(candidate);
+                    } catch (error) {
+                        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                    }
+                }
+                expect(delivered, 'K1: one skill reaches the real private home').toHaveLength(1);
+                if (process.platform !== 'win32') {
+                    expect(await realpath(delivered[0]!)).toBe(await realpath(join(skills.skillsRoot, 'contract-skill')));
+                }
+                expect(await readFile(join(delivered[0]!, 'SKILL.md'), 'utf8')).toContain('Contract skill');
+                expect(await readFile(join(delivered[0]!, 'scripts', 'nested.txt'), 'utf8')).toBe('supporting file');
+                return;
+            }
             if (acpDelivery?.kind === 'native_config_skills_dir') {
                 const nativeConfig = acpDefinition?.mcp?.nativeSessionConfig;
                 if (!nativeConfig) throw new Error('Native skill delivery requires its declared config root.');
@@ -234,6 +253,16 @@ export function runAgentSkillDeliveryContract(input: AgentSkillDeliveryContractI
         it('K3 applies native disables iff the declaration supports them', async () => {
             await open(input.openSession, skills);
             const launch = input.observeLaunch();
+            if (ownsPrivateHome(launch)) {
+                const raw = await readFile(join(launch.env.GEMINI_CLI_HOME!, '.gemini', 'settings.json'), 'utf8').catch((error: NodeJS.ErrnoException) => {
+                    if (error.code === 'ENOENT') return '{}';
+                    throw error;
+                });
+                const parsed: unknown = JSON.parse(raw);
+                const disabled = readOwnPath(parsed, ['skills', 'disabled']);
+                expect(Array.isArray(disabled) && disabled.includes('contract-native-blocked')).toBe(capability?.nativeDisable === 'supported');
+                return;
+            }
             if (acpDelivery?.kind === 'defaults_file_env' && acpDelivery.disabledKeyPath) {
                 const parsed: unknown = JSON.parse(await readFile(launch.env[acpDelivery.envKey]!, 'utf8'));
                 const disabled = readOwnPath(parsed, acpDelivery.disabledKeyPath);
