@@ -37,6 +37,23 @@ The external-author reference mounts the public component without host imports.
 
 ## Declaration, activation and projection
 
+In 0.3 development, `definePlugin` projects an Agent's
+`connectedAccountLaunch.stateSharingDescriptor` into
+`capabilities.providerStateSharing`. This cold declaration carries configuration
+and state support, modes, unavailable reasons and the named privacy-consent fact;
+native-home paths and sharing entries remain in the runtime descriptor. These
+declaration facts apply to bundled and admitted external Agents alike.
+An unavailable or retired catalog cannot authorize a shared-state change. The
+existing Settings Action approval and Account CAS writer retain admission and
+mutation ownership.
+
+Agent policy, usage and outcome projections are available through the public
+SDK Agent runtime domain. Native Lima operations use the machine-provisioner
+domain, Git comparison/index operations use SCM, and path identity uses FS.
+These projections retain the existing canonical implementations; plugin leaves
+do not import the private Protocol or CLI-common packages. The bounded Claude
+predecessor message-metadata build translation remains a build-only exception.
+
 In 0.3 development source, dynamic Resources and Composer References do not
 activate an otherwise undemanded daemon plugin during serving startup. Resource
 reads, watches and prompt preparation demand the selected producer through the
