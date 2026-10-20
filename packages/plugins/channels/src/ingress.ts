@@ -7517,14 +7517,17 @@ function pollActionFailureEvidence(cause: unknown): ConversationConnectionPollFa
 
 /**
  * The Action owner establishes these around the contributed handler. They are
- * currentness loss, not a provider poll failure, so the connection row must
- * not turn a superseded origin into a durable user-unblock state.
+ * currentness loss or a host interruption, not a provider poll failure. The
+ * next daemon/poll must resume without a durable user-unblock state.
  */
 function isPollActionOriginCurrentnessLoss(cause: unknown): boolean {
   return isPluginError(cause) && (
     cause.code === 'plugin_action_execution_origin_mismatch'
     || cause.code === 'plugin_action_execution_origin_unavailable'
     || cause.code === 'plugin_action_execution_origin_changed'
+    || cause.code === 'plugin_runtime_shutdown'
+    || cause.code === 'plugin_action_generation_retired'
+    || cause.code === 'plugin_action_aborted'
   );
 }
 

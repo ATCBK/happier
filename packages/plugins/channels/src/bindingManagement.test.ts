@@ -1766,6 +1766,8 @@ describe('Channels target-persisting binding management', () => {
         bindingId: 'binding-1',
         attemptCount: 5,
         updatedAt: 20,
+        recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'ingress/retry-v1' },
+          input: { obligationId: 'A'.repeat(43), expectedRevision: 7 }, reason: 'ingressBlocked' },
       }],
       nextCursor: 'cursor-2',
     });
@@ -1822,6 +1824,8 @@ describe('Channels target-persisting binding management', () => {
         connectionId: 'connection-1',
         attemptCount: 3,
         updatedAt: 30,
+        recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'ingress/retry-v1' },
+          input: { obligationId: 'E'.repeat(43), expectedRevision: 4 }, reason: 'ingressBlocked' },
       }],
     });
   });
@@ -1924,6 +1928,8 @@ describe('Channels target-persisting binding management', () => {
         updatedAt: 22,
         category: 'recoverable',
         reason: 'targetUnavailable',
+        recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'binding/read-v1' },
+          input: { bindingId: 'binding-1' }, reason: 'targetUnavailable' },
       }],
     });
   });

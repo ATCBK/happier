@@ -362,6 +362,73 @@ const connectionCreateInput = {
   maximumObservationAgeMs: 60_000,
 } as const;
 
+describe('connection Create acknowledgement recovery', () => {
+  it('adopts the exact committed reservation after an unknown Collection acknowledgement without a second write', async () => {
+    const collection = createMutableConnectionStateCollection();
+    seedConnectionIdentityKey(collection);
+    const originalBatch = collection.batch.getMockImplementation()!;
+    collection.batch.mockImplementationOnce(async operations => {
+      await originalBatch(operations);
+      throw new PluginError({ code: 'plugin_collection_outcome_unknown', message: 'Lost acknowledgement' });
+    });
+    const { context } = readyConnectionCreateContext({ stateCollection: collection });
+    const outcome = await createConversationConnectionForInvocation(connectionCreateInput, context);
+    expect(outcome).toMatchObject({ kind: 'rejoined' });
+    expect(collection.batch).toHaveBeenCalledTimes(1);
+    expect([...collection.rows.values()].filter(row => row.value['record-kind'] === 'connection')).toHaveLength(1);
+  });
+
+  it('preserves uncertainty after an uncommitted acknowledgement and safely rejoins through the same Create Action', async () => {
+    const collection = createMutableConnectionStateCollection();
+    seedConnectionIdentityKey(collection);
+    collection.batch.mockRejectedValueOnce(new PluginError({ code: 'plugin_collection_outcome_unknown', message: 'Lost acknowledgement' }));
+    const { context } = readyConnectionCreateContext({ stateCollection: collection });
+    await expect(createConversationConnectionForInvocation(connectionCreateInput, context)).rejects.toMatchObject({
+      code: 'plugin_collection_outcome_unknown', retryable: true,
+      details: { recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'connection/create-v1' } } },
+    });
+    const created = await createConversationConnectionForInvocation(connectionCreateInput, context);
+    expect(created.kind).toBe('created');
+    const rejoined = await createConversationConnectionForInvocation(connectionCreateInput, context);
+    expect(rejoined).toMatchObject({ ...created, kind: 'rejoined' });
+    expect([...collection.rows.values()].filter(row => row.value['record-kind'] === 'connection')).toHaveLength(1);
+  });
+
+  it('does not offer a safe retry when the canonical outcome cannot be read', async () => {
+    const collection = createMutableConnectionStateCollection();
+    seedConnectionIdentityKey(collection);
+    collection.batch.mockImplementationOnce(async () => {
+      vi.spyOn(collection, 'get').mockRejectedValueOnce(new Error('Account state unavailable'));
+      throw new PluginError({ code: 'plugin_collection_outcome_unknown', message: 'Lost acknowledgement' });
+    });
+    const { context } = readyConnectionCreateContext({ stateCollection: collection });
+    await expect(createConversationConnectionForInvocation(connectionCreateInput, context)).rejects.toMatchObject({
+      code: 'plugin_collection_outcome_unknown', retryable: false,
+      details: { recommendedRecovery: { unavailableReason: 'accountStateUnavailable' } },
+    });
+    expect(collection.batch).toHaveBeenCalledTimes(1);
+  });
+
+  it('adopts an original Create that commits after the unknown-outcome reread', async () => {
+    const collection = createMutableConnectionStateCollection();
+    seedConnectionIdentityKey(collection);
+    const commit = collection.batch.getMockImplementation()!;
+    let issued: readonly MutableStateMutation[] = [];
+    collection.batch.mockImplementationOnce(async operations => {
+      issued = operations;
+      throw new PluginError({ code: 'plugin_collection_outcome_unknown', message: 'Lost acknowledgement' });
+    });
+    const { context } = readyConnectionCreateContext({ stateCollection: collection });
+    await expect(createConversationConnectionForInvocation(connectionCreateInput, context)).rejects.toMatchObject({
+      code: 'plugin_collection_outcome_unknown', retryable: true,
+    });
+    await commit(issued);
+    expect(await createConversationConnectionForInvocation(connectionCreateInput, context)).toMatchObject({ kind: 'rejoined' });
+    expect(collection.batch).toHaveBeenCalledTimes(1);
+    expect([...collection.rows.values()].filter(row => row.value['record-kind'] === 'connection')).toHaveLength(1);
+  });
+});
+
 describe('native SCM session PR binding owner', () => {
   it('attaches without an existing connection and rejoins both link and scoped binding after response loss', async () => {
     const collection = createMutableConnectionStateCollection();

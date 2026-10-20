@@ -169,6 +169,8 @@ describe('Channels bindings Resource', () => {
           approval: { kind: 'notApplicable' },
           enabled: false,
           deletionState: 'none',
+          recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'binding/set-enabled-v1' },
+            input: { bindingId: 'binding-automation', expectedRevision: 7, enabled: true }, reason: 'bindingDisabled' },
         },
         {
           bindingId: 'binding-session',

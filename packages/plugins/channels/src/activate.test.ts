@@ -1570,6 +1570,8 @@ describe('Channels core activation', () => {
             acceptedPossibleLoss: false,
             outwardDelivery: NO_OUTWARD_DELIVERY_ATTENTION,
           },
+          recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'connection/update-v1' },
+            input: { connectionId, expectedRevision: 5, enabled: true, maximumObservationAgeMs: 120_000 }, reason: 'connectionDisabled' },
         }],
       }));
       observation.dispose();
@@ -3130,6 +3132,8 @@ describe('Channels core activation', () => {
           approval: { kind: 'off' },
           enabled: false,
           deletionState: 'none',
+          recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'binding/set-enabled-v1' },
+            input: { bindingId, expectedRevision: 7, enabled: true }, reason: 'bindingDisabled' },
         }],
       }));
       observation.dispose();
@@ -3359,6 +3363,9 @@ describe('Channels core activation', () => {
             acceptedPossibleLoss: false,
             outwardDelivery: NO_OUTWARD_DELIVERY_ATTENTION,
           },
+          recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'connection/update-v1' },
+            input: { connectionId: connection.id, expectedRevision: PLUGIN_COLLECTION_REVISION_MAX, enabled: true,
+              maximumObservationAgeMs: 30 * 86_400_000 }, reason: 'connectionDisabled' },
         })),
       });
       expect(serialized).not.toContain(hiddenPrincipalId);

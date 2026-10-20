@@ -15,6 +15,7 @@ import {
   readConversationOutwardDeliveryConnectionAttention,
 } from './outwardDelivery.js';
 import { requireChannelsResourceAccountStorage } from './requiredAccountStorage.js';
+import { recommendConversationConnectionRecovery } from './recoveryRecommendation.js';
 
 async function readConnectionsResource(
   options: PluginDynamicResourceInvocationOptionsV1,
@@ -56,13 +57,15 @@ export async function projectConversationConnectionDeliveryAttention(input: Read
           message: 'The Channels connections Resource could not derive delivery custody status.',
         });
       }
-      return {
+      const result = {
         ...connection,
         attention: {
           ...connection.attention,
           outwardDelivery,
         },
       };
+      const recommendedRecovery = recommendConversationConnectionRecovery(result);
+      return { ...result, ...(recommendedRecovery === null ? {} : { recommendedRecovery }) };
     });
 }
 

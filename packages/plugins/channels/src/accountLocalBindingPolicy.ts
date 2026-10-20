@@ -21,6 +21,7 @@ import {
   type ConversationBindingTargetV1,
   type ConversationBindingV1,
   type ConversationProviderConnectionStopInputV1,
+  type ConversationRecommendedRecoveryV1,
 } from '@happier-dev/channels-protocol/v1';
 import { createProtocolStoredReadSchema, pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 
@@ -61,6 +62,7 @@ import {
   projectConversationNonAdmissionPresentationCategory,
   type ConversationNonAdmissionReason,
 } from './commandPolicy.js';
+import { recommendConversationConnectionRecovery, recommendConversationBindingRecovery, recommendConversationIngressRecovery } from './recoveryRecommendation.js';
 
 const MANAGEMENT_SUMMARY_MAX_CODE_POINTS = 28;
 const storedBindingSchema = createProtocolStoredReadSchema(ConversationBindingV1Schema);
@@ -105,6 +107,7 @@ export type ConversationBindingUpdateRow = Readonly<{
 }>;
 
 export type ConversationBindingManagementRow = Readonly<{
+  recommendedRecovery?: ConversationRecommendedRecoveryV1 | null;
   bindingId: string;
   parentBindingId?: string;
   revision: number;
@@ -153,6 +156,7 @@ export type ConversationSessionBindingDeliveryTarget = Readonly<{
  * routing, or raw delivery data.
  */
 export type ConversationConnectionManagementRow = Readonly<{
+  recommendedRecovery?: ConversationRecommendedRecoveryV1 | null;
   connectionId: string;
   revision: number;
   providerPluginId: string;
@@ -186,6 +190,7 @@ export type ConversationConnectionManagementRow = Readonly<{
      */
     endpointRetargetOwed: boolean;
     acceptedPossibleLoss: boolean;
+    outwardDelivery?: Readonly<{ retryDue: boolean; notDelivered: boolean; partial: boolean; outcomeUnknown: boolean; archiveRecovery: boolean }>;
   }>;
 }>;
 
@@ -227,9 +232,9 @@ export type ConversationIngressOccurrenceConflictAttentionRow = Readonly<{
 }>;
 
 export type ConversationIngressAttentionRow =
-  | ConversationIngressBlockedAttentionRow
+  (ConversationIngressBlockedAttentionRow
   | ConversationIngressTerminalAttentionRow
-  | ConversationIngressOccurrenceConflictAttentionRow;
+  | ConversationIngressOccurrenceConflictAttentionRow) & Readonly<{ recommendedRecovery?: ConversationRecommendedRecoveryV1 | null }>;
 
 export type ConversationBindingEnablementResult = Readonly<{
   kind: 'updated' | 'unchanged';
@@ -681,7 +686,7 @@ function projectConversationConnectionManagementRow(
         ? {}
         : { diagnostic: current.lifecycle.providerReadiness.diagnostic }),
     };
-  return {
+  const result: ConversationConnectionManagementRow = {
     connectionId: row.rowId,
     revision: current.configurationRevision,
     providerPluginId: current.providerPluginId,
@@ -709,6 +714,8 @@ function projectConversationConnectionManagementRow(
         && current.lifecycle.pendingOldTransportStop.acceptedPossibleLoss,
     },
   };
+  const recommendedRecovery = recommendConversationConnectionRecovery(result, ownChannelStateValue(current.payload, 'credentialRef'));
+  return { ...result, ...(recommendedRecovery === null ? {} : { recommendedRecovery }) };
 }
 
 function projectConversationIngressConflictAttention(input: Readonly<{
@@ -816,13 +823,15 @@ export async function readConversationConnectionManagementPage(input: Readonly<{
         signal: input.signal,
         assertCurrent: input.assertCurrent,
       });
-      return {
+      const result: ConversationConnectionManagementRow = {
         ...connection,
         attention: {
           ...connection.attention,
           ingressConflict,
         },
       };
+      const recommendedRecovery = recommendConversationConnectionRecovery(result);
+      return { ...result, ...(recommendedRecovery === null ? {} : { recommendedRecovery }) };
     }));
     return { connections: projected, ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) };
 }
@@ -1115,7 +1124,9 @@ export async function readConversationBindingManagementPage(input: Readonly<{
           || current.binding.target.automationId !== input.automationId)) {
         continue;
       }
-      bindings.push(projectConversationBindingManagementRow(row, current));
+      const binding = projectConversationBindingManagementRow(row, current);
+      const recommendedRecovery = recommendConversationBindingRecovery(binding);
+      bindings.push({ ...binding, ...(recommendedRecovery === null ? {} : { recommendedRecovery }) });
     }
     return { bindings, ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) };
 }
@@ -1368,7 +1379,10 @@ export async function readConversationIngressAttentionPage(input: Readonly<{
     };
   });
   return {
-    obligations,
+    obligations: obligations.map(row => {
+      const recommendedRecovery = recommendConversationIngressRecovery(row);
+      return { ...row, ...(recommendedRecovery === null ? {} : { recommendedRecovery }) };
+    }),
     ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
   };
 }

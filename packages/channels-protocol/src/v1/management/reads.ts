@@ -9,6 +9,7 @@ import { ConversationBindingIdV1Schema, ConversationConnectionIdV1Schema, Conver
 import { ConversationProviderDiagnosticV1Schema } from '../diagnostics.js';
 import { CONVERSATION_NON_ADMISSION_REASONS_V1, CONVERSATION_PROVIDER_FAILURE_REASONS_V1, CONVERSATION_PROVIDER_READINESS_ATTENTION_CODES_V1 } from '../bounds.js';
 import { ConversationSessionLastDeliveryOutcomeV1Schema } from './sessionConversations.js';
+import { ConversationJsonValueV1ProtocolSchema } from '../json.js';
 
 function values<const T extends readonly [string, string, ...string[]]>(entries: T) {
     const literal = (entry: T[number]) => defineProtocolLiteral(entry);
@@ -25,6 +26,17 @@ const pageFields = {
     limit: defineProtocolNumber({ integer: true, minimum: 1, maximum: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 }).optional(),
 };
 const nextCursor = ProtocolCollectionOpaqueCursorV1Schema.optional();
+/** Read-time guidance only. The named Action still admits input and owns effects. */
+export const ConversationRecommendedRecoveryV1Schema = defineProtocolObject({
+    action: defineProtocolUnion([text, defineProtocolObject({ pluginId: text, localId: text }, closed)]),
+    input: ConversationJsonValueV1ProtocolSchema,
+    reason: text,
+    // Missing operands are never defaulted into consent to an irreversible effect.
+    unavailableReason: text.optional(),
+}, closed);
+export type ConversationRecommendedRecoveryV1 = ReturnType<typeof ConversationRecommendedRecoveryV1Schema.parse>;
+export const ConversationRecommendedRecoveryV1JsonSchema: PluginJsonSchema = ConversationRecommendedRecoveryV1Schema.jsonSchema;
+const recommendedRecovery = ConversationRecommendedRecoveryV1Schema.nullable().optional();
 export const ConversationConnectionListInputV1Schema = defineProtocolObject(pageFields, closed);
 export const ConversationBindingListInputV1Schema = defineProtocolObject({ ...pageFields,
     connectionId: ConversationConnectionIdV1Schema.optional(), parentBindingId: ConversationBindingIdV1Schema.optional(),
@@ -53,6 +65,7 @@ export const ConversationConnectionManagementRowV1Schema = defineProtocolObject(
     sharedEndpointInputModes: defineProtocolArray(values(['directMentionsOnly', 'addressedMessages', 'allAllowedMessages'])).optional(),
     authorityEpoch: integer, enabled: boolean, deletionState: values(['none', 'pendingStopReconciliation', 'finalizingDelete']),
     maximumObservationAgeMs: integer,
+    recommendedRecovery,
     attention: defineProtocolObject({
         historyGap: defineProtocolObject({ reportedAt: integer, reason: values(['providerHistoryUnavailable', 'applicationAdmissionLost']) }, closed).nullable(),
         providerReadiness: defineProtocolObject({ code: values(CONVERSATION_PROVIDER_READINESS_ATTENTION_CODES_V1),
@@ -76,20 +89,20 @@ export const ConversationBindingManagementRowV1Schema = defineProtocolObject({
         defineProtocolObject({ kind: defineProtocolLiteral('notApplicable') }, closed),
         defineProtocolObject({ kind: defineProtocolLiteral('off') }, closed),
         defineProtocolObject({ kind: defineProtocolLiteral('enabled'), maximumScope: values(['request', 'session']) }, closed),
-    ]), enabled: boolean, deletionState: values(['none', 'finalizingDelete']),
+    ]), enabled: boolean, deletionState: values(['none', 'finalizingDelete']), recommendedRecovery,
 }, closed);
 export const ConversationBindingListResultV1Schema = defineProtocolObject({ bindings: defineProtocolArray(ConversationBindingManagementRowV1Schema), nextCursor }, closed);
 const ingressIdentity = { obligationId: custodyId, revision, connectionId: ConversationConnectionIdV1Schema,
-    bindingId: ConversationBindingIdV1Schema.optional(), updatedAt: integer };
+    bindingId: ConversationBindingIdV1Schema.optional(), updatedAt: integer, recommendedRecovery };
 export const ConversationIngressAttentionResultV1Schema = defineProtocolObject({ obligations: defineProtocolArray(defineProtocolUnion([
     defineProtocolObject({ ...ingressIdentity, kind: defineProtocolLiteral('blocked'), attemptCount: integer }, closed),
     defineProtocolObject({ ...ingressIdentity, kind: defineProtocolLiteral('terminal'), category: values(['informational', 'recoverable']),
         reason: values(CONVERSATION_NON_ADMISSION_REASONS_V1).optional() }, closed),
-    defineProtocolObject({ kind: defineProtocolLiteral('occurrenceConflict'), censusId: custodyId, revision, connectionId: ConversationConnectionIdV1Schema }, closed),
+    defineProtocolObject({ kind: defineProtocolLiteral('occurrenceConflict'), censusId: custodyId, revision, connectionId: ConversationConnectionIdV1Schema, recommendedRecovery }, closed),
 ])), nextCursor }, closed);
 const createdThreadEndpointRequired = defineProtocolObject({ parentId: text }, closed).optional();
 export const ConversationDeliveryAttentionResultV1Schema = defineProtocolObject({ rows: defineProtocolArray(defineProtocolObject({
-    custodyId, revision, state: values(['partial', 'outcomeUnknown', 'archiveRecoverable']), createdThreadEndpointRequired,
+    custodyId, revision, state: values(['partial', 'outcomeUnknown', 'archiveRecoverable']), createdThreadEndpointRequired, recommendedRecovery,
 }, closed)), nextCursor }, closed);
 export const CONVERSATION_DELIVERY_CUSTODY_STATES_V1 = [
     'ready', 'retryDue', 'attempting', 'delivered', 'notDelivered', 'suppressed', 'partial', 'outcomeUnknown',
@@ -101,7 +114,7 @@ export const ConversationDeliveryReadResultV1Schema = defineProtocolUnion([
         custodyId, revision, connectionId: ConversationConnectionIdV1Schema, bindingId: ConversationBindingIdV1Schema.optional(),
         state: values(CONVERSATION_DELIVERY_CUSTODY_STATES_V1),
         projection: defineProtocolObject({ terminal: boolean, attention: boolean, retryNotBefore: integer.optional() }, closed),
-        lastOutcome: ConversationSessionLastDeliveryOutcomeV1Schema, createdThreadEndpointRequired,
+        lastOutcome: ConversationSessionLastDeliveryOutcomeV1Schema, createdThreadEndpointRequired, recommendedRecovery,
     }, closed) }, closed),
 ]);
 

@@ -13,6 +13,7 @@ import {
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
   conversationSessionBindingDeliveryModeForOmittedFieldV1,
+  ConversationRecommendedRecoveryV1Schema,
 } from '@happier-dev/channels-protocol/v1';
 
 import {
@@ -29,7 +30,7 @@ import {
   readConversationConnectionPollFailureAttention,
   type ConversationConnectionPollFailureAttentionV1,
 } from '../connectionPollFailure.js';
-import { readConversationOutwardDeliveryConnectionAttention } from '../outwardDelivery.js';
+import { projectConversationConnectionDeliveryAttention } from '../connectionsResource.js';
 import { selectChannelsConversationSessionState, type ChannelsConversationSessionState } from './conversationSessionState.js';
 
 /**
@@ -42,6 +43,8 @@ import { selectChannelsConversationSessionState, type ChannelsConversationSessio
  * shows, so the column, the widget and the page can never disagree about what
  * a row is called or whether it needs attention.
  */
+
+const recoveryReadSchema = ConversationRecommendedRecoveryV1Schema.nullable().optional();
 
 export const CHANNELS_CONNECTIONS_RESOURCE = {
   pluginId: CONVERSATION_CORE_PLUGIN_ID_V1,
@@ -260,6 +263,8 @@ export function parseSharedEndpointInputModes(
 
 export function parseConnection(value: unknown): ChannelsConnection | undefined {
   if (!isRecord(value) || !isRecord(value.attention)) return undefined;
+  const recommendedRecovery = recoveryReadSchema.safeParse(value.recommendedRecovery);
+  if (!recommendedRecovery.success) return undefined;
   const historyGap = parseHistoryGap(value.attention.historyGap);
   const providerReadiness = parseProviderReadiness(value.attention.providerReadiness);
   const ingressConflict = parseIngressConflict(value.attention.ingressConflict);
@@ -306,6 +311,7 @@ export function parseConnection(value: unknown): ChannelsConnection | undefined 
   }
   return {
     connectionId,
+    ...(recommendedRecovery.data === undefined ? {} : { recommendedRecovery: recommendedRecovery.data }),
     revision,
     authorityEpoch,
     providerPluginId,
@@ -406,6 +412,8 @@ export function parseBindingApproval(
 
 export function parseBinding(value: unknown): ChannelsBinding | undefined {
   if (!isRecord(value) || !isRecord(value.endpoint) || !isRecord(value.target)) return undefined;
+  const recommendedRecovery = recoveryReadSchema.safeParse(value.recommendedRecovery);
+  if (!recommendedRecovery.success) return undefined;
   const bindingId = value.bindingId;
   const parentBindingId = value.parentBindingId;
   const revision = value.revision;
@@ -438,6 +446,7 @@ export function parseBinding(value: unknown): ChannelsBinding | undefined {
   if (approval === undefined || typeof enabled !== 'boolean') return undefined;
   return {
     bindingId,
+    ...(recommendedRecovery.data === undefined ? {} : { recommendedRecovery: recommendedRecovery.data }),
     ...(parentBindingId === undefined ? {} : { parentBindingId }),
     revision,
     connectionId,
@@ -621,24 +630,12 @@ export function useAccountLocalConnectionRows(input: Readonly<{
       signal: input.signal,
     }).then(async (result) => {
       if (retired || input.signal.aborted) return;
-      const deliveryAttention = await readConversationOutwardDeliveryConnectionAttention({
+      const connections: ChannelsConnection[] = await projectConversationConnectionDeliveryAttention({
         deliveriesCollection: input.deliveriesCollection,
-        connectionIds: result.connections.map((connection) => connection.connectionId),
+        connections: result.connections,
         signal: input.signal,
       });
       if (retired || input.signal.aborted) return;
-      if (deliveryAttention.kind !== 'ready') throw new Error('Connection delivery attention is unavailable.');
-      const connections: ChannelsConnection[] = result.connections.map((connection) => {
-        const outwardDelivery = deliveryAttention.attentionByConnection.get(connection.connectionId);
-        if (outwardDelivery === undefined) throw new Error('Connection delivery attention is incomplete.');
-        return {
-          ...connection,
-          attention: {
-            ...connection.attention,
-            outwardDelivery,
-          },
-        };
-      });
       setState({
         connections,
         resource: {

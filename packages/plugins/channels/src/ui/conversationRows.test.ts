@@ -6,6 +6,7 @@ import {
   connectionStatus,
   readChannelsPageLocation,
   parseBinding,
+  parseConnection,
   type ChannelsConnection,
 } from './conversationRows.js';
 
@@ -59,6 +60,21 @@ function connection(attention: Partial<ChannelsConnection['attention']> = {}): C
 }
 
 const DELIVERY = connection().attention.outwardDelivery;
+
+it('preserves the canonical recovery Action through the shared UI row parsers and rejects malformed recommendations', () => {
+  const recommendedRecovery = { action: { pluginId: 'happier.channels', localId: 'connection/retest-v1' },
+    input: { connectionId: 'connection-1', expectedRevision: 1, authorityEpoch: 1 }, reason: 'providerPermissionMissing' };
+  expect(parseConnection({ ...connection(), recommendedRecovery })?.recommendedRecovery).toEqual(recommendedRecovery);
+  expect(parseConnection({ ...connection(), recommendedRecovery: { ...recommendedRecovery, action: { ...recommendedRecovery.action, rawCredential: 'forbidden' } } })).toBeUndefined();
+  const binding = { bindingId: 'binding-1', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct' },
+    target: { kind: 'session', summary: 'session-1' }, inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly',
+    approval: { kind: 'off' }, enabled: false, deletionState: 'none', recommendedRecovery: {
+      action: { pluginId: 'happier.channels', localId: 'binding/set-enabled-v1' },
+      input: { bindingId: 'binding-1', expectedRevision: 1, enabled: true }, reason: 'bindingDisabled',
+    } };
+  expect(parseBinding(binding)?.recommendedRecovery).toEqual(binding.recommendedRecovery);
+  expect(parseBinding({ ...binding, recommendedRecovery: { action: 123 } })).toBeUndefined();
+});
 
 describe('connectionStatus', () => {
   it('says nothing for a healthy bot, asks for you in the attention tone, and keeps rose for failure', () => {

@@ -9,6 +9,7 @@ import { ConversationBindingV1Schema, ConversationDeliveryReadResultV1Schema, Co
   CONVERSATION_MESSAGE_CONTENT_PROVENANCE_V1 } from '@happier-dev/channels-protocol/v1';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
 import { createConversationOutwardDeliveryCollectionStore } from './outwardDelivery.js';
+import { getActionSpec } from '@happier-dev/plugin-sdk/actions';
 
 function connection(connectionId: string) {
   return createCurrentConversationConnectionFixture({ connectionId, authority: {
@@ -38,6 +39,50 @@ async function readerKit() {
 }
 
 describe('registered Channels Account read Actions', () => {
+  it('recommends the Account reconnect Action for an expired saved credential without returning provider setup', async () => {
+    const { kit, state } = await readerKit();
+    try {
+      const current = connection('connection-1');
+      const account = { service: { pluginId: 'test.channel.read', localId: 'account' }, accountId: 'account-1' };
+      await state.put({ ...current, payload: { ...current.payload, credentialRef: account,
+        providerReadiness: { code: 'providerCredentialInvalid' } } }, { expectedRevision: 1 });
+      const result = await kit.invokeAction('connection/list-v1', {}, { surface: 'mcp' });
+      expect(result).toMatchObject({ connections: [{ recommendedRecovery: {
+        action: 'connectedServices.authentication.beginReconnect', input: { account, machineId: 'machine-1' },
+      } }] });
+      expect(JSON.stringify(result)).not.toMatch(/providerSetupInput|providerConfig|routingIdentityKey/);
+      const reconnect = getActionSpec('connectedServices.authentication.beginReconnect');
+      expect(reconnect.id).toBe('connectedServices.authentication.beginReconnect');
+    } finally { await kit.dispose(); }
+  });
+  it.each<Readonly<{ name: string; payload: Readonly<Record<string, JsonValue>>; action: string; input: JsonValue }>>([
+    { name: 'paused', payload: { enabled: false }, action: 'connection/update-v1', input: { connectionId: 'connection-1', expectedRevision: 1, enabled: true, maximumObservationAgeMs: 60_000 } },
+    { name: 'permission loss', payload: { providerReadiness: { code: 'providerPermissionMissing' } }, action: 'connection/retest-v1', input: { connectionId: 'connection-1', expectedRevision: 1, authorityEpoch: 1 } },
+    { name: 'expired credential', payload: { providerReadiness: { code: 'providerCredentialInvalid' } }, action: 'connection/retest-v1', input: { connectionId: 'connection-1', expectedRevision: 1, authorityEpoch: 1 } },
+    { name: 'blocked poll', payload: { pollFailure: { phase: 'blocked', attemptCount: 1, retryNotBeforeMs: null, evidence: { kind: 'provider', reason: 'permissionMissing' } } }, action: 'connection/poll-retry-v1', input: { connectionId: 'connection-1', expectedRevision: 1, authorityEpoch: 1 } },
+    { name: 'history gap', payload: { historyGap: { reportedAt: 100, reason: 'providerHistoryUnavailable' } }, action: 'stream/baseline-accept-v1', input: { connectionId: 'connection-1', expectedRevision: 1 } },
+    { name: 'provider configuration loss', payload: { providerReadiness: { code: 'providerConfigurationInvalid' } }, action: 'connection/retest-v1', input: { connectionId: 'connection-1', expectedRevision: 1, authorityEpoch: 1 } },
+  ])('recommends one registered recovery Action for $name from the canonical read', async ({ payload, action, input }) => {
+    const { kit, state } = await readerKit();
+    try {
+      const current = connection('connection-1');
+      await state.put({ ...current, payload: { ...current.payload, ...payload } }, { expectedRevision: 1 });
+      const result = await kit.invokeAction('connection/list-v1', {}, { surface: 'agent' });
+      expect(result).toMatchObject({ connections: [{ recommendedRecovery: {
+        action: { pluginId: 'happier.channels', localId: action }, input,
+      } }] });
+      const declaration = PLUGIN_MANIFEST.contributes?.actions?.find(row => row.id === action);
+      expect(declaration?.surfaces).toEqual(expect.arrayContaining(['ui', 'agent', 'mcp']));
+      if (!declaration?.inputSchema) throw new Error('Recovery Action must declare its input contract');
+      expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(declaration.inputSchema), input)).toBe(true);
+      if (action === 'connection/update-v1' || action === 'connection/poll-retry-v1') {
+        expect(await kit.invokeAction(action, input, { surface: 'agent' })).toMatchObject({
+          kind: action === 'connection/update-v1' ? 'updated' : 'retryScheduled',
+        });
+      }
+    } finally { await kit.dispose(); }
+  });
+
   it('pages router children and content-free ingress attention with exact recovery revisions', async () => {
     const { kit, state } = await readerKit();
     try {
@@ -82,6 +127,9 @@ describe('registered Channels Account read Actions', () => {
       const ingress = await kit.invokeAction('ingress/attention-v1', { limit: 1 }, { surface: 'agent' });
       expect(ingress)
         .toMatchObject({ obligations: [{ kind: 'occurrenceConflict', censusId, connectionId: 'connection-1', revision: 1 }] });
+      expect(ingress).toMatchObject({ obligations: [{ recommendedRecovery: {
+        action: { pluginId: 'happier.channels', localId: 'connection/list-v1' }, input: {},
+      } }] });
       expect(JSON.stringify(ingress)).not.toMatch(/private-body|private@example|private-mailbox/);
     } finally { await kit.dispose(); }
   });
@@ -109,11 +157,23 @@ describe('registered Channels Account read Actions', () => {
       expect(attention).toMatchObject({ rows: [{ custodyId, revision: 2, state: 'outcomeUnknown' }] });
       const unknown = await kit.invokeAction('delivery/read-v1', { custodyId }, { surface: 'agent' });
       expect(unknown).toMatchObject({ kind: 'ready', delivery: { revision: 2, lastOutcome: 'unknown', projection: { attention: true } } });
+      expect(unknown).toMatchObject({ kind: 'ready', delivery: { recommendedRecovery: {
+        action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
+        input: { custodyId, expectedRevision: 2 }, unavailableReason: 'ownerDecisionRequired',
+      } } });
+      const partial = await store.compareAndSwap({ custodyId, expectedRevision: 2,
+        custody: { state: 'partial', attemptCount: 1, providerMessageIds: ['accepted-first-chunk'], failedChunk: 1 } });
+      expect(partial.kind).toBe('updated');
+      const partialRead = await kit.invokeAction('delivery/read-v1', { custodyId }, { surface: 'agent' });
+      expect(partialRead).toMatchObject({ kind: 'ready', delivery: { recommendedRecovery: {
+        action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
+        input: { custodyId, expectedRevision: 3 }, reason: 'partial', unavailableReason: 'ownerDecisionRequired',
+      } } });
       expect(JSON.stringify([pending, attention, unknown])).not.toMatch(/private-body|private-delivery-key|private-endpoint/);
-      await store.compareAndSwap({ custodyId, expectedRevision: 2,
+      await store.compareAndSwap({ custodyId, expectedRevision: 3,
         custody: { state: 'delivered', attemptCount: 1, providerMessageIds: ['private-native-id'] } });
       expect(await kit.invokeAction('delivery/read-v1', { custodyId }, { surface: 'mcp' }))
-        .toMatchObject({ kind: 'ready', delivery: { revision: 3, lastOutcome: 'delivered' } });
+        .toMatchObject({ kind: 'ready', delivery: { revision: 4, lastOutcome: 'delivered' } });
     } finally { await kit.dispose(); }
   });
   it('reads an exact custody id through the safe delivery registration', async () => {

@@ -250,6 +250,35 @@ had thought about after connecting a busy channel, so it is asked up front.
 
 ## When something is blocked
 
+### Recovery recommendations (unreleased development source)
+
+Management reads derive one recommended recovery Action from the current
+connection, binding or delivery evidence. People and agents use the same
+Action, with the same revision checks and approvals. A recommendation does
+not grant permission or bypass a missing machine, account or provider.
+
+Resume a paused connection or binding through its ordinary update Action.
+For a credential failure, reconnect the saved Connected Account, then verify
+the connection. For missing provider permissions, follow the provider's setup
+guidance and verify again. Blocked ingress and polling use their existing
+retry Actions; an automatic backoff remains scheduled rather than becoming a
+second manual send. A history gap requires an explicit baseline decision.
+
+Review a partial or unknown delivery before recording it as accepted or
+discarded. A recommendation deliberately omits that decision until you make
+it. Accepted native chunks remain recorded and are never resent as a whole
+message. An archived destination may offer the separate, provider-proven
+unarchive-and-retry recovery.
+
+An unknown connection Create outcome does not mean the write rolled back.
+The same Create Action reads the canonical connection reservation before
+creating anything. If the exact connection exists, it adopts that row; after
+an uncertain acknowledgement it reads the reservation again. If that read
+finds no row, the outcome stays unknown and a fresh owner decision may retry
+through the same atomic reservation-and-connection write. If Account state
+cannot be read, recovery stays unavailable. Do not delete rows or repeat an
+external send to resolve an uncertain Create.
+
 Channels are conversations with other people's infrastructure, so parts of the
 model are about failure rather than success:
 

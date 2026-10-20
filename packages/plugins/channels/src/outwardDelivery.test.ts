@@ -2315,6 +2315,9 @@ describe('Channels control-response outward custody', () => {
     });
     expect(page.rows).toEqual([{ custodyId: unknown.record.custodyId, revision: unknown.record.revision,
       state: 'outcomeUnknown', createdThreadEndpointRequired: { parentId: endpoint.id },
+      recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
+        input: { custodyId: unknown.record.custodyId, expectedRevision: unknown.record.revision },
+        reason: 'outcomeUnknown', unavailableReason: 'ownerDecisionRequired' },
     }]);
     expect(JSON.stringify(page)).not.toMatch(/Private|private@example/u);
     const confirmed = await store.compareAndSwap({ custodyId: unknown.record.custodyId,
@@ -2324,7 +2327,11 @@ describe('Channels control-response outward custody', () => {
     if (confirmed.kind !== 'updated') throw new Error('Expected retained endpoint');
     expect((await readConversationOutwardDeliveryResolutionPage({
       deliveriesCollection: deliveries as never, connectionId: 'connection-1',
-    })).rows).toEqual([{ custodyId: confirmed.record.custodyId, revision: confirmed.record.revision, state: 'outcomeUnknown' }]);
+    })).rows).toEqual([{ custodyId: confirmed.record.custodyId, revision: confirmed.record.revision, state: 'outcomeUnknown',
+      recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
+        input: { custodyId: confirmed.record.custodyId, expectedRevision: confirmed.record.revision },
+        reason: 'outcomeUnknown', unavailableReason: 'ownerDecisionRequired' },
+    }]);
   });
 
   it('reads only exact ambiguous-custody CAS facts and resolves them through the canonical Collection row', async () => {
@@ -2387,11 +2394,17 @@ describe('Channels control-response outward custody', () => {
           custodyId: partial.record.custodyId,
           revision: partial.record.revision,
           state: 'partial',
+          recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
+            input: { custodyId: partial.record.custodyId, expectedRevision: partial.record.revision },
+            reason: 'partial', unavailableReason: 'ownerDecisionRequired' },
         },
         {
           custodyId: unknown.record.custodyId,
           revision: unknown.record.revision,
           state: 'outcomeUnknown',
+          recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
+            input: { custodyId: unknown.record.custodyId, expectedRevision: unknown.record.revision },
+            reason: 'outcomeUnknown', unavailableReason: 'ownerDecisionRequired' },
         },
       ],
     });
@@ -2646,6 +2659,8 @@ describe('Channels control-response outward custody', () => {
         custodyId: recoverable.record.custodyId,
         revision: archived.record.revision,
         state: 'archiveRecoverable',
+        recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'delivery/resolve-v1' },
+          input: { custodyId: recoverable.record.custodyId, expectedRevision: archived.record.revision, resolution: 'retryAfterUnarchive' }, reason: 'endpointArchived' },
       }],
     });
 

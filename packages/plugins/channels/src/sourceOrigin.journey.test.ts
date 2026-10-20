@@ -301,6 +301,26 @@ describe('Channels connection creation to registered provider journey', () => {
     } finally { await fixture.dispose(); }
   });
 
+  it.each(['plugin_runtime_shutdown', 'plugin_action_generation_retired', 'plugin_action_aborted'])(
+    'resumes polling after %s without persisting a connection block', async code => {
+      const fixture = await journey('materialization');
+      try {
+        const created = await fixture.create();
+        if (created === null || typeof created !== 'object' || !('connectionId' in created)
+          || typeof created.connectionId !== 'string') throw new Error('Expected a created connection.');
+        fixture.setConnectionId(created.connectionId);
+        const before = await fixture.state.get(created.connectionId);
+        fixture.failPoll(new PluginError({ code, message: 'Host invocation interrupted', retryable: true }));
+        await fixture.invoke('journey/poll', {});
+        expect(await fixture.state.get(created.connectionId)).toEqual(before);
+        expect([...fixture.state.rows.values()].some(row => row.value['record-kind'] === 'checkpoint')).toBe(false);
+        fixture.clearPollFailure();
+        await fixture.invoke('journey/poll', {});
+        expect([...fixture.state.rows.values()].some(row => row.value['record-kind'] === 'checkpoint')).toBe(true);
+      } finally { await fixture.dispose(); }
+    },
+  );
+
   it.each(['bindingResolve', 'connectionRetest', 'connectionPollRetry'] as const)(
     'keeps the approved connection revision usable by %s after poll status bookkeeping', async consumer => {
       const fixture = await journey('materialization');

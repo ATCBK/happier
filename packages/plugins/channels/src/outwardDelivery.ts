@@ -11,6 +11,7 @@ import type {
   ConversationPermissionMediationSourceCurrentnessInputV1,
   ConversationPermissionMediationSourceCurrentnessResultV1,
   ConversationSessionLastDeliveryV1,
+  ConversationRecommendedRecoveryV1,
 } from '@happier-dev/channels-protocol/v1';
 import {
   areConversationEndpointIdentitiesEqual,
@@ -79,6 +80,7 @@ import {
 import type { PersistedConversationProviderContributionSelection } from './collections.js';
 import type { ConversationPendingPermissionRequest } from './permissionMediation.js';
 import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
+import { recommendConversationDeliveryRecovery } from './recoveryRecommendation.js';
 
 /**
  * Loading the collection definition during generic delivery-module evaluation
@@ -395,6 +397,7 @@ type ChannelDeliveriesCollection = Pick<
  * envelope, exposing CAS facts and the parent required to confirm a new thread.
  */
 export type ConversationOutwardDeliveryResolutionRow = Readonly<{
+  recommendedRecovery?: ConversationRecommendedRecoveryV1 | null;
   custodyId: string;
   revision: number;
   state: 'partial' | 'outcomeUnknown' | 'archiveRecoverable';
@@ -409,6 +412,7 @@ export type ConversationOutwardDeliveryResolutionPage = Readonly<{
 export type ConversationOutwardDeliveryDetailResult =
   | Readonly<{ kind: 'notFound' }>
   | Readonly<{ kind: 'ready'; delivery: Readonly<{
+    recommendedRecovery?: ConversationRecommendedRecoveryV1 | null;
     custodyId: string;
     revision: number;
     connectionId: string;
@@ -1043,6 +1047,7 @@ export async function readConversationOutwardDeliveryResolutionPage(input: Reado
       revision: record.revision,
       state,
       ...createdThreadEndpointRequirement(record),
+      recommendedRecovery: recommendConversationDeliveryRecovery({ custodyId: record.custodyId, revision: record.revision, state }),
     });
   }
   return {
@@ -1076,6 +1081,8 @@ export async function readConversationOutwardDeliveryDetail(input: Readonly<{
   if (record === null || record.custodyId !== input.custodyId) {
     throw resolutionError('channels_delivery_read_foreign', 'Delivery details did not match the current Account custody.');
   }
+  const recommendedRecovery = recommendConversationDeliveryRecovery({ custodyId: record.custodyId, revision: record.revision,
+    state: isConversationDeliveryArchiveRecoverable(record.custody) ? 'archiveRecoverable' : record.custody.state });
   return { kind: 'ready', delivery: {
     custodyId: record.custodyId,
     revision: record.revision,
@@ -1085,6 +1092,7 @@ export async function readConversationOutwardDeliveryDetail(input: Readonly<{
     projection: deriveConversationDeliveryProjection(record.custody),
     lastOutcome: deriveConversationDeliveryLastOutcome(record.custody),
     ...createdThreadEndpointRequirement(record),
+    ...(recommendedRecovery === null ? {} : { recommendedRecovery }),
   } };
 }
 

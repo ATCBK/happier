@@ -203,6 +203,7 @@ import {
   readSessionPullRequestProviderSelection,
   type CurrentProviderContributionWitness,
 } from './providerContributions.js';
+import { recommendConversationRecovery } from './recoveryRecommendation.js';
 
 export {
   readConversationBindingManagementRows,
@@ -2228,50 +2229,74 @@ async function createOrRejoinConnection(input: Readonly<{
     ...(input.webhookEndpoint === undefined ? {} : { webhookEndpoint: input.webhookEndpoint }),
     now: Date.now(),
   });
-  const result = await collection.batch([
-    { kind: 'put', value: reservation, expectedRevision: 'absent' },
-    { kind: 'put', value: connection, expectedRevision: 'absent' },
-  ], { signal: input.context.signal });
-  assertNotAborted(input.context.signal);
-  if (result.status === 'updated') return { kind: 'created', connectionId };
-
-  let reservationTombstoneRevision: number | undefined;
-  for (const conflict of result.conflicts) {
-    const revision = conflict.revision;
-    if (conflict.rowId !== reservationRowId
-      || conflict.deleted !== true
-      || typeof revision !== 'number'
-      || !Number.isSafeInteger(revision)
-      || revision < 1) continue;
-    reservationTombstoneRevision = revision;
-    break;
-  }
-  if (reservationTombstoneRevision !== undefined) {
-    // A generic Data tombstone still owns uniqueness during its offline-writer
-    // window. Reuse only that opaque reservation row at its exact revision;
-    // the accompanying connection remains a fresh absent row, so no retired
-    // routing identity or dependent binding can be resurrected.
-    const recreated = await collection.batch([
-      { kind: 'put', value: reservation, expectedRevision: reservationTombstoneRevision },
+  try {
+    const result = await collection.batch([
+      { kind: 'put', value: reservation, expectedRevision: 'absent' },
       { kind: 'put', value: connection, expectedRevision: 'absent' },
     ], { signal: input.context.signal });
     assertNotAborted(input.context.signal);
-    if (recreated.status === 'updated') return { kind: 'created', connectionId };
-  }
+    if (result.status === 'updated') return { kind: 'created', connectionId };
 
-  const rejoined = await readExistingReservation({
-    context: input.context,
-    reservationRowId,
-    providerPluginId: input.providerPluginId,
-    providerConnectionKey: input.setup.providerConnectionKey,
-    integrationPrincipalId: input.setup.integrationPrincipal.id,
-  });
-  if (rejoined !== null) return { kind: 'rejoined', connectionId: rejoined };
-  throw pluginError(
-    'channels_connection_create_conflict',
-    'Connection setup conflicted before an authoritative connection could be created or re-read.',
-    true,
-  );
+    let reservationTombstoneRevision: number | undefined;
+    for (const conflict of result.conflicts) {
+      const revision = conflict.revision;
+      if (conflict.rowId !== reservationRowId
+        || conflict.deleted !== true
+        || typeof revision !== 'number'
+        || !Number.isSafeInteger(revision)
+        || revision < 1) continue;
+      reservationTombstoneRevision = revision;
+      break;
+    }
+    if (reservationTombstoneRevision !== undefined) {
+      // A generic Data tombstone still owns uniqueness during its offline-writer
+      // window. Reuse only that opaque reservation row at its exact revision;
+      // the accompanying connection remains a fresh absent row, so no retired
+      // routing identity or dependent binding can be resurrected.
+      const recreated = await collection.batch([
+        { kind: 'put', value: reservation, expectedRevision: reservationTombstoneRevision },
+        { kind: 'put', value: connection, expectedRevision: 'absent' },
+      ], { signal: input.context.signal });
+      assertNotAborted(input.context.signal);
+      if (recreated.status === 'updated') return { kind: 'created', connectionId };
+    }
+
+    const rejoined = await readExistingReservation({
+      context: input.context,
+      reservationRowId,
+      providerPluginId: input.providerPluginId,
+      providerConnectionKey: input.setup.providerConnectionKey,
+      integrationPrincipalId: input.setup.integrationPrincipal.id,
+    });
+    if (rejoined !== null) return { kind: 'rejoined', connectionId: rejoined };
+    throw pluginError(
+      'channels_connection_create_conflict',
+      'Connection setup conflicted before an authoritative connection could be created or re-read.',
+      true,
+    );
+  } catch (error) {
+    if (!isPluginError(error) || error.code !== 'plugin_collection_outcome_unknown' || input.context.signal.aborted) throw error;
+    // The Collection host cannot acknowledge an uncertain write. This domain
+    // can instead adopt its immutable reservation, exactly as a later Create
+    // invocation does. Absence never proves rollback; a new owner decision may
+    // retry only through this same atomic reservation-plus-connection CAS.
+    let existing: string | null;
+    try {
+      existing = await readExistingReservation({
+        context: input.context, reservationRowId, providerPluginId: input.providerPluginId,
+        providerConnectionKey: input.setup.providerConnectionKey, integrationPrincipalId: input.setup.integrationPrincipal.id,
+      });
+    } catch (readError) {
+      if (isPluginError(readError) && readError.code === 'channels_connection_reservation_corrupt') throw readError;
+      throw new PluginError({ code: error.code, message: error.message,
+        details: { recommendedRecovery: recommendConversationRecovery('connection/create-v1', {}, 'createOutcomeUnknown', 'accountStateUnavailable') },
+      }, { cause: error });
+    }
+    if (existing !== null) return { kind: 'rejoined', connectionId: existing };
+    throw new PluginError({ code: error.code, message: error.message, retryable: true,
+      details: { recommendedRecovery: recommendConversationRecovery('connection/create-v1', {}, 'createOutcomeUnknown', 'setupSelectionRequired') },
+    }, { cause: error });
+  }
 }
 
 function parseProviderSetupOutcome(value: unknown): ConversationProviderSetupOutcomeV1 {

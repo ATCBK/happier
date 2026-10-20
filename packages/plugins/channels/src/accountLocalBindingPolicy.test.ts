@@ -405,6 +405,7 @@ describe('Channels ingress conflict Account projections', () => {
         censusId: 'census-conflict',
         revision: 6,
         connectionId: CONNECTION_ID,
+        recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'connection/list-v1' }, input: {}, reason: 'occurrenceEvidenceMismatch' },
       }],
     });
   });
@@ -480,6 +481,8 @@ describe('Channels ingress conflict Account projections', () => {
         connectionId: CONNECTION_ID,
         attemptCount: 5,
         updatedAt: 20,
+        recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'ingress/retry-v1' },
+          input: { obligationId: eventObligationId, expectedRevision: 4 }, reason: 'ingressBlocked' },
       }, {
         kind: 'terminal',
         obligationId: bindingObligationId,
