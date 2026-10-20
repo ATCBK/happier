@@ -499,3 +499,15 @@ test('adopting an existing CLI dist still repairs every missing shared workspace
   }
   assert.equal(countEvent(events, 'cli:build:prepared'), 0, `adoption events:\n${events}`);
 });
+
+test('dev daemon start, recovery and reload all consume the one source-runtime selection', async () => {
+  const source = await readFile(join(scriptsDir, 'dev.mjs'), 'utf-8');
+  const startCalls = [...source.matchAll(/startDevDaemon\(\{[\s\S]*?\n\s*\}\);/gu)].map((match) => match[0]);
+  const executorCall = source.match(/createHappyCliReloadExecutor\(\{[\s\S]*?\n\s*\}\)/u)?.[0];
+
+  assert.equal(startCalls.length, 2, 'initial start and lifecycle recovery');
+  for (const call of [...startCalls, executorCall]) {
+    assert.match(call, /sourceRuntimeOptions,/u);
+    assert.doesNotMatch(call, /buildCli|startLastGreen|cliDir/u);
+  }
+});
