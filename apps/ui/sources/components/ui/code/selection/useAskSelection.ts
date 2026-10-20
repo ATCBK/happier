@@ -54,23 +54,24 @@ export function useAskSelection(input: UseAskSelectionInput) {
     const latestOwnerKey = React.useRef(ownerKey);
     latest.current = input;
     latestOwnerKey.current = ownerKey;
-    const remember = React.useCallback(() => {
+    const refreshSelection = React.useCallback((claimContext: boolean) => {
         if (latestOwnerKey.current !== ownerKey) return;
         const next = latest.current.getSelection();
         setSelectionState((previous) => previous.ownerKey === ownerKey && previous.selection === next
             ? previous : { ownerKey, selection: next });
         if (next) {
             rememberedSelection.current = { ownerKey, selection: next };
-            if (latest.current.active !== false) askSelectionContext.remember(input.scopeId, sourceId);
+            if (claimContext && latest.current.active !== false) askSelectionContext.remember(input.scopeId, sourceId);
         }
     }, [ownerKey, input.scopeId, sourceId]);
+    const remember = React.useCallback(() => refreshSelection(true), [refreshSelection]);
     React.useEffect(() => {
         if (rememberedSelection.current.ownerKey !== ownerKey) rememberedSelection.current = { ownerKey, selection: null };
         setUnavailableReason(null);
-        remember();
-        const unsubscribe = input.subscribeSelection?.(remember);
-        return () => { unsubscribe?.(); askSelectionContext.forget(input.scopeId, sourceId); };
-    }, [ownerKey, input.scopeId, input.subscribeSelection, remember, sourceId]);
+        refreshSelection(askSelectionContext.read(input.scopeId) === null);
+        return () => askSelectionContext.forget(input.scopeId, sourceId);
+    }, [ownerKey, input.scopeId, refreshSelection, sourceId]);
+    React.useEffect(() => input.subscribeSelection?.(remember), [input.subscribeSelection, remember]);
     const readSelection = React.useCallback(() => latest.current.getSelection()
         ?? (rememberedSelection.current.ownerKey === latestOwnerKey.current ? rememberedSelection.current.selection : null), []);
     const lastSource = React.useSyncExternalStore(askSelectionContext.subscribe,

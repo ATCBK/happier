@@ -30,8 +30,11 @@ vi.mock('@/text', async () => {
 vi.mock('@/components/ui/code/editor/CodeEditor', async () => import('@/components/ui/code/editor/CodeEditor.web'));
 
 import { FileEditorPanel } from './FileEditorPanel';
+import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
 
-it('passes focused Monaco shortcuts and reopens toolbar Find without overwriting the native query', async () => {
+it.each(['code', 'markdown'])('passes focused Monaco shortcuts and reopens %s Find without overwriting the native query', async (kind) => {
+    const measuredLayout = { lineNumbersWidth: 0, decorationsWidth: 10, contentLeft: 10 };
+    const measureDigits = (digits: number) => { measuredLayout.lineNumbersWidth = Math.round(digits * 7.8); measuredLayout.contentLeft = measuredLayout.lineNumbersWidth + measuredLayout.decorationsWidth; };
     const editorDom = document.createElement('div');
     const bodyInput = document.createElement('textarea');
     const widget = document.createElement('div');
@@ -53,11 +56,17 @@ it('passes focused Monaco shortcuts and reopens toolbar Find without overwriting
     editorDom.append(bodyInput, widget);
     document.body.append(editorDom);
     Object.defineProperty(window, 'require', { configurable: true, value: (_modules: string[], ready: () => void) => ready() });
-    Object.defineProperty(window, 'monaco', { configurable: true, value: { editor: {
-        createModel: () => ({ getValue: () => 'first\\n', setValue() {}, dispose() {} }),
-        create: () => ({ trigger, getDomNode: () => editorDom, hasWidgetFocus: () => editorDom.contains(document.activeElement),
+    Object.defineProperty(window, 'monaco', { configurable: true, value: {
+        typescript: { typescriptDefaults: { setModeConfiguration() {} }, javascriptDefaults: { setModeConfiguration() {} } },
+        editor: {
+        createModel: () => ({ getValue: () => 'first\\n', getLineCount: () => 1, setValue() {}, dispose() {} }),
+        create: (_node: unknown, options: { lineNumbersMinChars: number }) => { measureDigits(options.lineNumbersMinChars); return ({ trigger, getDomNode: () => editorDom, hasWidgetFocus: () => editorDom.contains(document.activeElement),
             onDidChangeModelContent: () => ({ dispose() {} }), onDidBlurEditorText: () => ({ dispose() {} }),
-            updateOptions() {}, dispose() {}, focus() {} }),
+            getLayoutInfo: () => measuredLayout,
+            updateOptions(next: { lineDecorationsWidth?: number; lineNumbersMinChars?: number }) {
+                if (next.lineDecorationsWidth !== undefined) measuredLayout.decorationsWidth = next.lineDecorationsWidth;
+                measureDigits(next.lineNumbersMinChars ?? Math.round(measuredLayout.lineNumbersWidth / 7.8));
+            }, dispose() {}, focus() {} }); },
         defineTheme() {}, setTheme() {},
     } } });
     const editorRef = { current: null as CodeEditorHandle | null };
@@ -66,11 +75,17 @@ it('passes focused Monaco shortcuts and reopens toolbar Find without overwriting
     const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}} enabledWhenDisabledCommandIds={['find.open']}>
         <PluginSurfaceFocusEligibilityProvider active={true}>
             <Probe />
-            <FileEditorPanel theme={createThemeFixture()} resetKey="a.ts" editorRef={editorRef}
-                filePath="a.ts" surfaceId="file:editor" value="first\\n" language="plaintext" onChange={() => {}} />
+            {kind === 'code' ? <FileEditorPanel theme={createThemeFixture()} resetKey="a.ts" editorRef={editorRef}
+                lineNumberDigits={5} reviewLaneWidth={32} showLineNumbers
+                filePath="a.ts" surfaceId="file:editor" value="first\\n" language="plaintext" onChange={() => {}} /> :
+                <MarkdownCodeEditorField resetKey="a.md" editorRef={editorRef} filePath="a.md"
+                    lineNumberDigits={5} reviewLaneWidth={32} showLineNumbers
+                    findSurfaceId="file:editor" value="first\\n" language="markdown" sourceOnly onChange={() => {}} />}
         </PluginSurfaceFocusEligibilityProvider>
     </KeyboardShortcutProvider>);
     try {
+        // The real composition must reach Monaco's measured layout, beyond forwarding props.
+        expect(measuredLayout.contentLeft).toBe(8 + 32 + 4 + 39 + 18);
         await act(async () => { bodyInput.focus(); });
         const first = new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', ctrlKey: true, bubbles: true, cancelable: true });
         await act(async () => { bodyInput.dispatchEvent(first); });

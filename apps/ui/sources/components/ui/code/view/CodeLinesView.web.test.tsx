@@ -75,6 +75,9 @@ vi.mock('shiki', () => ({
 }));
 
 async function flushReactAsyncWork(): Promise<void> {
+    // The highlighter and its regex engine load through dynamic imports; microtask
+    // flushing alone does not wait for Vite to finish those module requests.
+    await vi.dynamicImportSettled();
     await flushHookEffects({ cycles: 10, turns: 25 });
 }
 

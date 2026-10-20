@@ -324,7 +324,7 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
         const editor = editorRef.current as MonacoEditorApi.IStandaloneCodeEditor | null;
         const model = modelRef.current as MonacoEditorApi.ITextModel | null;
         const selection = editor?.getSelection?.();
-        if (!selection || !model) return null;
+        if (!editor || !selection || !model) return null;
         const empty = selection.startLineNumber === selection.endLineNumber && selection.startColumn === selection.endColumn;
         const position = editor.getScrolledVisiblePosition?.({ lineNumber: selection.startLineNumber, column: selection.startColumn });
         const bounds = editor.getDomNode?.()?.getBoundingClientRect();

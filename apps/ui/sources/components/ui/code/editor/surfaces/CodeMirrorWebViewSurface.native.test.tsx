@@ -22,6 +22,7 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock(
         {
                     View: 'View',
+                    Platform: { OS: 'ios', select: (options: Record<string, unknown>) => options.ios ?? options.native ?? options.default },
                     PixelRatio: {
                         getFontScale: () => 1,
                     },
@@ -104,14 +105,21 @@ describe('CodeMirrorWebViewSurface (native)', () => {
     it('forwards the configured editor save chord through the canonical host dispatcher', async () => {
         postMessageSpy.mockClear();
         const save = vi.fn();
-        await renderScreen(<KeyboardShortcutProvider handlers={{ 'files.editor.save': save }}>
-            <CodeMirrorWebViewSurface resetKey="save-shortcut" value="one" language="text" onChange={vi.fn()} />
-        </KeyboardShortcutProvider>);
-        emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
-        const configs = postMessageSpy.mock.calls.map(([raw]) => JSON.parse(String(raw))).filter(message => message.type === 'keyboard.config');
-        expect(configs.at(-1)?.payload.signatures).toContain('s|shift=false|ctrl=false|meta=false|alt=true');
-        emitEnvelope({ v: 1, type: 'keyboard.shortcut', payload: { key: 's', code: 'KeyS', modifiers: { shift: false, ctrl: false, meta: false, alt: true }, repeat: false } });
-        expect(save).toHaveBeenCalledOnce();
+        const { storage } = await import('@/sync/domains/state/storage');
+        const previous = storage.getState().settings;
+        try {
+            storage.setState({ settings: { ...previous, keyboardShortcutsV2Enabled: true } });
+            await renderScreen(<KeyboardShortcutProvider handlers={{ 'files.editor.save': save }}>
+                <CodeMirrorWebViewSurface resetKey="save-shortcut" value="one" language="text" onChange={vi.fn()} />
+            </KeyboardShortcutProvider>);
+            emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
+            const configs = postMessageSpy.mock.calls.map(([raw]) => JSON.parse(String(raw))).filter(message => message.type === 'keyboard.config');
+            expect(configs.at(-1)?.payload.signatures).toContain('s|shift=false|ctrl=false|meta=true|alt=false');
+            emitEnvelope({ v: 1, type: 'keyboard.shortcut', payload: { key: 's', code: 'KeyS', modifiers: { shift: false, ctrl: false, meta: true, alt: false }, repeat: false } });
+            expect(save).toHaveBeenCalledOnce();
+        } finally {
+            await act(async () => { storage.setState({ settings: previous }); });
+        }
     });
     it('consumes pointer, activation and cursor bridge events through the canonical handle and ignores malformed positions', async () => {
         const ref = React.createRef<CodeEditorHandle>();
