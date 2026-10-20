@@ -256,7 +256,7 @@ function resolveSessionListIndexRebuildSettings(
     };
 }
 
-function resolveSessionListMachineDisplaysForServer(
+export function resolveSessionListMachineDisplaysForServer(
     state: Pick<SessionsDomainDependencies, 'machineDisplayById' | 'machineListByServerId'>,
     serverId: string,
 ) {

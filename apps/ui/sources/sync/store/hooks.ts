@@ -33,7 +33,9 @@ import {
   workflowRunStoreKey,
   type WorkflowRunRow,
 } from '@/sync/store/domains/workflowRuns';
-import { isSessionRetiredForServer } from '@/sync/store/domains/sessions';
+import { isSessionRetiredForServer, resolveSessionListMachineDisplaysForServer } from '@/sync/store/domains/sessions';
+import { buildSessionListIndexWithServerScope } from './sessionListIndex/buildSessionListIndexWithServerScope';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { normalizeSessionAddress, sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { listSessionAddressesForSessionIdFromLocalState } from '@/sync/domains/session/resolveSessionAddressFromLocalState';
 
@@ -148,12 +150,14 @@ import {
 } from '../runtime/orchestration/connectionManager';
 import {
   areServerProfileIdentifiersEquivalent,
+  getServerProfileById,
   resolveServerProfileScopeIdForIdentifier,
 } from '../domains/server/serverProfiles';
 import { resolveServerScopedMachineInventory, resolveServerScopedMachineInventoryKeys } from '../domains/machines/resolveServerScopedMachines';
 import {
   readSessionListRowForServerId,
   readSessionListRowsForServerId,
+  resolveSessionListHomeKey,
 } from '../domains/session/listing/sessionListRowStateLookup';
 import { buildSessionFolderAssignmentKey } from '../domains/session/folders';
 import {
@@ -1084,7 +1088,7 @@ export function useSessionListIndexByServerId(
     [hasExplicitServerSelection, serverIds, serverIdsKey],
   );
 
-  return getStorage()(useShallow((state) => {
+  const source = getStorage()(useShallow((state) => {
     const indexByServerId = state.sessionListIndexByServerId ?? EMPTY_SESSION_LIST_INDEX_BY_SERVER_ID;
     if (!hasExplicitServerSelection) return indexByServerId;
     if (selectedServerIds.length === 0) return EMPTY_SESSION_LIST_INDEX_BY_SERVER_ID;
@@ -1096,6 +1100,53 @@ export function useSessionListIndexByServerId(
     }
     return Object.keys(selected).length > 0 ? selected : EMPTY_SESSION_LIST_INDEX_BY_SERVER_ID;
   }));
+  const retained = getStorage()(useShallow(state => readSessionArchiveOperationsForServers(
+    state, hasExplicitServerSelection ? selectedServerIds : null,
+  ).filter(operation => {
+    const key = resolveSessionListHomeKey(source, operation.serverId);
+    return !key || !source[key]?.some(item => item.type === 'session' && item.sessionId === operation.sessionId);
+  })));
+  const retainedRows = getStorage()(useShallow(state => retained.map(operation =>
+    readSessionListRowForServerId(state.sessionListRowsByServerId, operation.serverId, operation.sessionId))));
+  const retainedMachines = getStorage()(useShallow(state => retained.map(operation => {
+    const key = resolveSessionListHomeKey(state.machineListByServerId, operation.serverId) ?? operation.serverId;
+    return state.machineListByServerId[key] ?? state.machineDisplayById;
+  })));
+  const activeGroupingV1 = useSetting('sessionListActiveGroupingV1');
+  const inactiveGroupingV1 = useSetting('sessionListInactiveGroupingV1');
+  const sectionModeV1 = useSetting('sessionListSectionModeV1');
+  return React.useMemo(() => {
+    if (retained.length === 0) return source;
+    const state = getStorage().getState();
+    let result: Record<string, ReadonlyArray<SessionListIndexItem> | null | undefined> | null = null;
+    for (let index = 0; index < retained.length; index += 1) {
+      const operation = retained[index];
+      const retainedRow = retainedRows[index];
+      if (!retainedRow) continue;
+      const serverId = resolveSessionListHomeKey(source, operation.serverId)
+        ?? resolveServerProfileScopeIdForIdentifier(operation.serverId);
+      const previousIndex = (result ?? source)[serverId] ?? [];
+      if (previousIndex.some(item => item.type === 'session' && item.sessionId === operation.sessionId)) continue;
+      const candidates: Record<string, SessionListRenderableSession> = {};
+      for (const item of previousIndex) {
+        if (item.type !== 'session') continue;
+        const row = readSessionListRowForServerId(state.sessionListRowsByServerId, serverId, item.sessionId);
+        if (row) candidates[item.sessionId] = row;
+      }
+      candidates[operation.sessionId] = projectSessionArchiveRow(retainedRow, true)!;
+      result ??= { ...source };
+      const machineKey = resolveSessionListHomeKey(state.machineListByServerId, serverId) ?? serverId;
+      result[serverId] = buildSessionListIndexWithServerScope({
+        sessions: candidates,
+        machines: resolveSessionListMachineDisplaysForServer(state, machineKey),
+        activeGroupingV1, inactiveGroupingV1, sectionModeV1, previousIndex,
+        serverScope: { serverId, serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId) },
+      });
+    }
+    return result ?? source;
+    // Raw index changes own ordinary structural invalidation. Retained rows and
+    // Home machine inputs add only the missing pending candidates above.
+  }, [source, retained, retainedRows, retainedMachines, activeGroupingV1, inactiveGroupingV1, sectionModeV1]);
 }
 
 export function useSessionFolderAssignment(serverId: string | null | undefined, sessionId: string): string | null {
