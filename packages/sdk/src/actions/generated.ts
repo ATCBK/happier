@@ -101,6 +101,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "browser.workspace.open",
   "bugreport.submit",
   "clipboard.write",
+  "code.restart",
   "composer.attachments.pick",
   "composer.transaction.apply",
   "computer.control.handBack",
@@ -186,6 +187,9 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "execution.run.stop",
   "execution.run.stream.cancel",
   "execution.run.stream.start",
+  "file.editor.resolve",
+  "file.editor.save",
+  "file.view.set",
   "follow.preferences.set",
   "follow.remove",
   "follow.set",
@@ -506,6 +510,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "scm.diffSummary.commitPlan.includeHookChanges",
   "scm.diffSummary.commitPlan.stop",
   "scm.diffSummary.discuss",
+  "scm.diffSummary.draftPullRequest",
   "scm.diffSummary.generate",
   "scm.diffSummary.refine",
   "scm.diffSummary.result.clear",
@@ -814,6 +819,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "workflow.trigger.remove",
   "workflow.trigger.run_now",
   "workflow.trigger.update",
+  "workspace.files.replace",
   "workspace.groups.focus",
   "workspace.groups.maximize",
   "workspace.groups.restore",
@@ -1062,6 +1068,24 @@ export type GeneratedActions = Readonly<{
   readonly clipboard: Readonly<{
     readonly write: (input: PublicActionInputById["clipboard.write"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"clipboard.write">>;
   }> ;
+  readonly code: Readonly<{
+    readonly definition: Readonly<{
+      readonly get: (input: PublicActionInputById["code.definition.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.definition.get">>;
+    }> ;
+    readonly diagnostics: Readonly<{
+      readonly list: (input: PublicActionInputById["code.diagnostics.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.diagnostics.list">>;
+    }> ;
+    readonly hover: Readonly<{
+      readonly get: (input: PublicActionInputById["code.hover.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.hover.get">>;
+    }> ;
+    readonly references: Readonly<{
+      readonly list: (input: PublicActionInputById["code.references.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.references.list">>;
+    }> ;
+    readonly restart: (input: PublicActionInputById["code.restart"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.restart">>;
+    readonly symbols: Readonly<{
+      readonly list: (input: PublicActionInputById["code.symbols.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"code.symbols.list">>;
+    }> ;
+  }> ;
   readonly composer: Readonly<{
     readonly attachments: Readonly<{
       readonly pick: (input: PublicActionInputById["composer.attachments.pick"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"composer.attachments.pick">>;
@@ -1302,6 +1326,16 @@ export type GeneratedActions = Readonly<{
         readonly start: (input: PublicActionInputById["execution.run.stream.start"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"execution.run.stream.start">>;
       }> ;
       readonly wait: (input: PublicActionInputById["execution.run.wait"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"execution.run.wait">>;
+    }> ;
+  }> ;
+  readonly file: Readonly<{
+    readonly editor: Readonly<{
+      readonly resolve: (input: PublicActionInputById["file.editor.resolve"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"file.editor.resolve">>;
+      readonly save: (input: PublicActionInputById["file.editor.save"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"file.editor.save">>;
+    }> ;
+    readonly view: Readonly<{
+      readonly get: (input: PublicActionInputById["file.view.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"file.view.get">>;
+      readonly set: (input: PublicActionInputById["file.view.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"file.view.set">>;
     }> ;
   }> ;
   readonly follow: Readonly<{
@@ -2164,6 +2198,9 @@ export type GeneratedActions = Readonly<{
     readonly backend: Readonly<{
       readonly describe: (input: PublicActionInputById["scm.backend.describe"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.backend.describe">>;
     }> ;
+    readonly blame: Readonly<{
+      readonly get: (input: PublicActionInputById["scm.blame.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.blame.get">>;
+    }> ;
     readonly branch: Readonly<{
       readonly checkout: (input: PublicActionInputById["scm.branch.checkout"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.branch.checkout">>;
       readonly create: (input: PublicActionInputById["scm.branch.create"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.branch.create">>;
@@ -2206,6 +2243,7 @@ export type GeneratedActions = Readonly<{
         readonly stop: (input: PublicActionInputById["scm.diffSummary.commitPlan.stop"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.diffSummary.commitPlan.stop">>;
       }> ;
       readonly discuss: (input: PublicActionInputById["scm.diffSummary.discuss"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.diffSummary.discuss">>;
+      readonly draftPullRequest: (input: PublicActionInputById["scm.diffSummary.draftPullRequest"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.diffSummary.draftPullRequest">>;
       readonly generate: (input: PublicActionInputById["scm.diffSummary.generate"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.diffSummary.generate">>;
       readonly refine: (input: PublicActionInputById["scm.diffSummary.refine"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.diffSummary.refine">>;
       readonly result: Readonly<{
@@ -2220,6 +2258,9 @@ export type GeneratedActions = Readonly<{
         readonly mark: (input: PublicActionInputById["scm.diffSummary.reviewed.mark"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.diffSummary.reviewed.mark">>;
         readonly unmark: (input: PublicActionInputById["scm.diffSummary.reviewed.unmark"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.diffSummary.reviewed.unmark">>;
       }> ;
+    }> ;
+    readonly file: Readonly<{
+      readonly read: (input: PublicActionInputById["scm.file.read"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.file.read">>;
     }> ;
     readonly history: Readonly<{
       readonly entries: (input: PublicActionInputById["scm.history.entries"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"scm.history.entries">>;
@@ -3133,6 +3174,13 @@ export type GeneratedActions = Readonly<{
   }> ;
   readonly workspace: Readonly<{
     readonly files: Readonly<{
+      readonly link: Readonly<{
+        readonly get: (input: PublicActionInputById["workspace.files.link.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workspace.files.link.get">>;
+      }> ;
+      readonly replace: Readonly<{
+        readonly apply: (input: PublicActionInputById["workspace.files.replace"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workspace.files.replace">>;
+        readonly preview: (input: PublicActionInputById["workspace.files.replace.preview"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workspace.files.replace.preview">>;
+      }> ;
       readonly search: (input: PublicActionInputById["workspace.files.search"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"workspace.files.search">>;
     }> ;
     readonly groups: Readonly<{
@@ -3412,6 +3460,24 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
     clipboard: {
       write: (input: PublicActionInputById["clipboard.write"], options?: ActionExecutionOptions) => execute("clipboard.write", input, options),
     },
+    code: {
+      definition: {
+        get: (input: PublicActionInputById["code.definition.get"], options?: ActionExecutionOptions) => execute("code.definition.get", input, options),
+      },
+      diagnostics: {
+        list: (input: PublicActionInputById["code.diagnostics.list"], options?: ActionExecutionOptions) => execute("code.diagnostics.list", input, options),
+      },
+      hover: {
+        get: (input: PublicActionInputById["code.hover.get"], options?: ActionExecutionOptions) => execute("code.hover.get", input, options),
+      },
+      references: {
+        list: (input: PublicActionInputById["code.references.list"], options?: ActionExecutionOptions) => execute("code.references.list", input, options),
+      },
+      restart: (input: PublicActionInputById["code.restart"], options?: ActionExecutionOptions) => execute("code.restart", input, options),
+      symbols: {
+        list: (input: PublicActionInputById["code.symbols.list"], options?: ActionExecutionOptions) => execute("code.symbols.list", input, options),
+      },
+    },
     composer: {
       attachments: {
         pick: (input: PublicActionInputById["composer.attachments.pick"], options?: ActionExecutionOptions) => execute("composer.attachments.pick", input, options),
@@ -3652,6 +3718,16 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
           start: (input: PublicActionInputById["execution.run.stream.start"], options?: ActionExecutionOptions) => execute("execution.run.stream.start", input, options),
         },
         wait: (input: PublicActionInputById["execution.run.wait"], options?: ActionExecutionOptions) => execute("execution.run.wait", input, options),
+      },
+    },
+    file: {
+      editor: {
+        resolve: (input: PublicActionInputById["file.editor.resolve"], options?: ActionExecutionOptions) => execute("file.editor.resolve", input, options),
+        save: (input: PublicActionInputById["file.editor.save"], options?: ActionExecutionOptions) => execute("file.editor.save", input, options),
+      },
+      view: {
+        get: (input: PublicActionInputById["file.view.get"], options?: ActionExecutionOptions) => execute("file.view.get", input, options),
+        set: (input: PublicActionInputById["file.view.set"], options?: ActionExecutionOptions) => execute("file.view.set", input, options),
       },
     },
     follow: {
@@ -4514,6 +4590,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       backend: {
         describe: (input: PublicActionInputById["scm.backend.describe"], options?: ActionExecutionOptions) => execute("scm.backend.describe", input, options),
       },
+      blame: {
+        get: (input: PublicActionInputById["scm.blame.get"], options?: ActionExecutionOptions) => execute("scm.blame.get", input, options),
+      },
       branch: {
         checkout: (input: PublicActionInputById["scm.branch.checkout"], options?: ActionExecutionOptions) => execute("scm.branch.checkout", input, options),
         create: (input: PublicActionInputById["scm.branch.create"], options?: ActionExecutionOptions) => execute("scm.branch.create", input, options),
@@ -4556,6 +4635,7 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
           stop: (input: PublicActionInputById["scm.diffSummary.commitPlan.stop"], options?: ActionExecutionOptions) => execute("scm.diffSummary.commitPlan.stop", input, options),
         },
         discuss: (input: PublicActionInputById["scm.diffSummary.discuss"], options?: ActionExecutionOptions) => execute("scm.diffSummary.discuss", input, options),
+        draftPullRequest: (input: PublicActionInputById["scm.diffSummary.draftPullRequest"], options?: ActionExecutionOptions) => execute("scm.diffSummary.draftPullRequest", input, options),
         generate: (input: PublicActionInputById["scm.diffSummary.generate"], options?: ActionExecutionOptions) => execute("scm.diffSummary.generate", input, options),
         refine: (input: PublicActionInputById["scm.diffSummary.refine"], options?: ActionExecutionOptions) => execute("scm.diffSummary.refine", input, options),
         result: {
@@ -4570,6 +4650,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
           mark: (input: PublicActionInputById["scm.diffSummary.reviewed.mark"], options?: ActionExecutionOptions) => execute("scm.diffSummary.reviewed.mark", input, options),
           unmark: (input: PublicActionInputById["scm.diffSummary.reviewed.unmark"], options?: ActionExecutionOptions) => execute("scm.diffSummary.reviewed.unmark", input, options),
         },
+      },
+      file: {
+        read: (input: PublicActionInputById["scm.file.read"], options?: ActionExecutionOptions) => execute("scm.file.read", input, options),
       },
       history: {
         entries: (input: PublicActionInputById["scm.history.entries"], options?: ActionExecutionOptions) => execute("scm.history.entries", input, options),
@@ -5483,6 +5566,13 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
     },
     workspace: {
       files: {
+        link: {
+          get: (input: PublicActionInputById["workspace.files.link.get"], options?: ActionExecutionOptions) => execute("workspace.files.link.get", input, options),
+        },
+        replace: {
+          apply: (input: PublicActionInputById["workspace.files.replace"], options?: ActionExecutionOptions) => execute("workspace.files.replace", input, options),
+          preview: (input: PublicActionInputById["workspace.files.replace.preview"], options?: ActionExecutionOptions) => execute("workspace.files.replace.preview", input, options),
+        },
         search: (input: PublicActionInputById["workspace.files.search"], options?: ActionExecutionOptions) => execute("workspace.files.search", input, options),
       },
       groups: {
