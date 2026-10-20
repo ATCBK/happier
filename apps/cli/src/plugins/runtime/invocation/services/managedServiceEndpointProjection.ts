@@ -89,8 +89,6 @@ export type ManagedServiceSessionClientAccessResolver = (input: Readonly<{
     childEnvironment: Readonly<Record<string, string>>;
 }> | null>;
 
-const MAX_PROJECTION_RECORDS = 256;
-const MAX_RECORD_BYTES = 64 * 1024;
 const MAX_IDENTITY_LENGTH = 10_000;
 const PROJECTION_KEYS = Object.freeze([
     'v',
@@ -288,7 +286,7 @@ export function parseManagedServiceEndpointProjectionV1(
 function readPrivateJsonFile(path: string): unknown {
     try {
         const facts = lstatSync(path);
-        if (!facts.isFile() || facts.isSymbolicLink() || facts.size > MAX_RECORD_BYTES) return null;
+        if (!facts.isFile() || facts.isSymbolicLink()) return null;
         return JSON.parse(readPrivateOwnerFileSync(path)) as unknown;
     } catch {
         return null;
@@ -304,8 +302,7 @@ export function readManagedServiceEndpointProjectionCandidates(
         if (!directoryFacts.isDirectory() || directoryFacts.isSymbolicLink()) return Object.freeze([]);
         const entries = readdirSync(projectionDir)
             .filter((entry) => /^[a-f0-9]{64}\.json$/u.test(entry))
-            .sort()
-            .slice(0, MAX_PROJECTION_RECORDS);
+            .sort();
         const projections: ManagedServiceEndpointProjectionV1[] = [];
         for (const entry of entries) {
             const projection = parseManagedServiceEndpointProjectionV1(

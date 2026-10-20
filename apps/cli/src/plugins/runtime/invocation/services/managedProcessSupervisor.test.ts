@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
+import * as filesystemBoundary from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type {
@@ -22,6 +23,7 @@ import type {
     ManagedServiceProcessSpec,
 } from './managedProcessSupervisor';
 import type { ManagedServiceProcessDurabilityOwner } from './managedServiceDurability';
+import { createManagedServiceDurabilityOwner } from './managedServiceDurability';
 import { associateSupervisedPluginProcessHandleForHost } from '../../exec/processSupervisor';
 import * as processTree from '@/processes/terminate/terminateProcessTree';
 import * as localServiceScan from '@/daemon/local/services/inventory/platform/scan';
@@ -30,6 +32,13 @@ import { createManagedServicesOwner } from './managedServicesOwner';
 import { createLocalServiceActionRoutes } from '@/daemon/local/services/actions/routes';
 import { createLocalServiceInventoryRegistry } from '@/daemon/local/services/inventory/registry';
 import { createLocalServiceActionConfirmationNonceV1, isLocalServiceActionConfirmationNonceV1, LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import { createWindowsJobCustodyName } from '@/subprocess/supervision/processCustody';
+
+// The native helper's marker is an OS boundary; retain real filesystem behavior outside that marker.
+vi.mock('node:fs/promises', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:fs/promises')>();
+    return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 const CLEAN_EXIT: PluginProcessResult = Object.freeze({
     termination: Object.freeze({
@@ -936,6 +945,37 @@ describe('createManagedServiceProcessSupervisorHost', () => {
         expect(healthyObserver).toHaveBeenLastCalledWith(handle.snapshot());
     });
 
+    it('publishes durable-log truncation through the existing service diagnostics', async () => {
+        await withTempDir('managed-log-diagnostic-', async (rootDir) => {
+            const process = createProcess();
+            let emit: Parameters<PluginProcessHandle['onOutput']>[0] | undefined;
+            vi.mocked(process.onOutput).mockImplementation((listener) => {
+                emit = listener;
+                return { dispose() {} };
+            });
+            const host = createManagedServiceProcessSupervisorHost({
+                durability: createManagedServiceDurabilityOwner({ rootDir, maxLogBytes: 512 }),
+                captureProcessStartIdentity: async (pid) => `${pid}:1000`,
+            });
+            const services = host.bind({ occurrenceId: 'logs', pluginId: 'fixture.plugin', contributionId: 'fixture.agent',
+                sessionId: 'session-logs', sourceCustody: { kind: 'development', registeredRootId: 'fixture-root' },
+                isOccurrenceCurrent: () => true, exec: createExec([process]) });
+            const handle = await services.supervise(managedSpec('logged', { durableLog: { enabled: true, keepCount: 1 } }));
+            try {
+                expect(handle.snapshot().diagnostics).toEqual([]);
+                emit?.({ stream: 'stdout', data: new TextEncoder().encode('a'.repeat(1_024)) });
+                expect(handle.snapshot().diagnostics).toContainEqual(expect.objectContaining({
+                    code: 'plugin_managed_service_log_truncated', severity: 'warning',
+                }));
+                emit?.({ stream: 'stderr', data: new TextEncoder().encode('b'.repeat(1_024)) });
+                expect(handle.snapshot().diagnostics.filter(item => item.code === 'plugin_managed_service_log_truncated')).toHaveLength(1);
+                expect(handle.snapshot().state).toBe('healthy');
+            } finally {
+                await handle.dispose();
+            }
+        });
+    });
+
     it('exposes its immutable custody owner', () => {
         const daemon = createManagedServiceProcessSupervisorHost({});
         const sessionRunner = createManagedServiceProcessSupervisorHost({
@@ -963,6 +1003,43 @@ describe('createManagedServiceProcessSupervisorHost', () => {
             code: 'plugin_managed_server_custody_failed',
         });
         expect(exec.spawn).not.toHaveBeenCalled();
+    });
+
+    it.each(['complete', 'cancel'] as const)('lets the native Windows custody owner settle a slow handshake: %s', async (outcome) => {
+        vi.useFakeTimers();
+        const startedAt = Date.now();
+        const originalReadFile = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).readFile;
+        let observedHandshake = false;
+        vi.spyOn(filesystemBoundary, 'readFile').mockImplementation(async (path, options) => {
+            if (String(path).includes('.happier-svc09-custody-')) {
+                observedHandshake = true;
+                if (outcome === 'complete' && Date.now() >= startedAt + 6_000) {
+                    return JSON.stringify({ v: 1, pid: 42, job: createWindowsJobCustodyName('slow-windows') });
+                }
+                throw Object.assign(new Error('Handshake not published'), { code: 'ENOENT' });
+            }
+            return await originalReadFile(path, options);
+        });
+        const process = createProcess();
+        const host = createManagedServiceProcessSupervisorHost({ platform: 'win32',
+            createInstanceId: () => 'slow-windows', resolveProcessCustodyRuntimeExecutable: () => 'C:\\fixture\\custody.exe' });
+        const servers = host.bind({ occurrenceId: 'windows-custody', pluginId: 'fixture.plugin',
+            contributionId: 'fixture.agent', isOccurrenceCurrent: () => true, exec: createExec([process]) });
+        const caller = new AbortController();
+        const pending = servers.supervise(managedSpec('windows-managed'), { signal: caller.signal })
+            .then(handle => ({ handle }), error => ({ error }));
+        await vi.advanceTimersByTimeAsync(6_000);
+        expect(observedHandshake).toBe(true);
+        if (outcome === 'cancel') {
+            caller.abort('caller cancelled');
+            await vi.advanceTimersByTimeAsync(20);
+            expect(await pending).toMatchObject({ error: { code: 'plugin_managed_server_aborted' } });
+            expect(process.dispose).toHaveBeenCalledOnce();
+        } else {
+            const result = await pending;
+            expect(result).toMatchObject({ handle: { snapshot: expect.any(Function) } });
+            if ('handle' in result) await result.handle.dispose();
+        }
     });
 
     it('immediately publishes the current snapshot to a new observer', async () => {

@@ -2208,8 +2208,8 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                 custodyFacts = await waitForSupervisedPluginProcessCustody({
                     custody: managedProcessCustody,
                     signal: entry.lifecycle.signal,
-                    timeoutMs: 5_000,
                 });
+                assertNotAborted(entry.lifecycle.signal);
                 if (!custodyFacts) {
                     return fail(
                         'plugin_managed_server_custody_failed',
@@ -2298,6 +2298,12 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                             keepCount: spec.durableLog.keepCount,
                             secretValues: durableLogSecretValues(spec),
                             nowMs: snapshot.startedAtMs ?? now(),
+                            onDiagnostic: (diagnostic) => {
+                                setSnapshot({
+                                    ...snapshot,
+                                    ...retainManagedServiceDiagnostic(snapshot, diagnostic),
+                                });
+                            },
                         });
                         outputSubscription = process.onOutput((chunk) => {
                             durableLog?.write(chunk.stream, chunk.data);

@@ -9,7 +9,7 @@ import {
     probeProcessGroupLiveness,
     type ProcessLiveness,
 } from '@happier-dev/cli-common/process';
-import { PluginError } from '@happier-dev/plugin-sdk';
+import { PluginError, type PluginDiagnosticData } from '@happier-dev/plugin-sdk';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { createManagedServiceEndpointProjectionV1,
     managedServiceEndpointProjectionFileName,
@@ -68,6 +68,7 @@ export interface ManagedServiceProcessDurabilityOwner {
         keepCount: number;
         secretValues: readonly string[];
         nowMs?: number;
+        onDiagnostic?(diagnostic: PluginDiagnosticData): void;
     }>): Promise<ManagedServiceDurableLogCapture>;
 }
 
@@ -93,7 +94,6 @@ export interface ManagedServiceDurabilityOwner
     }>): Promise<readonly number[]>;
 }
 
-const DEFAULT_MAX_ENDPOINT_PROJECTIONS = 256;
 const DEFAULT_MAX_LOG_BYTES = 8 * 1024 * 1024;
 
 export async function observeManagedServiceProcessStartIdentity(
@@ -250,7 +250,6 @@ function redactStreamingText(
 
 export function createManagedServiceDurabilityOwner(params: Readonly<{
     rootDir: string;
-    maxEndpointProjections?: number;
     maxLogBytes?: number;
     observeProcessStartIdentity?: (pid: number) => Promise<string | null>;
     /** POSIX process-group witness for detached managed spawns; injected only by tests. */
@@ -273,10 +272,6 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
     const terminateTargets = createProcessTreeTerminator({ platform, ...params.processTreeSystemBoundary });
     const endpointProjectionsDir = join(params.rootDir, 'endpoint-projections');
     const logsDir = join(params.rootDir, 'logs');
-    const maxEndpointProjections = resolvePositiveBound(
-        params.maxEndpointProjections,
-        DEFAULT_MAX_ENDPOINT_PROJECTIONS,
-    );
     const maxLogBytes = resolvePositiveBound(params.maxLogBytes, DEFAULT_MAX_LOG_BYTES);
     const openLogPaths = new Set<string>();
     let stateQueue = Promise.resolve();
@@ -465,20 +460,6 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
             const projection = createManagedServiceEndpointProjectionV1(record);
             await ensureDirs();
             const target = endpointProjectionPath(projection.instanceId);
-            let records = (await readdir(endpointProjectionsDir))
-                .filter((entry) => entry.endsWith('.json'));
-            const targetName = target.slice(endpointProjectionsDir.length + 1);
-            if (!records.includes(targetName) && records.length >= maxEndpointProjections) {
-                await pruneDanglingEndpointProjections();
-                records = (await readdir(endpointProjectionsDir))
-                    .filter((entry) => entry.endsWith('.json'));
-            }
-            if (!records.includes(targetName) && records.length >= maxEndpointProjections) {
-                return fail(
-                    'plugin_managed_server_projection_capacity_exceeded',
-                    'Managed server endpoint projection capacity is exhausted',
-                );
-            }
             await replacePrivateBearerFile({
                 path: target,
                 contents: `${JSON.stringify(projection)}\n`,
@@ -606,13 +587,26 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
                 'Managed server durable-log keep count must be between 1 and 50',
             );
         }
-        const header = Buffer.from([
+        let truncationReported = false;
+        const reportTruncation = () => {
+            if (truncationReported) return;
+            truncationReported = true;
+            input.onDiagnostic?.({
+                code: 'plugin_managed_service_log_truncated',
+                severity: 'warning',
+                message: 'Managed server durable log reached its byte limit',
+                details: { maxBytes: maxLogBytes },
+            });
+        };
+        const fullHeader = Buffer.from([
             '# managed server log v1',
             `# instance: ${digest(input.instanceId)}`,
             `# server: ${digest(input.serverId)}`,
             `# openedAtMs: ${nowMs}`,
             '',
-        ].join('\n'), 'utf8').subarray(0, maxLogBytes);
+        ].join('\n'), 'utf8');
+        const header = fullHeader.subarray(0, maxLogBytes);
+        if (header.byteLength < fullHeader.byteLength) reportTruncation();
         let writtenBytes = header.byteLength;
         let queue = atomicWrite(path, header.toString('utf8'));
         openLogPaths.add(path);
@@ -644,8 +638,10 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
             pendingOrigins = redacted.pendingOrigins;
             for (const segment of redacted.emitted) {
                 const remaining = Math.max(0, maxLogBytes - writtenBytes);
+                const bytes = Buffer.from(`[${segment.source}] ${segment.text}`, 'utf8');
+                if (bytes.byteLength > remaining) reportTruncation();
                 if (remaining === 0) return;
-                const retained = Buffer.from(`[${segment.source}] ${segment.text}`, 'utf8').subarray(0, remaining);
+                const retained = bytes.subarray(0, remaining);
                 writtenBytes += retained.byteLength;
                 queue = queue.then(async () => await append(retained));
             }

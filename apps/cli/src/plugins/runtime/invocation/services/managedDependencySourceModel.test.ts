@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ResolvedInstallableContribution } from '@/plugins/projection/registry/types';
+import { PluginManagedDependencyContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/managedDependencies';
 
 import { createV2ManagedDependencySourceModel } from './managedDependencySourceModel';
-
-const declarationBytes = (definition: unknown): number => new TextEncoder().encode(JSON.stringify(definition)).byteLength;
 
 const sourceSpec = {
     kind: 'path' as const,
@@ -109,9 +108,6 @@ describe('V2 managed dependency source model', () => {
         expect(() => createV2ManagedDependencySourceModel({
             platform: 'linux', architecture: ' ', contributions: [],
         })).toThrowError(expect.objectContaining({ code: 'plugin_managed_dependency_source_invalid' }));
-        expect(() => createV2ManagedDependencySourceModel({
-            platform: 'linux', architecture: 'x'.repeat(65), contributions: [],
-        })).toThrowError(expect.objectContaining({ code: 'plugin_managed_dependency_source_invalid' }));
     });
 
     it('fails closed instead of silently dropping an invalid non-legacy dependency shape', () => {
@@ -193,36 +189,21 @@ describe('V2 managed dependency source model', () => {
         });
     });
 
-    it('enforces the aggregate dependency bound before publication', () => {
-        const exact = createV2ManagedDependencySourceModel({
-            platform: 'linux',
-            architecture: 'x64',
-            contributions: Array.from({ length: 128 }, (_, index) => contribution(`acme.plugin-${index}`, 'tool')),
-        });
-        expect(exact.snapshot().dependencies).toHaveLength(128);
-
-        expect(() => createV2ManagedDependencySourceModel({
-            platform: 'linux',
-            architecture: 'x64',
-            contributions: Array.from({ length: 129 }, (_, index) => contribution(`acme.plugin-${index}`, 'tool')),
-        })).toThrowError(expect.objectContaining({ code: 'plugin_managed_dependency_capacity_exceeded' }));
-    });
-
-    it('enforces the per-dependency source bound before publication', () => {
-        const exact = createV2ManagedDependencySourceModel({
-            platform: 'linux', architecture: 'x64',
-            contributions: [contribution('acme.one', 'tool', {
-                sources: Array.from({ length: 8 }, (_, index) => ({ kind: 'system' as const, executableNames: [`tool-${index}`] })),
-            })],
-        });
-        expect(exact.resolve({ pluginId: 'acme.one', localId: 'tool' }).sources).toHaveLength(8);
-
-        expect(() => createV2ManagedDependencySourceModel({
-            platform: 'linux', architecture: 'x64',
-            contributions: [contribution('acme.one', 'tool', {
-                sources: Array.from({ length: 9 }, (_, index) => ({ kind: 'system' as const, executableNames: [`tool-${index}`] })),
-            })],
-        })).toThrowError(expect.objectContaining({ code: 'plugin_managed_dependency_source_capacity_exceeded' }));
+    it('projects canonical admitted declarations without a second count or byte policy', () => {
+        const instructions = 'x'.repeat(70_000);
+        const contributions = Array.from({ length: 129 }, (_, index) => contribution(`acme.plugin-${index}`, 'tool', index === 0 ? {
+            sources: [...Array.from({ length: 9 }, (_, sourceIndex) => ({ kind: 'system' as const, executableNames: [`tool-${sourceIndex}`] })),
+                { kind: 'manual' as const, instructions }],
+            architectures: ['x64', 'a'.repeat(65), ...Array.from({ length: 15 }, (_, architectureIndex) => `arch-${architectureIndex}`)],
+        } : { architectures: ['x64'] })).map(entry => ({ ...entry,
+            definition: PluginManagedDependencyContributionV2Schema.parse(entry.definition) }));
+        const model = createV2ManagedDependencySourceModel({ platform: 'linux', architecture: 'a'.repeat(65), contributions });
+        expect(model.snapshot().dependencies).toHaveLength(129);
+        const resolved = model.resolve({ pluginId: 'acme.plugin-0', localId: 'tool' });
+        expect(resolved.sources).toHaveLength(10);
+        expect(resolved.definition.architectures).toHaveLength(17);
+        expect(resolved.definition.sources[9]).toMatchObject({ kind: 'manual', instructions });
+        expect(resolved.availability).toEqual({ state: 'available' });
     });
 
     it('bounds duplicate platform and architecture declarations before publication', () => {
@@ -236,38 +217,10 @@ describe('V2 managed dependency source model', () => {
         expect(() => createV2ManagedDependencySourceModel({
             platform: 'linux', architecture: 'x64',
             contributions: [contribution('acme.one', 'tool', {
-                architectures: Array.from({ length: 17 }, (_, index) => `arch-${index}`),
+                architectures: ['x64', 'x64'],
             })],
         })).toThrowError(expect.objectContaining({ code: 'plugin_managed_dependency_source_invalid' }));
 
-    });
-
-    it('rejects an oversized declaration before source publication', () => {
-        expect(() => createV2ManagedDependencySourceModel({
-            platform: 'linux', architecture: 'x64',
-            contributions: [contribution('acme.one', 'tool', {
-                sources: [{ kind: 'manual', instructions: 'x'.repeat(70_000) }],
-            })],
-        })).toThrowError(expect.objectContaining({ code: 'plugin_managed_dependency_source_invalid' }));
-    });
-
-    it('accepts the exact declaration byte bound and rejects one byte beyond it', () => {
-        const definition = contribution('acme.one', 'tool', { metadata: { padding: '' } }).definition;
-        const paddingBytes = (64 * 1024) - declarationBytes(definition);
-        const exactDefinition = { ...definition, metadata: { padding: 'x'.repeat(paddingBytes) } };
-        const overDefinition = { ...exactDefinition, metadata: { padding: `${exactDefinition.metadata.padding}x` } };
-        expect(declarationBytes(exactDefinition)).toBe(64 * 1024);
-        expect(declarationBytes(overDefinition)).toBe((64 * 1024) + 1);
-
-        const exact = createV2ManagedDependencySourceModel({
-            platform: 'linux', architecture: 'arm64',
-            contributions: [{ ...contribution('acme.one', 'tool'), definition: exactDefinition }],
-        });
-        expect(exact.snapshot().dependencies).toHaveLength(1);
-        expect(() => createV2ManagedDependencySourceModel({
-            platform: 'linux', architecture: 'arm64',
-            contributions: [{ ...contribution('acme.one', 'tool'), definition: overDefinition }],
-        })).toThrowError(expect.objectContaining({ code: 'plugin_managed_dependency_source_invalid' }));
     });
 
     it('fences every lookup after the model retires', () => {

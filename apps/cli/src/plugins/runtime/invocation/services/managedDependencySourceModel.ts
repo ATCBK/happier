@@ -8,12 +8,6 @@ import { PluginError } from '@happier-dev/plugin-sdk';
 
 import type { ResolvedInstallableContribution } from '@/plugins/projection/registry/types';
 
-const MAX_V2_MANAGED_DEPENDENCIES_PER_GENERATION = 128;
-const MAX_V2_MANAGED_DEPENDENCY_SOURCES = 8;
-const MAX_V2_MANAGED_DEPENDENCY_DECLARATION_BYTES = 64 * 1024;
-const MAX_V2_MANAGED_DEPENDENCY_ARCHITECTURES = 16;
-const MAX_V2_MANAGED_DEPENDENCY_ARCHITECTURE_CODE_UNITS = 64;
-
 export type ManagedDependencyHostPlatform = 'darwin' | 'linux' | 'win32';
 type DeclaredPlatform = NonNullable<PluginManagedDependencyContributionV2['platforms']>[number];
 type V2Source = PluginManagedDependencyContributionV2['sources'][number];
@@ -70,12 +64,6 @@ function normalizeSources(
     qualifiedId: string,
     sources: readonly V2Source[],
 ): readonly ManagedDependencySourceModelEntry[] {
-    if (sources.length > MAX_V2_MANAGED_DEPENDENCY_SOURCES) {
-        return fail(
-            'plugin_managed_dependency_source_capacity_exceeded',
-            'Managed dependency declares too many sources',
-        );
-    }
     const normalized = sources.map((rawSource, declarationIndex) => {
         const source = rawSource;
         return Object.freeze({
@@ -114,7 +102,6 @@ export function createV2ManagedDependencySourceModel(params: Readonly<{
         !(['darwin', 'linux', 'win32'] as const).includes(params.platform)
         || !params.architecture
         || params.architecture.trim() !== params.architecture
-        || params.architecture.length > MAX_V2_MANAGED_DEPENDENCY_ARCHITECTURE_CODE_UNITS
     ) {
         return fail('plugin_managed_dependency_source_invalid', 'Managed dependency host platform or architecture is invalid');
     }
@@ -134,10 +121,6 @@ export function createV2ManagedDependencySourceModel(params: Readonly<{
         }
         candidates.push(candidate as ResolvedV2ManagedDependencyContribution);
     }
-    if (candidates.length > MAX_V2_MANAGED_DEPENDENCIES_PER_GENERATION) {
-        return fail('plugin_managed_dependency_capacity_exceeded', 'Managed dependency occurrenceId exceeds its capacity');
-    }
-
     const dependencies: ManagedDependencySourceModelDependency[] = [];
     const byQualifiedId = new Map<string, ManagedDependencySourceModelDependency>();
     for (const candidate of candidates) {
@@ -161,23 +144,14 @@ export function createV2ManagedDependencySourceModel(params: Readonly<{
         ) {
             return fail('plugin_managed_dependency_source_invalid', 'Managed dependency source provenance is incomplete or invalid');
         }
-        if (new TextEncoder().encode(JSON.stringify(parsed.data)).byteLength > MAX_V2_MANAGED_DEPENDENCY_DECLARATION_BYTES) {
-            return fail('plugin_managed_dependency_source_invalid', 'Managed dependency declaration exceeds its byte bound');
-        }
         if (parsed.data.platforms && new Set(parsed.data.platforms).size !== parsed.data.platforms.length) {
             return fail('plugin_managed_dependency_source_invalid', 'Managed dependency platforms must be unique');
         }
         if (
             parsed.data.architectures
-            && (
-                parsed.data.architectures.length > MAX_V2_MANAGED_DEPENDENCY_ARCHITECTURES
-                || new Set(parsed.data.architectures).size !== parsed.data.architectures.length
-                || parsed.data.architectures.some((architecture) => (
-                    architecture.length > MAX_V2_MANAGED_DEPENDENCY_ARCHITECTURE_CODE_UNITS
-                ))
-            )
+            && new Set(parsed.data.architectures).size !== parsed.data.architectures.length
         ) {
-            return fail('plugin_managed_dependency_source_invalid', 'Managed dependency architectures are invalid or exceed their bounds');
+            return fail('plugin_managed_dependency_source_invalid', 'Managed dependency architectures must be unique');
         }
         let identity: PluginContributionIdentityV1;
         try {
