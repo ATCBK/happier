@@ -4,6 +4,7 @@ import {
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/advanced';
 import {
+  COLLECTION_RAIL_MIN_WIDTH_PX,
   HappierListDetailLayout,
   useHappierCollectionLayout,
 } from '@happier-dev/plugin-ui/presentation';
@@ -19,6 +20,7 @@ import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigation
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { useCollectionRailWidth } from '@/components/ui/lists/collection/useCollectionRailWidth';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -88,6 +90,7 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
   const router = useRouter();
   const { theme } = useUnistyles();
   const { fontScale } = useWindowDimensions();
+  const railWidth = useCollectionRailWidth('memory');
   const openSession = React.useCallback(
     (target: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => {
       fireAndForget(
@@ -299,9 +302,17 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
         testID="memory-document.layout"
         listTestID="memory-document.list-pane"
         detailTestID="memory-document.detail-pane"
-        minListWidth={HAPPIER_COLLECTION_RAIL_WIDTH_PX.detailed * scale}
+        minListWidth={COLLECTION_RAIL_MIN_WIDTH_PX * scale}
         minDetailWidth={FACT_DETAIL_MIN_WIDTH_PX * scale}
+        listWidthPx={railWidth.widthPx ?? HAPPIER_COLLECTION_RAIL_WIDTH_PX.detailed * scale}
+        onListWidthCommit={railWidth.commit}
+        onListWidthReset={railWidth.reset}
         preferredListRatio={0.5}
+        labels={{
+          resize: t('ui.resizableDockedPane.resizeA11y'),
+          resizeHint: t('ui.resizableDockedPane.resizeHint'),
+          resizeValue: (px) => t('ui.resizableDockedPane.resizeValue', { px }),
+        }}
         listStyle={{
           borderRightWidth: 1,
           borderRightColor: theme.colors.border.default,

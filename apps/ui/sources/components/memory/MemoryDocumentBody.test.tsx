@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import { MEMORY_ARCHIVE_TOPIC_TITLE_V1, MemoryDocBodyV1Schema, type MemoryDocBodyV1, type MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
@@ -238,6 +239,21 @@ async function readMemory(ref: PromptDocArtifactRefV1, topic?: string) {
     if (!result.ok) throw new Error(result.error);
     return MemoryDocReadResultV1Schema.parse(result.result);
 }
+
+it('restores the Memory rail width beside an admitted fact', async () => {
+    if (!connection) throw new Error('Expected the Memory Home connection fixture');
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'Verify signatures.')], topics: [] });
+    storage.getState().applyLocalSettings({ collectionRailWidthsV1: { memory: 350 } });
+    const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
+        <MemoryDocumentScreen artifactId={ref.artifactId} serverId={serverId} factId="one" />
+    </InjectedAuthProvider>);
+    await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+    const layout = screen.findHostByTestId('memory-document.layout');
+    await act(async () => layout!.props.onLayout({ nativeEvent: { layout: { width: 1200, height: 800 } } }));
+    const style = [screen.findHostByTestId('memory-document.list-pane')?.props.style].flat(Infinity)
+        .filter(Boolean).reduce((result, part) => ({ ...result, ...part }), {});
+    expect(1200 * style.flex).toBeCloseTo(350);
+});
 
 it.each(['private', 'grant', 'public', 'unknown'] as const)('publishes the admitted Memory audience (%s) without inferring privacy from ownership', async audience => {
     // Measure the display read, not the separate cold inventory hydration that changes its refresh basis.
