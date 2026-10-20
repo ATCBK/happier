@@ -66,6 +66,7 @@ import {
 export type SessionModelPickerExperimentalConfirmation = Readonly<{
     kind: 'confirm-experimental';
     connectionId: string;
+    connectedAccountTarget?: SessionModelProjectionGroup['connectedAccountTarget'];
     expectedConnectionRevision: number;
     agentTargetKey: string;
     modelId: string;
@@ -125,6 +126,7 @@ export function resolveSessionModelPickerSelection(input: Readonly<{
             return {
                 kind: 'confirm-experimental',
                 connectionId: group.connectionId,
+                ...(group.connectedAccountTarget ? { connectedAccountTarget: group.connectedAccountTarget } : {}),
                 expectedConnectionRevision: group.connectionRevision,
                 agentTargetKey: row.ref.agentTargetKey,
                 modelId: row.ref.modelId,

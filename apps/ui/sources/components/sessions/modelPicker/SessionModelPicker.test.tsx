@@ -78,6 +78,15 @@ function experimentalProviderGroup(id: string) {
 }
 
 describe('SessionModelPicker', () => {
+    it('passes the exact Connected Account source to the existing experimental confirmation', () => {
+        const { selected, providerGroups } = experimentalProviderGroup('connected-source:catalog-a');
+        const connectedAccountTarget = { kind: 'group' as const,
+            service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool-a' };
+        expect(resolveSessionModelPickerSelection({
+            groups: [{ ...providerGroups[0]!, connectedAccountTarget, connectionRevision: 0 }], ref: selected,
+        })).toMatchObject({ kind: 'confirm-experimental', connectedAccountTarget,
+            connectionId: selected.providerConnectionId, expectedConnectionRevision: 0 });
+    });
     it.each([false, true])('finds authoritative native models by exact id and label despite an unavailable Provider projection (favorite %s)', async (favorite) => {
         const agentTargetKey = 'agent:acme.agent/reviewer';
         const modelId = 'openai/gpt-6.1-sol';
