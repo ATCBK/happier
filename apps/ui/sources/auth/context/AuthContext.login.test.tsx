@@ -2,6 +2,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { AuthProvider, getCurrentAuth } from './AuthContext';
 
 (
@@ -149,8 +150,8 @@ describe('AuthContext.login', () => {
         const { storage } = await import('@/sync/domains/state/storageStore');
         const previousState = storage.getState();
         storage.getState().applyLocalSettings({ hasCompletedAuthOnce: false }, { source: 'test' });
-        storage.setState(state => ({ settings: { ...state.settings,
-            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } }));
+        storage.setState(state => ({ settings: settingsParse({ ...state.settings,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) }));
         switchConnectionToActiveServerSpy.mockImplementation(
             () => new Promise<null>(() => {}),
         );

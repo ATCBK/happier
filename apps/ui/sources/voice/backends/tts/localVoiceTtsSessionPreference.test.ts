@@ -26,8 +26,7 @@ const { sync } = await import('@/sync/sync');
 const { createDefaultLocalVoiceTtsProviderControllers } = await import('./localVoiceTtsProviderControllers');
 const { createLocalVoiceTtsController } = await import('./localVoiceTtsController');
 const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-const { playRealtimeCatalogPreview, readRealtimeCatalogPreview, stopRealtimeCatalogPreview } = await import('@/voice/settings/panels/realtime/catalogPreview');
-const { previewLocalNeuralTts } = await import('@/voice/settings/panels/localTts/providers/localNeural/previewLocalNeuralTts');
+const { previewLocalNeuralTts, localNeuralTtsPreviewController } = await import('@/voice/settings/panels/localTts/providers/localNeural/previewLocalNeuralTts');
 const { voiceSettingsParse, readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
 const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
@@ -79,7 +78,7 @@ describe('local model Session voice consumption', () => {
   });
 
   afterEach(async () => {
-    stopRealtimeCatalogPreview('happier.voice.builtin/local-neural');
+    localNeuralTtsPreviewController.stop();
     await disconnect?.();
     disconnect = undefined;
     await account?.dispose();
@@ -249,16 +248,16 @@ describe('local model Session voice consumption', () => {
 
   it('previews a catalog-only local voice through the shared preview owner and real local speech path', async () => {
     const cfg = readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }));
-    const synthesize = async (input: { registerPlaybackStopper: VoicePlaybackStopperRegistrar; signal: AbortSignal; isCurrent: () => boolean }) => {
+    const attempt = localNeuralTtsPreviewController.begin('am_adam');
+    try {
       await previewLocalNeuralTts({ config: { ...cfg.tts.localNeural, execution: 'daemon', voiceId: 'am_adam' },
-        sample: 'preview', timeoutMs: cfg.networkTimeoutMs, ...input });
-    };
-    const result = await playRealtimeCatalogPreview({ providerId: 'happier.voice.builtin/local-neural',
-      row: { id: 'am_adam', name: 'Adam' }, isCurrent: () => true, synthesize });
-    expect(result).toMatchObject({ status: 'completed' });
+        sample: 'preview', timeoutMs: cfg.networkTimeoutMs, ...attempt });
+    } finally {
+      attempt.finish();
+    }
     expect(daemonStreamStartRpc).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'am_adam', text: 'preview' }));
     expect(encodedAudio.start).toHaveBeenCalledOnce();
-    expect(readRealtimeCatalogPreview()).toBeNull();
+    expect(localNeuralTtsPreviewController.read()).toBeNull();
   });
 
   it('stops a local preview while synthesis is pending without starting late audio', async () => {
@@ -267,18 +266,15 @@ describe('local model Session voice consumption', () => {
     const synthesis = createDeferred<void>();
     daemonStreamStartRpc.mockReturnValueOnce(synthesis.promise);
     releaseSynthesis = () => synthesis.resolve();
-    const synthesize = async (input: { registerPlaybackStopper: VoicePlaybackStopperRegistrar; signal: AbortSignal; isCurrent: () => boolean }) => {
-      await previewLocalNeuralTts({ config: { ...cfg.tts.localNeural, execution: 'daemon', voiceId: 'am_adam' },
-        sample: 'preview', timeoutMs: cfg.networkTimeoutMs, ...input });
-    };
-    const providerId = 'happier.voice.builtin/local-neural';
-    const pending = playRealtimeCatalogPreview({ providerId, row: { id: 'am_adam', name: 'Adam' },
-      isCurrent: () => true, synthesize });
+    const attempt = localNeuralTtsPreviewController.begin('am_adam');
+    const pending = previewLocalNeuralTts({ config: { ...cfg.tts.localNeural, execution: 'daemon', voiceId: 'am_adam' },
+      sample: 'preview', timeoutMs: cfg.networkTimeoutMs, ...attempt }).finally(attempt.finish);
+    const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     await vi.waitFor(() => expect(daemonStreamStartRpc).toHaveBeenCalled());
-    expect(stopRealtimeCatalogPreview(providerId)).toBe(true);
+    expect(localNeuralTtsPreviewController.stop()).toBe(true);
     releaseSynthesis();
-    expect(await pending).toMatchObject({ status: 'cancelled' });
+    await cancelled;
     expect(encodedAudio.start).not.toHaveBeenCalled();
-    expect(readRealtimeCatalogPreview()).toBeNull();
+    expect(localNeuralTtsPreviewController.read()).toBeNull();
   });
 });

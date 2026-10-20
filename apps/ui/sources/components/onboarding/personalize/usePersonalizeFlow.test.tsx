@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
 import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
 import { registerNativeThemePreferenceTransitionController } from '@/components/settings/appearance/themePreferenceTransition';
@@ -77,8 +77,8 @@ describe('Personalize mounted visit', () => {
         ['notifications', { notifyNeedsYou: false, notifyFinished: false, notifyPreview: false }],
     ] satisfies readonly (readonly [PersonalizeStepId, Partial<PersonalizeChoices>])[])
     ('admits the %s choices before advancing or marking the step saved', async (step, patch) => {
-        const account = await createSecretSettingsTestHarness({ settings: { ...settingsDefaults,
-            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } });
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ ...settingsDefaults,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) });
         try {
             const hook = await renderHook(() => usePersonalizeFlow({ initialPage: step, onExit: vi.fn() }));
             const before = readPersonalizeChoices(storage.getState().settings, storage.getState().localSettings);
@@ -88,8 +88,8 @@ describe('Personalize mounted visit', () => {
             expect(storage.getState().localSettings.personalizeProgressV1.savedSteps).toEqual([]);
             expect(readPersonalizeChoices(storage.getState().settings, storage.getState().localSettings)).toEqual(before);
 
-            await act(async () => { account.replaceSettings({ ...account.persistedSettings,
-                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } } }); });
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } } })); });
             await act(async () => { expect(await hook.getCurrent().next()).toBe(true); });
             expect(readPersonalizeChoices(storage.getState().settings, storage.getState().localSettings)).toMatchObject(patch);
             expect(storage.getState().localSettings.personalizeProgressV1.savedSteps).toEqual([step]);
@@ -97,8 +97,8 @@ describe('Personalize mounted visit', () => {
     });
 
     it('keeps a compound step pending until approval and keeps its draft after rejection', async () => {
-        const account = await createSecretSettingsTestHarness({ settings: { ...settingsDefaults,
-            actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } } } });
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ ...settingsDefaults,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } } }) });
         try {
             const hook = await renderHook(() => usePersonalizeFlow({ initialPage: 'work', onExit: vi.fn() }));
             await act(async () => { hook.getCurrent().update({ listLayout: 'recent_activity' }); });
@@ -122,8 +122,8 @@ describe('Personalize mounted visit', () => {
     });
 
     it('remembers a skipped page without changing preferences when Settings writes are Off', async () => {
-        storage.setState({ settings: { ...settingsDefaults,
-            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } });
+        storage.setState({ settings: settingsParse({ ...settingsDefaults,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) });
         const hook = await renderHook(() => usePersonalizeFlow({ initialPage: 'look', onExit: vi.fn() }));
         await act(async () => { hook.getCurrent().skip(); });
         expect(hook.getCurrent().page).toBe('style');

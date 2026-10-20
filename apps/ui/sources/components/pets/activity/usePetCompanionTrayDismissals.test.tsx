@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
 
 import { usePetCompanionTrayDismissals } from './usePetCompanionTrayDismissals';
 
@@ -15,8 +16,8 @@ describe('usePetCompanionTrayDismissals', () => {
     it('remembers an acknowledged activity across visits with Settings writes Off', async () => {
         const previousState = storage.getState();
         try {
-            storage.setState(state => ({ settings: { ...state.settings,
-                actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } },
+            storage.setState(state => ({ settings: settingsParse({ ...state.settings,
+                actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }),
                 localSettings: { ...localSettingsDefaults, petsDismissedCompanionTrayItemKeys: [] } }));
             const hook = await renderHook(() => usePetCompanionTrayDismissals());
             await act(async () => hook.getCurrent().dismissTrayItem({

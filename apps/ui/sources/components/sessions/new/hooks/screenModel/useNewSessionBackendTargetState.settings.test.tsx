@@ -13,7 +13,7 @@ const network = await installSessionOpsNetworkBoundary();
 await loadSyncSingletonForTests();
 const { createResolvedAgentCatalogEntryFixture } = await import('@/dev/testkit/fixtures/agentCatalogFixtures');
 const { storage } = await import('@/sync/domains/state/storage');
-const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { settingsDefaults, settingsParse } = await import('@/sync/domains/settings/settings');
 const { useNewSessionBackendTargetState } = await import('./useNewSessionBackendTargetState');
 
 const codexTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
@@ -30,8 +30,8 @@ const entries: ReadonlyArray<ResolvedBackendCatalogEntry> = (['codex', 'claude']
 beforeEach(() => {
     network.resetRequests();
     storage.setState(storage.getInitialState(), true);
-    storage.setState({ settings: { ...settingsDefaults, lastUsedAgent: 'codex', lastUsedBackendTarget: codexTarget,
-        actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } });
+    storage.setState({ settings: settingsParse({ ...settingsDefaults, lastUsedAgent: 'codex', lastUsedBackendTarget: codexTarget,
+        actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) });
 });
 afterEach(() => standardCleanup());
 afterAll(() => network.dispose());

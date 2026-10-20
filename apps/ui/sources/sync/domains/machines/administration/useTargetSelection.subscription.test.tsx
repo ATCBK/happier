@@ -13,6 +13,7 @@ import {
     upsertServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import * as machineDisplayNames from '@/utils/sessions/machineDisplayNames';
 
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from './selectionPreferences';
@@ -53,8 +54,8 @@ describe('machine administration target demand', () => {
                 machineListByServerId: { [profile.id]: [createMachineFixture({ id: saved.machineId, activeAt: Date.now() }),
                     createMachineFixture({ id: 'other-machine', activeAt: Date.now() })] },
                 machineListStatusByServerId: { [profile.id]: 'idle' },
-                settings: { ...state.settings, machineAdministrationTargetsLocalV1: { agents: saved },
-                    actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } }));
+                settings: settingsParse({ ...state.settings, machineAdministrationTargetsLocalV1: { agents: saved },
+                    actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } }) }));
             const hook = await renderHook(() => useMachineAdministrationTargetSelection('agents', { initialTarget: requested }));
             expect(hook.getCurrent().selectedTarget).toEqual(requested);
             expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
