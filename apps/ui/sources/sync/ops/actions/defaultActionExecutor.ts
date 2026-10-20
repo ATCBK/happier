@@ -50,9 +50,8 @@ import {
   type SessionUsageLimitRecoveryOperationResult,
 } from '@/sync/ops/sessionUsageLimitRecovery';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { resolveActionSessionTargets } from '@happier-dev/protocol/actions/executor/sessionTargets';
 import type { ActionSessionAddress } from '@happier-dev/protocol/actions/executor/types';
-import type { SessionTargetSelectorV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
+import { SessionTargetPreviewV1Schema, type SessionTargetPreviewV1, type SessionTargetSelectorV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
 import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { presentActionApproval, readActionApprovalSubject, readActionApprovalRoleId } from '@/components/approvals/actionApprovalPresentation';
@@ -592,12 +591,7 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
   }
 }
 
-export type UiSessionTargetPreview = Readonly<{
-  coverage: 'complete' | 'unavailable';
-  addresses: readonly ActionSessionAddress[];
-  error: string | null;
-  cause?: string;
-}>;
+export type UiSessionTargetPreview = SessionTargetPreviewV1;
 type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'prepare' | 'execute' | 'replayApprovedApprovalRequest'> & Readonly<{
   /** Read-only selector preparation; creates neither an effect nor an approval. */
   previewSessionTargets: (target: SessionTargetSelectorV1, context?: ActionExecutorContext) => Promise<UiSessionTargetPreview>;
@@ -4163,22 +4157,10 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
 
   return {
     previewSessionTargets: async (target, context) => {
-      const resolved = await resolveActionSessionTargets(deps, {
-        actionId: 'session.message.send',
-        declaration: getActionSpec('session.message.send').sessionTarget!,
-        input: { sessionId: target },
-        context: resolveContext(context, { sessionId: target }, 'session.message.send'),
-      });
-      if (resolved && 'ok' in resolved) {
-        if (resolved.errorCode === 'session_target_empty') return { coverage: 'complete', addresses: [], error: null };
-        const details = resolved.details;
-        const cause = typeof details === 'object' && details !== null && 'cause' in details && typeof details.cause === 'string'
-          ? details.cause : undefined;
-        return { coverage: 'unavailable', addresses: [], error: resolved.errorCode,
-          ...(cause !== undefined ? { cause } : {}) };
-      }
-      return resolved ? { coverage: 'complete', addresses: resolved.targets, error: null }
-        : { coverage: 'unavailable', addresses: [], error: 'session_target_unavailable' };
+      const input = { target, actionId: 'session.message.send' };
+      const result = await executor.execute('session.targets.resolve', input, resolveContext(context, input, 'session.targets.resolve'));
+      return result.ok ? SessionTargetPreviewV1Schema.parse(result.result)
+        : { coverage: 'unavailable', addresses: [], error: result.errorCode };
     },
     // A genuine present-user native invocation has one installed Action policy
     // and approval owner. Do not create a second local Ask before its relay.

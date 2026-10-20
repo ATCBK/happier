@@ -374,6 +374,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'execution.run.wait',
   ],
   session_targeting: [
+    'session.targets.resolve',
     'session.target.primary.set',
     'session.target.tracked.set',
     'session.list',

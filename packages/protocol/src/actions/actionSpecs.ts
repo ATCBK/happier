@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { SessionIdSchema } from '../sessions/idsV1.js';
 import { RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
-import { ActionSessionTargetDeclarationV1Schema, SessionTargetV1Schema, withSessionTargetFanoutResultV1 } from './sessionTargetV1.js';
+import { ActionSessionTargetDeclarationV1Schema, SessionTargetV1Schema, SessionTargetPreviewV1Schema, withSessionTargetFanoutResultV1, type SessionTargetV1 } from './sessionTargetV1.js';
 import { SessionCoordinatorEnableInputV1Schema, SessionCoordinatorEnableResultV1Schema } from '../sessions/follow/sessionCoordinatorActionsV1.js';
 
 /** What a presenting app knows that an approval summary may use; every field is optional. */
@@ -831,6 +831,12 @@ import { WidgetSurfaceRefV1Schema } from '../widgets/widgetInstanceV1.js';
 import { ActionInvokeInputSchema } from './actionInvokeInput.js';
 import { isSourceQualifiedLocalServicePreviewActionInput } from './specs/localServices.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
+export const SessionTargetsResolveInputV1Schema: z.ZodMiniType<
+  { target: SessionTargetV1; actionId: ActionId },
+  { target: SessionTargetV1; actionId: ActionId }
+> = lazyZodSchema(() => z.strictObject({
+  target: SessionTargetV1Schema, actionId: ActionIdSchema,
+}));
 import {
   ActionContextualDefaultsSchema,
   type ActionContextualDefaults,
@@ -5163,8 +5169,10 @@ const ARTIFACT_ACTION_SPECS: readonly (PreNormalizedActionSpec & Readonly<{
     title: ARTIFACT_ACTION_COPY[id][0], description: 'Read, publish and manage ordinary Account Artifacts through their mode-aware store.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read || id === 'artifact.public_link.list' ? 'read' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: id === 'artifact.publish_from_file' || id === 'artifact.export' ? 'machine' : 'account',
-    placements: [], bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') },
-    surfaces: { ui: id !== 'artifact.export', cli: true, rpc: true, agent: true, mcp: true, voice: false },
+    placements: [], bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_'),
+      ...(id === 'artifact.get' || id === 'artifact.update' ? { voiceClientToolName: id.replaceAll('.', '_') } : {}) },
+    surfaces: { ui: id !== 'artifact.export', cli: true, rpc: true, agent: true, mcp: true,
+      voice: id === 'artifact.get' || id === 'artifact.update' },
     inputSchema: ArtifactActionInputSchemasV1[id], outputSchema: ArtifactActionOutputSchemasV1[id],
     ...(['artifact.public_link.create', 'artifact.create', 'artifact.update', 'artifact.publish_from_file', 'artifact.get', 'artifact.revisions.restore'].includes(id)
       ? { projectObservationOutput: projectPublicLinkCreationObservation } : {}),
@@ -7383,6 +7391,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSp
   },
   {
     id: 'session.handoff', originalExecution: { accountRoot: 'allowed' }, approval: {result: 'optional',flow: 'deferred'},
+    sideEffectClass: 'write',
     operation: {
       version: 1,
       visibility: 'activity',
@@ -9979,6 +9988,22 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
     cli: SESSION_UNARCHIVE_CLI_PROJECTION,
   },
   {
+    id: 'session.targets.resolve', sideEffectClass: 'read', approval: { result: 'none' },
+    title: 'Preview session targets',
+    description: 'Inspect the complete authorized target selection for an Action without executing it. Final invocation prepares its own current selection.',
+    safety: 'safe', executionPlacement: 'account', placements: [],
+    bindings: { mcpToolName: 'session_targets_resolve', voiceClientToolName: 'session_targets_resolve', rpcMethod: 'session.targets.resolve' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
+    inputSchema: SessionTargetsResolveInputV1Schema,
+    outputSchema: SessionTargetPreviewV1Schema,
+    examples: { voice: { argsExample: '{"target":{"selector":"workers"},"actionId":"session.message.send"}' } },
+    inputHints: { title: 'Preview session targets', fields: [
+      { path: 'target', title: 'Session target', widget: 'json', required: true },
+      { path: 'actionId', title: 'Action', widget: 'text', required: true },
+    ] },
+    cli: { acceptsServerId: true, commands: [{ path: ['session', 'targets', 'resolve'], visibility: 'canonical' }] },
+  },
+  {
     id: 'session.status.get', sideEffectClass: 'read', approval: {result: 'required'},
     sessionTarget: { field: 'sessionId', cardinality: 'many' },
     title: 'Get session status',
@@ -10468,7 +10493,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'GET', path: SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list },
   },
   {
-    id: 'follow.preview', approval: {result: 'none'},
+    id: 'follow.preview', sideEffectClass: 'read', approval: {result: 'none'},
     sessionTarget: { field: 'receiver.sessionId', cardinality: 'one' },
     title: 'Preview Follow rule',
     description: 'Preview the authorized matching corpus without creating Follow enrollments.',

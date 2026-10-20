@@ -6,7 +6,7 @@ import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Sc
 import { SessionDiscussionParticipantV1Schema } from '../sessions/creation/sessionDiscussionParticipantV1.js';
 import { SessionSpawnNewResultV1Schema } from '../sessions/creation/sessionSpawnNewResultV1.js';
 import { isSessionStopConfirmed, SessionStopResultSchema } from '../sessions/control/contract.js';
-import { bindActionSessionTargetOperands, readActionSessionTargetField, readActionSessionTargetOperands, replaceActionSessionTargetField, resolveActionSessionAddress, resolveActionSessionTargets } from './executor/sessionTargets.js';
+import { bindActionSessionTargetOperands, previewActionSessionTargets, readActionSessionTargetField, readActionSessionTargetOperands, replaceActionSessionTargetField, resolveActionSessionAddress, resolveActionSessionTargets } from './executor/sessionTargets.js';
 import { SessionMessageExplicitReplyV1Schema, SessionMessageReplyMutationResultV1Schema,
   deriveSessionMessageReplyReturnLocalIdV1, type SessionMessageReplyAccountMutationV1 } from '../sessions/messages/sessionMessageReplyV1.js';
 import { AutonomousExchangeControlRequestV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
@@ -144,7 +144,7 @@ import { projectAccountRoleActionRefusalV1, projectSessionRoleRpcFailureV1 } fro
 import { isWorkBoardActionIdV1 } from '../boards/actionIdsV1.js';
 import { WorkBoardActionInputSchemasV1 } from '../boards/actionsV1.js';
 import { HOME_HUB_LAYOUT_ACTION_IDS, HomeHubLayoutUpdateInputSchema } from './specs/homeHub.js';
-import { WidgetInstanceActionIdV1Schema, WidgetSurfaceReadV1Schema, readWidgetActionSurfaceV1, readWidgetActionDestinationV1, readWidgetCatalogBoundSessionV1 } from '../widgets/actionsV1.js';
+import { WidgetInstanceActionIdV1Schema, WidgetInstanceActionInputSchemasV1, WidgetSurfaceReadV1Schema, readWidgetActionSurfaceV1, readWidgetActionDestinationV1, readWidgetCatalogBoundSessionV1 } from '../widgets/actionsV1.js';
 import { executeWidgetInstanceActionV1, admitWidgetInstanceConfigurationV1, admitWidgetInstanceSizeV1, readWidgetActionSurfacePortV1 } from '../widgets/executeWidgetInstanceActionV1.js';
 import { getWidgetSizeFootprintV1, WIDGET_SIZE_ORDER_V1 } from '../widgets/widgetPresentationV1.js';
 import { clientActionUnavailable } from './clientDispatchV1.js';
@@ -247,6 +247,7 @@ import {
   SessionListActionInputV1Schema,
   SessionModelSetInputSchema,
   SessionSendMessageInputSchema,
+  SessionTargetsResolveInputV1Schema,
   getActionSpec,
   resolveActionExecutionPlacementForInput,
   listActionSpecs,
@@ -461,13 +462,13 @@ import type {
   SubagentStatusV1,
   SubagentLifecycleDetailV1,
 } from '../sessions/subagents/subagentRefV1.js';
-import {
-  type SessionHandoffAbortRequest,
-  type SessionHandoffCommitRequest,
-  type SessionHandoffPrepareTargetResultGetRequest,
-  type SessionHandoffPrepareTargetRequest,
-  type SessionHandoffPrepareTargetResumeRequest,
-  type SessionHandoffStatusGetRequest,
+import type {
+  SessionHandoffAbortRequest,
+  SessionHandoffCommitRequest,
+  SessionHandoffPrepareTargetResultGetRequest,
+  SessionHandoffPrepareTargetRequest,
+  SessionHandoffPrepareTargetResumeRequest,
+  SessionHandoffStatusGetRequest,
 } from '../sessions/control/handoff/handoffSchemas.js';
 import {
   WorkspaceSyncConflictResolveActionInputV1Schema,
@@ -536,7 +537,7 @@ import {
 } from './resolveActionBackendTargetSelection.js';
 import { ActionApprovalRequestCreatedResultSchema, ActionOperationCredentialUseV1Schema, projectActionExecuteFailure, type ActionOperationCredentialUseV1 } from './actionExecutionResult.js';
 import { dispatchRuntimeAction } from './executor/dispatch.js';
-import { type RuntimeActionExecute } from './executor/types.js';
+import type { RuntimeActionExecute } from './executor/types.js';
 import type { SessionConnectedServiceAuthSwitchRpcParams } from '../connect/sessionConnectedServiceAuthSwitch.js';
 import {
   TeamInvitationAcceptApprovalPrepareResultV1Schema,
@@ -4623,6 +4624,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
     try {
       if (approvalRouting.required && !isApprovalAction) {
+        // A person is asked to approve only an add whose inputs this host's input owner already admits.
+        if (actionId === 'widgets.item.add' && !existingAdmission && widgetTarget && deps.widgetInputs) {
+          const added = WidgetInstanceActionInputSchemasV1['widgets.item.add'].safeParse(admittedInput);
+          const refusal = added.success ? await admitWidgetInstanceConfigurationV1(deps,
+            { surface: widgetTarget, instanceId: added.data.instance.id }, added.data.instance, ctx) : null;
+          if (refusal) return refusal;
+        }
         if (options?.confirmUiDefault && approvalRouting === baseApprovalRouting && !folderApprovalRouting?.required
           && ctx.surface === 'ui' && isPresentUserHostInvocation(ctx) && !ctx.bypassApprovals
           && ctx.presentUserConfirmation?.actionId !== actionId && deps.presentUserActionConfirmation) {
@@ -5521,6 +5529,18 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return (failure && projectSessionRoleRpcFailureV1(actionId, failure.errorCode)) ?? failure ?? { ok: true, result };
       }
 
+      if (actionId === 'session.targets.resolve') {
+        const input = SessionTargetsResolveInputV1Schema.parse(parsed.data);
+        const targetSpec = getActionSpec(input.actionId);
+        if (!targetSpec.sessionTarget) {
+          return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+        }
+        const result = await previewActionSessionTargets(deps, { actionId: input.actionId,
+          declaration: { field: 'target', cardinality: targetSpec.sessionTarget.cardinality },
+          input: { target: input.target }, context: ctx });
+        return { ok: true, result };
+      }
+
       const artifactAccessActionId = isActionFamilyId(actionId, ArtifactAccessActionIdV1Schema) ? actionId : null;
       if (artifactAccessActionId !== null) {
         if (!deps.artifactAccessAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
@@ -5548,13 +5568,15 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const internalKindRefusal = { ok: false as const, errorCode: 'artifact_kind_internal', error: 'artifact_kind_internal' };
         // The incumbent Inbox may read and dismiss its captured Account's private
         // notices. This does not admit ordinary private-document authoring or egress.
-        const isNoticeInboxCaller = ctx.surface === 'ui' && ctx.authority === 'present_user'
+        const noticeAccountId = ctx.expectedAccountId ?? (ctx.surface === 'voice' ? ctx.runtimeAccountId : undefined);
+        const isNoticeInboxCaller = (ctx.surface === 'ui' && ctx.authority === 'present_user'
+          || ctx.surface === 'voice' && ctx.authority === 'account_automation')
           && (ctx.actionCaller === undefined || ctx.actionCaller.kind === 'host')
-          && Boolean(ctx.expectedAccountId) && ctx.externalActionCredential === undefined
+          && Boolean(noticeAccountId) && ctx.externalActionCredential === undefined
           && ctx.externalActionExecutionAuthorization === undefined && ctx.rpcSessionAuthorization === undefined;
         const readOwnedNotice = (artifact: Readonly<{ ownerAccountId: string; access: string;
           publicAudience?: string; header: unknown; body: unknown }>) => {
-          if (!isNoticeInboxCaller || artifact.ownerAccountId !== ctx.expectedAccountId
+          if (!isNoticeInboxCaller || artifact.ownerAccountId !== noticeAccountId
             || artifact.access !== 'owner' || artifact.publicAudience !== 'none') return null;
           return readAccountNoticeArtifactV1(artifact) ?? readUsageNoticeArtifactV1(artifact);
         };
@@ -6131,6 +6153,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return readActionFailureEnvelope(result) ?? { ok: true,
             result: machineReferences ? { ...readRecord(result), machineReferences } : result };
         } catch (error) {
+          if (readRecord(error).code === 'action_outcome_unknown') {
+            // The managed effect owner could not confirm a dispatched effect.
+            // Preserve that existing Action outcome across thrown host errors.
+            return { ok: false, errorCode: 'action_outcome_unknown', error: 'action_outcome_unknown' };
+          }
           if (ManagedControllerRequestFailureDetailsV1Schema.safeParse(readRecord(error).details).success) {
             return { ok: false, ...normalizeActionExecutorThrownError(error) };
           }

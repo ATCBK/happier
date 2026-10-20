@@ -1,4 +1,4 @@
-import { normalizeSessionTargetV1, type SessionTargetV1, type SessionTargetSelectorV1, type ActionResolvedSessionTargetsV1 } from '../sessionTargetV1.js';
+import { normalizeSessionTargetV1, type SessionTargetV1, type SessionTargetSelectorV1, type ActionResolvedSessionTargetsV1, type SessionTargetPreviewV1 } from '../sessionTargetV1.js';
 import { parseSessionListQueryActionResultV1 } from '../../sessions/awareness/action.js';
 import { FollowRulePreviewResultV1Schema } from '../../sessions/follow/sessionFollowRulePreviewV1.js';
 import { parseSessionFollowActionResponse } from '../../sessions/follow/actionTransport.js';
@@ -204,6 +204,36 @@ async function discussion(
 }
 
 type SessionTargetsRequest = Readonly<{ actionId: ActionId; declaration: Readonly<{ field: string; cardinality: 'one' | 'many' }>; input: Readonly<Record<string, unknown>>; context: ActionExecutorContext }>;
+
+/** The inspection Action and picker share this projection over the sole resolver. */
+export async function previewActionSessionTargets(deps: ActionExecutorDeps, args: SessionTargetsRequest): Promise<SessionTargetPreviewV1> {
+  const resolved = await resolveActionSessionTargets(deps, args);
+  if (args.context.signal?.aborted) return { coverage: 'unavailable', addresses: [], error: 'cancelled' };
+  if (resolved && 'ok' in resolved) {
+    if (resolved.errorCode === 'session_target_empty') return { coverage: 'complete', addresses: [], error: null };
+    const details = resolved.details;
+    const cause = typeof details === 'object' && details !== null && 'cause' in details && typeof details.cause === 'string'
+      ? details.cause : undefined;
+    return { coverage: 'unavailable', addresses: [], error: resolved.errorCode, ...(cause ? { cause } : {}) };
+  }
+  if (resolved) return { coverage: 'complete', addresses: resolved.targets, error: null };
+  // Exact IDs retain the final invocation's fast path, but inspection requires
+  // the authorized reference reader before disclosing an address.
+  const target = readActionSessionTargetField(args.input, args.declaration.field);
+  if (typeof target === 'string') {
+    try {
+      const address = await resolveActionSessionAddress(deps, { sessionId: target }, args.context, args.actionId, true);
+      if (args.context.signal?.aborted) return { coverage: 'unavailable', addresses: [], error: 'cancelled' };
+      if (address.kind === 'unique') return { coverage: 'complete', addresses: [address.address], error: null };
+      return { coverage: 'unavailable', addresses: [], error: 'session_target_unavailable',
+        cause: address.kind === 'ambiguous' ? 'session_id_ambiguous' : 'session_context_unavailable' };
+    } catch {
+      return { coverage: 'unavailable', addresses: [], error: args.context.signal?.aborted ? 'cancelled' : 'session_target_unavailable',
+        ...(args.context.signal?.aborted ? {} : { cause: 'target_read_failed' }) };
+    }
+  }
+  return { coverage: 'unavailable', addresses: [], error: 'session_target_unavailable' };
+}
 
 /** Catalog-owned operand paths; values such as source and CAS identities never supply paths. */
 export function readActionSessionTargetField(input: Readonly<Record<string, unknown>>, field: string): unknown {

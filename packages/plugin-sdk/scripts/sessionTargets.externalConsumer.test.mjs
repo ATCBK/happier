@@ -23,6 +23,14 @@ test('generated external Action clients accept shared targets without widening e
       sessionId: workers, message: 'Review the change', idempotencyKey: 'source-request',
     };
     const status: PluginActionInputById['session.status.get'] = { sessionId: { selector: 'manager' } };
+    const inspect: PluginActionInputById['session.targets.resolve'] = {
+      actionId: 'session.message.send', target: workers,
+    };
+    const inspected: PluginActionResultById['session.targets.resolve'] = {
+      coverage: 'complete', addresses: [{ serverId: 'home', sessionId: 'worker-a' }], error: null,
+    };
+    // @ts-expect-error Target inspection keeps the shared closed selector contract.
+    const invalidInspect: PluginActionInputById['session.targets.resolve'] = { actionId: 'session.message.send', target: { selector: 'workers', widenAuthority: true } };
     const open: PluginActionInputById['session.open'] = {
       sessionId: { selector: 'self' },
       destination: { kind: 'scmReview', comparison: { kind: 'workingTree' }, view: 'commits' },
@@ -61,7 +69,7 @@ test('generated external Action clients accept shared targets without widening e
     const unknown: SessionTargetV1 = { selector: 'workers', widenAuthority: true };
     // @ts-expect-error An inside-Session recipient cannot become a Session selector.
     const wrongRecipient: PluginActionInputById['session.message.send'] = { sessionId: workers, message: 'Review', idempotencyKey: 'wrong', recipient: { selector: 'manager' } };
-    void send; void genericSend; void status; void open; void oldSend; void declaration; void contributedDeclaration; void fanout; void invalidFanout;
+    void send; void genericSend; void status; void inspect; void inspected; void invalidInspect; void open; void oldSend; void declaration; void contributedDeclaration; void fanout; void invalidFanout;
     void nested; void unknown; void wrongRecipient;
     void inboxType; void inboxView; void inboxRead; void inboxPage; void inboxSource; void inboxCoverage; void invalidInboxType;
   `);

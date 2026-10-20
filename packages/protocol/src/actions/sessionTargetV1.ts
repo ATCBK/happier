@@ -54,6 +54,15 @@ export const ActionSessionAddressV1Schema = lazyZodSchema(() => z.strictObject({
 }));
 export type ActionSessionAddressV1 = z.infer<typeof ActionSessionAddressV1Schema>;
 
+/** Read-only inspection; an unavailable corpus never publishes a sendable subset. */
+export const SessionTargetPreviewV1Schema = lazyZodSchema(() => z.strictObject({
+  coverage: z.enum(['complete', 'unavailable']),
+  addresses: z.array(ActionSessionAddressV1Schema),
+  error: z.nullable(z.string().check(z.minLength(1))),
+  cause: z.optional(z.string().check(z.minLength(1))),
+}));
+export type SessionTargetPreviewV1 = z.infer<typeof SessionTargetPreviewV1Schema>;
+
 /** Approval retains exact reviewed addresses, not an intent that can expand again. */
 export const ActionResolvedSessionTargetsV1Schema = lazyZodSchema(() => z.strictObject({
   actionId: z.string().check(z.minLength(1)),

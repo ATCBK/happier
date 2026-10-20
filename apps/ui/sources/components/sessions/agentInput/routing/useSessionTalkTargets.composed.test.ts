@@ -5,6 +5,7 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { createPlainSessionByIdResponseFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { ListSessionFollowSourcesResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -71,4 +72,48 @@ it('demands authorized targets only while open and retains incomplete refreshes 
     expect(closed.getCurrent().manager).toMatchObject({ coverage: 'unavailable', addresses: [], loading: false });
     await closed.rerender({ enabled: true, sessionId: 'another-source' });
     expect(closed.getCurrent().manager.addresses).toEqual([]);
+});
+
+it('keeps unrelated selector previews and reads stable while Matching changes', async () => {
+    const serverUrl = 'https://talk-picker-filter.test';
+    const serverId = await homes.addHome({ name: 'Filter picker', serverUrl, accountId: 'alice', currentAccount: true });
+    restored = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+    await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
+    getStorage().setState({ sessions: {}, sessionListRowsByServerId: {} });
+    const source = createSessionFixture({ id: 'source', serverId, encryptionMode: 'plain',
+        manager: { sessionId: 'unloaded-manager' }, access: createSessionAccessFixture('view') });
+    homes.answer(serverId, '/v2/sessions/source', { body: createPlainSessionByIdResponseFixture(source) });
+    const followersPath = '/v2/sessions/source/follows/followers';
+    homes.answer(serverId, followersPath, { body: { follows: [], sources: [], rules: [], coverage: 'complete', peopleCount: 0 } });
+    const following = resolveSessionFollowActionRequest('follow.list', { direction: 'following', receiver: { kind: 'session', sessionId: 'source' } });
+    homes.answer(serverId, following.path, { body: ListSessionFollowSourcesResponseSchema.parse({ sources: [] }) });
+    homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
+    homes.answer(serverId, '/v2/sessions/query', { body: { sessions: [],
+        hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null } });
+    const matchingFilter = normalizeSessionListFilterV1({ homeServerIds: [serverId],
+        startedBy: ['you', 'agents', 'triggers'], scope: 'all_accessible' });
+    const hook = await renderHook(({ filter }) => useSessionTalkTargets('source', serverId, { matchingFilter: filter }),
+        { initialProps: { filter: matchingFilter } });
+    const unrelated = ['manager', 'workers', 'siblings', 'followers', 'following'] as const;
+    await vi.waitFor(() => expect([...unrelated, 'matching' as const].every(selector =>
+        hook.getCurrent()[selector].coverage === 'complete' && !hook.getCurrent()[selector].loading)).toBe(true));
+    const managerAddresses = hook.getCurrent().manager.addresses;
+    const before = homes.requests.length;
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    homes.answer(serverId, followersPath, { respondAfter: pending,
+        body: { follows: [], sources: [], rules: [], coverage: 'complete', peopleCount: 0 } });
+    homes.answer(serverId, following.path, { respondAfter: pending,
+        body: ListSessionFollowSourcesResponseSchema.parse({ sources: [] }) });
+    try {
+        await hook.rerender({ filter: { ...matchingFilter, source: 'persisted' } });
+        for (const selector of unrelated) expect(hook.getCurrent()[selector], selector).toMatchObject({ coverage: 'complete', loading: false });
+        expect(hook.getCurrent().manager.addresses).toBe(managerAddresses);
+    } finally { release?.(); }
+    await vi.waitFor(() => expect(hook.getCurrent().matching.loading).toBe(false));
+    expect(hook.getCurrent().matching.coverage).toBe('complete');
+    const rereads = homes.requests.slice(before);
+    expect(rereads.filter(request => request.path === followersPath || request.path === following.path)).toEqual([]);
+    expect(hook.getCurrent().manager.addresses).toBe(managerAddresses);
 });

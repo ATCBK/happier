@@ -76,6 +76,53 @@ function harness() {
 }
 
 describe('SessionTarget at the Actions front door', () => {
+  it('keeps ambiguous exact-reference previews unavailable without disclosing candidate addresses', async () => {
+    const h = harness();
+    const ambiguous = createActionExecutor({ ...h.deps, resolveSessionReference: async () => ({ kind: 'ambiguous',
+      candidates: [{ serverId: 'home', sessionId: 'a' }, { serverId: 'other-home', sessionId: 'a' }] }),
+    } as unknown as ActionExecutorDeps);
+    expect(await ambiguous.execute('session.targets.resolve', { actionId: 'session.message.send', target: 'a' }, context))
+      .toEqual({ ok: true, result: { coverage: 'unavailable', addresses: [], error: 'session_target_unavailable', cause: 'session_id_ambiguous' } });
+  });
+  it('keeps a canceled exact-reference preview unavailable even when its reader returns an address', async () => {
+    const h = harness();
+    const controller = new AbortController();
+    const canceled = createActionExecutor({ ...h.deps, resolveSessionReference: async () => {
+      controller.abort();
+      return { kind: 'unique', address: { serverId: 'home', sessionId: 'a' } };
+    } } as unknown as ActionExecutorDeps);
+    expect(await canceled.execute('session.targets.resolve', { actionId: 'session.message.send', target: 'a' }, { ...context, signal: controller.signal }))
+      .toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [], error: 'cancelled' } });
+  });
+  it('publishes authorized target inspection without sending and resolves a later invocation from its own current corpus', async () => {
+    const h = harness();
+    const preview = await h.executor.execute('session.targets.resolve', {
+      actionId: 'session.message.send', target: { selector: 'workers' },
+    }, context);
+    expect(preview).toEqual({ ok: true, result: { coverage: 'complete', addresses: [
+      { serverId: 'home', sessionId: 'a' }, { serverId: 'home', sessionId: 'b' },
+    ], error: null } });
+    expect(h.effects).toEqual([]);
+    expect(await h.executor.execute('session.targets.resolve', {
+      actionId: 'session.message.send', target: 'exact-session',
+    }, context)).toEqual({ ok: true, result: { coverage: 'complete',
+      addresses: [{ serverId: 'home', sessionId: 'exact-session' }], error: null } });
+    expect(await h.executor.execute('session.targets.resolve', {
+      actionId: 'artifact.get', target: { selector: 'workers' },
+    }, context)).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    h.setWorkers(['c']);
+    expect(await h.executor.execute('session.message.send', { sessionId: { selector: 'workers' }, message: 'hello' }, context))
+      .toMatchObject({ ok: true });
+    expect(h.effects.map(effect => effect.sessionId)).toEqual(['c']);
+    h.setWorkers([]);
+    expect(await h.executor.execute('session.targets.resolve', {
+      actionId: 'session.message.send', target: { selector: 'workers' },
+    }, context)).toEqual({ ok: true, result: { coverage: 'complete', addresses: [], error: null } });
+    h.incomplete();
+    expect(await h.executor.execute('session.targets.resolve', {
+      actionId: 'session.message.send', target: { selector: 'workers' },
+    }, context)).toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [], error: 'session_target_unavailable' } });
+  });
   const rule = (receiver: string | null, enabled = true) => OpenedSessionFollowRuleV1Schema.parse({
     ruleId: receiver ?? 'personal-rule', version: 1,
     receiver: receiver ? { kind: 'session', sessionId: receiver } : { kind: 'account' },
