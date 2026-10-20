@@ -264,6 +264,9 @@ installer, checksum/version validation and executable resolution.
 Explicit repair uses the admitted `machines.capabilities.install`
 Action with `dep.computer-cua-driver`, sharing the native launch installer's
 retained `tools/computer-cua-driver/current` directory and executable validation.
+Discovery refuses a missing driver with `driver_unavailable`; opening the picker
+does not install software. Installation remains with the admitted capability
+Action and the installable descriptor's required consent.
 The Computer picker and viewer re-read native grants and source/control facts
 after repair; successful installation alone never grants permission or input.
 `daemon/computer/driver/nativeTransport.ts` launches that installed absolute executable
