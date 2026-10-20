@@ -2677,6 +2677,7 @@ export const pt: TranslationStructure = {
                 profileMissing: 'A conta conectada selecionada não está mais disponível. Atualize a lista de contas e escolha outra.',
                 groupMissing: 'O Pool de contas selecionado não está mais disponível. Atualize a lista de contas e escolha outro Pool.',
                 metadataUpdateFailed: 'A sessão não conseguiu salvar a nova seleção de autenticação. Tente novamente depois que a sessão terminar a sincronização.',
+                restartDisallowedByExecutionPolicy: 'Esta alteração de autenticação exige uma reinicialização que não é permitida enquanto a sessão está em execução. Pare a sessão antes de alterar a autenticação.',
                 restartFailed: 'Não foi possível reiniciar a sessão com a nova seleção de autenticação. Pare a sessão e tente novamente.',
                 hotApplyFailed: 'A sessão em execução rejeitou a nova seleção de autenticação. Reinicie a sessão e tente novamente.',
                 agentMismatch: 'Esta seleção de autenticação não corresponde ao backend da sessão.',
@@ -4578,6 +4579,9 @@ export const pt: TranslationStructure = {
       full: "Largura total",
       fullDescription: "Use a largura disponível da janela",
     },
+    feedback: "Resposta",
+    haptics: "Resposta tátil",
+    hapticsDescription: "Use a resposta tátil para ações e reordenação neste dispositivo.",
     backdropBlur: "Desfoque de fundo",
     backdropBlurDescription:
       "Use desfoque de fundo atrás de modais e menus. Desative para melhorar o desempenho do navegador.",
@@ -5676,6 +5680,11 @@ export const pt: TranslationStructure = {
         composerBanners: {
             showBannerAction: 'Mostrar aviso',
             hideBannerAction: 'Ocultar aviso',
+	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Há trabalho em segundo plano em execução',
+	        body: ({ count }: { count: number }) => `Há trabalho em segundo plano em execução (${count}). Reiniciar irá interrompê-lo.`,
+	        confirmAction: 'Parar e reiniciar',
 	    },
 	    staleRunner: {
 	      title: "A sessão ainda está em uma CLI antiga",
@@ -9445,6 +9454,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'arquivo' : 'arquivos'}`,
         progressAccessibilityLabel: "Progresso do download",
+        verifyingDetail: "Verificando",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Verificado ${verified} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'arquivo' : 'arquivos'}`,
+        verifyingAccessibilityLabel: "Progresso da verificação",
         failedDetail: "Falhou",
         failedSubtitle: "Não foi possível preparar o modelo. Toque para tentar novamente.",
         failedResumableSubtitle: ({ size }: { size: string }) => `O download não terminou. ${size} foram mantidos; toque para retomar.`,

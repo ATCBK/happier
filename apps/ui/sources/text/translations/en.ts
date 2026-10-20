@@ -2340,6 +2340,7 @@ export const en = {
                 profileMissing: 'The selected connected account is no longer available. Refresh the account list and choose another account.',
                 groupMissing: 'The selected account pool is no longer available. Refresh the account list and choose another pool.',
                 metadataUpdateFailed: 'The session could not save the new authentication selection. Try again after the session finishes syncing.',
+                restartDisallowedByExecutionPolicy: 'This authentication change requires a restart that is not allowed while the session is running. Stop the session before changing its authentication.',
                 restartFailed: 'The session could not be restarted with the new authentication selection. Stop the session and try again.',
                 hotApplyFailed: 'The running session rejected the new authentication selection. Restart the session and try again.',
                 agentMismatch: 'This authentication selection does not match the session backend.',
@@ -4183,6 +4184,9 @@ export const en = {
             full: 'Full width',
             fullDescription: 'Use the available window width',
         },
+        feedback: "Feedback",
+        haptics: "Haptic feedback",
+        hapticsDescription: "Use touch feedback for actions and reordering on this device.",
         backdropBlur: 'Backdrop blur',
         backdropBlurDescription: 'Use frosted background blur behind modals and menus. Disable to improve browser performance.',
         multiPanePanels: 'Right panels',
@@ -5243,6 +5247,11 @@ export const en = {
         composerBanners: {
             showBannerAction: 'Show banner',
             hideBannerAction: 'Hide banner',
+        },
+        runnerRestartBackgroundWork: {
+            title: 'Background work is running',
+            body: ({ count }: { count: number }) => `${count} background ${count === 1 ? 'activity is' : 'activities are'} running. Restarting will stop ${count === 1 ? 'it' : 'them'}.`,
+            confirmAction: 'Stop and restart',
         },
         staleRunner: {
             title: 'Session is still running on an older CLI',
@@ -8885,6 +8894,10 @@ settingsSession: {
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} of ${total} · ${filesDone} of ${filesTotal} ${filesTotal === 1 ? 'file' : 'files'}`,
                 progressAccessibilityLabel: "Download progress",
+                verifyingDetail: "Verifying",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `Verified ${verified} of ${total} · ${filesDone} of ${filesTotal} ${filesTotal === 1 ? 'file' : 'files'}`,
+                verifyingAccessibilityLabel: "Verification progress",
                 failedDetail: "Failed",
                 failedSubtitle: "Couldn't get the model ready. Tap to try again.",
                 failedResumableSubtitle: ({ size }: { size: string }) => `Download didn't finish. ${size} is saved, so tap to resume.`,

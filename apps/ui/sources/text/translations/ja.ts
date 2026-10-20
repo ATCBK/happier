@@ -2859,6 +2859,7 @@ localTailscale: {
                 profileMissing: '選択した接続済みアカウントは利用できなくなりました。アカウント一覧を更新して別のアカウントを選択してください。',
                 groupMissing: '選択したアカウントプールは利用できなくなりました。アカウント一覧を更新して別のプールを選択してください。',
                 metadataUpdateFailed: 'セッションは新しい認証選択を保存できませんでした。セッションの同期完了後にもう一度お試しください。',
+                restartDisallowedByExecutionPolicy: 'この認証の変更には再起動が必要ですが、セッションの実行中は許可されていません。認証を変更する前にセッションを停止してください。',
                 restartFailed: '新しい認証選択でセッションを再起動できませんでした。セッションを停止してもう一度お試しください。',
                 hotApplyFailed: '実行中のセッションが新しい認証選択を拒否しました。セッションを再起動してもう一度お試しください。',
                 agentMismatch: 'この認証選択はセッションのバックエンドと一致しません。',
@@ -4746,6 +4747,9 @@ localTailscale: {
       full: "全幅",
       fullDescription: "利用可能なウィンドウ幅を使用します",
     },
+    feedback: "フィードバック",
+    haptics: "触覚フィードバック",
+    hapticsDescription: "このデバイスで操作や並べ替え時に触覚フィードバックを使用します。",
     backdropBlur: "背景ぼかし",
     backdropBlurDescription:
       "モーダルやメニューの背後に背景ぼかしを適用します。ブラウザー性能を優先する場合は無効にしてください。",
@@ -5830,6 +5834,11 @@ localTailscale: {
         composerBanners: {
             showBannerAction: 'バナーを表示',
             hideBannerAction: 'バナーを非表示',
+	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'バックグラウンドで処理が実行中です',
+	        body: ({ count }: { count: number }) => `バックグラウンドの処理が${count}件実行中です。再起動すると停止します。`,
+	        confirmAction: '停止して再起動',
 	    },
 	    staleRunner: {
 	      title: "セッションは古い CLI で実行中です",
@@ -9564,6 +9573,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} / ${total} · ${filesDone} / ${filesTotal} ファイル`,
         progressAccessibilityLabel: "ダウンロードの進行状況",
+        verifyingDetail: "検証中",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `検証済み ${verified} / ${total} · ${filesDone} / ${filesTotal} ファイル`,
+        verifyingAccessibilityLabel: "検証の進行状況",
         failedDetail: "失敗",
         failedSubtitle: "モデルを準備できませんでした。タップしてもう一度お試しください。",
         failedResumableSubtitle: ({ size }: { size: string }) => `ダウンロードが完了しませんでした。${size} は保存されています。タップして再開できます。`,

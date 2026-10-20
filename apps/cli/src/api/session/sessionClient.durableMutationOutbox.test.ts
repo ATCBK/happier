@@ -18,6 +18,8 @@ import {
   createApiSessionSocketStub,
 } from '@/testkit/backends/apiSessionSocketHarness';
 import type { ACPMessageData } from './sessionMessageTypes';
+import type { StreamedTranscriptWriterSession } from './streamedTranscriptWriter';
+import type { DeferredApiSessionClient, DeferredApiSessionTarget } from '@/agent/runtime/startup/DeferredApiSessionClient';
 import type { AgentState } from '@/api/types';
 import type { createSessionSocketTransport } from './connection/createSessionSocketTransport';
 import type { createUserScopedSocket } from './sockets';
@@ -847,6 +849,106 @@ describe('ApiSessionClient durable mutation outbox', () => {
     expect(supervisorControl?.getState()).toEqual({ phase: 'online' });
     expect(supervisorConnectedTransitions).toBe(1);
     await client.close();
+  });
+
+  it.each(['offline', 'late-failure', 'discarded', 'opencode', 'deferred', 'deferred-before-attach'] as const)('publishes a streamed final after reconnect without another turn (%s)', async (scenario) => {
+    useRealSupervisor = true;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      features: { sharing: { pendingQueueV2: { enabled: true } } }, capabilities: {},
+    }), { status: 200 })));
+    const stored = new Map<string, unknown>();
+    const firstAck = createDeferred<void>();
+    let messageAttempts = 0;
+    let committedMessageSeq = 0;
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+      if (event === 'message') {
+        const message = payload as { localId: string; message: unknown };
+        // Deferred attachment can also publish its startup-flush warning. Track
+        // only the final's identity when checking replay and duplicate delivery.
+        if (message.localId === 'final-segment') {
+          messageAttempts += 1;
+          if (scenario === 'late-failure' && messageAttempts === 1) {
+            await firstAck.promise;
+            return { ok: false, error: 'write_failed' };
+          }
+          stored.set(message.localId, message.message);
+        }
+        return { ok: true, id: message.localId, localId: message.localId, seq: ++committedMessageSeq };
+      }
+      return { ok: true };
+    } });
+    userSocketStub = createApiSessionSocketStub({ connected: false });
+    const { ApiSessionClient } = await import('./sessionClient');
+    const { createCurrentSessionTranscriptPort } = await import('./createCurrentSessionTranscriptPort');
+    const { createStreamedTranscriptWriter } = await import('./streamedTranscriptWriter');
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 'offline-final' }));
+    let transcriptSession: StreamedTranscriptWriterSession = scenario === 'opencode'
+      ? (await import('@/backends/opencode/server/createOpenCodeTranscriptStreamSession')).createOpenCodeTranscriptStreamSession({
+        session: client, baseMeta: {},
+      })
+      : createCurrentSessionTranscriptPort(() => client);
+    let deferredToAttach: DeferredApiSessionClient | null = null;
+    if (scenario === 'deferred' || scenario === 'deferred-before-attach') {
+      const { DeferredApiSessionClient } = await import('@/agent/runtime/startup/DeferredApiSessionClient');
+      const deferred = new DeferredApiSessionClient({
+        placeholderSessionId: 'PID-final', limits: { maxEntries: 10, maxBytes: 10_000 },
+      });
+      if (scenario === 'deferred-before-attach') deferredToAttach = deferred;
+      else await deferred.attach(client as unknown as DeferredApiSessionTarget);
+      transcriptSession = (await import('@/backends/claude/remote/createClaudeRemoteStreamedTranscriptSession'))
+        .createClaudeRemoteStreamedTranscriptSession(deferred);
+    }
+    const writer = createStreamedTranscriptWriter({
+      provider: scenario === 'opencode' ? 'opencode' : 'codex', session: transcriptSession,
+      makeLocalId: () => 'final-segment', initialCheckpointDelayMs: 60_000,
+    });
+    const reconnect = createDeferred<void>();
+    try {
+      await expect.poll(() => realSupervisorConnectedCompletion).not.toBeNull();
+      await realSupervisorConnectedCompletion;
+      let inFlightFlush: Promise<unknown> | null = null;
+      if (scenario === 'late-failure') {
+        writer.appendAssistantDelta('FINAL-offline');
+        inFlightFlush = writer.flushAll({ reason: 'turn-end' });
+        await expect.poll(() => messageAttempts).toBe(1);
+      }
+      sessionConnectionGate = reconnect.promise;
+      disconnectSessionTransport?.();
+      if (scenario !== 'late-failure') {
+        writer.appendAssistantDelta('FINAL-offline');
+        const flush = writer.flushAll({ reason: 'turn-end' });
+        if (deferredToAttach) {
+          await expect.poll(() => deferredToAttach?.getBufferStats().entryCount).toBeGreaterThan(0);
+          await deferredToAttach.attach(client as unknown as DeferredApiSessionTarget);
+        }
+        expect((await flush).assistant.didDurablyFlush).toBe(false);
+      }
+      expect(stored.size).toBe(0);
+      if (scenario === 'discarded') writer.discard();
+      reconnect.resolve();
+      await expect.poll(() => client.getEphemeralStreamConnectionEpoch(), { timeout: 10_000 }).toBe(2);
+      firstAck.resolve();
+      await inFlightFlush;
+      if (scenario === 'discarded') {
+        expect(messageAttempts).toBe(0);
+        return;
+      }
+      await expect.poll(() => stored.get('final-segment')).toMatchObject({
+        t: 'plain', v: { content: { data: { type: 'message', message: 'FINAL-offline' } },
+          meta: { happierStreamSegmentV1: { segmentState: 'complete' } } },
+      });
+      await expect.poll(() => writer.hasPendingSegments()).toBe(false);
+      expect(stored.size).toBe(1);
+      disconnectSessionTransport?.();
+      await expect.poll(() => client.getEphemeralStreamConnectionEpoch(), { timeout: 10_000 }).toBe(3);
+      await realSupervisorConnectedCompletion;
+      expect(messageAttempts).toBe(scenario === 'late-failure' ? 2 : 1);
+    } finally {
+      reconnect.resolve();
+      firstAck.resolve();
+      writer.discard();
+      await client.close();
+    }
   });
 
   it.each([

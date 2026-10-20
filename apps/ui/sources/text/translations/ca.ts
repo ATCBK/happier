@@ -2425,6 +2425,7 @@ export const ca: TranslationStructure = {
                 profileMissing: 'El compte connectat seleccionat ja no està disponible. Actualitza la llista de comptes i tria’n un altre.',
                 groupMissing: 'El Pool de comptes seleccionat ja no està disponible. Actualitza la llista de comptes i tria un altre Pool.',
                 metadataUpdateFailed: 'La sessió no ha pogut desar la nova selecció d’autenticació. Torna-ho a provar quan acabi la sincronització.',
+                restartDisallowedByExecutionPolicy: 'Aquest canvi d’autenticació requereix un reinici que no es permet mentre la sessió està en execució. Atura la sessió abans de canviar-ne l’autenticació.',
                 restartFailed: 'No s’ha pogut reiniciar la sessió amb la nova selecció d’autenticació. Atura la sessió i torna-ho a provar.',
                 hotApplyFailed: 'La sessió en execució ha rebutjat la nova selecció d’autenticació. Reinicia la sessió i torna-ho a provar.',
                 agentMismatch: 'Aquesta selecció d’autenticació no coincideix amb el backend de la sessió.',
@@ -4252,6 +4253,9 @@ export const ca: TranslationStructure = {
             full: 'Amplada completa',
             fullDescription: 'Fes servir tota l\'amplada disponible de la finestra',
         },
+        feedback: "Resposta",
+        haptics: "Resposta hàptica",
+        hapticsDescription: "Utilitza la resposta tàctil per a les accions i la reordenació en aquest dispositiu.",
         backdropBlur: 'Desenfocament de fons',
         backdropBlurDescription: 'Aplica desenfocament de fons darrere de modals i menús. Desactiva\'l per millorar el rendiment del navegador.',
         multiPanePanels: 'Panells a la dreta',
@@ -5225,6 +5229,11 @@ deps: {
         composerBanners: {
             showBannerAction: 'Mostra el bàner',
             hideBannerAction: 'Amaga el bàner',
+	        },
+	        runnerRestartBackgroundWork: {
+	            title: 'Hi ha feina en segon pla en execució',
+	            body: ({ count }: { count: number }) => `Hi ha feina en segon pla en execució (${count}). Reiniciar l’aturarà.`,
+	            confirmAction: 'Atura i reinicia',
 	        },
 	        staleRunner: {
 	            title: 'La sessió encara s’executa amb una CLI antiga',
@@ -8785,6 +8794,10 @@ settingsSession: {
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'fitxer' : 'fitxers'}`,
                 progressAccessibilityLabel: "Progrés de la descàrrega",
+                verifyingDetail: "Verificant",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `Verificat ${verified} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'fitxer' : 'fitxers'}`,
+                verifyingAccessibilityLabel: "Progrés de la verificació",
                 failedDetail: "Ha fallat",
                 failedSubtitle: "No s'ha pogut preparar el model. Toca per tornar-ho a provar.",
                 failedResumableSubtitle: ({ size }: { size: string }) => `La descàrrega no s'ha completat. Es conserven ${size}; toca per reprendre-la.`,

@@ -2339,6 +2339,7 @@ export const fr: TranslationStructure = {
                 profileMissing: 'Le compte connecté sélectionné n’est plus disponible. Actualise la liste des comptes et choisis-en un autre.',
                 groupMissing: 'Le pool de comptes sélectionné n’est plus disponible. Actualise la liste des comptes et choisis un autre pool.',
                 metadataUpdateFailed: 'La session n’a pas pu enregistrer la nouvelle sélection d’authentification. Réessaie une fois la synchronisation de la session terminée.',
+                restartDisallowedByExecutionPolicy: 'Ce changement d’authentification nécessite un redémarrage qui n’est pas autorisé pendant l’exécution de la session. Arrête la session avant de changer son authentification.',
                 restartFailed: 'La session n’a pas pu être redémarrée avec la nouvelle sélection d’authentification. Arrête la session et réessaie.',
                 hotApplyFailed: 'La session en cours a rejeté la nouvelle sélection d’authentification. Redémarre la session et réessaie.',
                 agentMismatch: 'Cette sélection d’authentification ne correspond pas au backend de la session.',
@@ -4163,6 +4164,9 @@ export const fr: TranslationStructure = {
             full: 'Pleine largeur',
             fullDescription: 'Utiliser toute la largeur de la fenêtre',
         },
+        feedback: "Retour",
+        haptics: "Retour haptique",
+        hapticsDescription: "Utilise le retour tactile pour les actions et la réorganisation sur cet appareil.",
         backdropBlur: 'Flou d’arrière-plan',
         backdropBlurDescription: 'Utilise un flou dépoli derrière les modales et les menus. Désactive-le pour améliorer les performances du navigateur.',
         multiPanePanels: 'Panneaux de droite',
@@ -5209,6 +5213,11 @@ export const fr: TranslationStructure = {
         composerBanners: {
             showBannerAction: 'Afficher la bannière',
             hideBannerAction: 'Masquer la bannière',
+        },
+        runnerRestartBackgroundWork: {
+            title: 'Du travail est en cours en arrière-plan',
+            body: ({ count }: { count: number }) => `Du travail est en cours en arrière-plan (${count}). Le redémarrage l’arrêtera.`,
+            confirmAction: 'Arrêter et redémarrer',
         },
         staleRunner: {
             title: 'Cette session tourne encore sur une ancienne CLI',
@@ -8840,6 +8849,10 @@ settingsSession: {
                 progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
                     `${loaded} sur ${total} · ${filesDone} ${filesDone <= 1 ? 'fichier' : 'fichiers'} sur ${filesTotal}`,
                 progressAccessibilityLabel: "Progression du téléchargement",
+                verifyingDetail: "Vérification",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `${verified} sur ${total} vérifiés · ${filesDone} ${filesDone <= 1 ? 'fichier' : 'fichiers'} sur ${filesTotal}`,
+                verifyingAccessibilityLabel: "Progression de la vérification",
                 failedDetail: "Échec",
                 failedSubtitle: "Impossible de préparer le modèle. Touche pour réessayer.",
                 failedResumableSubtitle: ({ size }: { size: string }) => `Le téléchargement n'est pas terminé. ${size} sont conservés ; touche pour reprendre.`,

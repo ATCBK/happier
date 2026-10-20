@@ -2508,6 +2508,7 @@ export const ru: TranslationStructure = {
                 profileMissing: 'Выбранный подключенный аккаунт больше недоступен. Обновите список аккаунтов и выберите другой.',
                 groupMissing: 'Выбранный пул аккаунтов больше недоступен. Обновите список аккаунтов и выберите другой пул.',
                 metadataUpdateFailed: 'Сессии не удалось сохранить новый выбор аутентификации. Попробуйте снова после завершения синхронизации сессии.',
+                restartDisallowedByExecutionPolicy: 'Это изменение аутентификации требует перезапуска, который запрещён во время работы сессии. Остановите сессию перед изменением её аутентификации.',
                 restartFailed: 'Не удалось перезапустить сессию с новым выбором аутентификации. Остановите сессию и попробуйте снова.',
                 hotApplyFailed: 'Запущенная сессия отклонила новый выбор аутентификации. Перезапустите сессию и попробуйте снова.',
                 agentMismatch: 'Этот выбор аутентификации не соответствует бэкенду сессии.',
@@ -4409,6 +4410,9 @@ export const ru: TranslationStructure = {
       full: "На всю ширину",
       fullDescription: "Использовать доступную ширину окна",
     },
+    feedback: "Отклик",
+    haptics: "Тактильный отклик",
+    hapticsDescription: "Использовать тактильный отклик для действий и изменения порядка на этом устройстве.",
     backdropBlur: "Размытие фона",
     backdropBlurDescription:
       "Использовать размытие фона за модальными окнами и меню. Отключите, чтобы повысить производительность браузера.",
@@ -6093,6 +6097,11 @@ export const ru: TranslationStructure = {
         composerBanners: {
             showBannerAction: 'Показать баннер',
             hideBannerAction: 'Скрыть баннер',
+	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Выполняется фоновая работа',
+	        body: ({ count }: { count: number }) => `Фоновых задач в работе: ${count}. Перезапуск остановит их.`,
+	        confirmAction: 'Остановить и перезапустить',
 	    },
 	    staleRunner: {
 	      title: "Сессия всё ещё работает на старой CLI",
@@ -9308,6 +9317,10 @@ settingsSession: {
         progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
           `${loaded} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
         progressAccessibilityLabel: "Ход загрузки",
+        verifyingDetail: "Проверка",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Проверено ${verified} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
+        verifyingAccessibilityLabel: "Ход проверки",
         failedDetail: "Ошибка",
         failedSubtitle: "Не удалось подготовить модель. Нажмите, чтобы повторить.",
         failedResumableSubtitle: ({ size }: { size: string }) => `Загрузка не завершилась. ${size} сохранено — нажмите, чтобы продолжить.`,

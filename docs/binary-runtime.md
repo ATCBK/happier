@@ -32,6 +32,15 @@ Before adding or changing a provider/runtime/install/update flow, classify it as
 
 Provider detection, install status, daemon validation, runtime spawning, and UI/installables must reuse the same source of truth. Backend CLIs should prefer user/system installs by default over Happier-managed installs unless an explicit setting says otherwise.
 
+In current development source, Windows command discovery and invocation share
+`packages/cli-common/windowsCommandInvocation.mjs`. A recognized npm wrapper that
+only forwards arguments to an existing native `.exe` resolves to that executable,
+avoiding `cmd.exe`'s smaller command-line limit (including Claude Code's native npm
+installation). Other command scripts retain shell execution and its existing
+quoting, including npm JavaScript wrappers and wrappers whose target is missing
+or still a text placeholder. Recognition does not choose a different installation
+or modify the subprocess environment.
+
 In current development source, vendor installers preserve the Windows process
 environment's `Path` spelling; cloning that environment and replacing it with an
 empty `PATH` prevents executable resolution. Only POSIX recipes prepend user
@@ -532,10 +541,15 @@ dependency copies is removed only when the surviving ancestor is reachable from 
 the two trees are recursively byte-identical without symbolic links, and direct peer resolution is
 unchanged; missing, shadowed, divergent, peer-dependent, or linked copies are retained.
 
-The PTY provider uses `node-pty` first. On POSIX Bun it skips the Homebridge native
-fallback because that package writes through a `tty.ReadStream` that is not writable
-in Bun, then uses the existing external relay when available. Node-hosted Homebridge
-and Windows backend selection are unchanged.
+In current development source, the PTY provider uses the existing Python relay on
+POSIX Bun. Both native packages use `tty.ReadStream` for a nonblocking PTY master;
+the bundled Bun 1.4.2 can return a successful spawn without working input/output
+([upstream issue](https://github.com/oven-sh/bun/issues/25822)). Module-load success
+therefore cannot establish backend usability. Re-enable native POSIX selection
+only after the bundled runtime passes interactive input/output and cleanup checks.
+The relay requires Python 3, applies the initial window size, and reports
+`terminal_resize_unavailable` for subsequent resizes. Node-hosted and Windows
+backend selection are unchanged.
 
 ## Internal dependency closure
 
