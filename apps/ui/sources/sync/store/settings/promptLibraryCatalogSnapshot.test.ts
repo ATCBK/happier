@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyPromptLibraryCatalogSnapshot, applyPromptLibraryCatalogAcknowledgedRecord, beginPromptLibraryCatalogLoad, getPromptLibraryCatalogValue,
+import { applyPromptLibraryCatalogSnapshot, applyPromptLibraryCatalogAcknowledgedRecord, beginPromptLibraryCatalogLoad, getPromptLibraryCatalogValue, getPromptLibraryCatalogSnapshot,
     publishPromptLibrarySkillRulesDraft, resetPromptLibraryCatalogSnapshotsForTests } from './promptLibraryCatalogSnapshot';
 afterEach(resetPromptLibraryCatalogSnapshotsForTests);
 const scope = { serverId: 'home', accountId: 'account' };
 const catalog = { status: 'ready' as const, rows: [{ record: { key: 'folders' as const,
     value: { v: 1 as const, folders: [{ id: 'folder', name: 'Folder' }] } }, revision: 3 }], tombstones: [], diagnostics: [] };
 describe('Prompt library scoped publications', () => {
+    it('keeps an acknowledged row in both projections when an older read finishes after the write', () => {
+        applyPromptLibraryCatalogSnapshot(scope, { catalog, rawSettings: {}, sourceSettingsVersion: 1 }, true);
+        const record = { key: 'folders' as const, value: { v: 1 as const, folders: [{ id: 'folder', name: 'New' }] } };
+        applyPromptLibraryCatalogAcknowledgedRecord(scope, record, 4, true);
+        applyPromptLibraryCatalogSnapshot(scope, { catalog, rawSettings: {}, sourceSettingsVersion: 1 }, true);
+        expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ revision: 4, value: record.value, stale: false });
+        expect(getPromptLibraryCatalogSnapshot(scope)?.catalog).toMatchObject({ rows: [{ record, revision: 4 }] });
+    });
     it('withdraws pending display intent with lost Account admission, not merely its received row', () => {
         const skillCatalog = { status: 'ready' as const, rows: [{ record: { key: 'skill-rules' as const,
             value: { v: 1 as const, rules: [] } }, revision: 3 }], tombstones: [], diagnostics: [] };
@@ -38,7 +46,7 @@ describe('Prompt library scoped publications', () => {
         applyPromptLibraryCatalogAcknowledgedRecord(scope, { ...catalog.rows[0]!.record,
             value: { v: 1, folders: [] } }, 11, true);
         expect(getPromptLibraryCatalogValue(scope, 'folders')).toBe(recreated);
-        expect(recreated).toMatchObject({ revision: 11, stale: true, value: catalog.rows[0]!.record.value });
+        expect(recreated).toMatchObject({ revision: 11, stale: false, value: catalog.rows[0]!.record.value });
         const otherScope = { ...scope, accountId: 'other-account' };
         applyPromptLibraryCatalogAcknowledgedRecord(otherScope, catalog.rows[0]!.record, 6, true);
         expect(getPromptLibraryCatalogValue(otherScope, 'folders').revision).toBe(6);
@@ -49,7 +57,7 @@ describe('Prompt library scoped publications', () => {
         const sibling = getPromptLibraryCatalogValue(scope, 'role-overrides');
         const record = { key: 'folders' as const, value: { v: 1 as const, folders: [{ id: 'folder', name: 'Acknowledged' }] } };
         applyPromptLibraryCatalogAcknowledgedRecord(scope, record, 4, true);
-        expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ status: 'loading', stale: true, revision: 4, value: record.value });
+        expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ status: 'ready', stale: false, revision: 4, value: record.value });
         const acknowledged = getPromptLibraryCatalogValue(scope, 'folders');
         applyPromptLibraryCatalogAcknowledgedRecord(scope, catalog.rows[0]!.record, 3, true);
         applyPromptLibraryCatalogAcknowledgedRecord(scope, catalog.rows[0]!.record, 5, false);

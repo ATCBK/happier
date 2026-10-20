@@ -38,14 +38,18 @@ it.each(['local', 'remote'] as const)('updates a mounted library after a %s reac
             target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }] } }],
     });
     const hook = await renderHook(() => useSkillsLibrary());
-    const contentReads = () => home.requests.filter(request => request.path === '/v1/artifacts/read-batch'
+    const contentReads = () => home.requests.filter(request => request.path === '/v1/artifacts/read'
         || request.method === 'GET' && ['/v1/artifacts/reach-skill', '/v1/artifacts/unchanged-skill'].includes(request.path)).length;
     try {
         await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
         expect(hook.getCurrent().items.find(item => item.skillId === 'reach-skill')?.rules[0]?.enabled).toBe(true);
         const opened = contentReads();
         const unchanged = hook.getCurrent().items.find(item => item.skillId === 'unchanged-skill');
+        const codecs = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
+        const decrypts = vi.spyOn(codecs, 'openPromptLibraryContentV1');
         for (const enabled of [false, true]) {
+            const requestStart = home.requests.length;
+            decrypts.mockClear();
             await act(async () => {
                 if (origin === 'local') {
                     const result = await createDefaultActionExecutor().execute('skills.rules.set', {
@@ -63,8 +67,7 @@ it.each(['local', 'remote'] as const)('updates a mounted library after a %s reac
                     });
                     expect(await response?.json()).toMatchObject({ status: 'updated' });
                     const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
-                    const { buildPromptLibraryPhysicalKeyV1 } = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
-                    publishHomeAccountChange(home.home.id, [buildPromptLibraryPhysicalKeyV1('skill-rules')], { changeKinds: ['account'] });
+                    publishHomeAccountChange(home.home.id, undefined, { source: 'catch-up-pending' });
                 }
             });
             await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'reach-skill')?.rules[0]?.enabled).toBe(enabled));
@@ -72,8 +75,24 @@ it.each(['local', 'remote'] as const)('updates a mounted library after a %s reac
             expect(hook.getCurrent().items.find(item => item.skillId === 'unchanged-skill')).toBe(unchanged);
             // The local writer validates its addressed skill; a rules-only remote
             // publication does not reopen content through either transport.
-            if (origin === 'remote') expect(contentReads()).toBe(opened);
+            if (origin === 'remote') {
+                const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+                const { buildPromptLibraryPhysicalKeyV1 } = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
+                const entityId = buildPromptLibraryPhysicalKeyV1('skill-rules');
+                await act(async () => publishHomeAccountChange(home.home.id, [entityId], {
+                    entityRevisions: { [entityId]: home.catalog.revision('skill-rules') }, changeKinds: ['account'],
+                }));
+                await new Promise<void>(resolve => setImmediate(resolve));
+                expect(contentReads()).toBe(opened);
+                expect(home.requests.slice(requestStart).filter(r => r.path.includes('prompt-library') || r.path.includes('/artifacts')
+                    || r.path.includes('/account/settings')).map(r => `${r.method} ${r.path}`))
+                    .toEqual(['GET /v1/account/entity-rows/prompt-library/skill-rules']);
+            }
+            const requests = home.requests.slice(requestStart).map(({ method, path }) => ({ method, path }));
+            console.info(JSON.stringify({ phase: origin, enabled, requests, rowDecrypts: decrypts.mock.calls.length,
+                bodyReads: requests.filter(r => r.path.includes('/artifacts/') && r.method !== 'POST').length }));
         }
+        decrypts.mockRestore();
     } finally { await hook.unmount(); await home.dispose(); }
 });
 
@@ -89,8 +108,8 @@ it('projects personal folder moves and clears without reopening content or repla
         await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'moving')?.folderId).toBe('old'));
         const unchanged = hook.getCurrent().items.find(item => item.skillId === 'unchanged');
         expect(unchanged).toBeDefined();
-        const contentReads = () => home.requests.filter(request => request.method === 'GET'
-            && ['/v1/artifacts/moving', '/v1/artifacts/unchanged'].includes(request.path)).length;
+        const contentReads = () => home.requests.filter(request => request.path === '/v1/artifacts/read'
+            || request.method === 'GET' && ['/v1/artifacts/moving', '/v1/artifacts/unchanged'].includes(request.path)).length;
         const opened = contentReads();
         expect(opened).toBeGreaterThan(0);
         for (const folderId of ['work', null]) {
@@ -112,8 +131,8 @@ it('keeps a complete cold library current through unchanged partial header publi
         skills: [{ id: 'published' }, { id: 'other' }],
     });
     const hook = await renderHook(() => useSkillsLibrary());
-    const readsOf = (id: string) => home.requests.filter(request => request.method === 'GET'
-        && request.path === `/v1/artifacts/${id}`).length;
+    const readsOf = (id: string) => home.requests.filter(request => request.path === '/v1/artifacts/read'
+        || request.method === 'GET' && request.path === `/v1/artifacts/${id}`).length;
     try {
         await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: false }), { timeout: 10_000 });
         expect(storage.getState().artifactsLoaded).toBe(false);
@@ -275,7 +294,7 @@ it.each([false, true])('starts cold content before rules and preserves revision 
         handleRequest: async (path, init) => {
             if (path === '/v1/account/entity-rows/prompt-library') await catalogReady.promise;
             if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') inventories++;
-            if (path === '/v1/artifacts/cold-skill' && (init?.method ?? 'GET') === 'GET') {
+            if (path === '/v1/artifacts/read' || path === '/v1/artifacts/cold-skill' && (init?.method ?? 'GET') === 'GET') {
                 bodyReads++;
                 const response = await home.boundary.handle(path, init);
                 await bodyReady.promise;

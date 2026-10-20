@@ -20,6 +20,8 @@ export type HomeAccountChangeEvent = Readonly<{
     source?: 'connected' | 'catch-up-pending';
     /** Exact only for a consumed focused-Home change page; absent wakes remain conservative. */
     entityIds?: readonly string[];
+    /** Revision hints from the consumed change page; never inferred from a socket wake. */
+    entityRevisions?: Readonly<Record<string, number>>;
     /** Present when the publisher knows the changed domains; omitted wakes remain conservative. */
     changeKinds?: readonly ChangeEntry['kind'][];
     /**
@@ -38,6 +40,7 @@ export type HomeAccountChangeEvent = Readonly<{
 }>;
 
 type HomeAccountChangeDetails = Readonly<{
+    entityRevisions?: Readonly<Record<string, number>>;
     source?: 'connected' | 'catch-up-pending';
     changeKinds?: readonly ChangeEntry['kind'][];
     sessionListQueryAffects?: boolean | 'structural';
@@ -120,6 +123,7 @@ export function publishHomeAccountChange(
         serverId,
         ...(details?.source ? { source: details.source } : {}),
         ...(entityIds ? { entityIds: Object.freeze([...new Set(entityIds)]) } : {}),
+        ...(details?.entityRevisions ? { entityRevisions: Object.freeze({ ...details.entityRevisions }) } : {}),
         ...(details?.changeKinds ? { changeKinds: Object.freeze([...new Set(details.changeKinds)]) } : {}),
         ...(details?.sessionListQueryAffects !== undefined
             ? { sessionListQueryAffects: details.sessionListQueryAffects }

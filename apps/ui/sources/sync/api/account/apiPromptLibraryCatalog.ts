@@ -160,6 +160,34 @@ export async function readPromptLibraryRowInContext(context: PromptLibraryAccoun
     return row;
 }
 
+/** Read only demanded active rows, with the same Account admission and envelope decoder as the catalog. */
+export async function readPromptLibraryCatalogRowsProjection(scope: ServerAccountScope, keys: readonly PromptLibraryCatalogKeyV1[]): Promise<Readonly<{
+    projection: PromptLibraryCatalogProjection; isAccountCurrent: () => boolean;
+}> | null> {
+    try {
+        return await withAccount(scope, undefined, context => admit(context, async (mode, material) => {
+            let absent = false;
+            const catalog = await loadPromptLibraryCatalogV1({ mode, material, readRows: async () => {
+                const reads = await Promise.all(keys.map(async key => ({ key, row: await readPromptLibraryRowInContext(context, key) })));
+                const rows: Extract<ReturnType<typeof PromptLibraryRowsListResponseV1Schema.parse>, { status: 'listed' }>['rows'] = [];
+                for (const { key, row } of reads) {
+                    if (row.status === 'absent') { absent = true; continue; }
+                    if (row.status !== 'present' && row.status !== 'deleted') return row;
+                    rows.push({ key, revision: row.revision, content: row.status === 'present' ? row.content : null });
+                }
+                return { status: 'listed', rows };
+            } });
+            const { encryption } = await context.resolveAccountEncryption();
+            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+            context.assertCurrent();
+            const projection: PromptLibraryCatalogProjection = { catalog: current.mode === mode ? catalog
+                : { status: 'unavailable', reason: 'account-mode-mismatch' }, rawSettings: {}, sourceSettingsVersion: 0 };
+            // An absent destination still needs the canonical source activation/migration path.
+            return absent && current.mode === mode ? null : { projection, isAccountCurrent: context.accountLifetime.isCurrent };
+        }));
+    } catch (error) { return { projection: { catalog: failure(error), rawSettings: {}, sourceSettingsVersion: 0 }, isAccountCurrent: () => true }; }
+}
+
 /** Preparation is shared by the sole row writer and atomic credential promotion. */
 export function preparePromptLibraryRecordMutationInContext(context: PromptLibraryAccountContext, input: PromptLibraryRecordWriteInput, signal?:AbortSignal) {
     return admit(context, async (mode, material) => {
@@ -219,10 +247,10 @@ export async function writePromptLibraryRecordAndPublishInContext(context: Promp
             context.assertAccountCurrent();
             const scope = { serverId: context.serverId, accountId: context.accountId };
             if (result.status === 'updated') applyPromptLibraryCatalogAcknowledgedRecord(scope, input.record, result.revision, true);
-            // The acknowledged row is visible immediately. The existing loader marks retained
-            // authority stale and owns revalidation; a held read cannot hold the durable receipt.
-            fireAndForget(invalidatePromptLibraryCatalogAfterAcknowledgedMutation(scope, context.assertAccountCurrent),
-                { tag: 'promptLibraryCatalog.afterAcknowledgedMutation' });
+            if (result.status === 'conflict') {
+                fireAndForget(invalidatePromptLibraryCatalogAfterAcknowledgedMutation(scope, context.assertAccountCurrent),
+                    { tag: 'promptLibraryCatalog.afterAcknowledgedMutation' });
+            }
         }
         catch { /* Projection failure cannot erase the received CAS outcome. */ }
     }

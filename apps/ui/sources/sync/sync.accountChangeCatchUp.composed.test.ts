@@ -378,9 +378,25 @@ describe('sync AccountChange catch-up projection', () => {
         const catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'skill-rules', value: { v: 1,
             rules: [{ id: 'built-in-on', skillId: 'happier:happier', target: { t: 'allMachines' }, enabled: true,
                 createdAt: 1, updatedAt: 1 }] } }] });
-        domainHttp.mockImplementation(async ({ url, init }) => await catalog.handle(new URL(url).pathname, init)
-            ?? Response.json({}, { status: 404 }));
-        await restoreTestAccount();
+        const work: string[] = [];
+        let measuring = false;
+        const ruleResponseGate = createDeferred<void>();
+        let ruleRequested = false;
+        domainHttp.mockImplementation(async ({ url, init }) => {
+            const path = new URL(url).pathname;
+            const response = await catalog.handle(path, init);
+            if (measuring && path.endsWith('/prompt-library/skill-rules') && (init?.method ?? 'GET') === 'GET') {
+                ruleRequested = true;
+                await ruleResponseGate.promise;
+            }
+            return response ?? Response.json({}, { status: 404 });
+        });
+        await restoreTestAccount({ onRequest: path => { if (measuring) work.push(path); } });
+        const rowCodec = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
+        const decrypts = vi.spyOn(rowCodec, 'openPromptLibraryContentV1');
+        const readers = await import('./api/account/apiPromptLibraryCatalog');
+        const catalogReads = vi.spyOn(readers, 'readPromptLibraryCatalogProjection');
+        const rowReads = vi.spyOn(readers, 'readPromptLibraryCatalogRowsProjection');
         const { useSkillsLibrary } = await import('./domains/skills/useSkillsLibrary');
         const { buildSkillsReach } = await import('@/components/settings/skills/skillsCollectionModel');
         const { resetPromptLibraryCatalogEngineForTests } = await import('./engine/settings/promptLibraryCatalogEngine');
@@ -410,15 +426,33 @@ describe('sync AccountChange catch-up projection', () => {
                     entityId: `${PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1}unrecognized`, hint: null }], nextCursor: 1 };
             });
             const cursorBefore = runtime.changesCursor;
+            measuring = true;
+            decrypts.mockClear(); catalogReads.mockClear(); rowReads.mockClear();
             await act(async () => {
                 if (phase === 'held') await runtime.handleUpdate(accountChangeWake('reach-changed-during-catch-up'));
                 else await runtime.resumeViaChanges({ accountId: ACCOUNT_ID });
             });
             await vi.waitFor(() => expect(requestedChanges).toBe(true));
+            await vi.waitFor(() => expect(ruleRequested).toBe(true));
+            const { publishHomeAccountChange } = await import('./runtime/orchestration/homeAccountChange');
+            const entityId = rowCodec.buildPromptLibraryPhysicalKeyV1('skill-rules');
+            // The detailed wake can arrive before the early read answers. It must
+            // not cause a second request for the revision that read then receives.
+            publishHomeAccountChange(account!.serverId, [entityId], { entityRevisions: { [entityId]: 2 } });
+            ruleResponseGate.resolve();
             await vi.waitFor(() => expect(hook.getCurrent().items.find(item => item.skillId === 'happier:happier')?.rules[0]?.enabled).toBe(false));
             expect(count()).toBe(0);
             expect(runtime.changesCursor).toBe(cursorBefore);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(work.filter(path => path.includes('prompt-library') || path.includes('/artifacts') || path.includes('/account/settings')))
+                .toEqual(['/v1/account/entity-rows/prompt-library/skill-rules']);
+            expect(decrypts).toHaveBeenCalledTimes(1);
+            expect(catalogReads).not.toHaveBeenCalled();
+            expect(rowReads).toHaveBeenCalledTimes(1);
+            console.info(JSON.stringify({ phase, requests: work, rowDecrypts: decrypts.mock.calls.length,
+                catalogRefreshes: catalogReads.mock.calls.length, scopedRowRefreshes: rowReads.mock.calls.length }));
         } finally {
+            ruleResponseGate.resolve();
             responseGate.resolve();
             await runtime.resumeInFlight;
             await hook.unmount(); resetPromptLibraryCatalogEngineForTests(); resetPromptLibraryCatalogSnapshotsForTests();

@@ -281,6 +281,7 @@ describe('Prompt catalog captured Account mutation publication', () => {
     const accountId = 'account-prompt-ack';
     const controller = new AbortController();
     let revision = 1;
+    let readsAfterWrite = 0;
     // Only Home HTTP is replaced; qualified credentials, Account lifetime, crypto, store and CAS stay real.
     setRuntimeFetch(async (url, init) => {
       const path = new URL(String(url)).pathname;
@@ -290,11 +291,14 @@ describe('Prompt catalog captured Account mutation publication', () => {
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
       if (path === '/v2/account/settings') return Response.json({ version: 7, content: { t: 'plain', v: {} } });
       if (path === '/v1/artifacts') return Response.json([]);
-      if (path === '/v1/account/entity-rows/prompt-library') return Response.json({ status: 'listed',
+      if (path === '/v1/account/entity-rows/prompt-library') {
+        if (revision > 1) readsAfterWrite += 1;
+        return Response.json({ status: 'listed',
         rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision, content: { t: 'plain',
           v: key === 'role-overrides' ? { key, value: { v: 1, overrides: {
             builder: { roleId: 'builder', workspaceWrites: revision === 1 ? 'allow' : 'deny' },
           } } } : emptyPromptLibraryRecordV1(key) } })) });
+      }
       if (path === '/v1/account/entity-rows/prompt-library/role-overrides' && init?.method === 'POST') {
         expect(PromptLibraryRowMutationV1Schema.parse(JSON.parse(String(init.body))).expectedRevision).toBe(1);
         revision = 2;
@@ -320,5 +324,7 @@ describe('Prompt catalog captured Account mutation publication', () => {
     await vi.waitFor(() => expect(getPromptLibraryCatalogValue(scope, 'role-overrides')).toMatchObject({ status: 'ready', revision: 2,
       value: { overrides: { builder: { workspaceWrites: 'deny' } } } }));
     expect(getStorage().getState().settingsVersion).toBe(settingsVersion);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(readsAfterWrite).toBe(0);
   });
 });

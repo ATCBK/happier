@@ -12193,6 +12193,12 @@ class Sync {
                                 // to reinterpret AccountChange hints or reacting a
                                 // second time to the earlier content-free wake.
                                 publishHomeAccountChange(plannedServerId, changedEntityIds, {
+                                    entityRevisions: Object.fromEntries(changes.flatMap(change => {
+                                        const hint = change.hint;
+                                        if (!hint || typeof hint !== 'object' || !('revision' in hint)
+                                            || typeof hint.revision !== 'number' || !Number.isSafeInteger(hint.revision) || hint.revision < 0) return [];
+                                        return [[change.entityId, hint.revision]];
+                                    })),
                                     changeKinds: changes.map(change => change.kind),
                                     sessionListQueryAffects: plannedChangesAffectSessionListQuery(planned),
                                     profileCatalogAffects: plannedChangesAffectProfileCatalog(planned),
