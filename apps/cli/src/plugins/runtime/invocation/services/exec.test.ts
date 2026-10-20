@@ -12,6 +12,7 @@ import {
     authorizeResolvedProjectExecLaunchForHost,
     createStableRunnerPluginExecService,
     createStablePluginExecService,
+    disposePluginProtocolClientGracefullyForHost,
     bindPluginExecProcessOwnerForHost,
     installManagedProcessCustodyForHost,
     createProjectNativeEnvironmentIoForHost,
@@ -60,6 +61,66 @@ function createService(options?: Readonly<{ current?: () => boolean; controller?
 }
 
 describe('createStablePluginExecService', () => {
+    it('finishes protocol disposal when the child never replies to shutdown', async () => {
+        const handle = await createService().clients.spawn({
+            kind: 'jsonRpc', framing: 'jsonLines', maxFrameBytes: 1024 * 1024,
+            cancellationMethod: '$/cancelRequest', launch: { executable, args: ['-e', `
+                process.on('SIGTERM', () => {});
+                const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+                require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+                    const request=JSON.parse(line);
+                    if(request.method==='ping')send({jsonrpc:'2.0',id:request.id,result:null});
+                    if(request.method==='shutdown')send({jsonrpc:'2.0',method:'shutdown_seen',params:{hasParams:Object.hasOwn(request,'params')}});
+                });
+            `] },
+        });
+        const notifications: unknown[] = [];
+        handle.client.onNotification(message => { notifications.push(message); });
+        try {
+            await handle.client.request('ping');
+            await disposePluginProtocolClientGracefullyForHost(handle, async signal => {
+                await handle.client.request('shutdown', undefined, { signal });
+                await handle.client.notify('exit');
+            });
+            expect(notifications).toContainEqual({ method: 'shutdown_seen', params: { hasParams: false } });
+            expect((await handle.wait()).termination.observed.kind).not.toBe('failed');
+        } finally { await handle.dispose(); }
+    });
+
+    it('delivers request cancellation to a declared protocol method with the original request id', async () => {
+        // The child is the external JSON-RPC system boundary; framing and correlation stay real.
+        const handle = await createService().clients.spawn({
+            kind: 'jsonRpc', framing: 'jsonLines', maxFrameBytes: 1024 * 1024,
+            cancellationMethod: '$/cancelRequest',
+            launch: { executable, args: ['-e', `
+                const readline = require('node:readline');
+                let pending, cancelled;
+                const send = message => process.stdout.write(JSON.stringify(message) + '\\n');
+                readline.createInterface({input: process.stdin}).on('line', line => {
+                    const request = JSON.parse(line);
+                    if (request.method === 'slow') { pending = request.id; send({jsonrpc:'2.0',method:'started'}); }
+                    if (request.method === '$/cancelRequest') cancelled = request.params.id;
+                    if (request.method === 'observed') send({jsonrpc:'2.0',id:request.id,result:{pending,cancelled}});
+                });
+            `] },
+        });
+        try {
+            let started!: () => void;
+            const observedStart = new Promise<void>(resolve => { started = resolve; });
+            handle.client.onNotification(message => { if (message.method === 'started') started(); });
+            const controller = new AbortController();
+            const request = handle.client.request('slow', undefined, { signal: controller.signal });
+            const rejected = expect(request).rejects.toMatchObject({ code: 'PLUGIN_EXEC_CLIENT_ABORTED' });
+            await observedStart;
+            controller.abort();
+            await rejected;
+            const observed = await handle.client.request('observed');
+            if (observed === null || typeof observed !== 'object' || Array.isArray(observed)) throw new Error('Invalid fixture observation');
+            expect(observed.pending).toBeDefined();
+            expect(observed.cancelled).toBe(observed.pending);
+        } finally { await handle.dispose(); }
+    });
+
     it('refuses native descendant handoff for a host-managed process without launching it', async () => {
         const service = createService();
         const request = { executable, args: ['-e', 'throw new Error("must not launch")'] };
