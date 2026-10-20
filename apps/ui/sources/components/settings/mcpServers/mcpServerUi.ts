@@ -1,7 +1,6 @@
 import type {
     DaemonMcpServersDetectWarningV1,
     DetectedMcpPreviewEntryV1,
-    ManagedMcpPreviewEntryV1,
     McpServerCatalogEntryTransportV1,
     McpPreviewAuthModeV1,
     McpPreviewScopeKindV1,
@@ -76,12 +75,6 @@ export function resolvePreviewScopeLabel(scopeKind: McpPreviewScopeKindV1): stri
         default:
             return t('settings.mcpServersScopeBuiltIn');
     }
-}
-
-export function resolveManagedAvailabilityLabel(entry: ManagedMcpPreviewEntryV1): string {
-    if (entry.availability === 'active') return t('settings.mcpServersStatusActive');
-    if (entry.availability === 'available') return t('settings.mcpServersStatusAvailable');
-    return t('settings.mcpServersStatusUnavailable');
 }
 
 export function resolveDetectedAvailabilityLabel(entry: DetectedMcpPreviewEntryV1): string {

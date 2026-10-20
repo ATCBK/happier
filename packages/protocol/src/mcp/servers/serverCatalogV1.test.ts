@@ -190,6 +190,24 @@ describe('MCP catalog row authority', () => {
       .toMatchObject({ status: 'partial', diagnostics: [{ path: 'pluginServers', reason: 'invalid-stored-content' }] });
   });
 
+  it('writes plugin Test snapshots without requiring prior tool settings or replacing them', () => {
+    const snapshot = { checkedAt: 20, machineId: 'machine', tools: [{ name: 'read', tokens: 7 }] };
+    const ctx = { nowMs: 20, newId: () => 'unused', pluginItemIds: [pluginServerId] };
+    const first = applyMcpServerCatalogMutationV1(catalog, { kind: 'tools-snapshot', serverId: pluginServerId, snapshot }, ctx);
+    expect(first.pluginServers?.[pluginServerId]).toEqual({ toolsSnapshot: snapshot });
+    const edited = applyMcpServerCatalogMutationV1(first, { kind: 'tools-change', serverId: pluginServerId,
+      settings: { default: 'allow_read_only', tools: { write: 'off' } } }, ctx);
+    const checked = applyMcpServerCatalogMutationV1(edited, { kind: 'tools-snapshot', serverId: pluginServerId,
+      snapshot: { ...snapshot, checkedAt: 21 } }, ctx);
+    expect(checked.pluginServers?.[pluginServerId]).toEqual({
+      tools: { default: 'allow_read_only', overrides: { write: 'off' } }, toolsSnapshot: { ...snapshot, checkedAt: 21 },
+    });
+    expect(checked.servers).toEqual(catalog.servers);
+    expect(checked.bindings).toEqual(catalog.bindings);
+    expect(() => applyMcpServerCatalogMutationV1(catalog, { kind: 'tools-snapshot', serverId: pluginServerId, snapshot },
+      { ...ctx, pluginItemIds: [] })).toThrow('Server not found');
+  });
+
   it('retains registry and machine origins through the canonical catalog reader', () => {
     const registry = { kind: 'registry', provenance: { sourceId: 'builtin:mcp-registry', format: 'mcp-registry',
       sourceUrl: 'https://registry.modelcontextprotocol.io', itemId: 'example/server',

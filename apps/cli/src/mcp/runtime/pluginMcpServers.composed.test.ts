@@ -69,6 +69,7 @@ describe('plugin MCP registration → rules → launch → public service', () =
         mcpServerCatalog: { status: 'ready' as const, authority: 'active' as const, catalog: off, revision: 1, diagnostics: [] } },
       machineId: 'fixture-machine', directory: root, agentId: 'claude', agentAcceptsUserMcp: true,
       pluginRuntimeRegistryLease: lease, includeHappierMcpServer: false as const, tmpDir: root,
+      mcpToolControl: { off: 'hidden' as const, approval: 'native' as const },
       detectedMcpServers: [true, false].map(loadedInHappierSessions => DetectedMcpServerV1Schema.parse({
         provider: 'claude', name: loadedInHappierSessions ? 'tools' : 'tools_3', transport: 'stdio',
         stdio: { command: 'echo', args: [] }, envKeys: [], enabled: true, loadedInHappierSessions,
@@ -91,6 +92,10 @@ describe('plugin MCP registration → rules → launch → public service', () =
         forceIncludeServerIds: [serverId], forceExcludeServerIds: [] } } });
       if (!register) { await expect(selected).rejects.toMatchObject({ code: 'plugin_mcp_generation_retired' }); return; }
       const result = await selected; stop = result.happierMcpServer.stop;
+      // A freshly installed declaration has reach, but no pluginServers row.
+      // The real launch consumer must retain the normal Ask default.
+      expect(catalog.pluginServers).toBeUndefined();
+      expect(result.mcpToolPolicy?.tools_3).toEqual({ unlisted: 'ask', tools: {} });
       expect(result.mcpServerIdentities?.tools_3).toMatchObject({ serverId, plugin: { pluginId, localId: 'tools' } });
       expect(result.mcpServers.tools_3?.command).toBeTruthy();
       const tools = await probeMcpStdioServerTools({ config: result.mcpServers.tools_3! });

@@ -63,6 +63,14 @@ export function applyMcpServerCatalogMutationV1(catalog: McpServerCatalogV1, raw
     });
     return McpServerCatalogV1Schema.parse({ ...catalog, bindings: [...catalog.bindings.filter(rule => !ids.has(rule.serverId)), ...next] });
   }
+  if (change.kind === 'tools-snapshot') {
+    const server = catalog.servers.find(entry => entry.id === change.serverId && !isMcpPluginItemIdV1(entry.id));
+    if (!server && !admittedPluginItem(change.serverId)) throw new Error(`Server not found: ${change.serverId}`);
+    if (server) return applyMcpServerCatalogMutationV1(catalog, { kind: 'server-update', entry: { ...server, toolsSnapshot: change.snapshot } }, ctx);
+    return McpServerCatalogV1Schema.parse({ ...catalog, pluginServers: { ...catalog.pluginServers,
+      [change.serverId]: { ...catalog.pluginServers?.[change.serverId], toolsSnapshot: change.snapshot },
+    } });
+  }
   if (change.kind === 'tools-change') {
     const server = catalog.servers.find(entry => entry.id === change.serverId && !entry.id.startsWith('plugin:'));
     if (!server && !admittedPluginItem(change.serverId)) throw new Error(`Server not found: ${change.serverId}`);

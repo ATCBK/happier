@@ -230,7 +230,7 @@ function createCapturedStore(input: Readonly<{
         revision: snapshot.revision };
       const pluginItemIds = change.kind === 'plugin-defaults'
         || change.kind === 'rules-change' && change.serverIds.some(id => id.startsWith('plugin:'))
-        || change.kind === 'tools-change' && change.serverId.startsWith('plugin:')
+        || (change.kind === 'tools-change' || change.kind === 'tools-snapshot') && change.serverId.startsWith('plugin:')
         ? (await readPluginMcpServerMetadata()).map(item => item.id) : [];
       await verifyCurrent();
       return commitMcpServerCatalogMutationV1({ catalog: snapshot.catalog, revision: snapshot.revision, change, scope,

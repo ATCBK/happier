@@ -4,16 +4,21 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
-import { DetectedMcpServerV1Schema, type DetectedMcpServerV1 } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
+import { DaemonMcpServersTestResponseSchema, DetectedMcpServerV1Schema, type DetectedMcpServerV1 } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
+import { McpServerCatalogRowMutationV1Schema, openMcpServerCatalogContentV1, type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { DaemonMcpServersPreviewResponseSchema } from '@happier-dev/protocol/mcp/servers/previewV1';
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/accountSettingsCache';
 import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { registerMachineMcpServersRpcHandlers } from './rpcHandlers.mcpServers';
-import type { McpServerProbeResult, probeMcpStdioServerTools } from '@/mcp/servers/probeMcpStdioServerTools';
+import { probeMcpStdioServerTools, type McpServerProbeResult } from '@/mcp/servers/probeMcpStdioServerTools';
 import { PromptLibraryCatalogKeyV1Schema, PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
-import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { configuration } from '@/configuration';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { detectProviderMcpServers } from '@/mcp/providerDetection/detectProviderMcpServers';
@@ -42,6 +47,7 @@ const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true,
 const catalog = { v: 1 as const, servers: settings.servers, bindings: settings.bindings };
 
 function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; retireDuringMaterialization?: boolean; project?: boolean;
+  realProbe?: boolean; env?: NodeJS.ProcessEnv;
   rules?: typeof catalog.bindings;
   retireDuringDetection?: boolean; reenterDuringHandoff?: boolean;
   detected?: readonly DetectedMcpServerV1[];
@@ -58,10 +64,12 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
   let reentered = false;
   let probeObservedReentry = false;
   let observedProtectedEnv: unknown;
-  const probe = vi.fn(async ({ config }: Parameters<typeof probeMcpStdioServerTools>[0]) => {
+  const probe = vi.fn(async (request: Parameters<typeof probeMcpStdioServerTools>[0]) => {
+    const { config } = request;
     probeObservedReentry = reentered;
     const configPath = config.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
     if (configPath) observedProtectedEnv = JSON.parse(await readFile(configPath, 'utf8')).env;
+    if (input.realProbe) return probeMcpStdioServerTools(request);
     return input.probeResult ? input.probeResult() : { tools: [{ name: 'echo', inputSchema: { type: 'object' as const } }] };
   });
   let handoffScheduled = false;
@@ -81,7 +89,7 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
     const active = getActiveAccountSettingsSnapshot();
     if (active) setActiveAccountSettingsSnapshot({ ...active, scopeKey: 'replacement-account', settingsVersion: 5 });
   };
-  const env: NodeJS.ProcessEnv = {};
+  const env: NodeJS.ProcessEnv = input.env ?? {};
   if (input.retireDuringMaterialization) {
     // OS environment expansion is a boundary during real async materialization.
     Object.defineProperty(env, 'RETIRE_ACCOUNT', { get: () => { retireAccount(); return 'expanded'; } });
@@ -455,6 +463,63 @@ describe('Machine MCP catalog admission', () => {
     } finally {
       stopHandoffObservation();
     }
+  });
+
+  it.each(['updated', 'conflict'] as const)('tests an installed plugin id through registration and snapshot CAS (%s)', async writeStatus => {
+    const pluginId = `acme.mcp-test.${writeStatus}`;
+    const serverId = `plugin:${pluginId}/tools`;
+    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      happyHomeDir: configuration.happyHomeDir,
+      resolveContributes: async happyHomeDir => createResolvedContributionRegistry(await resolvePluginContributes({ happyHomeDir })),
+      plugins: [{
+        manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: { mcp: { servers: [
+          { id: 'tools', title: 'Tools', kind: 'dynamic', sessionScope: 'session' },
+        ] } } }),
+        files: { 'daemon.mjs': `export function activate(api) {
+          api.mcp.registerServer('tools', {
+            async listTools() { return { items: [{ name: 'echo', inputSchema: { type: 'object' } }] }; }, async callTool() { return {}; },
+            async listResources() { return { items: [] }; }, async listResourceTemplates() { return { items: [] }; },
+            async readResource(request) { return { contents: [{ uri: request.uri, text: '' }] }; },
+            async subscribeResource() { return { dispose() {} }; }, async listPrompts() { return { items: [] }; },
+            async getPrompt() { return { messages: [] }; }, async dispose() {}
+          });
+        }` },
+      }] });
+    let held: McpServerCatalogV1 = { v: 1, servers: [], bindings: [], pluginServers: {
+      [serverId]: { tools: { default: 'ask', overrides: { write: 'off' } } },
+    } };
+    let revision = 3;
+    const { rpcHandlerManager, probe } = register({ realProbe: true,
+      env: { ...process.env, HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1' } });
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    const post = vi.mocked(axios.post).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (...args) => new URL(String(args[0])).pathname === '/v1/account/entity-rows/mcp'
+      ? { status: 200, data: { status: 'present', revision, content: { t: 'plain', v: held } } } : get(...args));
+    vi.mocked(axios.post).mockImplementation(async (...args) => {
+      if (new URL(String(args[0])).pathname !== '/v1/account/entity-rows/mcp') return post(...args);
+      const mutation = McpServerCatalogRowMutationV1Schema.parse(args[1]);
+      expect(mutation.expectedRevision).toBe(revision);
+      if (writeStatus === 'conflict') return { status: 409, data: { status: 'conflict', revision: revision + 1 } };
+      const opened = openMcpServerCatalogContentV1({ content: mutation.content, mode: 'plain', material: null });
+      if (opened.status !== 'opened') throw new Error('Expected current catalog write');
+      held = opened.catalog;
+      revision += 1;
+      return { status: 200, data: { status: 'updated', revision, cursor: revision } };
+    });
+    try {
+      const result = DaemonMcpServersTestResponseSchema.parse(await rpcHandlerManager.invokeLocal(
+        RPC_METHODS.DAEMON_MCP_SERVERS_TEST, { t: 'byId', serverId, machineId: 'm1', directory: '/tmp' },
+      ));
+      expect(result).toMatchObject(writeStatus === 'updated' ? { ok: true, toolCount: 1, toolNamesSample: ['echo'] }
+        : { ok: false, errorCode: 'materialization_failed', error: 'mcp_tools_snapshot_conflict' });
+      expect(probe).toHaveBeenCalled();
+      expect(held.servers).toEqual([]);
+      expect(held.pluginServers?.[serverId]?.tools).toEqual({ default: 'ask', overrides: { write: 'off' } });
+      if (writeStatus === 'updated') expect(held.pluginServers?.[serverId]?.toolsSnapshot).toMatchObject({
+        machineId: 'm1', checkedAt: expect.any(Number), tools: [{ name: 'echo', tokens: expect.any(Number) }],
+      });
+      else expect(held.pluginServers?.[serverId]?.toolsSnapshot).toBeUndefined();
+    } finally { await fixture.dispose(); }
   });
 
   it('refuses private tool names after same-Account reentry while the OS probe is in flight', async () => {

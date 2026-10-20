@@ -4,7 +4,7 @@ import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersTestRequestSchema 
 import { DaemonMcpServersPreviewRequestSchema } from '@happier-dev/protocol/mcp/servers/previewV1';
 import { listMcpServerCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { estimateTokensV1 } from '@happier-dev/protocol/capabilities/estimateTokensV1';
-import type { McpServerToolsSnapshotV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { isMcpPluginItemIdV1, type McpPluginItemV1, type McpServerToolsSnapshotV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import type { DaemonMcpServersPreviewResponse, DaemonMcpServersTestErrorCode, DaemonMcpServersDetectResponse, DaemonMcpServersDetectWarningV1, DaemonMcpServersTestRequest, DaemonMcpServersTestResponse, McpServersSettingsV1, McpServerMaterializationV1 } from '@happier-dev/protocol';
 
 import type { McpServerConfig } from '@/agent';
@@ -13,7 +13,6 @@ import { bootstrapAccountSettingsContext, type AccountSettingsContext } from '@/
 import { loadFreshMcpAccountSettingsContext } from '@/cli/commands/mcp/loadFreshMcpAccountSettingsContext';
 import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
-import { projectMcpServerMaterializationV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
@@ -33,6 +32,7 @@ import { readAvailablePluginSkillItemsV1 } from '@happier-dev/protocol/prompts/l
 import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { tryDecryptSessionOwnerMetadataView, readSessionOwnerLocality } from '@/session/transport/encryption/sessionEncryptionContext';
 import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
@@ -54,13 +54,15 @@ function nowMs(depsNowMs: (() => number) | undefined): number {
 function resolveServerForTestRequest(params: Readonly<{
   request: DaemonMcpServersTestRequest;
   accountMcpSettings?: McpServersSettingsV1;
+  mcpPluginItems?: readonly McpPluginItemV1[];
 }>): { ok: true; serverName: string; resolved: McpServerMaterializationV1 } | { ok: false; errorCode: DaemonMcpServersTestErrorCode; error: string } {
   const req = params.request;
   const settings: McpServersSettingsV1 | undefined = req.t === 'draft'
     ? { v: 1, strictMode: true, servers: [req.server], bindings: req.binding ? [req.binding] : [] }
     : params.accountMcpSettings;
   if (!settings) return { ok: false, errorCode: 'materialization_failed', error: 'mcp_catalog_unavailable' };
-  const server = req.t === 'draft' ? req.server : settings.servers.find((s) => s.id === req.serverId);
+  const server = req.t === 'draft' ? req.server : settings.servers.find((s) => s.id === req.serverId)
+    ?? params.mcpPluginItems?.find(item => item.itemId === req.serverId)?.config;
   if (!server) return { ok: false, errorCode: 'server_not_found', error: 'Server id not found.' };
   const binding = req.t === 'draft' ? req.binding : req.bindingId ? settings.bindings.find((b) => b.id === req.bindingId) : undefined;
   if ((req.t === 'byId' && req.bindingId && !binding) || (binding && binding.serverId !== server.id)) {
@@ -68,17 +70,18 @@ function resolveServerForTestRequest(params: Readonly<{
   }
   // Test is an explicit one-server operation. Reach rules decide Session defaults,
   // not whether the person can check an Off server before adding it to a Session.
-  const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
+  const resolved = resolveSessionCapabilitiesForDirectory({
     settings,
+    mcpPluginItems: params.mcpPluginItems,
     machineId: req.machineId,
     directory: req.directory,
     selection: { mcp: { v: 1, managedServersEnabled: false,
       forceIncludeServerIds: [server.id], forceExcludeServerIds: [] } },
-  }), req.directory);
-  const item = resolved.serversByName[server.name];
+  });
+  const item = Object.values(resolved.selectedServersByName).find(item => item.serverId === server.id);
   if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
   if (item.enabled !== true) return { ok: false, errorCode: 'server_disabled', error: 'Server is not enabled for this target.' };
-  return { ok: true, serverName: server.name, resolved: { directory: req.directory, strictMode: true, serversByName: { [server.name]: item } } };
+  return { ok: true, serverName: item.name, resolved: { directory: req.directory, strictMode: true, serversByName: { [item.name]: item } } };
 }
 
 export function registerMachineMcpServersRpcHandlers(params: Readonly<{
@@ -110,164 +113,194 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
       }
 
       const startedAt = nowMs(params.deps?.nowMs);
-
-      const credentials = await readCredentialsImpl().catch(() => null);
-      if (!credentials) {
-        const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
-        return { ok: false, errorCode: 'missing_credentials', error: 'missing_credentials', durationMs };
-      }
-
-      let accountSettingsContext: AccountSettingsContext;
-      let resolution: ReturnType<typeof resolveServerForTestRequest>;
-      let operationContext: SavedSecretOperationContextV1 | null = null;
+      let pluginLease: PluginRuntimeRegistryLease | undefined;
+      const pluginAttachments: Readonly<{ dispose(): void | Promise<void> }>[] = [];
       try {
-        // A complete caller-owned draft does not depend on stored MCP facts.
-        // Stored ids must capture the current admitted Account catalog.
-        if (parsed.data.t === 'draft') {
-          accountSettingsContext = await bootstrapAccountSettingsContextImpl({ credentials, mode: 'blocking', refresh: 'force' });
-        } else {
-          const captured = await loadFreshMcpAccountSettingsContext(credentials, { bootstrapAccountSettingsContext: bootstrapAccountSettingsContextImpl });
-          accountSettingsContext = captured;
-          operationContext = captured.operationContext;
-          if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
-        }
-        resolution = resolveServerForTestRequest({ request: parsed.data,
-          ...(parsed.data.t === 'draft' ? {} : { accountMcpSettings: readMcpServersSettingsFromAccountSettings(accountSettingsContext) }) });
-      } catch (error) {
-        return { ok: false, errorCode: 'materialization_failed', error: redactErrorText(error),
-          durationMs: Math.max(0, nowMs(params.deps?.nowMs) - startedAt) };
-      }
-      if (!resolution.ok) {
-        const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
-        return { ok: false, errorCode: resolution.errorCode, error: resolution.error, durationMs };
-      }
 
-      let materialSnapshot: ActiveAccountSettingsSnapshot = accountSettingsContext;
-      const references = [...new Set(listMcpServerCatalogSavedSecretRefsV1({ v: 1, bindings: [],
-        servers: Object.values(resolution.resolved.serversByName).filter(server => server.enabled === true).map(server => server.config),
-      }).map(ref => ref.secretId))].map(ref => ({ ref }));
-      if (references.length > 0 || parsed.data.t === 'byId') {
+        const credentials = await readCredentialsImpl().catch(() => null);
+        if (!credentials) {
+          const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
+          return { ok: false, errorCode: 'missing_credentials', error: 'missing_credentials', durationMs };
+        }
+
+        let accountSettingsContext: AccountSettingsContext;
+        let resolution: ReturnType<typeof resolveServerForTestRequest>;
+        let operationContext: SavedSecretOperationContextV1 | null = null;
         try {
-          const scopeKey = resolveAccountSettingsScopeKeyForToken(credentials.token);
-          if (!operationContext) {
-            const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-            operationContext = createInvocationSavedSecretOperationContextV1({ credentials, snapshot: accountSettingsContext,
-              serverHttpBaseUrl: resolveServerHttpBaseUrl(),
-              isCurrent: async () => getActiveAccountSettingsSnapshot()?.scopeKey === scopeKey
-                && getActiveAccountSettingsSnapshotLifetimeToken() === lifetimeToken });
+          // A complete caller-owned draft does not depend on stored MCP facts.
+          // Stored ids must capture the current admitted Account catalog.
+          if (parsed.data.t === 'draft') {
+            accountSettingsContext = await bootstrapAccountSettingsContextImpl({ credentials, mode: 'blocking', refresh: 'force' });
+          } else {
+            const captured = await loadFreshMcpAccountSettingsContext(credentials, { bootstrapAccountSettingsContext: bootstrapAccountSettingsContextImpl });
+            accountSettingsContext = captured;
+            operationContext = captured.operationContext;
+            if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
           }
-          const capturedSnapshot = operationContext.readSnapshot();
-          if (!capturedSnapshot) throw new McpServerCatalogUnavailableError('scope-retired');
-          materialSnapshot = capturedSnapshot;
-          if (references.length > 0) {
-            const admitted = await refreshSavedSecretCatalogForOperation({ expectedScopeKey: scopeKey, references, operationContext });
-            materialSnapshot = admitted;
+          const accountMcpSettings = parsed.data.t === 'byId' ? readMcpServersSettingsFromAccountSettings(accountSettingsContext) : undefined;
+          let mcpPluginItems: readonly McpPluginItemV1[] | undefined;
+          if (parsed.data.t === 'byId' && isMcpPluginItemIdV1(parsed.data.serverId)) {
+            pluginLease = await acquireAuthoritativePluginRuntimeRegistryLease();
+            mcpPluginItems = await pluginLease.registry.projectMcpServerItems?.(accountMcpSettings!) ?? [];
           }
+          resolution = resolveServerForTestRequest({ request: parsed.data, accountMcpSettings, mcpPluginItems });
         } catch (error) {
+          return { ok: false, errorCode: 'materialization_failed', error: redactErrorText(error),
+            durationMs: Math.max(0, nowMs(params.deps?.nowMs) - startedAt) };
+        }
+        if (!resolution.ok) {
+          const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
+          return { ok: false, errorCode: resolution.errorCode, error: resolution.error, durationMs };
+        }
+
+        let materialSnapshot: ActiveAccountSettingsSnapshot = accountSettingsContext;
+        const references = [...new Set(listMcpServerCatalogSavedSecretRefsV1({ v: 1, bindings: [],
+          servers: Object.values(resolution.resolved.serversByName).filter(server => server.enabled === true).map(server => server.config),
+        }).map(ref => ref.secretId))].map(ref => ({ ref }));
+        if (references.length > 0 || parsed.data.t === 'byId') {
+          try {
+            const scopeKey = resolveAccountSettingsScopeKeyForToken(credentials.token);
+            if (!operationContext) {
+              const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+              operationContext = createInvocationSavedSecretOperationContextV1({ credentials, snapshot: accountSettingsContext,
+                serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+                isCurrent: async () => getActiveAccountSettingsSnapshot()?.scopeKey === scopeKey
+                  && getActiveAccountSettingsSnapshotLifetimeToken() === lifetimeToken });
+            }
+            const capturedSnapshot = operationContext.readSnapshot();
+            if (!capturedSnapshot) throw new McpServerCatalogUnavailableError('scope-retired');
+            materialSnapshot = capturedSnapshot;
+            if (references.length > 0) {
+              const admitted = await refreshSavedSecretCatalogForOperation({ expectedScopeKey: scopeKey, references, operationContext });
+              materialSnapshot = admitted;
+            }
+          } catch (error) {
+            const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
+            return { ok: false, errorCode: 'materialization_failed', error: redactErrorText(error), durationMs };
+          }
+        }
+        const savedSecretMaterializer = createSavedSecretMaterializerFromSnapshotV1(materialSnapshot, {
+          isCurrent: () => operationContext !== null && operationContext.readSnapshot() === materialSnapshot,
+        });
+
+        let requestAuth: McpTestRequestAuthAttachment | undefined;
+        let mcpConfig: { serverName: string; config: McpServerConfig; cleanup: () => Promise<void>;
+          sanitizeDiagnosticText: (value: string) => string;
+          createDiagnosticStreamingSanitizer: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>>['createDiagnosticStreamingSanitizer'];
+        };
+        try {
+          if (pluginLease?.registry.materializePluginMcpServers) {
+            const testSessionId = `mcp-test:${context?.transportRequestId ?? randomUUID()}`;
+            const attached = await pluginLease.registry.materializePluginMcpServers({
+              scope: { kind: 'session', sessionId: testSessionId }, directory: parsed.data.directory,
+              signal: context?.signal, addDisposable: attachment => pluginAttachments.push(attachment),
+              servers: Object.values(resolution.resolved.serversByName).map(server => ({
+                id: server.serverId, name: server.name, title: server.config.title,
+                transport: server.config.remote ? { kind: server.config.transport === 'sse' ? 'sse' as const : 'http' as const, url: server.config.remote.url }
+                  : { kind: 'stdio' as const }, scope: { sessionId: testSessionId, directory: parsed.data.directory },
+              })),
+            });
+            const item = resolution.resolved.serversByName[resolution.serverName];
+            const server = attached.find(server => server.id === item?.serverId);
+            if (!server || !item) throw new Error('materialize_missing_config');
+            if (server.transport.kind === 'http' || server.transport.kind === 'sse') {
+              resolution = { ...resolution, resolved: { ...resolution.resolved, serversByName: {
+                [resolution.serverName]: { ...item, config: { ...item.config, remote: { ...item.config.remote!, url: server.transport.url } } },
+              } } };
+            }
+          }
+          const selected = resolution.resolved.serversByName[resolution.serverName]?.config;
+          const remote = selected?.remote;
+          if (selected && selected.transport !== 'stdio' && remote?.auth?.kind === 'oauth'
+            && params.deps?.issueRequestAuth) {
+            requestAuth = await params.deps.issueRequestAuth({ serverId: selected.id,
+              resource: canonicalMcpOAuthResourceUrlV1(remote.url), materializationId: randomUUID() }, operationContext, context);
+          }
+          const materialized = await materializeMcpServerConfigRecord({
+            resolved: resolution.resolved,
+            savedSecretMaterializer,
+            processEnv: depsEnv,
+            tmpDir: null,
+            strictMode: true,
+            ...(requestAuth && selected ? { requestAuthByServerId: { [selected.id]: requestAuth } } : {}),
+          });
+          const config = materialized.mcpServers[resolution.serverName];
+          if (!config) {
+            materialized.cleanup();
+            throw new Error('materialize_missing_config');
+          }
+          if (operationContext && !await operationContext.isCurrent()) {
+            materialized.cleanup();
+            throw new McpServerCatalogUnavailableError('scope-retired');
+          }
+          mcpConfig = { serverName: resolution.serverName, config, cleanup: async () => {
+            try { materialized.cleanup(); } finally { await requestAuth?.cleanup(); }
+          },
+            sanitizeDiagnosticText: materialized.sanitizeDiagnosticText,
+            createDiagnosticStreamingSanitizer: materialized.createDiagnosticStreamingSanitizer };
+        } catch (error) {
+          await requestAuth?.cleanup();
           const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
           return { ok: false, errorCode: 'materialization_failed', error: redactErrorText(error), durationMs };
         }
-      }
-      const savedSecretMaterializer = createSavedSecretMaterializerFromSnapshotV1(materialSnapshot, {
-        isCurrent: () => operationContext !== null && operationContext.readSnapshot() === materialSnapshot,
-      });
 
-      let requestAuth: McpTestRequestAuthAttachment | undefined;
-      let mcpConfig: { serverName: string; config: McpServerConfig; cleanup: () => Promise<void>;
-        sanitizeDiagnosticText: (value: string) => string;
-        createDiagnosticStreamingSanitizer: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>>['createDiagnosticStreamingSanitizer'];
-      };
-      try {
-        const selected = resolution.resolved.serversByName[resolution.serverName]?.config;
-        const remote = selected?.remote;
-        if (selected && selected.transport !== 'stdio' && remote?.auth?.kind === 'oauth'
-          && params.deps?.issueRequestAuth) {
-          requestAuth = await params.deps.issueRequestAuth({ serverId: selected.id,
-            resource: canonicalMcpOAuthResourceUrlV1(remote.url), materializationId: randomUUID() }, operationContext, context);
-        }
-        const materialized = await materializeMcpServerConfigRecord({
-          resolved: resolution.resolved,
-          savedSecretMaterializer,
-          processEnv: depsEnv,
-          tmpDir: null,
-          strictMode: true,
-          ...(requestAuth && selected ? { requestAuthByServerId: { [selected.id]: requestAuth } } : {}),
-        });
-        const config = materialized.mcpServers[resolution.serverName];
-        if (!config) {
-          materialized.cleanup();
-          throw new Error('materialize_missing_config');
-        }
-        if (operationContext && !await operationContext.isCurrent()) {
-          materialized.cleanup();
-          throw new McpServerCatalogUnavailableError('scope-retired');
-        }
-        mcpConfig = { serverName: resolution.serverName, config, cleanup: async () => {
-          try { materialized.cleanup(); } finally { await requestAuth?.cleanup(); }
-        },
-          sanitizeDiagnosticText: materialized.sanitizeDiagnosticText,
-          createDiagnosticStreamingSanitizer: materialized.createDiagnosticStreamingSanitizer };
-      } catch (error) {
-        await requestAuth?.cleanup();
-        const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
-        return { ok: false, errorCode: 'materialization_failed', error: redactErrorText(error), durationMs };
-      }
-
-      let probeCompleted = false;
-      try {
-        const probe = await probeMcpStdioServerToolsImpl({ config: mcpConfig.config, baseEnv: depsEnv,
-          signal: context?.signal,
-          sanitizeDiagnosticText: mcpConfig.sanitizeDiagnosticText,
-          createDiagnosticStreamingSanitizer: mcpConfig.createDiagnosticStreamingSanitizer });
-        probeCompleted = true;
-        if (operationContext && !await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
-        const { stderrTail, tools: definitions, ...metadata } = probe;
-        const tools = definitions.map(({ inputSchema, ...tool }) => ({ ...tool,
-          tokens: estimateTokensV1(tool.name + (tool.description ?? '') + JSON.stringify(inputSchema)) }));
-        const toolsSnapshot: McpServerToolsSnapshotV1 = { ...metadata, tools,
-          checkedAt: nowMs(params.deps?.nowMs), machineId: parsed.data.machineId };
-        if (parsed.data.t === 'byId') {
-          const capturedCatalog = accountSettingsContext.mcpServerCatalog;
-          const serverId = parsed.data.serverId;
-          const entry = capturedCatalog?.status === 'ready'
-            ? capturedCatalog.catalog.servers.find(server => server.id === serverId) : undefined;
-          if (!operationContext || !entry || capturedCatalog?.status !== 'ready' || capturedCatalog.revision === 'absent') {
-            return { ok: false, errorCode: 'materialization_failed', error: 'mcp_catalog_unavailable',
-              durationMs: Math.max(0, nowMs(params.deps?.nowMs) - startedAt) };
+        let probeCompleted = false;
+        try {
+          const probe = await probeMcpStdioServerToolsImpl({ config: mcpConfig.config, baseEnv: depsEnv,
+            signal: context?.signal,
+            sanitizeDiagnosticText: mcpConfig.sanitizeDiagnosticText,
+            createDiagnosticStreamingSanitizer: mcpConfig.createDiagnosticStreamingSanitizer });
+          probeCompleted = true;
+          if (operationContext && !await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+          const { stderrTail, tools: definitions, ...metadata } = probe;
+          const tools = definitions.map(({ inputSchema, ...tool }) => ({ ...tool,
+            tokens: estimateTokensV1(tool.name + (tool.description ?? '') + JSON.stringify(inputSchema)) }));
+          const toolsSnapshot: McpServerToolsSnapshotV1 = { ...metadata, tools,
+            checkedAt: nowMs(params.deps?.nowMs), machineId: parsed.data.machineId };
+          if (parsed.data.t === 'byId') {
+            const capturedCatalog = accountSettingsContext.mcpServerCatalog;
+            const serverId = parsed.data.serverId;
+            if (!operationContext || capturedCatalog?.status !== 'ready' || capturedCatalog.revision === 'absent') {
+              return { ok: false, errorCode: 'materialization_failed', error: 'mcp_catalog_unavailable',
+                durationMs: Math.max(0, nowMs(params.deps?.nowMs) - startedAt) };
+            }
+            const updated = await createCliMcpServerStoreForOperation({ operationContext }).mutate({
+              kind: 'tools-snapshot', serverId, snapshot: toolsSnapshot,
+            }, capturedCatalog.revision, capturedCatalog);
+            if (updated.status !== 'updated') return { ok: false, errorCode: 'materialization_failed',
+              error: updated.status === 'conflict' ? 'mcp_tools_snapshot_conflict' : 'mcp_tools_snapshot_unavailable',
+              ...(stderrTail ? { stderrTail } : {}), durationMs: Math.max(0, nowMs(params.deps?.nowMs) - startedAt) };
+            if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
           }
-          const updated = await createCliMcpServerStoreForOperation({ operationContext }).mutate({
-            kind: 'server-update', entry: { ...entry, toolsSnapshot },
-          }, capturedCatalog.revision, capturedCatalog);
-          if (updated.status !== 'updated') return { ok: false, errorCode: 'materialization_failed',
-            error: updated.status === 'conflict' ? 'mcp_tools_snapshot_conflict' : 'mcp_tools_snapshot_unavailable',
-            ...(stderrTail ? { stderrTail } : {}), durationMs: Math.max(0, nowMs(params.deps?.nowMs) - startedAt) };
-          if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+          const toolNames = tools.map((tool) => tool.name);
+          const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
+          return {
+            ok: true,
+            toolCount: toolNames.length,
+            toolNamesSample: toolNames.slice(0, 20),
+            tools, ...metadata, ...(stderrTail ? { stderrTail } : {}),
+            durationMs,
+          };
+        } catch (error) {
+          const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
+          const message = redactErrorText(mcpConfig.sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)));
+          const cause = error instanceof McpServerProbeError ? error.spawnFailure ?? error.cause : error;
+          const configuredCommand = resolution.resolved.serversByName[resolution.serverName]?.config.stdio?.command;
+          const runtimeMissing = configuredCommand && cause && typeof cause === 'object'
+            && 'code' in cause && cause.code === 'ENOENT' && 'path' in cause && cause.path === configuredCommand
+            ? configuredCommand : undefined;
+          const stderrTail = error instanceof McpServerProbeError ? error.stderrTail : undefined;
+          const code = probeCompleted ? 'materialization_failed'
+            : error instanceof McpServerProbeError ? error.phase === 'connect' ? 'mcp_connect_failed' : 'mcp_list_tools_failed'
+              : message.includes('mcp_connect_timeout') ? 'mcp_connect_failed' : 'mcp_list_tools_failed';
+          return { ok: false, errorCode: code, error: message, durationMs,
+            ...(runtimeMissing ? { runtimeMissing } : {}), ...(stderrTail ? { stderrTail } : {}) };
+        } finally {
+          await mcpConfig.cleanup();
         }
-        const toolNames = tools.map((tool) => tool.name);
-        const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
-        return {
-          ok: true,
-          toolCount: toolNames.length,
-          toolNamesSample: toolNames.slice(0, 20),
-          tools, ...metadata, ...(stderrTail ? { stderrTail } : {}),
-          durationMs,
-        };
-      } catch (error) {
-        const durationMs = Math.max(0, nowMs(params.deps?.nowMs) - startedAt);
-        const message = redactErrorText(mcpConfig.sanitizeDiagnosticText(error instanceof Error ? error.message : String(error)));
-        const cause = error instanceof McpServerProbeError ? error.spawnFailure ?? error.cause : error;
-        const configuredCommand = resolution.resolved.serversByName[resolution.serverName]?.config.stdio?.command;
-        const runtimeMissing = configuredCommand && cause && typeof cause === 'object'
-          && 'code' in cause && cause.code === 'ENOENT' && 'path' in cause && cause.path === configuredCommand
-          ? configuredCommand : undefined;
-        const stderrTail = error instanceof McpServerProbeError ? error.stderrTail : undefined;
-        const code = probeCompleted ? 'materialization_failed'
-          : error instanceof McpServerProbeError ? error.phase === 'connect' ? 'mcp_connect_failed' : 'mcp_list_tools_failed'
-            : message.includes('mcp_connect_timeout') ? 'mcp_connect_failed' : 'mcp_list_tools_failed';
-        return { ok: false, errorCode: code, error: message, durationMs,
-          ...(runtimeMissing ? { runtimeMissing } : {}), ...(stderrTail ? { stderrTail } : {}) };
       } finally {
-        await mcpConfig.cleanup();
+        try { await Promise.all(pluginAttachments.map(attachment => attachment.dispose())); }
+        finally { await pluginLease?.release(); }
       }
     },
   );
