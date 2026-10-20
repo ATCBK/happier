@@ -4,7 +4,7 @@ import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import {
   ApprovalExecutionOriginV1Schema,
-  ApprovalExecutionV1Schema,
+  ApprovalExecutionV2Schema,
   ApprovalRequestCreatedBySchema,
   ApprovalRequesterConfirmationV1Schema,
   ApprovalDecisionV2Schema,
@@ -63,7 +63,7 @@ export const TargetActionApprovalRequestV1Schema = lazyZodSchema(() => z.strictO
   requesterConfirmation: z.optional(ApprovalRequesterConfirmationV1Schema),
   summary: z.string().check(z.minLength(1), maxCodeUnits(TARGET_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units)),
   detail: z.optional(z.string().check(z.minLength(1), maxCodeUnits(TARGET_ACTION_APPROVAL_LIMITS_V1.detailUtf16Units))),
-  decision: z.optional(ApprovalDecisionV2Schema), execution: z.optional(ApprovalExecutionV1Schema),
+  decision: z.optional(ApprovalDecisionV2Schema), execution: z.optional(ApprovalExecutionV2Schema),
 }).check(z.superRefine((value, ctx) => {
   if (value.requesterConfirmation) {
     const invocation = projectTargetActionApprovalInvocationV1(value);

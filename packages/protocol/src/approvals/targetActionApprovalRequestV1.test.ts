@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import tweetnacl from 'tweetnacl';
-import { TargetActionApprovalRequestV1Schema } from './targetActionApprovalRequestV1';
+import { StoredTargetActionApprovalRequestV1Schema, TargetActionApprovalRequestV1Schema } from './targetActionApprovalRequestV1';
+import { ActionOperationCredentialUseV1Schema } from '../actions/actionExecutionResult';
 import { buildApprovalRequesterConfirmationV1 } from './approvalRequestV1';
 import { buildApprovalExecutionOriginV1 } from '../actions/actionExecutor';
 import type { ActionExecutorContext } from '../actions/executor/types';
@@ -155,6 +156,54 @@ describe('TargetActionApprovalRequestV1Schema', () => {
       ...request,
       detail: 'x'.repeat(4_097),
     })).toThrow();
+  });
+
+  it('admits only the canonical closed operation credential receipt on current target approvals', () => {
+    const use = ActionOperationCredentialUseV1Schema.parse({
+      v: 1, kind: 'team_resource', label: 'Release GitHub', owner: { kind: 'team', teamId: 'team-release' },
+      service: { pluginId: 'acme.github', localId: 'github' },
+      why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.alpha', localId: 'run' }, purpose: 'write' }, target: 'group' },
+      currentness: { kind: 'current_at_materialization', resourceRevision: 7 },
+    });
+    const request = { v: 1, kind: 'plugin_target_action', status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', qualifiedActionId: 'acme.alpha/actions/run',
+      input: { value: 'x' }, sourceCustody: { kind: 'development', registeredRootId: 'root-7' },
+      policyFingerprint: 'b'.repeat(64), subjectFingerprint: 'a'.repeat(64), summary: 'Run',
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: { executedAtMs: 3, ok: true, effectAttempted: true, result: { ok: true }, operationCredentialUses: [use] },
+    };
+    expect(TargetActionApprovalRequestV1Schema.parse(request)).toEqual(request);
+    expect(TargetActionApprovalRequestV1Schema.safeParse({ ...request,
+      execution: { ...request.execution, token: 'unadmitted-extra' },
+    }).success).toBe(false);
+    expect(TargetActionApprovalRequestV1Schema.safeParse({ ...request,
+      execution: { ...request.execution, operationCredentialUses: [{ ...use, kind: 'connected_account' }] },
+    }).success).toBe(false);
+    expect(TargetActionApprovalRequestV1Schema.safeParse({ ...request,
+      execution: { ...request.execution, effectAttempted: false },
+    }).success).toBe(false);
+
+    const future = { ...request, execution: { ...request.execution, futureAnnotation: 'drop',
+      operationCredentialUses: [{ ...use, currentness: { ...use.currentness, futureAnnotation: 'drop' } }],
+    } };
+    expect(StoredTargetActionApprovalRequestV1Schema.parse(future)).toEqual(request);
+    expect(StoredTargetActionApprovalRequestV1Schema.safeParse({ ...request,
+      execution: { ...request.execution, operationCredentialUses: [{ ...use, kind: 'connected_account' }] },
+    }).success).toBe(false);
+  });
+
+  it('keeps historical basic execution fields readable without fabricating credential use', () => {
+    const request = { v: 1, kind: 'plugin_target_action', status: 'failed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', qualifiedActionId: 'acme.alpha/actions/run',
+      input: { value: 'x' }, sourceCustody: { kind: 'development', registeredRootId: 'root-7' },
+      policyFingerprint: 'b'.repeat(64), subjectFingerprint: 'a'.repeat(64), summary: 'Run',
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: { executedAtMs: 3, ok: false, errorCode: 'action_failed', error: 'action_failed', result: { ok: false } },
+    };
+    expect(TargetActionApprovalRequestV1Schema.parse(request)).toEqual(request);
+    expect(StoredTargetActionApprovalRequestV1Schema.parse({ ...request,
+      execution: { ...request.execution, futureAnnotation: 'drop' },
+    })).toEqual(request);
   });
 
   it('rejects non-JSON and oversized approval subjects before persistence', () => {

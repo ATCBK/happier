@@ -560,6 +560,8 @@ export type SessionPermissionRemoteActionArgs =
     }>;
 
 export type ActionExecutorContext = Readonly<{
+  /** Host-only, exact-invocation observer of actual credential admission. Never parsed from input. */
+  recordOperationCredentialUse?: (use: import('../actionExecutionResult.js').ActionOperationCredentialUseV1) => void;
   /** Host-prepared target snapshot, retained by the existing approval origin. Never caller input. */
   sessionTargetsV1?: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
   /** Host-only read admission for Coach mutations; ordinary usage.query remains progressive. Never wire input. */

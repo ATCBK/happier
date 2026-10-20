@@ -1,6 +1,38 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { SessionGoalControlFailureV1Schema } from '../sessions/work/state/sessionWorkStateRpc.js';
+import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+
+/** Historical, content-free admission facts. Not credential authority or a live readiness claim. */
+export const ActionOperationCredentialUseV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  kind: z.enum(['connected_account', 'team_resource']),
+  label: z.nullable(z.string().check(z.minLength(1))),
+  owner: z.nullable(z.union([
+    z.strictObject({ kind: z.literal('account'), accountId: z.string().check(z.minLength(1)) }),
+    z.strictObject({ kind: z.literal('team'), teamId: z.string().check(z.minLength(1)) }),
+  ])),
+  service: asProtocolZod(PluginContributionIdentityV1Schema),
+  why: z.strictObject({
+    kind: z.literal('purpose_binding'),
+    purpose: QualifiedConnectedAccountPurposeV1Schema,
+    target: z.enum(['account', 'group', 'listed_account']),
+  }),
+  currentness: z.strictObject({
+    kind: z.literal('current_at_materialization'),
+    resourceRevision: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }),
+}).check(z.superRefine((value, ctx) => {
+  if (value.owner && (value.kind === 'team_resource') !== (value.owner.kind === 'team')) {
+    ctx.addIssue({ code: 'custom', path: ['owner'], message: 'Owner must describe the admitted credential kind' });
+  }
+  if (value.kind !== 'team_resource' && value.currentness.resourceRevision !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['currentness'], message: 'Resource revision requires a Team resource' });
+  }
+})));
+export type ActionOperationCredentialUseV1 = z.infer<typeof ActionOperationCredentialUseV1Schema>;
 
 /** A policy-deferred Action has not failed or executed; the present user owns the next step. */
 export const ActionApprovalRequestCreatedResultSchema = lazyZodSchema(() => z.strictObject({
@@ -38,9 +70,12 @@ export const ActionExecuteFailureSchema = lazyZodSchema(() => z.strictObject({
 
 export type ActionExecuteFailure = Readonly<z.infer<typeof ActionExecuteFailureSchema>>;
 
-export type ActionExecuteResult =
+export type ActionExecuteResult = Readonly<{
+  /** Host-only settlement annotation; public failure envelopes remain unchanged. Never Action input. */
+  operationCredentialUses?: readonly ActionOperationCredentialUseV1[];
+}> & (
   | Readonly<{ ok: true; result: unknown }>
-  | ActionExecuteFailure;
+  | ActionExecuteFailure);
 
 /** Failure of confirmation is not proof that an admitted effect did not happen. */
 export const UNEXPECTED_ACTION_FAILURE_CODES_V1 = ['action_not_admitted', 'action_outcome_unknown'] as const;

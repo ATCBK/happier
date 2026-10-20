@@ -534,7 +534,7 @@ import {
   resolveActionBackendTargetSelection,
   resolveExecutionBackendTargetSelectionForValue,
 } from './resolveActionBackendTargetSelection.js';
-import { ActionApprovalRequestCreatedResultSchema, projectActionExecuteFailure } from './actionExecutionResult.js';
+import { ActionApprovalRequestCreatedResultSchema, ActionOperationCredentialUseV1Schema, projectActionExecuteFailure, type ActionOperationCredentialUseV1 } from './actionExecutionResult.js';
 import { dispatchRuntimeAction } from './executor/dispatch.js';
 import { type RuntimeActionExecute } from './executor/types.js';
 import type { SessionConnectedServiceAuthSwitchRpcParams } from '../connect/sessionConnectedServiceAuthSwitch.js';
@@ -2192,9 +2192,13 @@ function buildApprovalDecisionResult(request: ApprovalRequest, liveResult?: Acti
 export function buildActionExecuteResultFromRecordedApprovalExecution(request: ApprovalRequest): ActionExecuteResult | null {
   if (!request.execution) return null;
   if (request.execution.ok) {
-    return { ok: true, result: request.execution.result };
+    return { ok: true, result: request.execution.result,
+      ...(request.v === 2 && request.execution.operationCredentialUses?.length
+        ? { operationCredentialUses: request.execution.operationCredentialUses } : {}) };
   }
-  return readApprovalExecutionFailure(request);
+  const failure = readApprovalExecutionFailure(request);
+  return failure && request.v === 2 && request.execution.operationCredentialUses?.length
+    ? { ...failure, operationCredentialUses: request.execution.operationCredentialUses } : failure;
 }
 
 function projectApprovalRequestPluginCaller(
@@ -3625,6 +3629,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             })
           : { executedAtMs, ok: false, errorCode: persistedExec.errorCode, error: persistedExec.error },
     };
+    if (nextExecuted.v === 2 && effectAttempted && persistedExec.operationCredentialUses?.length) {
+      nextExecuted.execution = { ...nextExecuted.execution!, operationCredentialUses: [...persistedExec.operationCredentialUses] };
+    }
 
     // The side effect ran after the durable execution claim. If its terminal
     // projection cannot be committed, the Artifact intentionally remains
@@ -3858,17 +3865,19 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
    * output schema. Approval admission is deliberately not an action output.
    */
   function settleActionOutput(actionId: ActionId, result: ActionExecuteResult): ActionExecuteResult {
-    if (!result.ok) return projectActionExecuteFailure(result);
+    const withCredentialUses = (settled: ActionExecuteResult): ActionExecuteResult => result.operationCredentialUses?.length
+      ? { ...settled, operationCredentialUses: result.operationCredentialUses } : settled;
+    if (!result.ok) return withCredentialUses(projectActionExecuteFailure(result));
     if (isDeferredApprovalResult(result)) return result;
     const outputSchema = getActionSpec(actionId).outputSchema;
     if (!outputSchema) return result;
     try {
       const output = outputSchema.safeParse(result.result);
-      return output.success
+      return withCredentialUses(output.success
         ? { ok: true, result: output.data }
-        : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+        : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' });
     } catch {
-      return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+      return withCredentialUses({ ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' });
     }
   }
 
@@ -11242,21 +11251,39 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     sessionTargetLeaf = false,
     sameHome?: ActionHomeEquivalence,
   ): Promise<ActionExecuteResult> {
-    const result = await executeCore(
-      actionId,
-      input,
-      context,
-      inputAlreadyBound,
-      legacyMetadataLabel,
-      { ...(prepared ? { prepared } : {}), ...(approvalReplay ? { approvalReplay: true } : {}),
-        ...(sessionTargetLeaf ? { sessionTargetLeaf: true } : {}),
-        ...(approvedApiTokenExecution ? { approvedApiTokenExecution } : {}),
-        ...(sameHome ? { sameHome } : {}) },
-    );
-    if ('kind' in result) {
-      throw new Error('Prepared Action invocation unexpectedly prepared twice');
+    const operationCredentialUses: ActionOperationCredentialUseV1[] = [];
+    let observing = true;
+    const recordOperationCredentialUse = (use: ActionOperationCredentialUseV1) => {
+      if (!observing) return;
+      const parsed = ActionOperationCredentialUseV1Schema.safeParse(use);
+      if (!parsed.success) return;
+      if (operationCredentialUses.some(existing => sameStrictJsonValue(existing, parsed.data))) return;
+      operationCredentialUses.push(parsed.data);
+      context?.recordOperationCredentialUse?.(parsed.data);
+    };
+    try {
+      const result = await executeCore(
+        actionId,
+        input,
+        { ...context, recordOperationCredentialUse },
+        inputAlreadyBound,
+        legacyMetadataLabel,
+        { ...(prepared ? { prepared } : {}), ...(approvalReplay ? { approvalReplay: true } : {}),
+          ...(sessionTargetLeaf ? { sessionTargetLeaf: true } : {}),
+          ...(approvedApiTokenExecution ? { approvedApiTokenExecution } : {}),
+          ...(sameHome ? { sameHome } : {}) },
+      );
+      if ('kind' in result) {
+        throw new Error('Prepared Action invocation unexpectedly prepared twice');
+      }
+      // Only this invocation's host observer may stamp the annotation. An
+      // arbitrary dependency/plugin result cannot assert a credential identity.
+      const { operationCredentialUses: _untrustedAnnotation, ...unannotated } = result;
+      const settled = settleActionOutput(actionId, unannotated);
+      return operationCredentialUses.length ? { ...settled, operationCredentialUses } : settled;
+    } finally {
+      observing = false;
     }
-    return settleActionOutput(actionId, result);
   }
 
   function isDeferredApprovalResult(result: ActionExecuteResult): boolean {

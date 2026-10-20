@@ -5542,8 +5542,17 @@ contracts are not a released availability claim.
 The host's immutable `actionRequestAttributionV1` records the request, qualified
 requester (or null), persona Session and optional exact source message. Read it
 as **asked by**; returned answers can separately retain **answered by** provenance.
-**Using** describes the actual execution Account/credential binding, captured by
-the existing execution-origin owner. Attribution grants no authority. Unknown or
+**Using** is separate from both the execution Account and the cause. Current
+operation/approval receipts carry host-stamped `operationCredentialUses` from the
+credential materializer that actually admitted the operation. Each content-free
+entry contains the authorized credential label (or null), connected-account or
+Team-resource kind, actual owning Account/Team when known, and purpose-binding
+reason. `current_at_materialization` describes the existing admission-time
+currentness check, not continuing readiness; a Team entry can retain its admitted
+resource revision. The original outcome remains authoritative, including failed
+or uncertain effects. Plugin result JSON and the Bot owner's identity cannot
+stamp these facts. Older receipts without admission evidence remain unknown.
+Attribution grants no authority. Unknown or
 autonomous causes never become the Bot owner, and retained history is not a full
 audit log. Byline rendering is still being integrated.
 
@@ -5553,7 +5562,9 @@ Actions policy. A known cross-Account requester gets a signed
 Bot Session and execution Account. The original executor checks a current
 authenticated decision from that requester; another person cannot substitute.
 The existing Artifact recipient path adds the entitled requester as a preview
-recipient. The Bot's original credentials execute the effect. Settings Require
+recipient. The original admitted executor runs the effect with the credentials
+selected and rechecked by the existing credential owner; it does not substitute
+the deciding person's or Bot owner's credentials. Settings Require
 and Waive remain surface-specific policy choices (currently **Ask first** and
 **Allowed** in Settings → Actions); a waiver never grants person authority or
 permission to accept a Doc proposal.
