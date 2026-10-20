@@ -732,6 +732,23 @@ POSIX natural-root uncertainty preserves the original exit waiter, cancellation 
 
 ### Session process custody (0.3 development)
 
+The existing owner-metadata `lifecycleState: 'stopped'` and
+`lifecycleStateSince` record a confirmed clean process end. The host Session loop
+publishes them after native disposal for a clean Stop, graceful termination or
+observed terminal exit with code zero, before semantic Session end. The daemon's
+confirmed physical Stop publishes the same fact through its authenticated,
+runner/attachment-fenced metadata retirement path. Startup and Resume restore
+`running`. This is a process fact, separate from archive intent and the durable
+explicit-Stop hold.
+
+Heartbeat expiry, native crashes and lost observation do not publish `stopped`.
+A generic `runtime-ended` event is insufficient: it can report unexpected native
+exit even when host cleanup exits zero. Disconnected status wording uses Stopped
+only when the viewer can read the exact terminal lifecycle value; absent,
+unrecognized or unreadable owner metadata stays Offline (list surfaces may keep
+their Last seen wording). The string field remains tolerant of unknown values;
+historical inactive Sessions are not backfilled from presence.
+
 Several tracked runner generations can coexist while predecessor cleanup settles.
 Private daemon-service ingress selects the generation matching both presented
 capabilities, then performs the existing exact authority and currentness checks.
@@ -765,17 +782,21 @@ Development-source durable resume admission has a separate
 Its shared reader distinguishes an absent record from malformed authority and
 returns `eligible`, `held_by_person`, `archived`, `machine_unavailable` or
 `authority_unavailable`; archive takes precedence over a hold. The hold includes
-an admitted lead stopping its own child, with `managerSessionId` recording that
-Stop's admitted creator. A person may resume either kind of hold. Through the
-existing `session.open {intent:'resume'}` Action and `requestInactiveSessionResume`
-owner, the current manager may resume a lead-created hold on its own Account's
-child. Person-created and older holds without creator evidence remain person-only.
+an admitted lead stopping a Session in its led subtree, with `managerSessionId`
+recording that Stop's admitted creator. A person may resume either kind of hold.
+The Session Action boundary admits led-subtree lifecycle targets for exactly
+`session.stop`, `session.archive` and `session.unarchive`; `session.open` remains
+current-Session-only. The existing `requestInactiveSessionResume` owner retains
+its separate current-manager check and person-only handling of older holds
+without creator evidence; it cannot widen that Action boundary.
 Native launch rechecks the current manager, requester, Home and Machine; Action
 enablement and approval policy still apply. Only successful exact native Resume
 clears the observed hold; a transport acknowledgement cannot clear it.
-Signed Stop/Resume metadata phases retain their original Action root for the
-exact Session read and owner tuple. Home admits those phases only for the owning
-Account and, for a Session caller, its current canonical manager relation.
+Signed Stop metadata phases retain their original Action root for the exact
+Session read and owner tuple. Home admits a Session caller's Stop through the
+same current, readable recursive led-subtree owner used by Session listing.
+Signed Open metadata phases remain bound to the original caller's own Session.
+Ordinary Account access and current publisher admission still apply.
 Clearing compares the observed request identity, so completing an older Resume
 cannot erase a newer Stop. This metadata
 contract does not replace physical Stop settlement or authorize a launch from
