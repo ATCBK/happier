@@ -10,6 +10,28 @@ const binding: VoiceSessionBinding = { adapterId: 'service', controlSessionId: '
 const snapshot: VoiceSessionSnapshot = { adapterId: 'service', sessionId: 'control', status: 'connecting', mode: 'idle', canStop: true };
 
 describe('Voice continuation attempt projection', () => {
+    it('retains one note identity until acknowledgement and retries only after a failed settlement', () => {
+        const projection = createVoiceContinuationProjection();
+        const input = { snapshot: { ...snapshot, status: 'connected' as const }, binding, deviceId: 'a', sessionSeq: 10 };
+        const publication = projection.update(input);
+        expect(publication).toMatchObject({ continuation: { v: 1, deviceId: 'a', conversation },
+            localId: expect.any(String), createdAt: expect.any(Number) });
+        if (!publication) throw new Error('Expected a connected publication');
+        expect(projection.update(input)).toBeNull();
+        projection.settle(publication, false);
+        const retry = projection.update({ ...input, sessionSeq: 12 });
+        expect(retry).toBe(publication);
+        expect(projection.update(input)).toBeNull();
+        projection.settle(publication, true);
+        expect(projection.update(input)).toBeNull();
+        projection.update({ ...input, snapshot: { ...snapshot, canStop: false } });
+        const next = projection.update(input);
+        expect(next?.localId).not.toBe(publication.localId);
+        projection.settle(publication, true);
+        projection.settle(next!, false);
+        expect(projection.update(input)).toBe(next);
+    });
+
     it('publishes only a connected bound attempt and retires only its own exact live control', () => {
         const projection = createVoiceContinuationProjection();
         expect(projection.update({ snapshot, binding: null, deviceId: 'a', sessionSeq: 10 })).toBeNull();

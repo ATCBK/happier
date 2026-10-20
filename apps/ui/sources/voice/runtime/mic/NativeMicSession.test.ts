@@ -478,6 +478,37 @@ describe('NativeMicSession', () => {
         expect(record).toHaveBeenCalledTimes(2);
     });
 
+    it('keeps recorded input muted until native resume acknowledges success', async () => {
+        (Platform as { OS: string }).OS = 'ios';
+        let rejectResume!: (error: Error) => void;
+        const resume = new Promise<void>((_resolve, reject) => { rejectResume = reject; });
+        const nativeMute = vi.fn(async ({ muted }: { muted: boolean }) => { if (!muted) await resume; });
+        const session = createRecordingSession({
+            requestPermission,
+            createNativeFileRecording: () => createVoiceFileRecording({ ...audioSession.nativeModule,
+                startFileRecording: async () => ({ recordingId: 'mute-ack' }),
+                setFileRecordingMuted: nativeMute,
+                stopFileRecording: async () => ({ uri: null }),
+            }),
+        });
+        await session.beginRecording();
+        await session.setMuted(true);
+        let settled = false;
+        const outcome = Promise.resolve(session.setMuted(false)).then(
+            () => { settled = true; return null; },
+            error => { settled = true; return error; },
+        );
+        await vi.waitFor(() => expect(nativeMute).toHaveBeenCalledWith({ recordingId: 'mute-ack', muted: false }));
+        try {
+            expect(settled).toBe(false);
+            expect(session.isMuted()).toBe(true);
+        } finally {
+            rejectResume(new Error('file_recording_resume_failed'));
+        }
+        await expect(outcome).resolves.toMatchObject({ message: 'file_recording_resume_failed' });
+        expect(session.isMuted()).toBe(true);
+    });
+
     it('applies mute to recordings that start while the session is already muted', async () => {
         const session = createRecordingSession({
             createRecorder,

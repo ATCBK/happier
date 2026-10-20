@@ -1,12 +1,14 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { createServer as createHttpsServer, request as httpsRequest, type RequestOptions } from 'node:https';
 import type { IncomingMessage } from 'node:http';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { fetchVoiceModelPackManifest, installVoiceModelPack, readInstalledVoiceModelPackManifest, removeInstalledVoiceModelPack } from './voiceModelPackInstaller';
+import { fetchVoiceModelPackManifest, hashVoiceModelPackManifest, installVoiceModelPack, readInstalledVoiceModelPackManifest, removeInstalledVoiceModelPack } from './voiceModelPackInstaller';
+import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import type { PinnedHttpStreamTransport } from '../../network/pinnedHttp';
 import { openPinnedHttpStream } from '../../network/pinnedHttp';
 import { createEphemeralTlsServerFixture } from '../../../../../packages/tests/src/testkit/tls/ephemeralTlsServerFixture.mjs';
@@ -43,6 +45,20 @@ async function withLegacyFetchFixture<T>(
 }
 
 describe('voiceModelPackInstaller packId filesystem safety', () => {
+  it('preserves retained daemon manifest hashes and includes runtime metadata', () => {
+    const manifest = parseModelPackManifest({ ...manifestFixture('metadata-currentness'),
+      voices: [{ id: 'voice-a', title: 'A', sid: 0 }, { id: 'voice-b', title: 'B', sid: 1 }],
+      defaultVoiceId: 'voice-a', frontend: { lang: 'en-us' } });
+    // The existing daemon receipt identity is SHA-256 of this complete serialization.
+    const retainedHash = createHash('sha256').update(JSON.stringify(manifest, null, 2), 'utf8').digest('hex');
+    expect(hashVoiceModelPackManifest(manifest)).toBe(retainedHash);
+    for (const revision of [
+      { ...manifest, voices: [{ id: 'voice-a', title: 'A', sid: 1 }, { id: 'voice-b', title: 'B', sid: 0 }] },
+      { ...manifest, defaultVoiceId: 'voice-b' },
+      { ...manifest, frontend: { lang: 'fr-fr' } },
+    ]) expect(hashVoiceModelPackManifest(revision)).not.toBe(retainedHash);
+  });
+
   it.each(['corrupt', 'unreadable'] as const)('logs %s receipt fallback locally without contents and keeps missing receipts quiet', async (failure) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-receipt-warning-'));
     const packId = 'receipt-warning';

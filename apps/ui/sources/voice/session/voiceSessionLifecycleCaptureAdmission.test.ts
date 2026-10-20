@@ -10,6 +10,11 @@ vi.mock('react-native', async () =>
 vi.mock('expo-router', async () =>
     (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/', params: {}, segments: [] }).module);
 
+// Load the real application graph during collection, as the composed controller
+// suite does, so the first capture case measures admission rather than imports.
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+
 const pendingBoundaries = new Set<() => void>();
 
 function deferred() {
