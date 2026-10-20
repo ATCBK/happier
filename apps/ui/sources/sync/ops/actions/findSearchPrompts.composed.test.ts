@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
 import { MemorySearchResultV1Schema } from '@happier-dev/protocol/memory/memorySearch';
@@ -192,6 +192,33 @@ describe('FSP search production composition', () => {
         misbound = true;
         await expect(executor.execute('workspace.files.search', input, context))
             .resolves.toMatchObject({ ok: false, errorCode: 'workspace_file_search_unavailable' });
+    });
+
+    it('shares code name search between the app Action and UI operation and preserves transport failures', async () => {
+        const page = DaemonWorkspaceFileSearchResponseSchema.parse({ ok: true, hasMore: false, coverage: 'complete',
+            files: [{ path: 'src/a.ts', matches: [{ line: 7, column16: 1, length16: 6,
+                text: 'needle()', before: [], after: [] }] }] });
+        answerRpc = request => {
+            expect(request.method).toBe(`fsp-machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH}`);
+            const input = DaemonWorkspaceFileSearchRequestSchema.parse(request.params);
+            expect(input).toMatchObject({ rootPath: '/repo', regex: true, matchCase: true });
+            expect(new RegExp(input.query, 'u').test('needle()')).toBe(true);
+            return page;
+        };
+        const context = { surface: 'ui' as const, serverId, expectedAccountId: 'fsp-account' };
+        const query = { rootPath: '/repo', path: 'src/a.ts', line: 7, symbol: 'needle', kind: 'references' as const };
+        const executor = createDefaultActionExecutor();
+        const { kind: _kind, ...actionInput } = query;
+        const result = await executor.execute('code.references.list', { machineId: 'fsp-machine', ...actionInput }, context);
+        expect(result).toMatchObject({ ok: true, result: { status: 'ok', source: 'text_matches', locations: [{ path: 'src/a.ts' }] } });
+        const { machineCodeIntelligenceFallback } = await import('../machineLanguageIntelligence');
+        const uiResult = await machineCodeIntelligenceFallback('fsp-machine', query, { serverId, accountId: 'fsp-account' });
+        if (!result.ok) throw new Error('Code Action unavailable');
+        expect(uiResult).toEqual(result.result);
+        expect(getActionSpec('code.references.list').outputSchema!.parse(result.result)).toEqual(result.result);
+        answerRpc = () => { throw Object.assign(new Error('missing'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }); };
+        expect(await machineCodeIntelligenceFallback('fsp-machine', query, { serverId, accountId: 'fsp-account' }))
+            .toEqual({ status: 'unavailable', reason: 'update_required' });
     });
 
     it('finds body-only native text through real sources and keeps a published page stable while another source waits', async () => {
