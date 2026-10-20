@@ -80,6 +80,7 @@ describe("TeamIdentityConnection lifecycle database contract", () => {
             member,
             connection: created.connection,
             input: {
+                v: 1 as const,
                 teamId: team.id,
                 actorAccountId: actor.id,
                 connectionId: created.connection.id,
