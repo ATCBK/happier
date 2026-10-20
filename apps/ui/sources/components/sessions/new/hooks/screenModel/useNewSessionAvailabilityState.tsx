@@ -9,7 +9,7 @@ import {
     type ResolvedBackendCatalogEntry,
 } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
-import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
+import type { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
 import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 import { findMachineAgentForBackendTarget } from '@/agents/machineAgents/machineAgentCatalog';
 import { projectMachineAgentsToCliAvailability } from '@/agents/machineAgents/machineAgentCliAvailability';
@@ -47,8 +47,8 @@ type ProfileAvailability = Readonly<{ available: boolean; reason?: string }>;
 export function useNewSessionAvailabilityState(params: Readonly<{
     selectedMachineId: string | null;
     selectedMachine: Machine | null;
-    /** Demand comes from the picker/popover visibility owner, never mount. */
-    agentInventoryDemanded?: boolean;
+    /** The selection owner and launch admission consume the same credential-qualified inventory. */
+    machineAgents: ReturnType<typeof useMachineAgents>;
     /** Embedded composers read cached availability until the person reaches for them. */
     machineProbesEnabled?: boolean;
     windowsTerminalRequested?: boolean;
@@ -90,15 +90,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     const selectedAgentSettingsReady = params.pluginSettingsReadiness === null
         || params.pluginSettingsReadiness === undefined
         || params.pluginSettingsReadiness.ready;
-    // Admission needs the selected Agent's facts even while the full picker stays closed.
-    const selectedInventoryAgentId = params.selectedBackendEntry && params.selectedBackendEntry.kind !== 'configuredBackend'
-        ? params.selectedBackendEntry.agentId : undefined;
-    const machineAgents = useMachineAgents({
-        machineId: params.selectedMachineId,
-        serverId: params.capabilityServerId,
-        agentId: params.agentInventoryDemanded === true ? undefined : selectedInventoryAgentId,
-        load: machineProbesEnabled && (params.agentInventoryDemanded === true || Boolean(selectedInventoryAgentId)),
-    });
+    const machineAgents = params.machineAgents;
     // A configured definition is a distinct inventory row, even when its Agent is shared.
     const machineAgentsById = React.useMemo(() => Object.fromEntries(machineAgents.agents.map((agent) => [buildMachineAgentInventoryKey(agent), agent])), [machineAgents.agents]);
     const getBackendEntryMachineAgent = React.useCallback((entry: ResolvedBackendCatalogEntry) =>

@@ -1311,12 +1311,14 @@ export function useNewSessionScreenModel(input?: Readonly<{
         || hydratedPersistedBackendTarget
         ? null
         : profilePreferredBackendTarget;
+    const [agentInventoryDemanded, setAgentInventoryDemanded] = React.useState(false);
     const {
         backendTarget,
         setBackendTarget,
         selectedCatalogAgentId: staticAgentId,
         selectedRuntimeCarrierAgentId,
         selectedUiAgentType,
+        machineAgents,
     } = useNewSessionBackendTargetState({
         entries: resolvedBackendEntries,
         configuredCatalogReady: acpCatalogReady,
@@ -1328,6 +1330,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
             ?? implicitProfileBackendTarget,
         tempAgentType: agentTypeParam,
         projectionPhase: daemonMergedProjection.phase,
+        machineTarget: { machineId: selectedMachineId, serverId: capabilityServerId, load: hostDemanded,
+            inventoryDemanded: agentInventoryDemanded },
     });
     /**
      * The selected installed Agent's declarations are the only owners of the
@@ -1896,9 +1900,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             sessionOverride: windowsRemoteSessionLaunchModeOverride ?? undefined,
         }).mode;
     }, [selectedMachine?.metadata, windowsLaunchSettings, windowsRemoteSessionLaunchModeOverride]);
-    const [agentInventoryDemanded, setAgentInventoryDemanded] = React.useState(false);
     const {
-        machineAgents,
         machineAgentsById,
         getBackendEntryMachineAgent,
         cliAvailability,
@@ -1919,7 +1921,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         windowsTerminalAvailable,
         onWindowsTerminalIntent,
     } = useNewSessionAvailabilityState({
-        agentInventoryDemanded,
+        machineAgents,
         windowsTerminalRequested: selectedMachine?.metadata?.platform === 'win32' && effectiveWindowsRemoteSessionLaunchMode === 'windows_terminal',
         machineProbesEnabled: hostDemanded,
         selectedMachineId,

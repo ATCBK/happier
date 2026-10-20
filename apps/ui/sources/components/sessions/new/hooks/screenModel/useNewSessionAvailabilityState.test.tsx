@@ -15,6 +15,8 @@ const { resolveDaemonCapabilitiesCacheKeySalt } = await import('@/hooks/server/u
 const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabilityState');
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
 const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
+const { EMPTY_MACHINE_AGENTS } = await import('@/agents/machineAgents/machineAgentInventoryStore');
+const machineAgents = { ...EMPTY_MACHINE_AGENTS, refresh: async () => {} };
 
 beforeEach(() => {
     network.resetRequests();
@@ -37,6 +39,7 @@ describe('machine launch readiness', () => {
         storage.getState().applyMachines([machine], false, { sourceServerId: home.id });
         network.respond('capabilities.detect', { protocolVersion: 1, results: {} });
         const hook = await renderHook((windowsTerminalRequested: boolean) => useNewSessionAvailabilityState({
+            machineAgents,
             selectedMachineId: machine.id, selectedMachine: machine, capabilityServerId: home.id, windowsTerminalRequested,
             externalSessionsFeatureEnabled: false, settings: { ...settingsDefaults, sessionTerminalHost: 'none', sessionUseTmux: false },
             resumeSessionId: null, backendNewSessionOptionStateByTargetKey: {}, resolvedBackendEntries: [], selectedBackendEntry: null,
@@ -68,6 +71,7 @@ describe('machine launch readiness', () => {
         } });
         network.respond('capabilities.detect', { protocolVersion: 1, results: {} });
         const hook = await renderHook(() => useNewSessionAvailabilityState({
+            machineAgents,
             selectedMachineId: machine.id, selectedMachine: machine, capabilityServerId: home.id,
             runtimeCarrierAgentId: agentId, externalSessionsFeatureEnabled: false,
             settings: { ...settingsDefaults, sessionTerminalHost: hasDependency ? 'tmux' : 'none', sessionUseTmux: hasDependency },
@@ -109,6 +113,7 @@ describe('machine launch readiness', () => {
         expect(warmer.getCurrent().inputs?.pluginProjectionV2?.agentsById['acme.resume/resume']?.capabilities?.sessions?.open).toContain('resume');
         const requestsBefore = network.requests.length;
         const hook = await renderHook(() => useNewSessionAvailabilityState({
+            machineAgents,
             selectedMachineId: machine.id, selectedMachine: machine, capabilityServerId: home.id,
             machineProbesEnabled: false, runtimeCarrierAgentId: 'acme.resume/resume',
             externalSessionsFeatureEnabled: false, settings: settingsDefaults, resumeSessionId: null,
@@ -131,6 +136,7 @@ describe('machine launch readiness', () => {
         const serverId = home.id;
         storage.getState().applyMachines([machine], false, { sourceServerId: serverId });
         const hook = await renderHook((selectedMachine: typeof machine) => useNewSessionAvailabilityState({
+            machineAgents,
             selectedMachineId: machine.id, selectedMachine, capabilityServerId: serverId,
             externalSessionsFeatureEnabled: false, settings: settingsDefaults, resumeSessionId: null,
             backendNewSessionOptionStateByTargetKey: {}, resolvedBackendEntries: [], selectedBackendEntry: null,
@@ -161,6 +167,7 @@ describe('machine launch readiness', () => {
 describe('effective terminal host availability', () => {
     it.each(['herdr', 'zellij', 'tmux', 'none'] as const)('warns about tmux only when the effective host is tmux, not %s', async (host) => {
         const hook = await renderHook(() => useNewSessionAvailabilityState({
+            machineAgents,
             selectedMachineId: null, selectedMachine: null, capabilityServerId: 'server-a',
             externalSessionsFeatureEnabled: false,
             settings: { ...settingsDefaults, sessionTerminalHost: host, sessionUseTmux: host === 'tmux' },

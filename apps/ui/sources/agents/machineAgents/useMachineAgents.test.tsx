@@ -52,6 +52,76 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine inventory lifecycle boundary', () => {
+    it('moves a fresh composer default to the Agent authenticated by its exact Account purpose, preserving a subsequent picker choice', async () => {
+        const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+        await loadSyncSingletonForTests();
+        const { useNewSessionBackendTargetState } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionBackendTargetState');
+        const { createResolvedAgentCatalogEntryFixture } = await import('@/dev/testkit/fixtures/agentCatalogFixtures');
+        const { getResolvedBackendCatalogEntries } = await import('@/agents/backendCatalog/getResolvedBackendCatalogEntries');
+        const server = await network.addHome('https://fresh-composer-account.example.test', 'fresh-composer-account');
+        const scope = { serverId: server.id, accountId: 'fresh-composer-account' };
+        const machine = createMachineFixture({ id: 'fresh-composer-machine', active: true, activeAt: Date.now() });
+        const service = { pluginId: 'happier.agent.codex', localId: 'account' };
+        const identity = { pluginId: 'happier.agent.codex', localId: 'codex' };
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection,
+            familiesById: { connectedAccounts: { family: 'connectedAccounts', entriesById: { 'happier.agent.codex/account': {
+                id: 'account', serviceId: 'account', pluginId: service.pluginId, title: 'Codex account', provenance: 'external', sourceKind: 'installed',
+                authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'providerCheck' }] },
+                capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+            } } } },
+            agentsById: Object.fromEntries(['claude', 'codex'].map(agentId => [agentId, {
+                id: agentId, title: agentId, identity: { pluginId: `happier.agent.${agentId}`, localId: agentId },
+                ...(agentId === 'codex' ? { connectedAccounts: [{ purpose: 'primary', service, credentialKinds: ['oauth'] }] } : {}),
+                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+            },
+            ])),
+        });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope,
+            settings: { ...storage.getState().settings, lastUsedAgent: null, lastUsedBackendTarget: null },
+            profile: { ...storage.getState().profile, connectedAccountsV4: [{ ref: { service, accountId: 'work' },
+                revisionSemantics: 'revisioned', credentialRevision: 'revision-1', status: 'connected', kind: 'oauth',
+                authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null, displayName: 'Work account', scopes: [] }] },
+        });
+        primeServerFeaturesSnapshot({ serverId: server.id, snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({
+            features: {}, capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 } } },
+        }) } });
+        applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: { v: 1, definitions: [] } }, true);
+        const publishDefaults = (accountId: string | null, revision: number) => applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
+            status: 'ready', revision, record: { key: 'purposes', value: { v: 1, bindings: accountId ? [{
+                purpose: { consumer: identity, purpose: 'primary' }, target: { kind: 'account', account: { service, accountId } },
+            }] : [] } },
+        }, true);
+        publishDefaults(null, 1);
+        rpc.mockImplementation(async ({ method }: { method: string }) => method.includes('contributionRegistryProjection.describe')
+            ? { protocolVersion: 1, projection }
+            : method === 'capabilities.detect' ? { protocolVersion: 1, results: Object.fromEntries(['claude', 'codex'].map(agentId => [
+                `cli.${agentId}`, { ok: true, checkedAt: 12, data: { ...item, agentId, title: agentId,
+                    signIn: { status: 'signedOut', loginSupport: 'login_terminal' }, isLoggedIn: false,
+                    authStatus: { state: 'logged_out', checkedAt: 12 } } },
+            ])) } : { jobs: [] });
+        const entries = getResolvedBackendCatalogEntries({ enabledAgentIds: ['claude', 'codex'] }).map(entry => ({
+            ...entry, agentCatalogEntry: createResolvedAgentCatalogEntryFixture({ agentId: entry.agentId }),
+        }));
+        const hook = await renderHook(() => useNewSessionBackendTargetState({ entries, projectionPhase: 'ready',
+            machineTarget: { machineId: machine.id, serverId: server.id, load: true } }));
+        const agentId = () => hook.getCurrent().selectedCatalogAgentId;
+        try {
+            expect(agentId()).toBe('claude');
+            await refreshMachineAgents({ serverId: server.id, machineId: machine.id,
+                accountLifetime: { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) } });
+            // A healthy unselected account is not launch authority.
+            expect(agentId()).toBe('claude');
+            await act(async () => publishDefaults('missing-account', 2));
+            expect(agentId()).toBe('claude');
+            await act(async () => publishDefaults('work', 3));
+            await vi.waitFor(() => expect(agentId()).toBe('codex'));
+            const claude = entries.find(entry => entry.agentId === 'claude')!;
+            await act(async () => hook.getCurrent().setBackendTarget(claude.backendTarget));
+            await act(async () => publishDefaults('work', 4));
+            expect(agentId()).toBe('claude');
+        } finally { await hook.unmount(); resetServerFeaturesClientForTests(); }
+    });
+
     it('keeps an installed external Agent selectable across unrelated probe failures and reopening', async () => {
         const server = await network.addHome('https://isolated-inventory-facts.example.test', 'inventory-account');
         const scope = { serverId: server.id, accountId: 'inventory-account' };

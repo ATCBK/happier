@@ -12,6 +12,9 @@ import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { useSettingsSelector } from '@/sync/store/hooks';
 import { backendTargetKeysMatch, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildLastUsedBackendTargetSettings } from '@/agents/backendCatalog/buildLastUsedBackendTargetSettings';
+import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
+import { findMachineAgentForBackendTarget } from '@/agents/machineAgents/machineAgentCatalog';
+import { isMachineAgentReady } from '@/agents/machineAgents/resolveMachineAgentState';
 
 function findEntryByTarget(
     entries: ReadonlyArray<ResolvedBackendCatalogEntry>,
@@ -50,12 +53,14 @@ export function useNewSessionBackendTargetState(params: Readonly<{
     tempBackendTarget?: unknown;
     tempAgentType?: unknown;
     projectionPhase?: 'idle' | 'loading' | 'ready' | 'unsupported' | 'error';
+    machineTarget?: Readonly<{ machineId: string | null; serverId: string; load?: boolean; inventoryDemanded?: boolean }>;
 }>): Readonly<{
     backendTarget: PersistedBackendTargetRefV2;
     setBackendTarget: React.Dispatch<React.SetStateAction<PersistedBackendTargetRefV2>>;
     selectedCatalogAgentId: AgentId | null;
     selectedRuntimeCarrierAgentId: string | null;
     selectedUiAgentType: string;
+    machineAgents: ReturnType<typeof useMachineAgents>;
 }> {
     const expectedSettingsScope = useAccountSettingsScope();
     const [hasExplicitUserSelection, setHasExplicitUserSelection] = React.useState(false);
@@ -129,6 +134,32 @@ export function useNewSessionBackendTargetState(params: Readonly<{
         () => findEntryByTarget(params.entries, backendTarget),
         [backendTarget, params.entries],
     );
+    const implicitDefault = !hasExplicitUserSelection && !explicitRouteTarget && !params.tempBackendTarget
+        && !params.persistedBackendTarget && !params.tempAgentType && !lastUsedAgent && !lastUsedBackendTarget;
+    const selectedInventoryAgentId = matched && matched.kind !== 'configuredBackend' ? matched.agentId : undefined;
+    // An implicit choice needs the alternatives' admitted Account-default credentials.
+    // Authored choices keep the incumbent selected-Agent probe; opening the picker expands it.
+    const inventoryDemanded = params.machineTarget?.inventoryDemanded === true || implicitDefault;
+    const machineAgents = useMachineAgents({
+        machineId: params.machineTarget?.machineId ?? null,
+        serverId: params.machineTarget?.serverId,
+        agentId: inventoryDemanded ? undefined : selectedInventoryAgentId,
+        load: params.machineTarget?.load !== false && (inventoryDemanded || Boolean(selectedInventoryAgentId)),
+    });
+    const preferredBackendTarget = React.useMemo(() => {
+        if (!implicitDefault) return initialBackendTarget;
+        const readyBackendTargets = params.entries.filter(entry => isMachineAgentReady(
+            findMachineAgentForBackendTarget(machineAgents.agents, entry.backendTarget),
+        )).map(entry => entry.backendTarget);
+        // Losing readiness during refresh does not invent another usable choice.
+        if (readyBackendTargets.length === 0 && matched) return backendTarget;
+        return resolvePreferredBackendTarget({
+            availableBackendTargets: params.entries.map(entry => entry.backendTarget),
+            readyBackendTargets,
+            lastUsedAgent,
+            lastUsedBackendTarget,
+        });
+    }, [backendTarget, implicitDefault, initialBackendTarget, lastUsedAgent, lastUsedBackendTarget, machineAgents.agents, matched, params.entries]);
     const configuredTargetUnavailable = isConfiguredTarget(backendTarget)
         && (params.configuredCatalogReady === false || matched === null);
 
@@ -138,15 +169,15 @@ export function useNewSessionBackendTargetState(params: Readonly<{
         if (hasExplicitUserSelection) return;
         if (explicitRouteTarget && backendTargetKeysMatch(explicitRouteTarget, backendTarget)) return;
         if (configuredTargetUnavailable) return;
-        if (matched) return;
+        if (matched && !implicitDefault) return;
         const shouldKeepExplicitRoutePluginTarget = explicitRoutePluginTarget
             && backendTargetKeysMatch(explicitRoutePluginTarget, backendTarget);
         if ((shouldPreserveUnresolvedPluginTarget(params.projectionPhase) || shouldKeepExplicitRoutePluginTarget) && isPluginLikeBackendTarget(backendTarget)) {
             return;
         }
-        if (backendTargetKeysMatch(backendTarget, initialBackendTarget)) return;
-        setBackendTargetState(initialBackendTarget);
-    }, [backendTarget, configuredTargetUnavailable, explicitRoutePluginTarget, explicitRouteTarget, hasExplicitUserSelection, initialBackendTarget, matched, params.entries, params.projectionPhase]);
+        if (backendTargetKeysMatch(backendTarget, preferredBackendTarget)) return;
+        setBackendTargetState(preferredBackendTarget);
+    }, [backendTarget, configuredTargetUnavailable, explicitRoutePluginTarget, explicitRouteTarget, hasExplicitUserSelection, implicitDefault, preferredBackendTarget, matched, params.entries, params.projectionPhase]);
 
     const selectedCatalogAgentId = React.useMemo<AgentId | null>(() => {
         if (matched?.catalogAgentId && isBundledAgentId(matched.catalogAgentId)) {
@@ -227,5 +258,6 @@ export function useNewSessionBackendTargetState(params: Readonly<{
         selectedCatalogAgentId,
         selectedRuntimeCarrierAgentId,
         selectedUiAgentType,
+        machineAgents,
     };
 }

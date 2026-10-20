@@ -15,6 +15,8 @@ export type BackendTargetPreferenceInput = Readonly<{
     candidateBackendTargets?: ReadonlyArray<unknown>;
     preferredBuiltInAgentIds?: ReadonlyArray<unknown>;
     availableBackendTargets?: ReadonlyArray<PersistedBackendTargetRefV2>;
+    /** Current credential-qualified readiness, used only when no authored preference exists. */
+    readyBackendTargets?: ReadonlyArray<PersistedBackendTargetRefV2>;
     lastUsedAgent: unknown;
     lastUsedBackendTarget?: unknown;
     defaultBuiltInAgentId?: AgentId;
@@ -76,8 +78,14 @@ export function resolvePreferredBackendTarget(params: BackendTargetPreferenceInp
     }
 
     const hasStoredBackendTargetPreference = params.lastUsedBackendTarget !== undefined && params.lastUsedBackendTarget !== null;
+    const readyBackendTargets = params.readyBackendTargets?.filter((target) => params.availableBackendTargets?.some(
+        (available) => formatBackendTargetKeyV2(available) === formatBackendTargetKeyV2(target),
+    ));
+    const availableBackendTargets = !hasStoredBackendTargetPreference && !isBundledAgentId(params.lastUsedAgent)
+        && !(params.preferredBuiltInAgentIds ?? []).some(isBundledAgentId) && readyBackendTargets?.length
+        ? readyBackendTargets : params.availableBackendTargets;
     if (!hasStoredBackendTargetPreference) {
-        const preferredConfiguredBackendTarget = params.availableBackendTargets?.find(
+        const preferredConfiguredBackendTarget = availableBackendTargets?.find(
             (target) => target.kind === 'agent' ? target.definitionId !== undefined : !!target.configuredBackendId,
         ) ?? null;
         if (preferredConfiguredBackendTarget) {
@@ -113,14 +121,14 @@ export function resolvePreferredBackendTarget(params: BackendTargetPreferenceInp
         const builtInTarget = resolveParseableBackendTarget({
             kind: 'agent',
             identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[preferredBuiltInAgentId],
-        }, params.availableBackendTargets);
+        }, availableBackendTargets);
         if (builtInTarget) {
             return builtInTarget;
         }
     }
 
-    if (params.availableBackendTargets?.length) {
-        return params.availableBackendTargets[0];
+    if (availableBackendTargets?.length) {
+        return availableBackendTargets[0];
     }
 
     return {
