@@ -78,7 +78,6 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { resolveRuntimeFeatureDecisionFromSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
 import type { ServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
@@ -1225,20 +1224,18 @@ function readSummaryCatalogAccount() {
 /** Publish the Account inventory at its real writer; sharing admission and consent stay real. */
 async function admitSettingsSharingCatalog() {
     const account = await readSummaryCatalogAccount();
-    // Notification settings lazily acquire Sync through the native bridge.
-    // Initialize that same owner before mounting this fixture's Account.
-    const syncBridge = await loadSyncSingletonForTests();
     const scope = await activateStorageAccountScope(account.accountLifetime.scope);
     const { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } =
         await import('@/sync/domains/plugins/availability/projection');
-    onTestFinished(() => {
+    const dispose = () => {
         clearPluginAccountAvailabilityProjection();
         scope.dispose();
-        syncBridge.dispose();
-    });
+    };
+    onTestFinished(dispose);
     replacePluginAccountAvailabilityProjection({ scope: account.accountLifetime.scope, snapshot: {
         availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [], inventoryComplete: true,
     } });
+    return dispose;
 }
 
 /** Seed only device storage; model descriptors, catalog projection and admission stay real. */
@@ -2452,29 +2449,38 @@ describe('declared settings owner', () => {
             const invoke = vi.spyOn(desktopHostBoundary, 'invokeDesktopHost').mockResolvedValue(undefined);
             onTestFinished(() => invoke.mockRestore());
             const value = await supportedSummaryPreference();
-            await admitSettingsSharingCatalog();
+            // Voice preparation also needs the Account identity of this settings fixture.
+            storage.setState({ settingsScope: (await readSummaryCatalogAccount()).accountLifetime.scope });
             const owner = createOwner(host, true, true, applySettings(settingsDefaults, {
                 'scm.diffSummary.modelProfileOverride': value,
             }));
             const discovered = await owner.action({ actionId: 'settings.list', input: {} });
             if (!('items' in discovered) || !discovered.items) throw new Error('Discovery failed');
             for (const item of discovered.items.filter((item) => item.writable)) {
-                const current = await owner.action({ actionId: 'settings.get', input: { anchor: item.anchor } });
-                if ('errorCode' in current && current.errorCode === 'setting_key_required') continue;
-                // A native service fact is discoverable, but this scalar fixture has no service inventory.
-                if (item.anchor === 'desktop.startOnLogin' && 'errorCode' in current) {
-                    expect(current).toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
-                    continue;
+                // Earlier Notification controls can retire the mounted Sync Account.
+                // Give sharing its real Account inventory at its own read/write boundary.
+                const disposeSharing = item.anchor === 'connectedServicesAgentSignIn.sharingState'
+                    ? await admitSettingsSharingCatalog() : null;
+                try {
+                    const current = await owner.action({ actionId: 'settings.get', input: { anchor: item.anchor } });
+                    if ('errorCode' in current && current.errorCode === 'setting_key_required') continue;
+                    // A native service fact is discoverable, but this scalar fixture has no service inventory.
+                    if (item.anchor === 'desktop.startOnLogin' && 'errorCode' in current) {
+                        expect(current).toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
+                        continue;
+                    }
+                    if ('unset' in current) {
+                        expect(current).toEqual({ anchor: item.anchor, unset: true });
+                        continue;
+                    }
+                    if (!('value' in current)) throw new Error(`${item.anchor}: ${'errorCode' in current ? current.errorCode : 'Missing value'}`);
+                    // Compound owners expose a read projection, not necessarily their
+                    // write intent. Their keyed/CAS contracts have dedicated owner tests.
+                    if (current.value !== null && typeof current.value === 'object') continue;
+                    expect(await owner.action({ actionId: 'settings.set', input: current })).toEqual(current);
+                } finally {
+                    disposeSharing?.();
                 }
-                if ('unset' in current) {
-                    expect(current).toEqual({ anchor: item.anchor, unset: true });
-                    continue;
-                }
-                if (!('value' in current)) throw new Error(`${item.anchor}: ${'errorCode' in current ? current.errorCode : 'Missing value'}`);
-                // Compound owners expose a read projection, not necessarily their
-                // write intent. Their keyed/CAS contracts have dedicated owner tests.
-                if (current.value !== null && typeof current.value === 'object') continue;
-                expect(await owner.action({ actionId: 'settings.set', input: current })).toEqual(current);
             }
     });
 
