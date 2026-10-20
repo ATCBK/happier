@@ -144,7 +144,7 @@ function readHookTaskActivity(
     if (readTaskId(nestedTask) !== requestedTaskId) return null;
     const status = terminalStatus(nestedTask.status);
     return status
-      ? { type: 'terminal', terminalStatus: status, sessionId, taskId: requestedTaskId }
+      ? { type: 'terminal', terminalStatus: 'stopped', sessionId, taskId: requestedTaskId }
       : null;
   }
 

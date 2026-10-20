@@ -853,6 +853,10 @@ describe('createClaudeProviderActivityLedger', () => {
         hook_event_name: 'PostToolUse', tool_name: 'TaskStop',
         tool_input: { task_id: 'agent-1' }, tool_response: { task_id: 'agent-1', status: 'stopped' },
       }],
+      ['completed TaskStop', {
+        hook_event_name: 'PostToolUse', tool_name: 'TaskStop',
+        tool_input: { task_id: 'agent-1' }, tool_response: { task_id: 'agent-1', status: 'completed' },
+      }],
       ['StopFailure', { hook_event_name: 'StopFailure', agent_id: 'agent-1' }],
     ])('settles an awaiting Agent after %s evidence', (_label, terminalRow) => {
       const ledger = createClaudeProviderActivityLedger();
@@ -869,6 +873,28 @@ describe('createClaudeProviderActivityLedger', () => {
       expect(ledger.hasUnsettledProviderTasks(query)).toBe(false);
       apply({ subtype: 'task_progress', task_id: 'agent-1' });
       expect(isActive(ledger, 'agent-1')).toBe(false);
+    });
+
+    it.each(['typed', 'TaskOutput'])('preserves an Agent wake after %s completion and completed TaskOutput aliases', (firstCompletion) => {
+      const ledger = createClaudeProviderActivityLedger();
+      const query = {};
+      ledger.registerOwner(query);
+      const apply = sdkRowApplier(ledger, query);
+      startAgent(apply, 'agent-1');
+      startShell(apply, 'bash-1', 'agent-1');
+      const output = readClaudeProviderTaskActivity({
+        hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'TaskOutput',
+        tool_input: { task_id: 'agent-1' },
+        tool_response: { retrieval_status: 'success', task: { task_id: 'agent-1', status: 'completed' } },
+      });
+      if (!output) throw new Error('expected completed TaskOutput evidence');
+      if (firstCompletion === 'TaskOutput') ledger.apply(output, query);
+      else stop(apply, 'agent-1');
+      ledger.apply(output, query);
+      stop(apply, 'agent-1');
+      apply({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed' });
+      apply({ subtype: 'task_progress', task_id: 'agent-1' });
+      expect(isActive(ledger, 'agent-1')).toBe(true);
     });
 
     it('requires the awaiting Agent\'s query owner to settle or reactivate it', () => {
