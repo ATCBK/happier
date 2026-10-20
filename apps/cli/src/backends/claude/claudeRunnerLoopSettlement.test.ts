@@ -37,6 +37,60 @@ function startRunner() {
 }
 
 describe('settleClaudeRunnerLoop', () => {
+    it.each(['crash', 'stop'] as const)('yields a late %s during normal cleanup to the termination owner', async (kind) => {
+        const fakeProcess = new EventEmitter();
+        const exit = vi.fn<(code: number) => void>();
+        let terminationRequested = false;
+        let finishTransportClose = () => {};
+        const transportClose = vi.fn(() => new Promise<void>((resolve) => { finishTransportClose = resolve; }));
+        let cleanupPromise: Promise<void> | null = null;
+        const cleanupOnce = () => cleanupPromise ??= transportClose();
+        const handlers = registerRunnerTerminationHandlers({
+            process: fakeProcess,
+            exit,
+            onTerminationRequested: () => { terminationRequested = true; },
+            onTerminate: cleanupOnce,
+        });
+        try {
+            const settlement = settleClaudeRunnerLoop(Promise.resolve(0), {
+                isRequested: () => terminationRequested,
+                whenTerminated: handlers.whenTerminated,
+            }, cleanupOnce);
+            // Let ordinary loop completion reach its asynchronous transport cleanup.
+            await Promise.resolve();
+            await Promise.resolve();
+            if (kind === 'crash') fakeProcess.emit('uncaughtException', new Error('late crash'));
+            else handlers.requestTermination({ kind: 'killSession' });
+            await Promise.resolve();
+            finishTransportClose();
+
+            await expect(settlement).resolves.toEqual({ kind: 'terminated' });
+            expect(transportClose).toHaveBeenCalledTimes(1);
+            expect(exit.mock.calls).toEqual([[kind === 'crash' ? 1 : 0]]);
+        } finally {
+            finishTransportClose();
+            handlers.dispose();
+        }
+    });
+
+    it('preserves an ordinary loop failure after normal cleanup', async () => {
+        const error = new Error('provider failed');
+        const closeTransport = vi.fn(async () => {});
+        await expect(settleClaudeRunnerLoop(Promise.reject(error), {
+            isRequested: () => false,
+            whenTerminated: new Promise(() => {}),
+        }, closeTransport)).resolves.toEqual({ kind: 'failed', error });
+        expect(closeTransport).toHaveBeenCalledTimes(1);
+    });
+
+    it('propagates ordinary cleanup failure', async () => {
+        const error = new Error('transport close failed');
+        await expect(settleClaudeRunnerLoop(Promise.resolve(0), {
+            isRequested: () => false,
+            whenTerminated: new Promise(() => {}),
+        }, async () => { throw error; })).rejects.toBe(error);
+    });
+
     it('yields a termination-driven loop exit to the termination owner and its exit code', async () => {
         const runner = startRunner();
         try {
