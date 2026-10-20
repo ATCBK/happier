@@ -2,6 +2,7 @@ import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
 import { type ArtifactCallerAccessV1, type ArtifactAccessGrantRowV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1, HOME_HUB_DEFAULT_LAYOUT, HomeHubLayoutV1Schema } from '@happier-dev/protocol/home';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -48,6 +49,12 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
         if (!opened || typeof opened !== 'object' || typeof Reflect.get(opened, 'body') !== 'string') throw new Error('Expected text Home Artifact body');
         return definition.parseLayout(JSON.parse(String(Reflect.get(opened, 'body'))));
     };
+    /** The server stores the coarse kind hint with every row; without it, inventory sync would write a backfill. */
+    const served = (row: Artifact): Artifact => {
+        const header: unknown = decodePlainArtifactStoredContent(row.header);
+        return { ...row, kind: header && typeof header === 'object' && !Array.isArray(header)
+            ? deriveArtifactCoarseKindV1(header as Readonly<Record<string, unknown>>) : null };
+    };
     const seed = (value: T) => {
         artifact = {
             id: artifactId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
@@ -64,13 +71,13 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
         if (path === AUTHORING_MEMORY_ROUTE_V1 && (!init?.method || init.method === 'GET')) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
-        if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json(artifact ? [artifact] : []);
+        if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json(artifact ? [served(artifact)] : []);
         if (path === `/v1/artifacts/${artifactId}/access/grants`) return artifact && (callerAccess === 'owner' || callerAccess === 'admin')
             ? Response.json({ artifactId, ownerAccountId: artifact.ownerAccountId, access: callerAccess, grants })
             : Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
         if (path !== '/v1/artifacts' && path !== `/v1/artifacts/${artifactId}`) return Response.json({ error: 'not_found' }, { status: 404 });
         if (callerAccess === null) return Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
-        if (init?.method !== 'POST') return artifact ? Response.json({ ...artifact, access: callerAccess }) : Response.json({ error: 'not_found' }, { status: 404 });
+        if (init?.method !== 'POST') return artifact ? Response.json({ ...served(artifact), access: callerAccess }) : Response.json({ error: 'not_found' }, { status: 404 });
         if (callerAccess === 'view') return Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
         const body: unknown = typeof init.body === 'string' ? JSON.parse(init.body) : null;
         if (!body || typeof body !== 'object' || typeof Reflect.get(body, 'header') !== 'string' || typeof Reflect.get(body, 'body') !== 'string') throw new Error('Expected encoded Artifact write');

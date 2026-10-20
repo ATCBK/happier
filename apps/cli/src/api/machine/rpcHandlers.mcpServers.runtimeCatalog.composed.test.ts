@@ -93,7 +93,8 @@ function register(input: Readonly<{ unavailable?: boolean; retire?: boolean; ret
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
     if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
       key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) } };
-    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === '/v1/artifacts') return { status: 200, data: new URL(String(url)).searchParams.has('kind')
+      ? { items: [], hasUnclassified: false } : [] };
     if (path === '/v1/account/entity-rows/mcp') {
       if (input.retire) retireAccount();
       const rowCatalog = input.project ? { ...catalog, bindings: catalog.bindings.map(rule => ({ ...rule,
@@ -284,7 +285,11 @@ describe('Machine MCP catalog admission', () => {
     }));
     vi.mocked(axios.get).mockImplementation(async (...args) => {
       const path = new URL(String(args[0])).pathname;
-      if (path === '/v1/artifacts') return { status: 200, data: artifacts.map(({ body: _body, ...header }) => header) };
+      if (path === '/v1/artifacts') {
+        const items = artifacts.map(({ body: _body, ...header }) => header);
+        return { status: 200, data: new URL(String(args[0])).searchParams.has('kind')
+          ? { items, hasUnclassified: false } : items };
+      }
       // Isolated item routes are unavailable; a read preview must use the admitted batch.
       if (path.startsWith('/v1/artifacts/')) return { status: 503, data: {} };
       return get(...args);
