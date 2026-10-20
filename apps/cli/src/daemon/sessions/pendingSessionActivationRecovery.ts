@@ -109,32 +109,43 @@ export async function recoverPendingSessionActivations(params: Readonly<{
   const fetchSessionsPage = params.fetchSessionsPage ?? fetchSessionsPageDefault;
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
-  while (true) {
-    const page = await fetchSessionsPage({
-      token: params.token,
-      limit: 200,
-      ...(cursor ? { cursor } : {}),
-    });
-    for (const session of page.sessions) {
-      if (!isOwnedSessionForPendingActivation(session)) continue;
-      // Follow progress has its own source custody, so a dormant receiver need
-      // not already have an authored Pending row to be observed on reconnect.
-      await params.visitOwnedSession?.(session.id, session);
-      const authorization = session.pendingActivationAuthorization;
-      if (!authorization || authorization.status !== 'waiting') continue;
-      const input: PendingSessionActivationInput = {
-        sessionId: session.id,
-        requestId: authorization.requestId,
-        pendingVersion: typeof session.pendingVersion === 'number' ? session.pendingVersion : 0,
-        source: 'scan',
-      };
-      await params.activate(input).catch((error) => {
-        params.warn('Pending session activation reconnect item failed; waiting custody retained', input, error);
+  const recoveries: Promise<void>[] = [];
+  const visitFailures: unknown[] = [];
+  try {
+    while (true) {
+      const page = await fetchSessionsPage({
+        token: params.token,
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
       });
+      for (const session of page.sessions) {
+        if (!isOwnedSessionForPendingActivation(session)) continue;
+        // Each Session retains its own Follow observation and activation order;
+        // its startup must not hold discovery or recovery of another Session.
+        recoveries.push((async () => {
+          // Follow progress has its own source custody, so a dormant receiver need
+          // not already have an authored Pending row to be observed on reconnect.
+          await params.visitOwnedSession?.(session.id, session);
+          const authorization = session.pendingActivationAuthorization;
+          if (!authorization || authorization.status !== 'waiting') return;
+          const input: PendingSessionActivationInput = {
+            sessionId: session.id,
+            requestId: authorization.requestId,
+            pendingVersion: typeof session.pendingVersion === 'number' ? session.pendingVersion : 0,
+            source: 'scan',
+          };
+          await params.activate(input).catch((error) => {
+            params.warn('Pending session activation reconnect item failed; waiting custody retained', input, error);
+          });
+        })().catch(error => { visitFailures.push(error); }));
+      }
+      if (!page.hasNext || !page.nextCursor || seenCursors.has(page.nextCursor)) break;
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
     }
-    if (!page.hasNext || !page.nextCursor || seenCursors.has(page.nextCursor)) return;
-    seenCursors.add(page.nextCursor);
-    cursor = page.nextCursor;
+  } finally {
+    await Promise.all(recoveries);
+    if (visitFailures.length > 0) throw visitFailures[0];
   }
 }
 
@@ -153,8 +164,10 @@ export function createPendingSessionActivationRecovery(params: Readonly<{
   return {
     activateHint: params.activate,
     recoverAfterConnect: async () => {
-      await recoverPendingSessionActivations(params);
-      await params.recoverRequesterSessions?.();
+      await Promise.all([
+        recoverPendingSessionActivations(params),
+        params.recoverRequesterSessions?.(),
+      ]);
     },
   };
 }
