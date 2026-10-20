@@ -198,14 +198,14 @@ describe('WalkthroughView (lab WT1-A)', () => {
         expect(onAsk.mock.calls[0]![0]).toMatchObject({ id: 'why' });
     });
 
-    it('stays readable offline, but cannot mark or ask without the machine', async () => {
+    it('keeps displayed changes reviewable offline while questions need the Machine', async () => {
         const onToggleReviewed = vi.fn();
         const screen = await renderScreen(view(COMPLETE, { onToggleReviewed, onAsk: vi.fn(), offline: { machine: 'MacBook Pro', time: '10:42' } }));
         expect(screen.findByTestId('walkthrough-notice-offline')).toBeTruthy();
         expect(diffsUnder(screen, 'walkthrough-stop-why')).toHaveLength(1);
         expect(hostIds(screen, 'walkthrough-ask-')).toHaveLength(0);
         await screen.pressByTestIdAsync('walkthrough-mark-why');
-        expect(onToggleReviewed).not.toHaveBeenCalled();
+        expect(onToggleReviewed).toHaveBeenCalledWith(expect.objectContaining({ id: 'why' }));
     });
 
     it('shows every file before a word is written, and invites Files when nothing was asked for', async () => {

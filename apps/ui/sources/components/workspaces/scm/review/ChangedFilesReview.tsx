@@ -58,7 +58,8 @@ import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import { preserveWebScrollAnchorAfterToggle } from './preserveWebScrollAnchorAfterToggle';
 import { ChangedFilesReviewIndex } from './ChangedFilesReviewIndex';
 import { ChangedFilesReviewPhoneFileControl } from './ChangedFilesReviewPhoneFileControl';
-import { ChangedFilesReviewKeyboardShortcuts } from './ChangedFilesReviewKeyboardShortcuts';
+import { ReviewKeyboardBindings } from './hunkReview/ReviewKeyboardBindings';
+import type { ReviewKeyboardController } from './hunkReview/useReviewKeyboard';
 import { ChangedFilesReviewMoreMenu, useChangedFilesReviewDisplayMenu } from './ChangedFilesReviewMoreMenu';
 import type { ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
@@ -150,6 +151,8 @@ type ChangedFilesReviewProps = {
      * is on and brings a file a changed-files list asks for into view.
      */
     activeReviewFile?: Readonly<{ key: string; presented: boolean; externalLifecycle?: boolean }> | null;
+    /** The comparison's one review controller also owns row/bar keyboard actions. */
+    keyboardController?: ReviewKeyboardController;
     theme: ChangedFilesReviewTheme;
     sessionId?: string;
     /** Presentation/cache identity only. Workspace hosts always supply their Machine diff reader. */
@@ -189,6 +192,7 @@ type ChangedFilesReviewProps = {
     onLayout?: ScrollViewProps['onLayout'];
     onContentSizeChange?: ScrollViewProps['onContentSizeChange'];
     workspaceScope?: WorkspaceScopeBase | null;
+    keyboardContainsFocus?: () => boolean;
     fetchUnifiedDiffForPath?: ScmReviewUnifiedDiffFetcher;
 } & (Readonly<{ sessionId: string }> | Readonly<{ reviewScopeKey: string; fetchUnifiedDiffForPath: ScmReviewUnifiedDiffFetcher }>);
 
@@ -1417,11 +1421,12 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     );
 
     // The comparison bar holds only the lab's controls (WT8): the scope, its actions and a ⋯ with Review's
-    // display choices; moving between files and changes is J / K / N (hinted in the rail).
+    // display choices; J / K moves changes and Shift moves files (hinted in the rail).
     const comparisonDisplayActions = <><ChangedFilesReviewFindButton surfaceId={findSurfaceId} /><ChangedFilesReviewMoreMenu diffArea={diffArea} availableDiffAreas={diffConfig.availableModes}
         diffAreaLabels={diffAreaLabels} onDiffArea={setDiffArea} leadingSections={comparisonChrome?.menuSections} /></>;
-    const comparisonKeyboardShortcuts = <ChangedFilesReviewKeyboardShortcuts enabled={props.activeReviewFile?.presented !== false}
-        paths={navigationPaths} activePath={activeReviewPath} onFocusPath={focusFile} diffStateSource={diffStateSource} onFocusLine={focusLine} />;
+    const comparisonKeyboardShortcuts = <ReviewKeyboardBindings enabled={props.activeReviewFile?.presented !== false}
+        paths={navigationPaths} activePath={activeReviewPath} onFocusPath={focusFile} diffStateSource={diffStateSource} onFocusLine={focusLine}
+        controller={props.keyboardController} containsFocus={props.keyboardContainsFocus} />;
     // A phone has one comparison menu: Find and the display choices are rows of it, not a row of buttons in it.
     const findRuntime = useFindSurfaceRuntime();
     const displayMenu = useChangedFilesReviewDisplayMenu({ diffArea, availableDiffAreas: diffConfig.availableModes,

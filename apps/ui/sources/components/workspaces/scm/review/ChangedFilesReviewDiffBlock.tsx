@@ -11,8 +11,8 @@ import { t } from '@/text';
 import { useSetting } from '@/sync/domains/state/storage';
 
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
-import { diffHunkNoteAnchors } from '@/components/ui/code/diff/diffHunkNoteAnchors';
-import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
+import { useDiffHunkTable } from '@/components/ui/code/diff/hunks/useDiffHunkTable';
+import type { DiffHunkInfo, DiffViewerHunks } from '@/components/ui/code/diff/diffViewerTypes';
 import { CODE_LINE_BASE_HEIGHT } from '@/components/ui/code/view/CodeLineRow';
 import { DiffReviewCommentsViewer } from '@/components/ui/code/diff/reviewComments/DiffReviewCommentsViewer';
 import { resolveInlineDiffVirtualization } from '@/components/ui/code/diff/resolveInlineDiffVirtualization';
@@ -20,8 +20,9 @@ import { useInlineDiffVirtualizationThresholds } from '@/components/ui/code/diff
 import { resolveInlineDiffVirtualizedMaxHeight } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedMaxHeight';
 import { resolveInlineDiffVirtualizedViewportStyle } from '@/components/ui/code/diff/resolveInlineDiffVirtualizedViewportStyle';
 
-import { isKnownBinaryPath, isKnownImagePath } from '@/scm/utils/filePresentation';
-import { useChangedFilesReviewImagePreview } from './useChangedFilesReviewImagePreview';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
+import { useFilePreviewSource } from '@/components/ui/media/useFilePreviewSource';
+import { buildWorkspacePreviewIdentity } from '@/components/ui/media/buildWorkspacePreviewIdentity';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import type { ChangedFilesReviewDiffStateSource } from '@/components/workspaces/scm/review/ChangedFilesReviewDiffStore';
@@ -197,8 +198,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     const blockTestId = `scm-review-diff-${testIdSafePath}`;
 
     const diffLoaded = state.status === 'loaded';
-    const noteAnchors = React.useMemo(() => props.hunkNotes
-        ? diffHunkNoteAnchors(state.diff, props.hunkNotes.placement) : null, [state.diff, props.hunkNotes]);
+    const hunkTable = useDiffHunkTable({ mode: 'unified', filePath, unifiedDiff: state.diff }, Boolean(props.hunkNotes || props.scrollToLineId));
     const columnNotes = props.hunkNotes?.placement === 'column' ? props.hunkNotes : null;
     const frameRef = React.useRef<View>(null);
     const [noteTops, setNoteTops] = React.useState<ReadonlyMap<number, number>>(() => new Map());
@@ -207,27 +207,35 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
         setNoteTops((current) => current.get(hunkIndex) === y ? current : new Map(current).set(hunkIndex, y));
     }, []);
     const onFrameLayout = React.useCallback(() => setMeasureGeneration((value) => value + 1), []);
-    const renderAfterLine = React.useCallback((line: CodeLine) => {
-        const hunkIndex = noteAnchors?.get(line.id);
-        if (hunkIndex === undefined || !props.hunkNotes) return null;
+    const renderNote = React.useCallback((hunk: DiffHunkInfo) => {
+        const hunkIndex = hunk.hunkIndex;
+        // Explain notes describe the captured git hunk, even when it contains several review units.
+        if (!props.hunkNotes || hunkTable.hunks[hunk.index - 1]?.hunkIndex === hunkIndex) return null;
         if (props.hunkNotes.placement === 'column') {
             return <HunkNoteAnchor hunkIndex={hunkIndex} frameRef={frameRef} generation={measureGeneration} onMeasure={onAnchorMeasure} />;
         }
         return props.hunkNotes.render(filePath, hunkIndex, props.hunkNotes.placement);
-    }, [filePath, measureGeneration, noteAnchors, onAnchorMeasure, props.hunkNotes]);
+    }, [filePath, measureGeneration, hunkTable.hunks, onAnchorMeasure, props.hunkNotes]);
+    const hunks = React.useMemo<DiffViewerHunks | undefined>(() => {
+        if (!props.hunkNotes && !props.scrollToLineId) return undefined;
+        const currentIndex = hunkTable.hunks.findIndex((hunk) => hunk.firstChangeLineId === props.scrollToLineId);
+        return { currentIndex: currentIndex < 0 ? null : currentIndex, renderNote: props.hunkNotes ? renderNote : undefined };
+    }, [hunkTable.hunks, props.hunkNotes, props.scrollToLineId, renderNote]);
     const notesColumn = useHunkNotesColumn({ filePath, hunkNotes: columnNotes ?? EMPTY_COLUMN_NOTES, tops: columnNotes ? noteTops : EMPTY_NOTE_TOPS,
         borderColor: theme.colors.border.default });
     const noteColumnStyle = columnNotes ? { paddingRight: columnNotes.columnWidth, minHeight: notesColumn.minHeight } : null;
     const hasDiff = diffLoaded && Boolean(state.diff);
-    const fileIsBinary = isKnownBinaryPath(filePath);
-    const fileIsImage = isKnownImagePath(filePath);
+    const fileViewer = resolveFileViewerKind({ path: filePath });
+    const fileIsBinary = fileViewer.kind !== 'code' && fileViewer.kind !== 'markdown' && fileViewer.kind !== 'svg';
+    const fileIsImage = fileViewer.kind === 'image' || fileViewer.kind === 'svg';
 
-    const imagePreview = useChangedFilesReviewImagePreview({
-        sessionId,
-        snapshotSignature,
-        filePath,
+    const imagePreview = useFilePreviewSource({
+        source: props.workspaceScope ? { kind: 'workspace', scope: props.workspaceScope, filePath }
+            : { kind: 'session', sessionId, filePath },
+        ...(props.workspaceScope ? buildWorkspacePreviewIdentity(props.workspaceScope, filePath, null, snapshotSignature)
+            : { cacheKey: snapshotSignature }),
+        mimeType: fileViewer.mimeType,
         enabled: props.evidenceOnly !== true && diffLoaded && !state.diff && fileIsImage,
-        workspaceScope: props.workspaceScope ?? null,
     });
 
     const wrapLines = useSetting('wrapLinesInDiffs');
@@ -386,7 +394,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                 <DiffReviewCommentsViewer
                     findActive={props.findActive}
                     findRangesByLineId={findRangesByLineId}
-                    renderAfterLine={props.hunkNotes ? renderAfterLine : undefined}
+                    hunks={hunks}
                     scrollToLineId={props.scrollToLineId}
                     highlightLineId={props.scrollToLineId}
                     onScrollToLine={props.onScrollToLine}
@@ -413,7 +421,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                     findActive={props.findActive}
                     registerFindRefold={registerFindRefold}
                     findRangesByLineId={findRangesByLineId}
-                    renderAfterLine={props.hunkNotes ? renderAfterLine : undefined}
+                    hunks={hunks}
                     scrollToLineId={props.scrollToLineId}
                     highlightLineId={props.scrollToLineId}
                     onScrollToLine={props.onScrollToLine}

@@ -10,7 +10,7 @@ import { Typography } from '@/constants/Typography';
 import { buildSessionDetailsHref } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { WalkthroughStopNumber } from '@/components/sessions/files/walkthrough/WalkthroughAtoms';
 import { useSessionScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
-import { useWalkthroughReviewedMarks } from '@/components/sessions/files/walkthrough/useWalkthroughReviewedMarks';
+import { useScmReviewedMarks } from '@/components/sessions/files/comparison/useScmReviewedMarks';
 import { buildWalkthroughReadingProgress, type WalkthroughReadingProgress } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { t } from '@/text';
 
@@ -80,7 +80,7 @@ export function SessionWalkthroughWidgetContent(props: Readonly<{
     const comparison = React.useMemo(() => ({ kind: props.comparisonKind }), [props.comparisonKind]);
     const result = useSessionScmWalkthrough(props.sessionId, comparison, 'walkthrough', props.serverId);
     const captured = result?.comparison ?? null;
-    const marks = useWalkthroughReviewedMarks({ comparison: captured, serverId: props.serverId, host: { sessionId: props.sessionId } });
+    const marks = useScmReviewedMarks({ comparison: captured, serverId: props.serverId, host: { sessionId: props.sessionId } });
     const reading = React.useMemo(() => captured ? buildWalkthroughReadingProgress({ comparison: captured,
         walkthrough: result?.outputs?.walkthrough ?? null, reviewed: marks.record,
     }) : null, [captured, result?.outputs?.walkthrough, marks.record]);

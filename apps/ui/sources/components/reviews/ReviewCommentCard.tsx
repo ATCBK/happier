@@ -37,6 +37,9 @@ export type ReviewCommentCardTransitionInput = Readonly<{
 }>;
 
 export type ReviewCommentCardActions = Readonly<{
+    /** File locations open through the workspace Action; the page composition owns the link. */
+    onOpenFile?: (comment: ReviewCommentV1) => void;
+    canOpenFile?: (comment: ReviewCommentV1) => boolean;
     onEdit?: (comment: ReviewCommentV1) => void;
     onTransition?: (input: ReviewCommentCardTransitionInput) => void;
     onRedact?: (comment: ReviewCommentV1) => void;

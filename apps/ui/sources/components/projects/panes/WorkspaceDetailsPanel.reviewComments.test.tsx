@@ -163,7 +163,7 @@ describe('WorkspaceDetailsPanel review comment launcher', () => {
         }));
     });
 
-    it('allows project surfaces to hide the terminal and focus-mode header actions', async () => {
+    it('allows project surfaces to hide the terminal header action', async () => {
         const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
 
         const rendered = await renderScreen(
@@ -178,17 +178,10 @@ describe('WorkspaceDetailsPanel review comment launcher', () => {
                 scopeId="project:wr_1"
                 activeRootPath="/repo/worktree-a"
                 showTerminalHeaderAction={false}
-                showFocusModeToggle={false}
             />,
         );
 
         expect(rendered.findByTestId('workspace-details-open-terminal')).toBeNull();
-        expect(
-            rendered.root.findAll((node) =>
-                node.props?.accessibilityLabel === 'session.detailsPanel.enterFocusModeA11y'
-                || node.props?.accessibilityLabel === 'session.detailsPanel.exitFocusModeA11y')
-                .length,
-        ).toBe(0);
     });
 
     it('passes terminal instance ids into project terminal tabs', async () => {

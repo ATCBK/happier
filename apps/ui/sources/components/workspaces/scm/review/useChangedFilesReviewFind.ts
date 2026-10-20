@@ -2,7 +2,7 @@ import * as React from 'react';
 import { matchFindText, type FindController, type FindOptions, type FindStatus, type FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { ChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiffStore';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
-import { isKnownBinaryPath } from '@/scm/utils/filePresentation';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 
 export type ReviewFindTarget = Readonly<{ filePath: string; lineId: string }>;
@@ -73,7 +73,8 @@ export function createChangedFilesReviewFind() {
         if (snapshot.open && snapshot.query && input) {
             invalid = 'invalidPattern' in matchFindText('', snapshot.query, snapshot.options);
             if (!invalid) for (const path of input.paths) {
-                if (input.binaryPaths?.has(path) || isKnownBinaryPath(path)) { partial = true; continue; }
+                const viewer = resolveFileViewerKind({ path, isBinaryContent: input.binaryPaths?.has(path) });
+                if (viewer.kind !== 'code' && viewer.kind !== 'markdown' && viewer.kind !== 'svg') { partial = true; continue; }
                 const state = input.diffStateSource.getDiffState(path);
                 if (state.status === 'idle' || state.status === 'loading') { pending = true; continue; }
                 if (state.status === 'error' || /^Binary files .* differ$/m.test(state.diff) || /^GIT binary patch$/m.test(state.diff)) {

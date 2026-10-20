@@ -54,15 +54,6 @@ vi.mock('@/components/ui/code/diff/useInlineDiffVirtualizationThresholds', () =>
     useInlineDiffVirtualizationThresholds: () => ({ lineThreshold: 1, byteThreshold: 1 }),
 }));
 
-vi.mock('@/scm/utils/filePresentation', () => ({
-    isKnownBinaryPath: () => false,
-    isKnownImagePath: () => false,
-}));
-
-vi.mock('./useChangedFilesReviewImagePreview', () => ({
-    useChangedFilesReviewImagePreview: () => ({ status: 'idle' }),
-}));
-
 vi.mock('@/components/ui/code/diff/DiffViewer', () => ({
     DiffViewer: (props: any) => React.createElement('DiffViewer', props),
 }));

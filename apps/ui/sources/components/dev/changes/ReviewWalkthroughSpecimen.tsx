@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { applyScmReviewedMarkIntent } from '@happier-dev/protocol/scm';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { projectReviewFindingsOverlay, type ReviewFindingsOverlayReview } from '@happier-dev/protocol/reviews/projectReviewFindingsOverlay';
@@ -141,7 +142,7 @@ function ReviewReading(props: Readonly<{
         comparison,
         walkthrough: props.scenario.walkthrough,
         analysis: props.input?.analysis ?? SPECIMEN_ANALYSIS_COMPLETE,
-        reviewed: { v: 1, comparisonId: comparison.id, reviewedChangeRefs: props.scenario.walkthrough?.value?.stops.slice(0, props.scenario.reviewed ?? 2).flatMap((stop) => stop.changeRefs) ?? [] },
+        reviewed: applyScmReviewedMarkIntent(comparison, null, props.scenario.walkthrough?.value?.stops.slice(0, props.scenario.reviewed ?? 2).flatMap((stop) => stop.changeRefs) ?? [], true),
     }), [comparison, props.input?.analysis, props.scenario]);
     const overlay = React.useMemo(() => overlayOf(props.scenario, comparison), [props.scenario, comparison]);
     const severityColors = useReviewSeverityColorResolver();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ScmComparison, ScmReviewedMarksRecord } from '@happier-dev/protocol';
+import { applyScmReviewedMarkIntent, type ScmComparison, type ScmReviewedMarksRecord } from '@happier-dev/protocol';
 import { createTwoFilesPatch, parsePatch } from 'diff';
 import { SPECIMEN_COMPARISON, SPECIMEN_WALKTHROUGH } from '@/components/dev/changes/walkthroughSpecimenFixture';
 
@@ -110,13 +110,14 @@ describe('buildWalkthroughReading', () => {
         const value = { ...WALKTHROUGH, stops: files.map((file, index) => ({
             id: `stop-${index}`, title: `Stop ${index}`, explanationMarkdown: 'Explanation', changeRefs: [file.occurrences[0]!.id],
         })), otherChangeRefs: [] };
-        const projected = buildWalkthroughReadingProgress(input({ comparison, walkthrough: { state: 'complete', value },
-            reviewed: { v: 1, comparisonId: comparison.id, reviewedChangeRefs: ['change-0'] } }));
+        const reviewed = applyScmReviewedMarkIntent(comparison, null, ['change-0'], true);
+        evidenceReads = 0;
+        const projected = buildWalkthroughReadingProgress(input({ comparison, walkthrough: { state: 'complete', value }, reviewed }));
         expect(projected).toMatchObject({ phase: 'complete', title: WALKTHROUGH.title, reviewedCount: 1 });
         expect(projected.stops.find((stop) => !stop.reviewed)?.title).toBe('Stop 1');
         expect(evidenceReads).toBe(0);
         const updated = buildWalkthroughReadingProgress(input({ comparison, walkthrough: { state: 'complete', value },
-            reviewed: { v: 1, comparisonId: comparison.id, reviewedChangeRefs: ['change-0', 'change-1'] } }));
+            reviewed: applyScmReviewedMarkIntent(comparison, reviewed, ['change-1'], true) }));
         expect(updated.reviewedCount).toBe(2);
         expect(updated.stops.find((stop) => !stop.reviewed)?.title).toBe('Stop 2');
         expect(evidenceReads).toBe(0);
@@ -197,17 +198,17 @@ describe('buildWalkthroughReading', () => {
     });
 
     it('keeps source, analysis and your marks as three separate counts', () => {
-        const reviewed: ScmReviewedMarksRecord = { v: 1, comparisonId: 'cmp-1', reviewedChangeRefs: ['a0'] };
+        const reviewed: ScmReviewedMarksRecord = applyScmReviewedMarkIntent(COMPARISON, null, ['a0'], true);
         const reading = buildWalkthroughReading(input({ reviewed }));
         expect(reading.source).toMatchObject({ fileCount: 4, changeCount: 5, added: 5, removed: 2, unavailableCount: 1, inventoryState: 'complete' });
         expect(reading.analysis).toEqual({ analysed: 3, total: 5 });
         expect(reading.stops.map((stop) => stop.reviewed)).toEqual([true, false]);
         expect(reading.reviewedCount).toBe(1);
         // A mark on part of a stop's code is not a reviewed stop.
-        const partial = buildWalkthroughReading(input({ reviewed: { v: 1, comparisonId: 'cmp-1', reviewedChangeRefs: ['b0'] } }));
+        const partial = buildWalkthroughReading(input({ reviewed: applyScmReviewedMarkIntent(COMPARISON, null, ['b0'], true) }));
         expect(partial.reviewedCount).toBe(0);
         // Marks of another comparison never apply.
-        const foreign = buildWalkthroughReading(input({ reviewed: { v: 1, comparisonId: 'other', reviewedChangeRefs: ['a0'] } }));
+        const foreign = buildWalkthroughReading(input({ reviewed: { ...reviewed, scopeId: 'other' } }));
         expect(foreign.reviewedCount).toBe(0);
     });
 
@@ -254,7 +255,7 @@ describe('buildWalkthroughReading', () => {
                 { ...WALKTHROUGH.stops[0]!, changeRefs: ['a1', 'a0', 'b0'] },
                 { ...WALKTHROUGH.stops[1]!, changeRefs: ['a1'] },
             ] } },
-            reviewed: { v: 1, comparisonId: COMPARISON.id, reviewedChangeRefs: ['a0', 'a1', 'b0'] },
+            reviewed: applyScmReviewedMarkIntent(COMPARISON, null, ['a0', 'a1', 'b0'], true),
         }));
         expect(reading.explainNotesByHunk.get('src/a.ts')).toEqual([
             [{ key: 'stop-why', stop: reading.stops[0], secondary: false }],

@@ -4,7 +4,7 @@ import { renderScreen } from '@/dev/testkit';
 import { SPECIMEN_ANALYSIS_COMPLETE, SPECIMEN_COMPARISON, SPECIMEN_WALKTHROUGH } from '@/components/dev/changes/walkthroughSpecimenFixture';
 import { buildWalkthroughReading } from './walkthroughReading';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
-import { diffHunkNoteAnchors } from '@/components/ui/code/diff/diffHunkNoteAnchors';
+import { buildDiffHunkTable } from '@/components/ui/code/diff/hunks/buildDiffHunkTable';
 import type { ScmComparison } from '@happier-dev/protocol';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -77,18 +77,15 @@ it('places only the stops for the requested hunk and deduplicates later hunks in
     expect(diff.state).toBe('available');
     if (diff.state !== 'available') throw new Error('The authored specimen must have exact patch evidence');
     const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: diff.unifiedDiff });
-    const column = diffHunkNoteAnchors(diff.unifiedDiff, 'column');
-    const inline = diffHunkNoteAnchors(diff.unifiedDiff, 'inline');
-    expect(column.size).toBe(ids.length);
-    expect(inline.size).toBe(ids.length);
-    for (const [start, hunkIndex] of column) {
-        const end = [...inline].find((entry) => entry[1] === hunkIndex)![0];
-        const startIndex = lines.findIndex((line) => line.id === start);
-        const endIndex = lines.findIndex((line) => line.id === end);
-        expect(startIndex).toBeLessThanOrEqual(endIndex);
-        expect(lines[startIndex]?.renderIsHeaderLine).toBe(false);
-        expect(lines[endIndex]?.renderIsHeaderLine).toBe(false);
-        expect(lines.slice(startIndex, endIndex + 1).some((line) => line.id.startsWith('h:'))).toBe(false);
+    const table = buildDiffHunkTable({ mode: 'unified', filePath: path, unifiedDiff: diff.unifiedDiff });
+    expect(new Set(table.hunks.map((hunk) => hunk.hunkIndex)).size).toBe(ids.length);
+    for (const [anchor, hunks] of table.hunksByAfterLineId) {
+        const anchorIndex = lines.findIndex((line) => line.id === anchor);
+        for (const hunk of hunks) {
+            const firstChange = lines.findIndex((line) => line.id === hunk.firstChangeLineId);
+            expect(anchorIndex + 1).toBe(firstChange);
+            expect(lines[anchorIndex]?.hunkIndex).toBe(hunk.hunkIndex);
+        }
     }
 });
 

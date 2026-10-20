@@ -26,7 +26,7 @@ import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFo
 import type { useScmDiffSummaryBinding } from '@/components/sessions/files/comparison/useScmDiffSummaryBinding';
 import { WalkthroughView, type WalkthroughViewLayout } from './WalkthroughView';
 import { buildWalkthroughReading, EMPTY_WALKTHROUGH_READING, type WalkthroughStop } from './walkthroughReading';
-import { useWalkthroughReviewedMarks } from './useWalkthroughReviewedMarks';
+import { useScmReviewedMarks } from '../comparison/useScmReviewedMarks';
 import { useWalkthroughSavedActions } from './WalkthroughSavedActions';
 import type { ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonMoreMenu';
 import { useWalkthroughReview } from '@/components/sessions/reviews/walkthrough/useWalkthroughReview';
@@ -84,7 +84,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     const openExplainSetting = useOpenExplainChangesSetting();
     const key = viewModel?.requestKey;
     const runId = viewModel?.executionRunId ?? null;
-    const marks = useWalkthroughReviewedMarks({ comparison: capturedComparison, serverId: props.serverId ?? null, host: bound.host });
+    const marks = useScmReviewedMarks({ comparison: capturedComparison, serverId: props.serverId ?? null, host: bound.host });
     const reading = React.useMemo(() => (capturedComparison
         ? buildWalkthroughReading({
             comparison: capturedComparison,

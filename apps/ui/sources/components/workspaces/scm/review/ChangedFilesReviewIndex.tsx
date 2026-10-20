@@ -172,10 +172,10 @@ const ChangedFilesReviewRail = React.memo(function ChangedFilesReviewRail(props:
                 <ScrollView style={styles.railScroll} contentContainerStyle={styles.railRows}>{props.rows}</ScrollView>
             )}
             {Platform.OS === 'web' ? (
-                // The keys `ChangedFilesReviewKeyboardShortcuts` binds for this view (web only).
+                // Defaults from the shared Review command catalog.
                 <ScmComparisonRailKeys testID="scm-review-index-keys" keys={[
-                    { keys: ['J', 'K'], label: t('scmComparison.keys.nextFile') },
-                    { keys: ['N'], label: t('scmComparison.keys.nextChange') },
+                    { keys: ['Shift', 'J', 'K'], label: t('scmComparison.keys.nextFile') },
+                    { keys: ['J', 'K'], label: t('scmComparison.keys.nextChange') },
                 ]} />
             ) : null}
         </View>

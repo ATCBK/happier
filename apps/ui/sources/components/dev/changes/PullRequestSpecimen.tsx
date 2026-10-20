@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { applyScmReviewedMarkIntent } from '@happier-dev/protocol/scm';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { ScmComparison } from '@happier-dev/protocol';
@@ -30,7 +31,7 @@ function PullRequestFrame(props: Readonly<{ phone: boolean; comparison?: ScmComp
     const input = React.useMemo<Omit<WalkthroughReadingInput, 'reviewed'>>(() => ({ comparison,
         walkthrough: { state: 'complete', value: PR_SPECIMEN_WALKTHROUGH }, analysis: PR_SPECIMEN_ANALYSIS }), [comparison]);
     const reading = React.useMemo(() => buildWalkthroughReading({ ...input,
-        reviewed: { v: 1, comparisonId: comparison.id, reviewedChangeRefs: refs } }), [comparison.id, input, refs]);
+        reviewed: applyScmReviewedMarkIntent(comparison, null, refs, true) }), [comparison, input, refs]);
     const options = listFilesComparisonScopeOptions(AVAILABILITY, 'turn-3', scope, { pendingFileCount: 9, sessionFileCount: 9,
         latestTurnFileCount: 4, currentFileCount: comparison.inventory.files.length });
     const selectView = (next: 'files' | 'walkthrough' | 'commits') => { if (next !== 'commits') setView(next); };

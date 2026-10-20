@@ -22,7 +22,7 @@ import {
 import { SessionWalkthroughView } from '@/components/sessions/files/walkthrough/SessionWalkthroughView';
 import { SessionCommitsView } from '@/components/sessions/files/commits/SessionCommitsView';
 import { scmReviewViewUnavailableReason } from '@/sync/domains/scm/diffSummary/selection';
-import { useWalkthroughReviewedMarks } from '@/components/sessions/files/walkthrough/useWalkthroughReviewedMarks';
+import { useScmReviewedMarks } from '@/components/sessions/files/comparison/useScmReviewedMarks';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { useSessionScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
@@ -842,7 +842,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       'walkthrough',
       props.serverId,
     );
-    const marks = useWalkthroughReviewedMarks({
+    const marks = useScmReviewedMarks({
       comparison:
         reviewView === 'files'
           ? (walkthroughAnalysis?.comparison ?? null)

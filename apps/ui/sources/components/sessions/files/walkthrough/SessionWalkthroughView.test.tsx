@@ -2,7 +2,7 @@ import * as React from 'react';
 import '@/dev/testkit/harness/syncSingletonLoader';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildScmComparisonIdentity, ScmComparisonCaptureInputSchema, ScmComparisonCaptureOutputSchema, ScmDiffSummaryDiscussInputSchema, ScmDiffSummaryGenerateInputSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryResultSchema, ScmDiffSummaryResultEditInputSchema } from '@happier-dev/protocol/scm';
+import { applyScmReviewedMarkIntent, buildScmComparisonIdentity, ScmComparisonCaptureInputSchema, ScmComparisonCaptureOutputSchema, ScmDiffSummaryDiscussInputSchema, ScmDiffSummaryGenerateInputSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryResultSchema, ScmDiffSummaryResultEditInputSchema } from '@happier-dev/protocol/scm';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExecutionRunGetResponseSchema, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -285,7 +285,7 @@ async function mountWithAccountMarks(sessionId: string) {
                 stops: [{ id: 'retained', title: 'Retained stop', importance: 'high', explanationMarkdown: 'The saved code remains readable.', changeRefs: ['captured-change'] }], otherChangeRefs: [] } } },
             analysis: { suppliedChangeRefs: ['captured-change'], analysedChangeRefs: ['captured-change'], remainingChangeRefs: [] },
         } });
-    let stored = encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: { v: 1, comparisonId: comparison.id, reviewedChangeRefs: [] } });
+    let stored = encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: applyScmReviewedMarkIntent(boundary.savedResult.output.comparison!, null, [], true) });
     let version = 1;
     let writes = 0;
     let reads = 0;
@@ -514,7 +514,7 @@ describe('SessionWalkthroughView retained offline reading through real Account m
             } }),
         ]);
     });
-    it('labels retained code from its observation and disables personal marks when the owning machine goes offline', async () => {
+    it('labels retained code from its observation and keeps Account marks writable with the Machine offline', async () => {
         const { screen, home, offline, writes, observedAtMs } = await mountWithAccountMarks('offline-marks');
         await screen.pressByTestIdAsync('walkthrough-mark-retained');
         await vi.waitFor(() => expect(writes(), screen.getTextContent()).toBe(1));
@@ -525,13 +525,13 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         vi.setSystemTime(observedAtMs! + 86_400_000);
         restoreObservationClock = () => vi.useRealTimers();
         await offline();
-        expect(screen.findByTestId('walkthrough-mark-retained')?.props.disabled).toBe(true);
+        expect(screen.findByTestId('walkthrough-mark-retained')?.props.disabled).toBe(false);
         expect(screen.getTextContent()).toContain('Retained reading');
         const readingView = screen.find(node => node.props.scopeLabel === 'Shown comparison'
             && node.props.reading !== undefined && node.props.start !== undefined);
         expect(readingView.props.reading.stops[0].files[0].unifiedDiff).toContain('+retained-code');
         await screen.pressByTestIdAsync('walkthrough-mark-retained');
-        expect(writes()).toBe(1);
+        await vi.waitFor(() => expect(writes()).toBe(2));
         expect(screen.findHostByTestId('walkthrough-notice-offline')).toBeTruthy();
         expect(readingView.props.offline).toEqual({ machine: 'tester.local',
             time: formatWithCachedDateTimeFormatter(observedAtMs!, getPreferredLanguage(), { dateStyle: 'medium', timeStyle: 'short' }),

@@ -47,6 +47,7 @@ export const SOURCE_CONTROL_SETTINGS = defineSettingsPage({
         files: {
             titleKey: 'settingsSourceControl.page.files.title',
             settings: {
+                trackAgentEdits: { anchor: 'files.trackAgentEdits' },
                 // The renderer and layout rows exist on web only (the view's `Platform.OS === 'web'`).
                 diffRenderer: { host: settingsHosts.web },
                 diffLayout: {

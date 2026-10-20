@@ -3,7 +3,8 @@ import { Platform, View } from 'react-native';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { t } from '@/text';
 import type { ChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiffStore';
-import { useReviewDiffHunkNavigation } from './useReviewDiffHunkNavigation';
+import { useDiffHunkTable } from '@/components/ui/code/diff/hunks/useDiffHunkTable';
+import { useDiffHunkNavigation } from '@/components/ui/code/diff/hunks/useDiffHunkNavigation';
 
 export type ChangedFilesReviewLineTarget = Readonly<{ filePath: string; lineId: string }>;
 
@@ -17,7 +18,8 @@ function ChangedFilesReviewHunkNavigation(props: Readonly<{
         React.useCallback(() => props.diffStateSource.getDiffState(props.filePath), [props.diffStateSource, props.filePath]),
         React.useCallback(() => props.diffStateSource.getDiffState(props.filePath), [props.diffStateSource, props.filePath]),
     );
-    const navigation = useReviewDiffHunkNavigation(state.diff);
+    const table = useDiffHunkTable({ mode: 'unified', filePath: props.filePath, unifiedDiff: state.diff });
+    const navigation = useDiffHunkNavigation(table);
     React.useEffect(() => { props.onFocusLine(null); }, [props.filePath, props.onFocusLine, state.diff]);
     const move = (direction: -1 | 1) => {
         const lineId = direction === 1 ? navigation.next() : navigation.previous();

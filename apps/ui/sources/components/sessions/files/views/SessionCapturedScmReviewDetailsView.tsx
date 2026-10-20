@@ -11,7 +11,7 @@ import { useScmReviewActiveFileSelection, useSessionScmReviewTabState } from '@/
 import { SessionWalkthroughView } from '@/components/sessions/files/walkthrough/SessionWalkthroughView';
 import { useSessionScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
-import { useWalkthroughReviewedMarks } from '@/components/sessions/files/walkthrough/useWalkthroughReviewedMarks';
+import { useScmReviewedMarks } from '@/components/sessions/files/comparison/useScmReviewedMarks';
 import { presentStartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
 import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments/useReviewComposerHandoff';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -49,7 +49,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
         activeFileKey: activeReviewFile.key, comparison, view, presented: props.active !== false && Boolean(accountScope),
         isCurrent: accountBinding?.isCurrent });
     const scopeLabel = resolveFilesComparisonLabel(comparison, null);
-    const marks = useWalkthroughReviewedMarks({ comparison: view === 'files' ? captured.comparison : null, serverId: props.serverId ?? null,
+    const marks = useScmReviewedMarks({ comparison: view === 'files' ? captured.comparison : null, serverId: props.serverId ?? null,
         host: { sessionId: props.sessionId } });
     const marksAvailable = marks.record?.comparisonId === captured.comparison?.id && marks.record !== null && marks.unavailableReason === null;
     const reading = React.useMemo(() => walkthrough?.comparison && walkthrough.comparison.id === comparison.comparisonId && walkthrough.outputs?.walkthrough?.value

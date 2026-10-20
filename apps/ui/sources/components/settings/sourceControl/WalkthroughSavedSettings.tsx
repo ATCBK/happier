@@ -76,7 +76,7 @@ export function WalkthroughSavedSettings(props: Readonly<{
                 ...(item.sessionId ? { sessionId: item.sessionId } : {}) })) });
             if (!binding.isCurrent() || currentKey.current !== key) return;
             if (result.success) deleteSavedScmDiffSummaryResults(scope, result.deleted.map(item => item.resultId));
-            setClearFailed(!result.success || result.failures.length > 0 || result.deleted.some(item => item.marksCleanup?.success === false));
+            setClearFailed(!result.success || result.failures.length > 0);
             const refreshed = await captured.ops.list();
             if (binding.isCurrent() && currentKey.current === key) setData({ key, inventory: refreshed });
         } finally { if (binding.isCurrent() && currentKey.current === key) setClearing(false); }

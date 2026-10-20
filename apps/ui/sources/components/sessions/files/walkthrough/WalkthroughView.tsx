@@ -32,7 +32,8 @@ import {
 } from '@/sync/domains/scm/diffSummary/state';
 import { WalkthroughContents } from './WalkthroughContents';
 import { WalkthroughEditorialHeader } from './WalkthroughEditorialHeader';
-import { WalkthroughKeyboardShortcuts } from './WalkthroughKeyboardShortcuts';
+import { useReviewKeyboard } from '@/components/workspaces/scm/review/hunkReview/useReviewKeyboard';
+import { isKeyboardTargetHidden } from '@/keyboard/runtime';
 import {
   WalkthroughInventory,
   WalkthroughOtherChanges,
@@ -255,9 +256,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
 
   const onToggleReviewed = props.onToggleReviewed;
   const onAsk = props.onAsk;
-  // Offline, the machine cannot accept a mark or a question; the reading stays.
-  const marksBlocked =
-    Boolean(props.offline) || Boolean(props.marksDisabledReason);
+  const marksBlocked = Boolean(props.marksDisabledReason);
   const toggleCurrent = React.useMemo(
     () =>
       onToggleReviewed && currentStop && !marksBlocked
@@ -316,6 +315,22 @@ export const WalkthroughView = React.memo(function WalkthroughView(
     scrollToOthers,
     scrollToStop,
   ]);
+
+  useReviewKeyboard({
+    next: () => move(1), previous: () => move(-1), keepCurrent: toggleCurrent, askCurrent,
+  }, {
+    active: props.active !== false && reading.stops.length > 0,
+    containsFocus: () => {
+      const element = rootRef.current as unknown as HTMLElement | null;
+      if (typeof document === 'undefined') return true;
+      if (!element?.isConnected || isKeyboardTargetHidden(element)) return false;
+      if (document.activeElement && isKeyboardTargetHidden(document.activeElement)) {
+        element.focus({ preventScroll: true });
+        return true;
+      }
+      return element.contains(document.activeElement);
+    },
+  });
 
   if (reading.phase === 'none') {
     if (props.restoreState === 'restoring') {
@@ -544,9 +559,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
       ) : null}
     </View>
   );
-  const marksDisabled = props.offline
-    ? t('walkthrough.notice.offlineA11y')
-    : (props.marksDisabledReason ?? null);
+  const marksDisabled = props.marksDisabledReason ?? null;
   const renderStopFindings = props.review?.renderStopFindings;
   const stopNav = { scrollToStop, scrollToFindings };
   const stops = reading.stops.map((stop) => {
@@ -803,6 +816,13 @@ export const WalkthroughView = React.memo(function WalkthroughView(
       ref={rootRef}
       testID="walkthrough-view"
       tabIndex={-1}
+      onPointerDown={(event) => {
+        const element = rootRef.current as unknown as HTMLElement | null;
+        const target = event.target as unknown as Element | null;
+        if (!element || !target || typeof target.closest !== 'function') return;
+        if (target.closest('button, a[href], input, textarea, [contenteditable="true"], [role="button"]')) return;
+        element.focus({ preventScroll: true });
+      }}
       style={styles.root}
     >
       {notices}
@@ -829,13 +849,6 @@ export const WalkthroughView = React.memo(function WalkthroughView(
           </ScrollView>
         </View>
       </View>
-      <WalkthroughKeyboardShortcuts
-        enabled={props.active !== false && reading.stops.length > 0}
-        scopeRef={rootRef}
-        onMove={move}
-        onToggleReviewed={toggleCurrent}
-        onAsk={askCurrent}
-      />
     </View>
   );
 });

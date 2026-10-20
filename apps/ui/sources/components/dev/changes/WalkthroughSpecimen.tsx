@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { applyScmReviewedMarkIntent } from '@happier-dev/protocol/scm';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -40,7 +41,7 @@ const SESSION = { kind: 'session' } as const;
 const DETAIL = `${t('scmComparison.since', { time: '09:40' })} · ${t('scmComparison.turnsWithChanges', { count: 3 })}`;
 
 function reviewed(count: number): WalkthroughReadingInput['reviewed'] {
-    return { v: 1, comparisonId: SPECIMEN_COMPARISON.id, reviewedChangeRefs: specimenReviewedRefs(count) };
+    return applyScmReviewedMarkIntent(SPECIMEN_COMPARISON, null, specimenReviewedRefs(count), true);
 }
 
 const PENDING = { kind: 'workingTree' } as const;
@@ -85,7 +86,7 @@ function LiveMarks(props: Readonly<{
     const [refs, setRefs] = React.useState(() => specimenReviewedRefs(props.reviewedCount));
     const reading = React.useMemo(() => buildWalkthroughReading({
         ...props.input,
-        reviewed: { v: 1, comparisonId: SPECIMEN_COMPARISON.id, reviewedChangeRefs: refs },
+        reviewed: applyScmReviewedMarkIntent(SPECIMEN_COMPARISON, null, refs, true),
     }), [props.input, refs]);
     return (
         <View style={styles.fill}>

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { applyScmReviewedMarkIntent } from '@happier-dev/protocol/scm';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
@@ -13,7 +14,7 @@ vi.mock('@/text', async () => {
 
 const reading = (refs: string[] = []) => buildWalkthroughReadingProgress({
     comparison: SPECIMEN_COMPARISON, walkthrough: { state: 'complete', value: SPECIMEN_WALKTHROUGH },
-    reviewed: { v: 1, comparisonId: SPECIMEN_COMPARISON.id, reviewedChangeRefs: refs },
+    reviewed: applyScmReviewedMarkIntent(SPECIMEN_COMPARISON, null, refs, true),
 });
 
 describe('Walkthrough Board reading projection', () => {

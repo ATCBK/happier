@@ -46,7 +46,7 @@ import { useCapturedScmComparison } from '@/components/sessions/files/comparison
 import { CapturedComparisonFilesView } from '@/components/sessions/files/comparison/CapturedComparisonFilesView';
 import { listFilesComparisonScopeOptions, resolveFilesComparisonLabel } from '@/components/sessions/files/comparison/filesComparison';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
-import { useWalkthroughReviewedMarks } from '@/components/sessions/files/walkthrough/useWalkthroughReviewedMarks';
+import { useScmReviewedMarks } from '@/components/sessions/files/comparison/useScmReviewedMarks';
 import type { SessionScmReviewComparison, SessionScmReviewView } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { t } from '@/text';
 import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
@@ -258,7 +258,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
             if (displayedIsCurrent()) Modal.alert(t('common.error'), t('common.unavailable'));
         }
     };
-    const marks = useWalkthroughReviewedMarks({ comparison: bound.capturedComparison, serverId: props.serverId, host: props.host });
+    const marks = useScmReviewedMarks({ comparison: bound.capturedComparison, serverId: props.serverId, host: props.host });
     const reading = React.useMemo(() => bound.capturedComparison ? buildWalkthroughReading({ comparison: bound.capturedComparison,
         walkthrough: bound.viewModel?.outputs?.walkthrough ?? null, analysis: bound.viewModel?.analysis ?? null,
         reviewed: marks.record, provenance: bound.viewModel?.savedResult?.walkthroughProvenance }) : null,

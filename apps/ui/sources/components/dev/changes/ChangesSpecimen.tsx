@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { applyScmReviewedMarkIntent } from '@happier-dev/protocol/scm';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -123,7 +124,7 @@ const EXPLAIN_READING = buildWalkthroughReading({
     comparison: SPECIMEN_COMPARISON,
     walkthrough: { state: 'complete', value: SPECIMEN_WALKTHROUGH },
     analysis: SPECIMEN_ANALYSIS_COMPLETE,
-    reviewed: { v: 1, comparisonId: SPECIMEN_COMPARISON.id, reviewedChangeRefs: specimenReviewedRefs(2) },
+    reviewed: applyScmReviewedMarkIntent(SPECIMEN_COMPARISON, null, specimenReviewedRefs(2), true),
 });
 const EXPLAIN_FILES: ScmFileStatus[] = SESSION_FILES.flatMap((entry) => {
     const row = EXPLAIN_READING.inventory.find((item) => item.path === entry.fullPath);
