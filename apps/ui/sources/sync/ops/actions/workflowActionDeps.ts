@@ -37,6 +37,8 @@ import { decodeBase64 } from '@/encryption/base64';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { fetchAccountEncryptionCurrentness } from '@/sync/api/account/apiAccountEncryptionMode';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { isServerFeaturesProbeRetryable } from '@/sync/api/capabilities/serverFeaturesProbeRetryability';
+import { isExplicitlyRetryableError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
 import { createWorkflowRunAccountStorage } from '@/sync/api/automations/apiWorkflowRunStorage';
 import { readActiveSessionPullRequestLinks } from '@/sync/api/plugins/data/sessionPullRequestLinks';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
@@ -213,6 +215,7 @@ export function createUiWorkflowAction(params: Readonly<{
             }),
         });
         account.assertCurrent();
+        if (resolved.kind === 'unavailable' && 'cause' in resolved && isExplicitlyRetryableError(resolved.cause)) throw resolved.cause;
         if (resolved.kind !== 'available') {
             throw Object.assign(new Error('content_unavailable'), { code: 'content_unavailable' });
         }
@@ -363,6 +366,7 @@ export function createUiWorkflowAction(params: Readonly<{
         definitions, runs, triggers,
         isWorkflowFeatureEnabled: async () => {
             const snapshot = await getServerFeaturesSnapshot({ serverId: account.serverId });
+            if (isServerFeaturesProbeRetryable(snapshot)) throw Object.assign(new Error('storage_unavailable'), { code: 'storage_unavailable' });
             return snapshot.status === 'ready' && readServerEnabledBit(snapshot.features, 'workflows') === true;
         },
     });

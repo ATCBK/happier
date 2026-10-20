@@ -149,6 +149,7 @@ import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@hap
 import { DaemonAgentInstallStartResponseSchema, DaemonAgentInstallReadResponseSchema, DaemonAgentInstallCancelResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { DaemonTerminalEnsureResponseSchema, DaemonTerminalListResponseV1Schema, DaemonTerminalCloseResponseSchema } from '@happier-dev/protocol/daemon/terminal';
 import { DaemonWorkspaceFileSearchResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { DaemonWorkspaceFileReplacePreviewResponseSchema, DaemonWorkspaceFileReplaceApplyResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 import { projectSessionActivityCompatibilityV1, SESSION_LIST_AWARENESS_VIEW_V1 } from '@happier-dev/protocol/sessions/awareness/action';
 import { projectSessionManagerSourceKeyPreparationV1, readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { resolveSessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
@@ -251,6 +252,7 @@ import { getPreferredHostName } from '@/daemon/machine/metadata';
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
 import { createAcknowledgedAccountArtifactTransport, createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createCliArtifactActions } from './artifactActions';
+import { createCliInboxReadAction } from './inboxActions';
 import { createWorkflowDefinitionActions } from './workflowDefinitions';
 import { createCliWorkflowTriggerActions } from './workflowTriggers';
 import { getWorkflowStarterExamplesV1 } from '@happier-dev/protocol/workflows/builtins/examples';
@@ -269,7 +271,7 @@ import { createWorkflowInvocationRecoveryFactWriter } from '@/daemon/workflows/r
 import { createWorkflowRunPushNotificationClient } from '@/daemon/workflows/production';
 import { createWorkflowRunReviewEntryNotificationHandler } from '@/notifications/activity/dispatchWorkflowRunUpdateNotification';
 import type { WorkflowAccountRunActionDeps } from '@happier-dev/protocol';
-import { isWorkflowRuntimeEnabled } from '@/daemon/automation/workflowFeatureGate';
+import { getWorkflowRuntimeFeatureDecision } from '@/daemon/automation/workflowFeatureGate';
 import { listCurrentAccountAdministrationMachines, listCurrentAccountMachines, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { isMachineRequestReachabilityFailureV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 import { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCustody';
@@ -298,6 +300,7 @@ import { getSessionEvents } from '@/session/services/getSessionEvents';
 import { getSessionTranscript } from '@/session/services/getSessionTranscript';
 import { buildCliSessionAwarenessInputV1 } from '@/cli/output/session/sessionAwareness';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { getSessionStatus } from '@/session/services/getSessionStatus';
 import { createSessionBoardActionDeps } from '@/session/board/sessionBoardActionDeps';
 import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
@@ -489,7 +492,8 @@ import type {
   RevalidatePluginActionCallerMaterialization,
 } from '@/plugins/runtime/invocation/services/actionCaller';
 import { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
-import { createCliScmReviewedMarkAction, clearCliScmReviewedMarks } from '@/scm/actions/executeScmReviewedMarkAction';
+import { sendFileReviewNoteToSession } from '@/session/services/sendFileReviewNote';
+import { createCliScmReviewedMarkAction } from '@/scm/actions/executeScmReviewedMarkAction';
 import { executeScmDiffSummaryAction } from '@/scm/actions/executeScmDiffSummaryAction';
 import { createRepositoryCheckpointTranscriptPageReader } from '@/scm/checkpoints/readRepositoryCheckpointTranscriptPage';
 import type { ReadPullRequestComparisonPage } from '@/scm/comparisons/readPullRequestComparisonPage';
@@ -523,7 +527,7 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { resolveWorkspaceRefById } from '@/workspaces/workspaceRefsV1';
 import { projectWorkspaceRefV1, resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
-import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { isServerFeaturesProbeRetryable, type CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { createCliAcpCatalogStore } from '@/agent/acp/catalog/acpCatalogStore';
 
 /**
@@ -1735,6 +1739,7 @@ export function createCliActionDeps(params: Readonly<{
     authorization?: ActionExecutorContext['rpcSessionAuthorization'];
     signal?: AbortSignal;
     timeoutMs?: number | null;
+    waitForResultOnCancel?: boolean;
     requestId?: string;
     reattachOnReconnect?: Parameters<typeof callMachineRpc>[0]['reattachOnReconnect'];
     exactMachine?: true;
@@ -1815,6 +1820,7 @@ export function createCliActionDeps(params: Readonly<{
       ...executionRunAuthorityCeiling(input),
       ...(input.signal ? { signal: input.signal } : {}),
       ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+      ...(input.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
     });
   };
 
@@ -2089,6 +2095,8 @@ export function createCliActionDeps(params: Readonly<{
       }),
       resolveAccountEncryptionMaterial: async () => createAutomationAccountEncryptionMaterialSnapshotV1(params.credentials!),
     });
+    if (resolved.kind === 'unavailable' && 'cause' in resolved
+      && classifyServerEndpointError(resolved.cause).retryable) throw resolved.cause;
     if (resolved.kind !== 'available') throw Object.assign(new Error('content_unavailable'), { code: 'content_unavailable' });
     return resolved;
   };
@@ -2101,11 +2109,12 @@ export function createCliActionDeps(params: Readonly<{
       const execute = createWorkflowActionExecutor({
         onFailureDiagnostic: diagnostic => logger.infoFile(JSON.stringify(diagnostic)),
         isWorkflowFeatureEnabled: async () => {
-          try {
-            return isWorkflowRuntimeEnabled(process.env, await readServerFeaturesSnapshot());
-          } catch {
-            return false;
+          const snapshot = await readServerFeaturesSnapshot();
+          const decision = getWorkflowRuntimeFeatureDecision(process.env, snapshot);
+          if (decision.state === 'unknown' && (!snapshot || isServerFeaturesProbeRetryable(snapshot))) {
+            throw Object.assign(new Error('storage_unavailable'), { code: 'storage_unavailable' });
           }
+          return decision.state === 'enabled';
         },
         resolveIngressContext: async (args) => await resolveWorkflowIngressContext(args.context),
         resolveTargetValidation: async (args) => {
@@ -3138,15 +3147,9 @@ export function createCliActionDeps(params: Readonly<{
     const localReviewContext = { ...context, serverId: configuration.activeServerId };
     const requesterAccountId = context.externalActionCredential?.accountId ?? context.runtimeAccountId;
     const accountMarksDeps = params.credentials ? {
-      executeReviewedMarks: (comparison: import('@happier-dev/protocol').ScmComparison, request: import('@happier-dev/protocol').ScmReviewedMarkInput, reviewed: boolean) => createCliScmReviewedMarkAction({
-        credentials: params.credentials!, comparison, changeRefs: request.changeRefs, reviewed,
-        ...(requesterAccountId ? { requesterAccountId } : {}),
-        ...(params.serverHttpBaseUrl ? { serverBaseUrl: params.serverHttpBaseUrl } : {}),
-        resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, actionId, request),
-        ...(context.signal ? { signal: context.signal } : {}),
-      }),
-      clearReviewedMarks: (comparison: import('@happier-dev/protocol').ScmComparison) => clearCliScmReviewedMarks({
-        credentials: params.credentials!, comparison,
+      executeReviewedMarks: (evidence: import('@happier-dev/protocol').ScmComparison | import('@happier-dev/protocol').ScmReviewedMarksSource, request: import('@happier-dev/protocol').ScmReviewedMarkInput, reviewed: boolean) => createCliScmReviewedMarkAction({
+        credentials: params.credentials!, ...('id' in evidence ? { comparison: evidence } : { source: evidence }),
+        ...('changeKeys' in request ? { changeKeys: request.changeKeys } : { changeRefs: request.changeRefs }), reviewed,
         ...(requesterAccountId ? { requesterAccountId } : {}),
         ...(params.serverHttpBaseUrl ? { serverBaseUrl: params.serverHttpBaseUrl } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, actionId, request),
@@ -3174,6 +3177,10 @@ export function createCliActionDeps(params: Readonly<{
     const inputRecord = input && typeof input === 'object' && !Array.isArray(input)
       ? input as Readonly<Record<string, unknown>>
       : {};
+    const reviewNoteCredentials = params.credentials;
+    const emitFileReviewNote: Parameters<typeof executeScmActionOperation>[0]['emitFileReviewNote'] = reviewNoteCredentials
+      ? async ({ sessionId, ...note }) => await sendFileReviewNoteToSession({ credentials: reviewNoteCredentials, sessionId, note })
+      : undefined;
     const resolveScmBackendTarget = (metadata: Record<string, unknown> | null) => {
       const selector = inputRecord.modelSelector;
       const selectorRecord = selector && typeof selector === 'object' && !Array.isArray(selector)
@@ -3240,6 +3247,7 @@ export function createCliActionDeps(params: Readonly<{
         if (currentMachine.machineId === machineId) {
           if (!await localReviewHomeCurrent()) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
           return executeScmActionOperation({ actionId, input: inputRecord, workingDirectory: cwd ?? process.cwd(),
+            emitFileReviewNote,
             accessPolicy: params.scmFilesystemAccessPolicy ?? resolveFilesystemAccessPolicy(),
             ...(readComparisonTranscriptPage ? { readComparisonTranscriptPage } : {}), readPullRequestComparisonPage,
             authorizeSession: authorizeReviewSession,
@@ -3308,6 +3316,7 @@ export function createCliActionDeps(params: Readonly<{
         actionId,
         input: inputRecord,
         workingDirectory: selectedRoot,
+        emitFileReviewNote,
         accessPolicy: { kind: 'restrictedRoots', roots: [selectedRoot] },
         ...(context.signal ? { signal: context.signal } : {}),
       });
@@ -3381,6 +3390,7 @@ export function createCliActionDeps(params: Readonly<{
     }
 
     return await attachSuccessfulPullRequest(await executeScmActionOperation({
+      emitFileReviewNote,
       actionId,
       input: sessionBoundInput,
       workingDirectory,
@@ -3913,6 +3923,11 @@ export function createCliActionDeps(params: Readonly<{
       }
       return entries;
     } },
+    ...(roleArtifactStore && homeAccountId ? { appShellAction: createCliInboxReadAction({
+      store: { list: options => withProjectHome(() => roleArtifactStore.list(options)) },
+      accountId: homeAccountId, serverId: todoHomeServerId,
+      isCurrent: async () => !await projectHomeAdmission() && (!params.isCredentialCurrent || await params.isCredentialCurrent()),
+    }) } : {}),
     artifactAction: async (args) => {
       if (!roleArtifactStore) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       const execute = createCliArtifactActions({ store: roleArtifactStore, onPublicLinkIssued: params.onPublicLinkIssued,
@@ -6863,6 +6878,24 @@ export function createCliActionDeps(params: Readonly<{
       return isRpcMethodNotFoundResult(result) && !('success' in result)
         ? { ok: false, errorCode: result.errorCode ?? RPC_ERROR_CODES.METHOD_NOT_FOUND, error: result.error }
         : result;
+    },
+    workspaceFilesReplacePreview: async ({ machineId, ...request }, context) => {
+      if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      const invoke = async () => DaemonWorkspaceFileReplacePreviewResponseSchema.parse(await callMachineAction({
+        machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW, request,
+        ...(context.signal ? { signal: context.signal } : {}),
+      }));
+      return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());
+    },
+    workspaceFilesReplace: async ({ machineId, rootPath, files, ...matcher }, context) => {
+      if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      const invoke = async () => DaemonWorkspaceFileReplaceApplyResponseSchema.parse(await callMachineAction({
+        machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY,
+        request: { rootPath, operation: { kind: 'replace', matcher, files } }, context, effectActionId: 'workspace.files.replace',
+        waitForResultOnCancel: true,
+        ...(context.signal ? { signal: context.signal } : {}),
+      }));
+      return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());
     },
     workspaceFilesSearch: async ({ machineId, ...request }, context) => {
       if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) {

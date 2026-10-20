@@ -5,8 +5,36 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { resetMmkvStoresForTests } from '@/dev/reactNativeMmkvStub';
+import { buildGuardStopWarningPushDataV1 } from '@happier-dev/protocol/activity/webhookPayload';
+import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol/push/pushNotificationActions';
+import { parseNotificationTap } from '@/activity/notifications/notificationRouting';
+import { createMachineGuardViewFixture } from '@/sync/domains/machines/guard/guardViewFixtures';
+import * as React from 'react';
+import { createDeferred, renderScreen, flushHookEffects } from '@/dev/testkit';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
+const nativeNotifications = vi.hoisted(() => ({ listener: null as ((response: unknown) => void) | null,
+    received: new Set<() => void>(),
+    onDismiss: undefined as (() => void) | undefined,
+    presented: [] as import('expo-notifications').Notification[], dismissed: [] as string[] }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'ios' } }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+// Only the OS notification delivery is replaced; parsing, routing and Action admission stay real.
+vi.mock('@/utils/platform/loadExpoNotifications', () => ({ loadExpoNotifications: async () => ({
+    DEFAULT_ACTION_IDENTIFIER: 'default', getLastNotificationResponseAsync: async () => null,
+    getPresentedNotificationsAsync: async () => nativeNotifications.presented,
+    dismissNotificationAsync: async (id: string) => { nativeNotifications.dismissed.push(id);
+        nativeNotifications.presented = nativeNotifications.presented.filter(notice => notice.request.identifier !== id);
+        nativeNotifications.onDismiss?.(); },
+    addNotificationReceivedListener: (listener: () => void) => {
+        nativeNotifications.received.add(listener);
+        return { remove: () => { nativeNotifications.received.delete(listener); } };
+    },
+    addNotificationResponseReceivedListener: (listener: (response: unknown) => void) => {
+        nativeNotifications.listener = listener;
+        return { remove: () => { if (nativeNotifications.listener === listener) nativeNotifications.listener = null; } };
+    },
+}) }));
 // These transport cases start after the present user accepts the shared confirmation.
 vi.mock('@/modal', async () =>
     (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
@@ -24,6 +52,8 @@ const { keepMachineGuardWorkRunningViaAction, undoMachineGuardActivityViaAction 
 const { fetchMachineVitalsViaMachineRpc, fetchMachineVitalsHistoryViaMachineRpc, watchMachineVitalsViaMachineRpc } = await import('@/sync/domains/machines/resources/machineRpc');
 const { fetchMachineProcessesViaMachineRpc, watchMachineProcessesViaMachineRpc } = await import('@/sync/domains/machines/processes/machineProcessesRpc');
 const { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes');
+const { executeGuardStopWarningAction, reconcileGuardStopWarningNotifications } = await import('@/activity/notifications/guardStopWarningLifecycle');
+const { machineGuardStore } = await import('@/sync/domains/machines/guard/machineGuardStore');
 const { storage } = await import('@/sync/domains/state/storage');
 const initialStorage = storage.getState();
 let serverId: string;
@@ -35,6 +65,7 @@ beforeEach(async () => {
     resetMmkvStoresForTests();
     storage.setState(initialStorage, true);
     await loadSyncSingletonForTests(); rpc.machine.mockReset();
+    machineGuardStore.reset(); nativeNotifications.presented = []; nativeNotifications.dismissed = []; nativeNotifications.onDismiss = undefined;
     savedHomeId = await homes.addHome({ name: 'Process Home', serverUrl: 'https://process-actions.test', serverIdentityId: 'srv_process_actions', accountId: 'owner', currentAccount: true });
     // Harness mutations use their saved registration handle; Actions retain the advertised Home scope.
     serverId = 'srv_process_actions';
@@ -44,9 +75,132 @@ afterEach(async () => {
     await homes.reset();
     storage.setState(initialStorage, true);
     resetMmkvStoresForTests();
+    machineGuardStore.reset();
 });
 const kill = { machineId: 'm', tree: true, targets: [{ ref: 'r', expect: { level: 'proven' as const, owner: { kind: 'session' as const, sessionId: 's' } } }] };
 describe('machine process Actions through the captured UI Home', () => {
+    it('retains a newly delivered warning when an already-demanded Guard view still has stale absence', async () => {
+        const watching = createDeferred<void>();
+        const freshRead = createDeferred<void>();
+        const withdrawn = createDeferred<void>();
+        nativeNotifications.onDismiss = () => { withdrawn.resolve(); };
+        const parked = createDeferred<unknown>();
+        let read = false;
+        let current = createMachineGuardViewFixture({ idleTerminals: [] });
+        rpc.machine.mockImplementation(async ({ method }: { method: string }) => {
+            if (method === RPC_METHODS.MACHINES_GUARD_GET) { if (read) freshRead.resolve(); read = true; return current; }
+            if (method === RPC_METHODS.DAEMON_GUARD_WATCH) { watching.resolve(); return parked.promise; }
+            throw new Error(`Unexpected Guard operation ${method}`);
+        });
+        const { resolveNotificationSavedHome } = await import('@/activity/notifications/resolveNotificationSavedHome');
+        const home = resolveNotificationSavedHome({ serverId: undefined, serverUrl: 'https://process-actions.test' });
+        expect(home).not.toBeNull();
+        const { resolveMachineDaemonReadServerId } = await import('@/sync/domains/machines/useMachineDaemonReadTarget');
+        const key = { serverId: resolveMachineDaemonReadServerId(home!.id), expectedAccountId: 'owner', machineId: 'm' };
+        const release = machineGuardStore.demandView(key);
+        await watching.promise;
+        expect(machineGuardStore.getView(key)).toMatchObject({ status: 'ready', pending: false, view: { idleTerminals: [] } });
+        const { ActivityLocalNotificationRuntime } = await import('@/activity/notifications/runtime/ActivityLocalNotificationRuntime');
+        const screen = await renderScreen(React.createElement(ActivityLocalNotificationRuntime));
+        try {
+            await flushHookEffects({ cycles: 20 });
+            expect(nativeNotifications.received.size).toBeGreaterThan(0);
+            current = createMachineGuardViewFixture({ idleTerminals: [{ terminalId: 'terminal', terminalKey: 'key', label: 'Shell', idleMs: 0,
+                eligible: true, commandRunning: true, status: 'stops_at', stopAt: 300_000, reasons: [] }] });
+            const data = { ...buildGuardStopWarningPushDataV1({ topic: 'guard_stop_warning', machineId: 'm', terminalId: 'terminal',
+                terminalKey: 'key', rule: 'idle_terminals', stopAt: 300_000 }), serverUrl: 'https://process-actions.test' };
+            nativeNotifications.presented = [{ date: 1, request: { identifier: 'new-terminal-os-id', trigger: null,
+                content: { title: null, subtitle: null, body: null, data, sound: null, categoryIdentifier: null } } }];
+            for (const listener of nativeNotifications.received) listener();
+            // Await the actual boundary outcome, not a guessed number of async Account-admission turns.
+            await Promise.race([freshRead.promise, withdrawn.promise]);
+            await flushHookEffects({ cycles: 20 });
+            expect(nativeNotifications.dismissed).toEqual([]);
+            await vi.waitFor(() => {
+                expect(machineGuardStore.getView(key)).toMatchObject({ pending: false, view: { idleTerminals: current.idleTerminals } });
+            });
+        } finally { await screen.unmount(); release(); }
+    });
+    it('withdraws a delivered terminal warning when another device clears it while the app stays active', async () => {
+        const data = { ...buildGuardStopWarningPushDataV1({ topic: 'guard_stop_warning', machineId: 'm', terminalId: 'terminal',
+            terminalKey: 'key', rule: 'idle_terminals', stopAt: 300_000 }), serverUrl: 'https://process-actions.test' };
+        nativeNotifications.presented = [{ date: 1, request: { identifier: 'terminal-os-id', trigger: null,
+            content: { title: null, subtitle: null, body: null, data, sound: null, categoryIdentifier: null } } }];
+        const read = createDeferred<void>();
+        const change = createDeferred<unknown>();
+        const withdrawn = createDeferred<void>();
+        nativeNotifications.onDismiss = () => { withdrawn.resolve(); };
+        const parked = createDeferred<unknown>();
+        let watched = false;
+        const current = createMachineGuardViewFixture({ idleTerminals: [{ terminalId: 'terminal', terminalKey: 'key', label: 'Shell', idleMs: 0,
+            eligible: true, commandRunning: true, status: 'stops_at', stopAt: 300_000, reasons: [] }] });
+        rpc.machine.mockImplementation(async ({ method }: { method: string }) => {
+            if (method === RPC_METHODS.MACHINES_GUARD_GET) { read.resolve(); return current; }
+            if (method === RPC_METHODS.DAEMON_GUARD_WATCH) {
+                if (watched) return parked.promise;
+                watched = true;
+                return change.promise;
+            }
+            throw new Error(`Unexpected Guard operation ${method}`);
+        });
+        const { ActivityLocalNotificationRuntime } = await import('@/activity/notifications/runtime/ActivityLocalNotificationRuntime');
+        const screen = await renderScreen(React.createElement(ActivityLocalNotificationRuntime));
+        try {
+            await read.promise; await flushHookEffects();
+            expect(rpc.machine.mock.calls.map(call => call[0].method)).toContain(RPC_METHODS.DAEMON_GUARD_WATCH);
+            current.idleTerminals = [];
+            change.resolve({ changed: true, since: 2, view: current });
+            await withdrawn.promise;
+            expect(nativeNotifications.dismissed).toEqual(['terminal-os-id']);
+        } finally { await screen.unmount(); }
+    });
+    it('dispatches a real Guard push through the notification parser and canonical Action executor', async () => {
+        let stopAt: number | undefined = 300_000;
+        const dispatched = createDeferred<void>();
+        rpc.machine.mockImplementation(async ({ method }: { method: string }) => {
+            if (method === RPC_METHODS.MACHINES_GUARD_GET) return createMachineGuardViewFixture({ idle: stopAt === undefined ? [] : [{ sessionRef: 's', title: 'Session', agentId: 'codex',
+                status: 'stops_at', stopAt, idleMs: 0 }] });
+            dispatched.resolve(); return { status: 'kept' };
+        });
+        const data = { ...buildGuardStopWarningPushDataV1({ topic: 'guard_stop_warning', machineId: 'm',
+            sessionId: 's', rule: 'idle_sessions', stopAt: 300_000 }), serverUrl: 'https://process-actions.test' };
+        const response = {
+            actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.guardKeepRunningV1,
+            notification: { request: { identifier: data.notificationId, content: { data } } },
+        };
+        const parsed = parseNotificationTap({ defaultActionIdentifier: 'default', response });
+        expect(parsed?.command.kind).toBe('executeAction');
+        if (parsed?.command.kind !== 'executeAction') return;
+        const command = parsed.command;
+        const { useNotificationResponseRouting } = await import('@/activity/notifications/runtime/useNotificationResponseRouting');
+        function Probe() { useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} }); return null; }
+        const screen = await renderScreen(React.createElement(Probe));
+        await flushHookEffects();
+        expect(nativeNotifications.listener).not.toBeNull();
+        nativeNotifications.listener?.(response);
+        await dispatched.promise;
+        await flushHookEffects();
+        await screen.unmount();
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId,
+            accountId: 'owner', machineId: 'm', payload: expect.objectContaining({ sessionId: 's' }) }));
+        rpc.machine.mockClear(); stopAt = 400_000;
+        expect(await executeGuardStopWarningAction(command)).toBeNull();
+        expect(rpc.machine.mock.calls.map(call => call[0].method)).toEqual([RPC_METHODS.MACHINES_GUARD_GET]);
+        const dismissNotificationAsync = vi.fn(async () => {});
+        const notifications = { dismissNotificationAsync, getPresentedNotificationsAsync: async () => [{ date: 1, request: {
+            identifier: 'os-delivered-id', trigger: null,
+            content: { title: null, subtitle: null, body: null, data, sound: null, categoryIdentifier: null },
+        } }] };
+        // Replacing a deadline withdraws only the superseded delivered occurrence.
+        await reconcileGuardStopWarningNotifications({ notifications });
+        expect(dismissNotificationAsync.mock.calls).toEqual([['os-delivered-id']]);
+        dismissNotificationAsync.mockClear(); stopAt = 300_000;
+        await reconcileGuardStopWarningNotifications({ notifications });
+        expect(dismissNotificationAsync).not.toHaveBeenCalled();
+        stopAt = undefined;
+        await reconcileGuardStopWarningNotifications({ notifications });
+        expect(dismissNotificationAsync.mock.calls).toEqual([['os-delivered-id']]);
+    });
     it.each(['machines.processes.stop', 'machines.processes.kill', 'machines.processes.leftBehind.cleanUp'] as const)
     ('preserves the delayed %s receipt after cancellation and Account retirement', async actionId => {
         const controller = new AbortController();

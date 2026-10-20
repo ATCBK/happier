@@ -41,7 +41,7 @@ function isRequiredIssue(issue: ValidationIssue): boolean {
 }
 
 export function resolveActionInputValidationError(args: Readonly<{
-    sessionId: string;
+    sessionId: string | null;
     input: Record<string, unknown>;
     spec: ActionSpec;
     fields: readonly ActionInputFieldHint[];
