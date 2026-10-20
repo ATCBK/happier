@@ -42,11 +42,15 @@ export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex
                 requested?.startsWith('bytes:') ? deps.index.readNode(requested)?.volumeId === value.id : requested !== undefined && (canonicalAbsolutePathsEqual(value.mountPath, requested) || isCanonicalAbsolutePathInsideRoot(value.mountPath, requested, { platform: process.platform })));
             if (!volume) throw Object.assign(new Error('Volume unavailable'), { code: 'volume_unavailable' });
             const root = requested ?? volume.mountPath;
+            // A folder has no known total on its first walk. Zero preserves an
+            // honest unknown estimate; volume usage is meaningful only for a
+            // whole-volume target, never as the denominator of a folder scan.
+            const usedBytes = 'volumeId' in input.target ? volume.usedBytes : 0;
             if (disposed) throw Object.assign(new Error('Scan runner closed'), { code: 'closed' });
             if (input.resume && deps.index.root(volume.id) !== root) throw Object.assign(new Error('Resume target changed'), { code: 'invalid_resume_target' });
             await options.beforeEffect?.();
             if (!await deps.readEnabled()) throw Object.assign(new Error('Whole-disk scan disabled'), { code: 'disabled' });
-            const state = deps.index.begin({ ...input, relistOnly: options.relistOnly, volumeId: volume.id, root, usedBytes: volume.usedBytes,
+            const state = deps.index.begin({ ...input, relistOnly: options.relistOnly, volumeId: volume.id, root, usedBytes,
                 reservedBytes: volume.reservedBytes, apfsContainerId: volume.apfsContainerId, fullDiskAccess: deps.fullDiskAccess() });
             const run: { native?: NativeDiskScan; done: Promise<void>; volumeId: string; cancelled: boolean; skipped: Set<string> } =
                 { done: Promise.resolve(), volumeId: volume.id, cancelled: false, skipped: new Set(input.resume ? deps.index.skippedPaths(volume.id) : []) };
@@ -62,7 +66,7 @@ export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex
                         await options.beforeEffect?.();
                         if (!await deps.readEnabled()) throw Object.assign(new Error('Whole-disk scan disabled'), { code: 'disabled' });
                         if (run.cancelled || disposed) throw Object.assign(new Error('Scan cancelled'), { name: 'AbortError' });
-                        run.native = startNativeDiskScan({ ...scanHints, root, relistOnly: options.relistOnly, drawableNodes: STORAGE_CHART_MAX_DRAWABLE_NODES, keepMinBytes: 0, lowPower, usedBytes: volume.usedBytes,
+                        run.native = startNativeDiskScan({ ...scanHints, root, relistOnly: options.relistOnly, drawableNodes: STORAGE_CHART_MAX_DRAWABLE_NODES, keepMinBytes: 0, lowPower, usedBytes,
                             ...(prior ? { previousIndexPath: prior.path } : {}), ...(resume ? { resumeFrom: [], skippedPaths: [...run.skipped] } : {}) },
                             { onRecord: record => { deps.index.ingest(volume.id, record); deps.onChange?.(); },
                                 onRecordBatch: consume => deps.index.withIngestBatch(volume.id, consume) });

@@ -73,7 +73,7 @@ export const STORAGE_RECOGNIZERS: readonly RecognitionRule[] = [
   { id: 'python-project-cache', names: ['__pycache__', '.pytest_cache', '.tox'], manifests: pythonManifests, unusedRepository: true, verdict: 'safe', code: 'rebuilds' },
   { id: 'turbo-cache', names: ['.turbo'], manifests: ['package.json'], unusedRepository: true, verdict: 'safe', code: 'rebuilds' },
   { id: 'project-compiler-cache', names: ['.ccache'], manifests: projectManifests, unusedRepository: true, verdict: 'safe', code: 'rebuilds' },
-  { id: 'npm-cache', paths: homePaths('.npm/_cacache'), verdict: 'safe', code: 'reinstalls' },
+  { id: 'npm-cache', paths: facts => [join(facts.protection.homeDir, '.npm/_cacache'), join(localAppData(facts), 'npm-cache/_cacache')], verdict: 'safe', code: 'reinstalls' },
   { id: 'pnpm-store', paths: facts => [join(facts.protection.homeDir, '.local/share/pnpm/store'), join(facts.protection.homeDir, 'Library/pnpm/store'), join(localAppData(facts), 'pnpm/store')], verdict: 'safe', code: 'reinstalls' },
   { id: 'yarn-cache', paths: facts => [join(cacheBase(facts), 'yarn'), join(facts.protection.homeDir, 'Library/Caches/Yarn'), join(localAppData(facts), 'Yarn/Cache')], verdict: 'safe', code: 'reinstalls' },
   { id: 'python-download-cache', paths: facts => ['uv', 'pip'].flatMap(name => [join(cacheBase(facts), name), join(facts.protection.homeDir, 'Library/Caches', name), join(localAppData(facts), name, 'Cache')]), verdict: 'safe', code: 'reinstalls' },

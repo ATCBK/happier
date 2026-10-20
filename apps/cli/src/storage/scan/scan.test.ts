@@ -27,6 +27,39 @@ describe('resident streamed disk index', () => {
         disposeNative = await createProcessCustodyFixture();
     });
     afterAll(async () => { await disposeNative?.(); if (scratch) await rm(scratch, { recursive: true, force: true }); });
+    it('clears recovered stuck and current-path facts from the next native progress snapshot', async () => {
+        const root = join(scratch, 'progress-root');
+        const index = createStorageScanIndex({ activeServerDir: join(scratch, 'progress-state') });
+        await index.initialize([], true);
+        const state = index.begin({ volumeId: 'progress', root, target: { folderPath: root }, usedBytes: 0,
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
+        try {
+            index.ingest('progress', { v: 1, type: 'progress', sizedBytes: 0, items: 1, currentPath: root, stuckSinceMs: 1000 });
+            expect(index.state(state.scanId)?.progress.stuckSinceMs).toBe(1000);
+            index.ingest('progress', { v: 1, type: 'progress', sizedBytes: 4096, items: 2, currentPath: join(root, 'active') });
+            expect(index.state(state.scanId)?.progress).toEqual({ sizedBytes: 4096, usedBytes: 0, items: 2, currentPath: join(root, 'active') });
+            index.ingest('progress', { v: 1, type: 'progress', sizedBytes: 8192, items: 3 });
+            expect(index.state(state.scanId)?.progress).toEqual({ sizedBytes: 8192, usedBytes: 0, items: 3 });
+        } finally { index.close(); }
+    });
+    it('keeps folder estimates unknown and whole-volume progress relative to volume usage', async () => {
+        const volume = join(scratch, 'progress-volume'); const folder = join(volume, 'folder');
+        await mkdir(folder, { recursive: true }); await writeFile(join(folder, 'data'), Buffer.alloc(8192));
+        const index = createStorageScanIndex({ activeServerDir: join(scratch, 'progress-volume-state') });
+        const runner = createStorageScanRunner({ index, readVolumes: () => [{ id: 'progress-volume', mountPath: volume, usedBytes: 2_000_000 }],
+            readEnabled: () => true, fullDiskAccess: () => ({ state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } }) });
+        try {
+            await runner.initialize();
+            const folderScan = await runner.start({ target: { folderPath: folder } });
+            expect(folderScan.progress.usedBytes).toBe(0);
+            await runner.wait(folderScan.scanId);
+            expect(MachineStorageScanGetResultV1Schema.parse(await runner.get()).state?.progress.usedBytes).toBe(0);
+            const volumeScan = await runner.start({ target: { volumeId: 'progress-volume' } });
+            expect(volumeScan.progress.usedBytes).toBe(2_000_000);
+            await runner.wait(volumeScan.scanId);
+            expect(MachineStorageScanGetResultV1Schema.parse(await runner.get()).state?.progress.usedBytes).toBe(2_000_000);
+        } finally { await runner.dispose(); }
+    });
     it.each(['open', 'close'] as const)('removes prior-projection scratch and ownership after a filesystem %s failure', async phase => {
         const root = join(scratch, `projection-${phase}`); const volumeId = `projection-${phase}`;
         const index = createStorageScanIndex({ activeServerDir: join(scratch, `projection-${phase}-state`) });

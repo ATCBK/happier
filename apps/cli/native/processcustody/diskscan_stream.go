@@ -34,7 +34,30 @@ type diskStreamDirectory struct {
 	pending                    int
 	enumerationDone, published bool
 	enumerationError           bool
+	lastActivity               time.Time
 }
+
+var diskScanNow = time.Now
+
+// Approved scan presentation: only name stalled work after ten seconds with
+// no completed metadata batch. This is an observation threshold, not a timeout.
+const diskScanStuckAfter = 10 * time.Second
+
+func diskStreamProgress(now time.Time, summary diskSummary, inFlight map[string]*diskStreamDirectory) diskProgress {
+	path := ""
+	var oldest time.Time
+	for candidate, directory := range inFlight {
+		if path == "" || directory.lastActivity.Before(oldest) || directory.lastActivity.Equal(oldest) && candidate < path {
+			path, oldest = candidate, directory.lastActivity
+		}
+	}
+	progress := diskProgress{V: 1, Type: "progress", SizedBytes: summary.AllocatedBytes, Items: summary.Items, CurrentPath: diskPathID(path)}
+	if path != "" && now.Sub(oldest) >= diskScanStuckAfter {
+		progress.StuckSinceMs = oldest.UnixMilli()
+	}
+	return progress
+}
+
 type diskStreamBatch struct {
 	directory *diskStreamDirectory
 	entries   []diskEntry
@@ -554,7 +577,7 @@ func diskScanStream(ctx context.Context, control *diskControl, request diskScanR
 		}
 		return nil
 	}
-	lastCompleted, lastProgress := time.Now(), time.Time{}
+	lastProgress := time.Time{}
 	heartbeat := time.NewTicker(100 * time.Millisecond)
 	defer heartbeat.Stop()
 	pendingPaths, err := diskNewPathSpool(request.ScratchDirectory, "pending-paths")
@@ -640,6 +663,7 @@ walk:
 		}
 		select {
 		case ready <- waiting:
+			waiting.lastActivity = diskScanNow()
 			inFlight[waiting.record.rawPath] = waiting
 			waiting = nil
 		case <-ctx.Done():
@@ -654,23 +678,17 @@ walk:
 			break walk
 		case <-heartbeat.C:
 			if time.Since(lastProgress) >= 100*time.Millisecond {
-				path := ""
-				for candidate := range inFlight {
-					if path == "" || candidate < path {
-						path = candidate
-					}
-				}
-				if err := emit(diskProgress{V: 1, Type: "progress", SizedBytes: summary.AllocatedBytes, Items: summary.Items, CurrentPath: diskPathID(path), StuckSinceMs: lastCompleted.UnixMilli()}); err != nil {
+				if err := emit(diskStreamProgress(diskScanNow(), summary, inFlight)); err != nil {
 					return err
 				}
 				lastProgress = time.Now()
 			}
 		case batch := <-batches:
 			directory := batch.directory
+			directory.lastActivity = diskScanNow()
 			record := &directory.record
 			if batch.done {
 				delete(inFlight, record.rawPath)
-				lastCompleted = time.Now()
 				directory.enumerationDone = true
 				if control.skips(record.rawPath) {
 					summary.Skipped = append(summary.Skipped, diskIssue{record.rawPath, "user"})

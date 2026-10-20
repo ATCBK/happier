@@ -130,6 +130,23 @@ describe('verified storage recognizers', () => {
     const docker = join(home, '.cache', 'docker'); await mkdir(docker);
     expect(await recognizeStorageCandidate({ path: docker, size }, facts)).toBeNull();
   });
+  it('recognizes only the content cache under relocated Windows npm data', async () => {
+    const home = await fixture(); const local = join(home, 'relocated-local');
+    const npmRoot = join(local, 'npm-cache'); const cache = join(npmRoot, '_cacache');
+    const installed = join(local, 'npm', 'node_modules'); const other = join(npmRoot, 'user-data');
+    for (const path of [cache, installed, other]) {
+      await mkdir(path, { recursive: true }); await writeFile(join(path, 'data'), 'bytes');
+    }
+    const facts: StorageRecognitionFacts = { protection: { homeDir: home, env: { ...process.env, LOCALAPPDATA: local } },
+      now: Date.now(), suggestUnusedAfterDays: 30 };
+    expect(await recognizeStorageCandidate({ path: cache, size }, facts)).toMatchObject({
+      recognizerId: 'npm-cache', verdict: 'safe', evidence: ['verified_cache_location'],
+    });
+    for (const path of [npmRoot, installed, other]) expect(await recognizeStorageCandidate({ path, size }, facts), path).toBeNull();
+    const hints = await readStorageScanHints({ root: home, facts, repositoryRoots: [] });
+    expect(hints.priorityHints).toContain(cache);
+    expect(hints.priorityHints).not.toContain(npmRoot);
+  });
   it('requires a verified browser profile and keeps credentials while rebuilding only caches', async () => {
     const home = await fixture(); const profile = join(home, 'browser', 'Default'); await mkdir(profile, { recursive: true }); await writeFile(join(profile, 'Preferences'), '{}');
     const facts = { protection: { homeDir: home }, now: Date.now(), suggestUnusedAfterDays: 30 };

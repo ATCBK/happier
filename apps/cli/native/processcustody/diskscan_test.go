@@ -52,6 +52,107 @@ func TestDiskCommandProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+// A cancellable OS enumeration lets the real stream observe healthy work,
+// elapsed inactivity and recovery without leaving a test worker alive.
+type diskProgressBatchDirectory struct {
+	diskDirectory
+	release <-chan struct{}
+}
+
+func (dir diskProgressBatchDirectory) entryBatches(ctx context.Context, visit func([]diskEntry) error) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "fixture", ctx.Err()
+	case <-dir.release:
+	}
+	entries, backend, err := dir.diskDirectory.entries(ctx)
+	if err != nil {
+		return backend, err
+	}
+	if err := visit(entries); err != nil {
+		return backend, err
+	}
+	<-ctx.Done()
+	return backend, ctx.Err()
+}
+
+func TestDiskScanProgressClearsStallOnCompletedMetadataBatch(t *testing.T) {
+	root := storageRenameTestRoot(t)
+	if err := os.WriteFile(filepath.Join(root, "ordinary"), []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Unix(1_700_000_000, 0)
+	var clock atomic.Int64
+	clock.Store(start.UnixMilli())
+	originalOpen, originalNow := diskOpenDirectoryForScan, diskScanNow
+	release := make(chan struct{})
+	diskScanNow = func() time.Time { return time.UnixMilli(clock.Load()) }
+	diskOpenDirectoryForScan = func(path string) (diskDirectory, error) {
+		dir, err := diskOpenRoot(path)
+		if err == nil {
+			return diskProgressBatchDirectory{dir, release}, nil
+		}
+		return dir, err
+	}
+	defer func() { diskOpenDirectoryForScan, diskScanNow = originalOpen, originalNow }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stage := 0
+	err := diskScanStream(ctx, &diskControl{skipped: map[string]bool{}, changed: make(chan struct{}, 1)},
+		diskScanRequest{Root: root, ScratchDirectory: storageRenameTestRoot(t)}, func(record any) error {
+			progress, ok := record.(diskProgress)
+			if !ok {
+				return nil
+			}
+			switch stage {
+			case 0:
+				if progress.StuckSinceMs != 0 {
+					t.Errorf("new directory reported stuck: %#v", progress)
+				}
+				clock.Store(start.Add(10 * time.Second).UnixMilli())
+				stage = 1
+			case 1:
+				if progress.CurrentPath != root || progress.StuckSinceMs != start.UnixMilli() {
+					t.Errorf("missing elapsed stall: %#v", progress)
+				}
+				close(release)
+				stage = 2
+			case 2:
+				if progress.Items > 1 {
+					if progress.StuckSinceMs != 0 {
+						t.Errorf("completed metadata failed to clear stall: %#v", progress)
+					}
+					stage = 3
+					cancel()
+				}
+			}
+			return nil
+		})
+	if err != nil || stage != 3 {
+		t.Fatalf("missing stall recovery: stage=%d err=%v", stage, err)
+	}
+}
+
+func TestDiskScanProgressNamesLongestInactiveDirectory(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	older, newer := filepath.Join(string(filepath.Separator), "z-old"), filepath.Join(string(filepath.Separator), "a-new")
+	inFlight := map[string]*diskStreamDirectory{
+		older: {lastActivity: now.Add(-11 * time.Second)},
+		newer: {lastActivity: now.Add(-time.Second)},
+	}
+	progress := diskStreamProgress(now, diskSummary{Items: 5, AllocatedBytes: 4096}, inFlight)
+	if progress.CurrentPath != diskPathID(older) || progress.StuckSinceMs != now.Add(-11*time.Second).UnixMilli() {
+		t.Fatalf("picked lexical path instead of longest inactive directory: %#v", progress)
+	}
+	delete(inFlight, older)
+	if progress := diskStreamProgress(now, diskSummary{}, inFlight); progress.StuckSinceMs != 0 || progress.CurrentPath != diskPathID(newer) {
+		t.Fatalf("completed folder left a stale stall: %#v", progress)
+	}
+	if progress := diskStreamProgress(now, diskSummary{}, nil); progress.CurrentPath != "" || progress.StuckSinceMs != 0 {
+		t.Fatalf("empty frontier reported work: %#v", progress)
+	}
+}
+
 func TestDiskMeasureLargeUnsharedTreeCost(t *testing.T) {
 	if os.Getenv("HAPPIER_DISK_MEASURE_QA_COST") == "" || runtime.GOOS != "linux" {
 		t.Skip("opt-in Linux helper RSS measurement")
@@ -186,7 +287,9 @@ func TestDiskScanOwnerBlockedSkipRetiresHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoder := json.NewEncoder(input)
-	if err := encoder.Encode(diskScanRequest{Root: root, ScratchDirectory: storageRenameTestRoot(t)}); err != nil {
+	// Two workers intentionally block. Start the selected Skip target first so
+	// the longest-inactive report identifies it independent of worker timing.
+	if err := encoder.Encode(diskScanRequest{Root: root, ScratchDirectory: storageRenameTestRoot(t), PriorityHints: []string{blocked}}); err != nil {
 		t.Fatal(err)
 	}
 	var summary map[string]json.RawMessage
@@ -203,10 +306,7 @@ func TestDiskScanOwnerBlockedSkipRetiresHelper(t *testing.T) {
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 			t.Fatal(err)
 		}
-		if record.Type == "progress" && record.CurrentPath == diskPathID(blocked) && !sentSkip {
-			if completed[finished].AllocatedBytes < 8192 {
-				t.Fatal("finished subtree remained unusable until whole-scan interruption")
-			}
+		if record.Type == "progress" && record.CurrentPath == diskPathID(blocked) && !sentSkip && completed[finished].AllocatedBytes >= 8192 {
 			sentSkip = true
 			if err := encoder.Encode(map[string]string{"type": "skip", "path": diskPathID(blocked)}); err != nil {
 				t.Fatal(err)

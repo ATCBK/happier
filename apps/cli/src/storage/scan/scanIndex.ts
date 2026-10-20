@@ -436,7 +436,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
         withIngestBatch(volumeId: string, consume: () => void): void { transaction(dbFor(volumeId), consume); },
         ingest(volumeId: string, record: NativeDiskScanRecord) {
             const db = dbFor(volumeId); ingestion(db).assertAdmittedState();
-            if (record.type === 'progress') { const state = readState(db)!; state.progress = { ...state.progress, sizedBytes: record.sizedBytes, items: record.items,
+            if (record.type === 'progress') { const state = readState(db)!; state.progress = { usedBytes: state.progress.usedBytes, sizedBytes: record.sizedBytes, items: record.items,
                 ...(record.currentPath ? { currentPath: record.currentPath } : {}), ...(record.stuckSinceMs === undefined ? {} : { stuckSinceMs: record.stuckSinceMs }) };
                 saveMetadata(db, 'state', JSON.stringify(state)); return; }
             if (record.type === 'summary') return;
