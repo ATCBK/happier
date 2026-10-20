@@ -17,6 +17,25 @@ describe('useWorkspaceFileQuery', () => {
     beforeEach(() => { vi.useFakeTimers(); transport.list.mockReset(); });
     afterEach(() => { vi.useRealTimers(); });
 
+    it('pages through every matching file and resets the page on a new query', async () => {
+        transport.list.mockResolvedValue({ ok: true, paths: Array.from({ length: 45 }, (_, index) => `needle-${index}.ts`), truncated: false });
+        const hook = await renderHook((query: string) => useWorkspaceFileQuery({
+            scope: { ...scope, rootPath: '/paged' }, query, mode: 'glob', accountLifetime, pageSize: 20,
+        }), { initialProps: 'needle*' });
+        await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+        expect(hook.getCurrent().items).toHaveLength(20);
+        expect(hook.getCurrent().hasMore).toBe(true);
+        await act(async () => { hook.getCurrent().loadMore(); await vi.advanceTimersByTimeAsync(200); });
+        expect(hook.getCurrent().items).toHaveLength(40);
+        await act(async () => { hook.getCurrent().loadMore(); await vi.advanceTimersByTimeAsync(200); });
+        expect(hook.getCurrent().items).toHaveLength(45);
+        expect(hook.getCurrent().hasMore).toBe(false);
+        await hook.rerender('different*');
+        await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+        expect(hook.getCurrent().items).toHaveLength(20);
+        expect(hook.getCurrent().resultQuery).toBe('different*');
+    });
+
     it('retains rows during refresh, cancels superseded requests and reports failed coverage', async () => {
         transport.list.mockResolvedValueOnce({ ok: true, paths: ['src/first.ts'], truncated: true });
         let finishLate: (value: unknown) => void = () => {};

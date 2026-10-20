@@ -91,6 +91,21 @@ describe('workspaceRepositoryDirectory', () => {
         });
         expect(machineFilesystemListDirectoryMock).toHaveBeenCalledTimes(2);
     });
+
+    it('prunes cached descendants when a refreshed parent no longer contains their directory', async () => {
+        const mod = await import('./workspaceRepositoryDirectory');
+        const { buildWorkspaceCacheKey } = await import('@/sync/domains/workspaces/workspaceScope');
+        const workspaceCacheKey = buildWorkspaceCacheKey(SCOPE_A);
+        mod.setCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey, directoryPath: '', entries: [{ name: 'src', type: 'directory' }] });
+        mod.setCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey, directoryPath: 'src', entries: [{ name: 'old.ts', type: 'file' }] });
+        mod.setCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey, directoryPath: 'src/deep', entries: [{ name: 'stale.ts', type: 'file' }] });
+        mod.setCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey, directoryPath: 'src-other', entries: [{ name: 'keep.ts', type: 'file' }] });
+        machineFilesystemListDirectoryMock.mockResolvedValue({ ok: true, path: '/repo', entries: [] });
+        await mod.listWorkspaceRepositoryDirectoryEntries({ scope: SCOPE_A, directoryPath: '' });
+        expect(mod.getCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey, directoryPath: 'src' })).toBeNull();
+        expect(mod.getCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey, directoryPath: 'src/deep' })).toBeNull();
+        expect(mod.getCachedWorkspaceRepositoryDirectoryEntries({ workspaceCacheKey, directoryPath: 'src-other' })).toEqual([{ name: 'keep.ts', type: 'file' }]);
+    });
 });
 
 

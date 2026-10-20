@@ -86,6 +86,8 @@ export function useLazyDirectoryTree(input: {
     loadDirectoryEntries: (directoryPath: string, signal: AbortSignal) => Promise<LazyDirectoryTreeLoadResult>;
     warmDirectoryEntries?: ((directoryPath: string, signal: AbortSignal) => Promise<LazyDirectoryTreeLoadResult>) | null;
     warmChildDirectoriesLimit?: number;
+    /** Keep settled file mutations queued while a create/rename field owns the tree. */
+    reconciliationPaused?: boolean;
 }) {
     const {
         scopeKey,
@@ -132,6 +134,11 @@ export function useLazyDirectoryTree(input: {
     const [internalExpandedPaths, setInternalExpandedPaths] = React.useState<string[]>([]);
     const [loadingDirectories, setLoadingDirectories] = React.useState<Set<string>>(() => new Set());
     const [directoryErrors, setDirectoryErrors] = React.useState<Map<string, string>>(() => new Map());
+    const [arrivedPaths, setArrivedPaths] = React.useState<ReadonlySet<string>>(() => new Set());
+    const staleDirectoriesRef = React.useRef(new Set<string>());
+    const queuedMutationPathsRef = React.useRef(new Set<string>());
+    const reconciliationPausedRef = React.useRef(input.reconciliationPaused === true || !enabled);
+    reconciliationPausedRef.current = input.reconciliationPaused === true || !enabled;
 
     const normalizedExternalExpandedPaths = React.useMemo(() => {
         if (!useExternalExpanded) return null;
@@ -172,6 +179,9 @@ export function useLazyDirectoryTree(input: {
         setLoadingDirectories(new Set());
         setDirectoryErrors(new Map());
         setRootError(null);
+        setArrivedPaths(new Set());
+        staleDirectoriesRef.current.clear();
+        queuedMutationPathsRef.current.clear();
     }, [getCachedDirectoryMetadata, getCachedEntries, rootDirectoryPath, scopeKey]);
 
     const loadingRef = React.useRef<Set<string>>(new Set());
@@ -206,11 +216,28 @@ export function useLazyDirectoryTree(input: {
 
     const applyDirectoryLoadResult = React.useCallback((directoryPath: string, result: LazyDirectoryTreeLoadResult) => {
         if (result.ok) {
-            setDirectoryEntriesByPath((prev) => {
-                const next = new Map(prev);
-                next.set(directoryPath, result.entries);
-                return next;
-            });
+            staleDirectoriesRef.current.delete(directoryPath);
+            if (directoryPath === rootDirectoryPathRef.current) setRootError(null);
+            const previousEntries = directoryEntriesByPathRef.current.get(directoryPath);
+            const next = new Map(directoryEntriesByPathRef.current);
+            const nextDirectories = new Set(result.entries.filter(entry => entry.type === 'directory').map(entry => entry.path));
+            for (const removed of previousEntries ?? []) {
+                if (removed.type !== 'directory' || nextDirectories.has(removed.path)) continue;
+                for (const cachedPath of next.keys()) {
+                    if (cachedPath === removed.path || cachedPath.startsWith(`${removed.path}/`)) {
+                        next.delete(cachedPath);
+                        staleDirectoriesRef.current.delete(cachedPath);
+                    }
+                }
+            }
+            next.set(directoryPath, result.entries);
+            directoryEntriesByPathRef.current = next;
+            setDirectoryEntriesByPath(next);
+            if (previousEntries) {
+                const previousPaths = new Set(previousEntries.map(entry => entry.path));
+                const additions = result.entries.filter(entry => !previousPaths.has(entry.path)).map(entry => entry.path);
+                if (additions.length) setArrivedPaths(new Set(additions));
+            }
             setDirectoryErrors((prev) => {
                 if (!prev.has(directoryPath)) return prev;
                 const next = new Map(prev);
@@ -226,6 +253,7 @@ export function useLazyDirectoryTree(input: {
         }
 
         const message = typeof result.error === 'string' ? result.error.trim() : '';
+        if (directoryPath === rootDirectoryPathRef.current) setRootError(message || 'unknown_error');
         setDirectoryErrors((prev) => {
             const next = new Map(prev);
             next.set(directoryPath, message || 'unknown_error');
@@ -268,7 +296,8 @@ export function useLazyDirectoryTree(input: {
             }
             return;
         }
-        if (options?.forceReload !== true && (directoryEntriesByPathRef.current.has(clean) || directoryErrorsRef.current.has(clean))) {
+        if (options?.forceReload !== true && !staleDirectoriesRef.current.has(clean)
+            && (directoryEntriesByPathRef.current.has(clean) || directoryErrorsRef.current.has(clean))) {
             return;
         }
 
@@ -276,6 +305,7 @@ export function useLazyDirectoryTree(input: {
         const signal = requestLifetimeRef.current?.signal;
         if (!signal || signal.aborted) return;
         loadingRef.current.add(clean);
+        if (clean === rootDirectoryPath) setRootLoading(true);
         setLoadingDirectories((prev) => {
             const next = new Set(prev);
             next.add(clean);
@@ -295,6 +325,7 @@ export function useLazyDirectoryTree(input: {
             if (!signal.aborted) applyDirectoryLoadResult(clean, { ok: false, error: error instanceof Error ? error.message : 'unknown_error' });
         } finally {
             if (signal.aborted) return;
+            if (clean === rootDirectoryPath) setRootLoading(false);
             loadingRef.current.delete(clean);
             setLoadingDirectories((prev) => {
                 const next = new Set(prev);
@@ -309,43 +340,42 @@ export function useLazyDirectoryTree(input: {
 
     React.useEffect(() => {
         if (!enabled) return;
+        void loadDirectory(rootDirectoryPath, { forceReload: true });
+    }, [enabled, loadDirectory, loadDirectoryEntries, reloadToken, rootDirectoryPath, scopeKey, warmChildren]);
 
-        let cancelled = false;
-        const signal = requestLifetimeRef.current!.signal;
-        const loadRoot = async () => {
-            setRootLoading(true);
-            setRootError(null);
-            try {
-                const result = await loadDirectoryEntries(rootDirectoryPath, signal);
-                if (cancelled || signal.aborted || scopeKeyRef.current !== scopeKey) return;
-                if (result.ok) {
-                    setDirectoryEntriesByPath((prev) => {
-                        const next = new Map(prev);
-                        next.set(rootDirectoryPath, result.entries);
-                        return next;
-                    });
-                    setDirectoryTruncationByPath((prev) => {
-                        const next = new Map(prev);
-                        next.set(rootDirectoryPath, result.truncated === true);
-                        return next;
-                    });
-                    warmChildren(result.entries);
-                } else {
-                    const err = typeof result.error === 'string' ? result.error.trim() : '';
-                    setRootError(err || 'unknown_error');
+    const reconcilePaths = React.useCallback((paths: readonly string[]) => {
+        if (reconciliationPausedRef.current) {
+            for (const path of paths) queuedMutationPathsRef.current.add(path);
+            return;
+        }
+        const directories = new Set<string>();
+        const root = rootDirectoryPathRef.current;
+        for (const path of paths) {
+            let nearest: string | null = null;
+            for (const loadedPath of directoryEntriesByPathRef.current.keys()) {
+                if (loadedPath !== root && path === loadedPath) continue;
+                if (loadedPath === '' || path === loadedPath || path.startsWith(`${loadedPath}/`)) {
+                    if (nearest === null || loadedPath.length > nearest.length) nearest = loadedPath;
                 }
-            } catch (error) {
-                if (!cancelled && !signal.aborted) setRootError(error instanceof Error ? error.message : 'unknown_error');
-            } finally {
-                if (!cancelled) setRootLoading(false);
             }
-        };
+            if (nearest !== null) directories.add(nearest);
+        }
+        for (const directory of directories) {
+            staleDirectoriesRef.current.add(directory);
+            const collapsedAncestor = [...directoryEntriesByPathRef.current.keys()].some(ancestor => ancestor !== root
+                && (directory === ancestor || directory.startsWith(`${ancestor}/`)) && !expandedDirectoriesRef.current.has(ancestor));
+            if (!collapsedAncestor && (directory === root || expandedDirectoriesRef.current.has(directory))) {
+                void loadDirectory(directory, { forceReload: true });
+            }
+        }
+    }, [loadDirectory]);
 
-        void loadRoot();
-        return () => {
-            cancelled = true;
-        };
-    }, [enabled, loadDirectoryEntries, reloadToken, rootDirectoryPath, scopeKey, warmChildren]);
+    React.useEffect(() => {
+        if (reconciliationPausedRef.current || queuedMutationPathsRef.current.size === 0) return;
+        const paths = [...queuedMutationPathsRef.current];
+        queuedMutationPathsRef.current.clear();
+        reconcilePaths(paths);
+    }, [enabled, input.reconciliationPaused, reconcilePaths]);
 
     const toggleDirectory = React.useCallback(async (path: string) => {
         const clean = normalizeDirectoryPath(path);
@@ -366,29 +396,9 @@ export function useLazyDirectoryTree(input: {
     }, [setExpandedPaths]);
 
     const retryRoot = React.useCallback(async () => {
-        const signal = requestLifetimeRef.current?.signal;
-        if (!signal || signal.aborted) return;
         setRootError(null);
-        setRootLoading(true);
-        try {
-            const result = await loadDirectoryEntries(rootDirectoryPath, signal);
-            if (signal.aborted) return;
-            if (result.ok) {
-                setDirectoryEntriesByPath((prev) => {
-                    const next = new Map(prev);
-                    next.set(rootDirectoryPath, result.entries);
-                    return next;
-                });
-            } else {
-                const err = typeof result.error === 'string' ? result.error.trim() : '';
-                setRootError(err || 'unknown_error');
-            }
-        } catch (error) {
-            if (!signal.aborted) setRootError(error instanceof Error ? error.message : 'unknown_error');
-        } finally {
-            if (!signal.aborted) setRootLoading(false);
-        }
-    }, [loadDirectoryEntries, rootDirectoryPath]);
+        await loadDirectory(rootDirectoryPath, { forceReload: true });
+    }, [loadDirectory, rootDirectoryPath]);
 
     const retryDirectory = React.useCallback(async (directoryPath: string) => {
         const clean = normalizeDirectoryPath(directoryPath);
@@ -411,6 +421,7 @@ export function useLazyDirectoryTree(input: {
             for (const dir of expandedDirectories) {
                 if (cancelled) return;
                 if (!dir) continue;
+                if (![...directoryEntriesByPath.values()].some(entries => entries.some(entry => entry.type === 'directory' && entry.path === dir))) continue;
                 await loadDirectory(dir, { forceReload: shouldForceReloadExpandedDirectories });
             }
         };
@@ -419,7 +430,7 @@ export function useLazyDirectoryTree(input: {
         return () => {
             cancelled = true;
         };
-    }, [enabled, expandedDirectories, loadDirectory, shouldForceReloadExpandedDirectories]);
+    }, [directoryEntriesByPath, enabled, expandedDirectories, loadDirectory, shouldForceReloadExpandedDirectories]);
 
     const flattenedNodes = React.useMemo(() => {
         if ((!enabled && !input.retainNodesWhenDisabled) || scopeKeyRef.current !== scopeKey) return [];
@@ -451,5 +462,7 @@ export function useLazyDirectoryTree(input: {
         expandedCount,
         retryRoot,
         retryDirectory,
+        reconcilePaths: (_paths: readonly string[]) => {},
+        arrivedPaths,
     };
 }
