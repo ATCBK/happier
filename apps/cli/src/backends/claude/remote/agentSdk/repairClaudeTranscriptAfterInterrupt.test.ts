@@ -69,7 +69,7 @@ describe('repairClaudeTranscriptAfterInterrupt', () => {
         expect(updated).toContain('Interrupted');
     });
 
-    it('appends a resumable interrupted tool_result chained to the unanswered tool_use entry', async () => {
+    it('batches missing tool results into one resumable entry and does not repair them twice', async () => {
         vi.resetModules();
         const baseDir = await mkdtemp(join(tmpdir(), 'happier-claude-repair-chained-'));
         const claudeConfigDir = join(baseDir, 'claude-config');
@@ -80,9 +80,8 @@ describe('repairClaudeTranscriptAfterInterrupt', () => {
         await mkdir(projectDir, { recursive: true });
         const transcriptPath = join(projectDir, 'sess_1.jsonl');
 
-        await writeFile(
-            transcriptPath,
-            `${JSON.stringify({
+        const original = [
+            {
                 parentUuid: 'user_0',
                 type: 'assistant',
                 uuid: 'asst_1',
@@ -91,19 +90,39 @@ describe('repairClaudeTranscriptAfterInterrupt', () => {
                 cwd: workDir,
                 timestamp: '2026-10-19T12:00:00.000Z',
                 message: {
+                    id: 'msg_1',
                     role: 'assistant',
-                    content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'sleep 1000' } }],
+                    content: [
+                        { type: 'tool_use', id: 'toolu_completed', name: 'Bash', input: { command: 'pwd' } },
+                        { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'sleep 1000' } },
+                        { type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'sleep 2000' } },
+                    ],
                 },
-            })}\n`,
-            'utf8',
-        );
+            },
+            {
+                parentUuid: 'asst_1',
+                type: 'user',
+                uuid: 'user_1',
+                isSidechain: false,
+                sessionId: 'sess_1',
+                cwd: workDir,
+                timestamp: '2026-10-19T12:00:01.000Z',
+                message: {
+                    role: 'user',
+                    content: [{ type: 'tool_result', tool_use_id: 'toolu_completed', content: workDir, is_error: false }],
+                },
+            },
+        ].map((entry) => `${JSON.stringify(entry)}\n`).join('');
+        await writeFile(transcriptPath, original, 'utf8');
 
         const { repairClaudeTranscriptAfterInterrupt } = await import('./repairClaudeTranscriptAfterInterrupt');
         await repairClaudeTranscriptAfterInterrupt({ sessionId: 'sess_1', transcriptPath, workDir, claudeConfigDir });
 
-        const lines = (await readFile(transcriptPath, 'utf8')).split('\n').filter(Boolean);
-        expect(lines).toHaveLength(2);
-        const appended = JSON.parse(lines[1] as string);
+        const repaired = await readFile(transcriptPath, 'utf8');
+        expect(repaired.startsWith(original)).toBe(true);
+        const lines = repaired.split('\n').filter(Boolean);
+        expect(lines).toHaveLength(3);
+        const appended = JSON.parse(lines[2] as string);
         // Claude Code rejects the whole transcript ("No conversation found") when an entry is not
         // linked into the conversation chain with its session identity.
         expect(appended).toMatchObject({
@@ -114,11 +133,17 @@ describe('repairClaudeTranscriptAfterInterrupt', () => {
             cwd: workDir,
             message: {
                 role: 'user',
-                content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Interrupted', is_error: true }],
+                content: [
+                    { type: 'tool_result', tool_use_id: 'toolu_1', content: 'Interrupted', is_error: true },
+                    { type: 'tool_result', tool_use_id: 'toolu_2', content: 'Interrupted', is_error: true },
+                ],
             },
         });
         expect(appended.uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
         expect(Number.isNaN(Date.parse(appended.timestamp))).toBe(false);
+
+        await repairClaudeTranscriptAfterInterrupt({ sessionId: 'sess_1', transcriptPath, workDir, claudeConfigDir });
+        expect(await readFile(transcriptPath, 'utf8')).toBe(repaired);
     });
 
     it('ignores tool_use blocks echoed by non-conversation entries such as api-request-blob', async () => {
