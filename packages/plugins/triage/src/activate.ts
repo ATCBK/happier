@@ -1,12 +1,11 @@
 import { TRIAGE_PLUGIN } from './manifest.js';
 
 /**
- * The single Triage registration spine, invoked once by the host through the
- * manifest's declared daemon entrypoint.
+ * The daemon projection of the one authored Triage registration spine.
  *
  * It is projected from the one `definePlugin` owner rather than hand-written,
  * so a declared Action, Composer attachment role or Collection can never drift
- * from a registered implementation in either direction. No Triage code
- * registers through a second activation, host branch or package.
+ * from a registered implementation in either direction. The same owner projects
+ * Account Actions into the declared portable artifact via `activateAccount`.
  */
 export const activate = TRIAGE_PLUGIN.activate;

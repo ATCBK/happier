@@ -10,7 +10,6 @@ import {
 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it } from 'vitest';
 
-import { activate } from './activate.js';
 import { TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1, TriageListEntriesResultV1Schema } from './actions/listEntriesProtocol.js';
 import {
   TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1,
@@ -26,7 +25,7 @@ import {
   TriageSavedViewsCatalogValueV1Schema,
 } from './actions/savedViewsProtocol.js';
 import { TRIAGE_ENTRY_ATTACHMENT_LOCAL_ID_V1 } from './composer/attachmentValue.js';
-import { PLUGIN_MANIFEST } from './manifest.js';
+import { PLUGIN_MANIFEST, TRIAGE_PLUGIN } from './manifest.js';
 import { CORPUS_USER_MARKS_COLLECTION } from './corpus/collections/definitions.js';
 import {
   CORPUS_SOURCE_INSTANCES_COLLECTION_ID,
@@ -68,7 +67,7 @@ async function withRegisteredPlugin(run: (fixture: Readonly<{
     readCurrent: async () => plugin.readTargetedContributionFixture(point),
     dispose: () => {},
   }) } as unknown as PluginServices['targetedContributions'];
-  plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: { storage, targetedContributions } });
+  plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: TRIAGE_PLUGIN, services: { storage, targetedContributions } });
   try {
     await run({ plugin, corpus, kv });
   } finally {
@@ -114,7 +113,7 @@ describe('Triage activation', () => {
     });
   });
 
-  it('registers exactly the daemon Actions the manifest declares', async () => {
+  it('registers exactly the daemon and Account Actions the manifest declares', async () => {
     await withRegisteredPlugin(async ({ plugin }) => {
       const registered = plugin.registrations().filter((entry) => entry.family === 'actions').map((entry) => entry.localId);
 
@@ -127,8 +126,8 @@ describe('Triage activation', () => {
         TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1,
       ]));
       expect(PLUGIN_MANIFEST.contributes.actions
-        .filter((action) => action.execution.target === 'daemon')
-        .map((action) => action.id)).toEqual(registered);
+        .filter((action) => action.execution.target !== 'client')
+        .map((action) => action.id).sort()).toEqual([...registered].sort());
     });
   });
 

@@ -161,6 +161,7 @@ import {
 import { TRIAGE_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 import { PLUGIN_TARGETED_CONTRIBUTION_POINT_DEFINITIONS } from './targetedContributions.js';
 import { INTERNAL_TASK_ACTIONS_V1, INTERNAL_TASK_CONTRIBUTION_V1 } from './internalTasks/contribution.js';
+import { TRIAGE_ACCOUNT_ACTION_EXECUTION_V1 } from './accountExecution.js';
 import { ScmComparisonSourceProtocolSchema } from '@happier-dev/plugin-sdk/scm';
 
 export { TRIAGE_DISPLAY_NAME };
@@ -244,6 +245,7 @@ function createTriagePlugin() {
         inputSchema: TriageListEntriesInputV1Schema,
         resultSchema: TriageListEntriesResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageListEntriesActionHandler({ taskOnly: true }),
       },
       [TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1]: {
@@ -255,6 +257,7 @@ function createTriagePlugin() {
         inputSchema: TriageCreateTaskActionInputV1Schema,
         resultSchema: TriageTaskWriteResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageCreateTaskActionHandler(),
       },
       [TRIAGE_TASKS_OPEN_CREATE_ACTION_LOCAL_ID_V1]: {
@@ -275,6 +278,7 @@ function createTriagePlugin() {
         inputSchema: TriageEditTaskActionInputV1Schema,
         resultSchema: TriageTaskWriteResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageEditTaskActionHandler(),
       },
       [TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1]: {
@@ -286,6 +290,7 @@ function createTriagePlugin() {
         inputSchema: TriageTransitionTaskActionInputV1Schema,
         resultSchema: TriageTaskWriteResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageTransitionTaskActionHandler(),
       },
       [TRIAGE_TASKS_LINK_ACTION_LOCAL_ID_V1]: {
@@ -297,6 +302,7 @@ function createTriagePlugin() {
         inputSchema: TriageLinkEntryToSessionInputV1Schema,
         resultSchema: TriageLinkEntryToSessionActionResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageLinkEntryToSessionActionHandler(),
       },
       [TRIAGE_SOURCE_PANEL_REVEAL_ACTION_V1]: {
@@ -347,6 +353,7 @@ function createTriagePlugin() {
         resultSchema: TriageListEntriesResultV1Schema,
         // The one Collection it touches is `source-instances`, read-only.
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageListEntriesActionHandler(),
       },
       [TRIAGE_SEARCH_ENTRIES_ACTION_LOCAL_ID_V1]: {
@@ -385,6 +392,7 @@ function createTriagePlugin() {
         inputSchema: TriageSetEntryPinnedInputV1Schema,
         resultSchema: TriageSetEntryPinnedResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageSetEntryPinnedActionHandler(),
       },
       [TRIAGE_SET_FIX_PULL_REQUEST_ACTION_LOCAL_ID_V1]: {
@@ -398,6 +406,7 @@ function createTriagePlugin() {
         inputSchema: TriageSetFixPullRequestInputV1Schema,
         resultSchema: TriageSetFixPullRequestResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageSetFixPullRequestActionHandler(),
       },
       [TRIAGE_READ_FIX_PULL_REQUESTS_ACTION_LOCAL_ID_V1]: {
@@ -409,6 +418,7 @@ function createTriagePlugin() {
         resultSchema: TriageReadFixPullRequestsResultV1Schema,
         // Reads `user-marks` and `session-links`; writes nothing.
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageReadFixPullRequestsActionHandler(),
       },
       [TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1]: {
@@ -420,6 +430,7 @@ function createTriagePlugin() {
         resultSchema: TriageListPinnedEntriesResultV1Schema,
         // The one Collection it touches is `user-marks`, read-only.
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageListPinnedEntriesActionHandler(),
       },
       [TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1]: {
@@ -441,6 +452,7 @@ function createTriagePlugin() {
         // The one Collection it touches is `session-links`, and it is the sole
         // writer of it.
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageLinkEntryToSessionActionHandler(),
       },
       [TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1]: {
@@ -450,6 +462,7 @@ function createTriagePlugin() {
         inputSchema: TriageReadSourceSessionLinksInputV1Schema,
         resultSchema: TriageReadSourceSessionLinksResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageReadSourceSessionLinksActionHandler(),
       },
       [TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1]: {
@@ -523,6 +536,7 @@ function createTriagePlugin() {
         inputSchema: TriageUnlinkEntryFromSessionActionInputV1Schema,
         resultSchema: TriageUnlinkEntryFromSessionActionResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageUnlinkEntryFromSessionActionHandler(),
       },
       [TRIAGE_SOURCES_ADMINISTER_ACTION_LOCAL_ID_V1]: {
@@ -544,6 +558,7 @@ function createTriagePlugin() {
         // The one Collection it touches is `source-instances`, and it is the sole
         // writer of it.
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageAdministerSourceInstanceActionHandler({
           mintSourceInstanceId: mintTriageOpaqueIdV1,
           nowMs: () => Date.now(),
@@ -560,6 +575,7 @@ function createTriagePlugin() {
         resultSchema: TriageReadConfiguredSourceInstancesResultV1Schema,
         // The one Collection it touches is `source-instances`, read-only.
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageReadConfiguredSourceInstancesActionHandler(),
       },
       [TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1]: {
@@ -573,6 +589,7 @@ function createTriagePlugin() {
         resultSchema: TriageReadEntryDetailResultV1Schema,
         // `source-instances` and `session-links`, both read-only.
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageReadEntryDetailActionHandler(),
       },
       [TRIAGE_REOBSERVE_ENTRY_ACTION_LOCAL_ID_V1]: {
@@ -583,6 +600,7 @@ function createTriagePlugin() {
         inputSchema: TriageReobserveEntryInputV1Schema,
         resultSchema: TriageReobserveEntryResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageReobserveEntryActionHandler(),
       },
       [TRIAGE_READ_PULL_REQUEST_STATUS_ACTION_LOCAL_ID_V1]: {
@@ -604,6 +622,7 @@ function createTriagePlugin() {
         inputSchema: TriageReadSavedViewsInputV1Schema,
         resultSchema: TriageReadSavedViewsResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageReadSavedViewsActionHandler(),
       },
       [TRIAGE_ADMINISTER_SAVED_VIEW_ACTION_LOCAL_ID_V1]: {
@@ -624,6 +643,7 @@ function createTriagePlugin() {
         inputSchema: TriageAdministerSavedViewInputV1Schema,
         resultSchema: TriageAdministerSavedViewResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageAdministerSavedViewActionHandler(),
       },
       [TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1]: {
@@ -636,6 +656,7 @@ function createTriagePlugin() {
         inputSchema: TriageReadActionsInputV1Schema,
         resultSchema: TriageReadActionsResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageReadActionsActionHandler(),
       },
       [TRIAGE_ADMINISTER_ACTION_ACTION_LOCAL_ID_V1]: {
@@ -654,6 +675,7 @@ function createTriagePlugin() {
         inputSchema: TriageAdministerActionInputV1Schema,
         resultSchema: TriageAdministerActionResultV1Schema,
         hostAccess: ['account-storage'],
+        execution: TRIAGE_ACCOUNT_ACTION_EXECUTION_V1,
         run: createTriageAdministerActionActionHandler(),
       },
     },

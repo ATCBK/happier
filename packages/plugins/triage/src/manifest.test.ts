@@ -25,6 +25,20 @@ import { testkitEntryRef } from './corpus/testkit/observations.test-support.js';
 import { createTriageSetEntryPinnedActionHandler, listTriagePinnedEntries } from './actions/userMarks.js';
 
 describe('Triage plugin manifest', () => {
+  it('places Account task reads and writes in the same portable Account artifact', () => {
+    const accountActions = [
+      'tasks/list-v1', 'tasks/create-v1', 'tasks/edit-v1', 'tasks/transition-v1',
+      TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1, 'entries/read-detail-v1',
+      'internal/tasks/configure-v1', 'internal/tasks/list-instances-v1',
+      'internal/tasks/scan-v1', 'internal/tasks/get-v1', 'internal/tasks/create-v1',
+      'internal/tasks/edit-v1', 'internal/tasks/transition-v1',
+    ];
+    for (const id of accountActions) {
+      expect(PLUGIN_MANIFEST.contributes.actions.find(action => action.id === id), id).toMatchObject({
+        execution: { target: 'account', account: { artifactId: 'triage-account-runtime', exportName: 'activate' } },
+      });
+    }
+  });
   it('declares Tasks as another page of the existing plugin and /task through its create Action', () => {
     expect(PLUGIN_MANIFEST.contributes.ui.views.find((view) => view.id === 'tasks')).toMatchObject({ container: 'appPage', renderer: 'tasks-page' });
     expect(PLUGIN_MANIFEST.contributes.actions.find((action) => action.id === 'tasks/open-create-v1')).toMatchObject({
@@ -262,19 +276,16 @@ describe('Triage plugin manifest', () => {
     expect(PLUGIN_MANIFEST.entrypoints.daemon).toBe('./.happier-plugin/daemon.js');
   });
 
-  it('offers one existing safe list read to Voice through its canonical daemon Action', () => {
+  it('offers one existing safe list read to Voice through its canonical Account Action', () => {
     const action = PLUGIN_MANIFEST.contributes.actions.find(
       (candidate) => candidate.id === TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
     );
 
-    // This is deliberately a pre-existing bounded list read, not a new GitHub
-    // mutation. The Action declaration has one daemon implementation and adds
-    // Voice only as an invocation surface; no Triage-specific Voice handler or
-    // router is involved.
+    // Voice shares the same portable bounded read and source admission owner.
     expect(action).toMatchObject({
       id: TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
       surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'],
-      execution: { target: 'daemon' },
+      execution: { target: 'account' },
     });
   });
 
