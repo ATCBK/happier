@@ -30,6 +30,20 @@ function facetOf(
 }
 
 describe('the filter rail facet plan', () => {
+  it('retains seen alternatives and discloses failed configured scope projection', () => {
+    const plan = planTriageFilterFacetsV1({
+      configuredSources: [{ ...configured(GITHUB, 'instance-1', 'Work account'), scope: {
+        unit: { singularLabel: 'Repository', pluralLabel: 'repositories' },
+        projection: { kind: 'failed', failure: { class: 'unknown', code: 'scope_read_failed' } },
+      } }],
+      facetCensus: { types: [], scopes: [{ source: GITHUB, collisionScope: 'github:1' }],
+        scopeNames: { [triageFacetScopeKeyV1(GITHUB, 'github:1')]: 'acme/widgets' }, coverage: 'partial' },
+      filters: TRIAGE_LIST_NO_FILTERS_V1,
+    });
+    expect(facetOf(plan, 'scopes').options.map((option) => option.label)).toEqual(['acme/widgets']);
+    expect(facetOf(plan, 'scopes').notices).toEqual(['Work account: Configured scopes could not be read. Refresh to try again.']);
+  });
+
   it('distinguishes identically named instances and keeps retired exact constraints removable', () => {
     const plan = planTriageFilterFacetsV1({
       configuredSources: [configured(GITHUB, 'instance-1', 'GitHub'), configured(GITHUB, 'instance-2', 'GitHub')],
