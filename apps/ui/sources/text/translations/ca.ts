@@ -5229,6 +5229,11 @@ deps: {
             showBannerAction: 'Mostra el bàner',
             hideBannerAction: 'Amaga el bàner',
 	        },
+	        runnerRestartBackgroundWork: {
+	            title: 'Hi ha feina en segon pla en execució',
+	            body: ({ count }: { count: number }) => `Hi ha feina en segon pla en execució (${count}). Reiniciar l’aturarà.`,
+	            confirmAction: 'Atura i reinicia',
+	        },
 	        staleRunner: {
 	            title: 'La sessió encara s’executa amb una CLI antiga',
 	            body: 'Reinicia el runner d’aquesta sessió per continuar amb la CLI del daemon actualitzada. La sessió de Happier es manté.',

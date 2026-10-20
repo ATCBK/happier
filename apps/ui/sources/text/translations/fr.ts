@@ -5213,6 +5213,11 @@ export const fr: TranslationStructure = {
             showBannerAction: 'Afficher la bannière',
             hideBannerAction: 'Masquer la bannière',
         },
+        runnerRestartBackgroundWork: {
+            title: 'Du travail est en cours en arrière-plan',
+            body: ({ count }: { count: number }) => `Du travail est en cours en arrière-plan (${count}). Le redémarrage l’arrêtera.`,
+            confirmAction: 'Arrêter et redémarrer',
+        },
         staleRunner: {
             title: 'Cette session tourne encore sur une ancienne CLI',
             body: 'Redémarre le runner de cette session pour continuer avec la CLI du daemon mise à jour. La session Happier reste la même.',

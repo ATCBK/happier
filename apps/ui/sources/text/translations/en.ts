@@ -5247,6 +5247,11 @@ export const en = {
             showBannerAction: 'Show banner',
             hideBannerAction: 'Hide banner',
         },
+        runnerRestartBackgroundWork: {
+            title: 'Background work is running',
+            body: ({ count }: { count: number }) => `${count} background ${count === 1 ? 'activity is' : 'activities are'} running. Restarting will stop ${count === 1 ? 'it' : 'them'}.`,
+            confirmAction: 'Stop and restart',
+        },
         staleRunner: {
             title: 'Session is still running on an older CLI',
             body: 'Restart this session runner to continue on the updated daemon CLI. The Happier session stays the same.',

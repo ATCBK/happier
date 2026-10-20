@@ -869,6 +869,8 @@ async function runSdkStreamUntilEof() {
         type: 'system',
         subtype: 'task_started',
         task_id: stagedRuntimeActivityTaskId,
+        task_type: 'local_agent',
+        is_backgrounded: true,
         status: 'running',
         description: 'staged runtime activity',
         uuid: randomUUID(),

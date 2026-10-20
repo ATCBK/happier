@@ -5379,6 +5379,11 @@ export const zhHans: TranslationStructure = {
             showBannerAction: '显示横幅',
             hideBannerAction: '隐藏横幅',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: '后台任务正在运行',
+	        body: ({ count }: { count: number }) => `${count} 个后台任务正在运行。重启将停止它们。`,
+	        confirmAction: '停止并重启',
+	    },
 	    staleRunner: {
 	      title: "会话仍在旧版 CLI 上运行",
 	      body: "重启此会话运行器，以继续使用已更新的守护进程 CLI。Happier 会话本身保持不变。",
