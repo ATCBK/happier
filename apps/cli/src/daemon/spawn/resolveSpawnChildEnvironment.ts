@@ -170,6 +170,8 @@ export async function resolveSpawnChildEnvironment(params: {
   pluginRuntimeRegistry?: ResolvedExecutablePluginRuntimeRegistry;
   options: SpawnSessionOptions;
   existingSessionMetadata?: Readonly<Record<string, unknown>> | null;
+  /** Home-written inference witness from this Session's protected attach, never Spawn options. */
+  acceptedTeamCredentialBinding?: import('@happier-dev/protocol/teams/credentials/sessionBindingIntentV1').SessionTeamCredentialBindingIntentV1 | null;
   /** Registry-resolved routing id for a canonical `agentTarget`. */
   resolvedAgentId?: string | null;
   profileEnvironmentVariables: Record<string, string>;
@@ -214,6 +216,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   pluginRuntimeRegistry?: ResolvedExecutablePluginRuntimeRegistry;
   options: SpawnSessionOptions;
   existingSessionMetadata?: Readonly<Record<string, unknown>> | null;
+  acceptedTeamCredentialBinding?: import('@happier-dev/protocol/teams/credentials/sessionBindingIntentV1').SessionTeamCredentialBindingIntentV1 | null;
   resolvedAgentId?: string | null;
   profileEnvironmentVariables: Record<string, string>;
   daemonSpawnHooks: DaemonSpawnHooks | null;
@@ -767,11 +770,16 @@ async function resolveSpawnChildEnvironmentImpl(params: {
       params.connectedServiceAuth?.qualifiedPurposeBindingSnapshot ?? null,
     ).some(({ purpose }) => purpose.consumer.pluginId === agentIdentity.pluginId
       && purpose.consumer.localId === agentIdentity.localId);
+    const acceptedTeamBinding = params.acceptedTeamCredentialBinding;
+    const hasAcceptedTeamBrokerInference = Boolean(params.options.existingSessionId
+      && acceptedTeamBinding?.slot.kind === 'provider_model'
+      && acceptedTeamBinding.resourceId !== null
+      && acceptedTeamBinding.deliveryMode === 'brokered');
     // The admitted Provider route owns credential transport. External bindings
     // materialize above; managed bindings materialize after Session admission.
     // Qualified Connected Account request-auth also owns its transport; none
     // of these routes require the Agent's unrelated native sign-in.
-    const auth = !agentCliLaunchSpec || params.providerBindingContext || hasConnectedAccountRequestAuth
+    const auth = !agentCliLaunchSpec || params.providerBindingContext || hasConnectedAccountRequestAuth || hasAcceptedTeamBrokerInference
       ? null
       : await detectNativeAgentCliAuthStatus({
         agentId: resolvedAgentId,

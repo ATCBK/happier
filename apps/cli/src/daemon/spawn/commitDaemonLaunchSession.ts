@@ -148,12 +148,19 @@ export async function commitDaemonLaunchSession(input: Readonly<{
     credentials: input.credentials,
   });
   const createdHere = created.sessionCreationOutcome?.disposition === 'created';
-  if (!attach.ok) {
+  const requestedTeamModel = options.teamCredentialBindings?.some(binding => binding.slot.kind === 'provider_model' && binding.resourceId !== null);
+  const acceptedTeamModel = attach.ok ? attach.attachPayload.snapshot?.acceptedTeamCredentialBinding : null;
+  const missingTeamModelWitness = requestedTeamModel && (!acceptedTeamModel
+    || acceptedTeamModel.slot.kind !== 'provider_model' || acceptedTeamModel.resourceId === null);
+  if (!attach.ok || missingTeamModelWitness) {
     if (createdHere) {
       await archiveSessionOnceInactive({ token: input.credentials.token, sessionId: created.id })
         .catch(() => undefined);
     }
-    return { ok: false, result: mapExistingSessionAttachFailureToSpawnError(attach.reason) };
+    return { ok: false, result: !attach.ok ? mapExistingSessionAttachFailureToSpawnError(attach.reason) : {
+      type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      errorMessage: 'team_credential_provider_binding_unavailable',
+    } };
   }
 
   const rejoined = !createdHere;

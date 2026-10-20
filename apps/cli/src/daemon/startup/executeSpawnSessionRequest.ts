@@ -1115,6 +1115,7 @@ export async function executeSpawnSessionRequest(
                 readMachineResourcesPolicy: params.readMachineResourcesPolicy,
                 options: effectiveOptionsForSpawn,
                 existingSessionMetadata: launchSessionAttachPayload?.snapshot?.metadata ?? null,
+                sessionAttachPayload: launchSessionAttachPayload,
                 resolvedAgentId: catalogAgentId,
                 effectiveModelSelection: modelSelection,
                 terminal: options.terminal,

@@ -42,6 +42,7 @@ export async function prepareDaemonSpawnChildEnvironment(input: Readonly<{
     readMachineResourcesPolicy?: MachineResourcesPolicyReader;
     options: SpawnSessionOptions;
     existingSessionMetadata?: Readonly<Record<string, unknown>> | null;
+    sessionAttachPayload?: import('@/agent/runtime/sessionAttachPayload').SessionAttachFilePayload | null;
     resolvedAgentId?: string | null;
     effectiveModelSelection: SpawnSessionOptions['modelSelection'];
     terminal: SpawnSessionOptions['terminal'];
@@ -90,6 +91,7 @@ export async function prepareDaemonSpawnChildEnvironment(input: Readonly<{
         pluginRuntimeRegistry: input.pluginRuntimeRegistry,
         options: input.options,
         ...(input.existingSessionMetadata ? { existingSessionMetadata: input.existingSessionMetadata } : {}),
+        acceptedTeamCredentialBinding: input.sessionAttachPayload?.snapshot?.acceptedTeamCredentialBinding,
         resolvedAgentId: input.resolvedAgentId,
         profileEnvironmentVariables: input.profileEnvironmentVariables,
         daemonSpawnHooks: input.daemonSpawnHooks,

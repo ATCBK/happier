@@ -293,6 +293,29 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
     }
   });
 
+  it('uses an admitted Team broker route without native login, but never caller intent or another purpose', async () => {
+    const home = await createTempDir('happier-spawn-team-auth-', tmpdir());
+    try {
+      const cli = writeExecutableShimSync({ dir: home,
+        fileName: process.platform === 'win32' ? 'codex.cmd' : 'codex',
+        contents: process.platform === 'win32' ? '@echo off\r\nexit /b 1\r\n' : '#!/bin/sh\nexit 1\n' });
+      const binding = { v: 1 as const, slot: { kind: 'provider_model' as const }, resourceId: 'resource-1',
+        expectedResourceRevision: 3, deliveryMode: 'brokered' as const, teamId: 'team-1' };
+      const params = { pluginRuntimeRegistry: await createPinnedSpawnAgentRegistry(),
+        options: { directory: home, existingSessionId: 'accepted-session', teamCredentialBindings: [binding],
+          backendTarget: { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const } },
+        profileEnvironmentVariables: {}, daemonSpawnHooks: null,
+        processEnv: { PATH: '', HOME: home, USERPROFILE: home, CODEX_HOME: home, HAPPIER_HOME_DIR: home,
+          HAPPIER_CODEX_PATH: cli, HAPPIER_JS_RUNTIME_PATH: process.execPath },
+        logDebug: () => {}, logInfo: () => {}, logWarn: () => {} };
+      expect(await resolveSpawnChildEnvironment(params)).toMatchObject({ ok: false, errorCode: 'agent_signed_out' });
+      expect(await resolveSpawnChildEnvironment({ ...params, acceptedTeamCredentialBinding: binding })).toMatchObject({ ok: true });
+      expect(await resolveSpawnChildEnvironment({ ...params, acceptedTeamCredentialBinding: { ...binding,
+        slot: { kind: 'connected_service_purpose', purpose: { consumer: { pluginId: 'acme.other', localId: 'other' }, purpose: 'mcp' } },
+      } })).toMatchObject({ ok: false, errorCode: 'agent_signed_out' });
+    } finally { await removeTempDir(home); }
+  });
+
   it('refuses a signed-out Agent and preserves cleanup for its prepared credentials', async () => {
     const home = await createTempDir('happier-spawn-signed-out-', tmpdir());
     try {
