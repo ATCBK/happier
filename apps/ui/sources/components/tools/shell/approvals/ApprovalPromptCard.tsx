@@ -3,7 +3,7 @@ import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
-import { describeApprovalRequestFields, listActionSpecs } from '@happier-dev/protocol/actions';
+import { describeApprovalRequestFields } from '@happier-dev/protocol/actions';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -19,7 +19,7 @@ import { ApprovalPromptChrome } from './ApprovalPromptChrome';
 import { BrowserOpenApprovalProgress } from '@/components/approvals/BrowserOpenOperationStatus';
 import { readBrowserOpenAcceptance } from '@/sync/domains/browser/firstUse/browserFirstUse';
 import { alertApprovalFailure, isApprovalReplayRouteUnavailable, useApprovalDecisionHandler, useApprovalHome } from './useApprovalDecisionHandler';
-import { presentApprovalFailureOutcome } from './approvalFailureOutcome';
+import { presentApprovalFailureOutcome, resolveApprovalActionTitle } from './approvalFailureOutcome';
 import { useFailedApprovalDismissal } from './failedApprovalDismissal';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ActionApprovalFieldsCard, ApprovalTechnicalDetails } from '@/components/approvals/ActionApprovalFieldsCard';
@@ -56,9 +56,6 @@ function resolveDeferredComputerPicker() {
     return (require('../../../computer/openComputerTargetPickerForSession') as typeof import('../../../computer/openComputerTargetPickerForSession')).openComputerTargetPickerForSession;
 }
 
-function resolveActionTitle(approval: ApprovalRequest): string {
-    return listActionSpecs().find((spec) => spec.id === approval.actionId)?.title || approval.actionId;
-}
 
 export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: Readonly<{
     artifact: ApprovalPromptCardArtifact;
@@ -79,7 +76,7 @@ export const ApprovalPromptCard = React.memo(function ApprovalPromptCard(props: 
     const chrome = props.chrome ?? 'card';
     // On a phone the composer's inline prompt keeps its decision in view: the arguments wait behind Details.
     const phone = useDeviceType() === 'phone';
-    const actionTitle = React.useMemo(() => resolveActionTitle(props.approval), [props.approval]);
+    const actionTitle = React.useMemo(() => resolveApprovalActionTitle(props.approval), [props.approval]);
     const previewSummary = React.useMemo(() => getPreviewSummary(props.approval.preview), [props.approval.preview]);
     const review = React.useMemo(() => readActionApprovalReview(props.approval), [props.approval]);
     const approveAdmission = review.admission;

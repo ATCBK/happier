@@ -526,3 +526,17 @@ it('keeps a collapsed card to its Details line until the person opens it', async
     await act(async () => { disclosure?.props.onExpandedChange(true); });
     expect(screen.getTextContent()).toContain('http://127.0.0.1:4000');
 });
+
+it('reads an open card\'s arguments as one key/value table with no inner card heading, the technical line as its last row', async () => {
+    const presentation = describeApprovalActionFields({ actionId: 'browser.view.open', actionArgs: {
+        commandId: 'cmd-1', browserSessionId: 'browser-session-1', viewId: 'view-1', kind: 'openView', platform: 'web', focus: true,
+        target: { targetId: 'target-1', kind: 'externalUrl', url: 'http://127.0.0.1:4000' } } });
+    const screen = await renderScreen(<ActionApprovalFieldsCard presentation={presentation} />);
+    // One table holds every argument, label beside value; the card repeats no "Details" heading of its own.
+    const table = screen.findByTestId('approvals.fields-table');
+    expect(table).not.toBeNull();
+    expect(screen.getTextContent()).not.toContain(t('approvals.details'));
+    expect(screen.getTextContent()).toContain('http://127.0.0.1:4000');
+    const first = presentation.rows.find(row => row.kind === 'value' && !row.technical);
+    expect(screen.findByTestId(`approvals.fields-table.row:${first?.path}`)).not.toBeNull();
+});

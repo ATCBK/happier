@@ -337,11 +337,13 @@ describe('ApprovalPromptCard', () => {
         expect(screen.getTextContent()).toContain('filesystem_operation_failed');
     });
 
-    it('falls back to a generic outcome for a failure with no typed copy', async () => {
+    it('names the failed action for a failure with no typed copy', async () => {
         const approval = ApprovalRequestSchema.parse({ ...failedWriteFile(), status: 'failed', actionId: 'session.list', actionArgs: {},
             execution: { executedAtMs: 3, ok: false, errorCode: 'boom_happened', error: 'boom_happened' } });
         const screen = await renderCard(approval, { chrome: 'inline' });
-        expect(screen.getTextContent()).toContain('approvals.failureGeneric');
+        // A failure with no typed copy still names what failed, never the bare "approved action failed".
+        expect(screen.getTextContent()).toContain('approvals.failureNamed');
+        expect(screen.getTextContent()).not.toContain('approvals.failureGeneric');
     });
 
     it('heads a stale failure as not run, not as the action it never attempted', async () => {

@@ -1,7 +1,13 @@
 import type { ActionExecuteFailure, ApprovalRequest } from '@happier-dev/protocol';
+import { listActionSpecs } from '@happier-dev/protocol/actions';
 
 import { t } from '@/text';
 import { isApprovalDecisionStale, presentRecordedApprovalFailure } from './useApprovalDecisionHandler';
+
+/** The Action's title, which names what was asked wherever the request is shown. */
+export function resolveApprovalActionTitle(approval: ApprovalRequest): string {
+    return listActionSpecs().find((spec) => spec.id === approval.actionId)?.title || approval.actionId;
+}
 
 /** A request that never reached its effect must not name that effect as attempted. */
 function readFailureHeadline(approval: ApprovalRequest, failure: ActionExecuteFailure): string {
@@ -12,7 +18,7 @@ function readFailureHeadline(approval: ApprovalRequest, failure: ActionExecuteFa
     switch (actionId) {
         case 'daemon.filesystem.writeFile': return t('approvals.failureFileWrite');
         case 'daemon.filesystem.readFile': return t('approvals.failureFileRead');
-        default: return actionId.startsWith('daemon.filesystem.') ? t('approvals.failureFileOther') : t('approvals.failureGeneric');
+        default: return actionId.startsWith('daemon.filesystem.') ? t('approvals.failureFileOther') : t('approvals.failureNamed', { action: resolveApprovalActionTitle(approval) });
     }
 }
 

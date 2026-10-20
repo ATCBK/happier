@@ -125,10 +125,28 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
             </View>
         );
     }
+    // An open card reads its arguments as one inset table, label beside value (lab `b-ask C`): the card
+    // already says what is asked, so the table carries no heading or border of its own.
     return (
-        <View style={styles.card}>
-            <Text style={styles.sectionTitle}>{t('approvals.details')}</Text>
-            {cardRows}
+        <View testID="approvals.fields-table" style={styles.table}>
+            {rows.map((row) => (
+                <View key={row.path} testID={`approvals.fields-table.row:${row.path}`}
+                    style={row.kind === 'value' ? styles.tableRow : styles.tableBlock}>
+                    {row.kind === 'value' && !row.entries ? (
+                        <ApprovalValueItem row={row} serverId={serverId} anatomy="table" />
+                    ) : row.kind === 'value' ? (
+                        <>
+                            <Text style={styles.tableLabel}>{row.title}</Text>
+                            <View style={styles.tableValue}><ApprovalStructuredValue entries={row.entries!} serverId={serverId} /></View>
+                        </>
+                    ) : (
+                        <>
+                            <Text style={styles.label}>{row.title}</Text>
+                            <ApprovalFieldValue row={row} serverId={serverId} />
+                        </>
+                    )}
+                </View>
+            ))}
             {technicalDetails}
         </View>
     );
@@ -142,7 +160,7 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
 function ApprovalValueItem(props: Readonly<{
     row: Extract<ApprovalActionFieldsPresentation['rows'][number], { kind: 'value' }>;
     serverId: string | null;
-    anatomy?: 'page';
+    anatomy?: 'page' | 'table';
 }>) {
     const { row } = props;
     // A declared confidential input is held by the original request and never shown: it reads as
@@ -154,6 +172,14 @@ function ApprovalValueItem(props: Readonly<{
             ? tLoose(option.labelKey) : option.label).join(', ') : row.value;
     const reading = useApprovalReferenceReading(row.reference, literal, props.serverId);
     const title = nameApprovalReferenceLabel(row.title, row.reference, reading.named);
+    if (props.anatomy === 'table') {
+        return (
+            <>
+                <Text style={styles.tableLabel}>{title}</Text>
+                <Text style={[styles.value, styles.tableValue]}>{reading.text}</Text>
+            </>
+        );
+    }
     if (props.anatomy !== 'page') {
         return (
             <>
@@ -306,15 +332,35 @@ function ApprovalFieldValue(props: Readonly<{ row: ApprovalActionFieldsPresentat
 }
 
 const ENTRY_INDENT = 12;
+/** The key column of the inset table: wide enough for the common argument names, so the values share one edge. */
+const TABLE_LABEL_WIDTH_PX = 96;
 
 const styles = StyleSheet.create((theme) => ({
-    card: {
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.elevated,
-        padding: theme.space.s16,
+    // The inset table: the card's own fill stepped in, at the radius concentric with the card's padding.
+    table: {
+        borderRadius: theme.borderRadius.md,
+        backgroundColor: theme.colors.surface.inset,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
+        gap: theme.space.s6,
+    },
+    tableRow: {
+        flexDirection: 'row',
+        alignItems: 'baseline',
         gap: theme.space.s12,
+    },
+    tableBlock: {
+        gap: theme.space.s4,
+    },
+    tableLabel: {
+        ...Typography.variant('meta', 'semiBold'),
+        color: theme.colors.text.secondary,
+        width: TABLE_LABEL_WIDTH_PX,
+        flexShrink: 0,
+    },
+    tableValue: {
+        flex: 1,
+        minWidth: 0,
     },
     disclosureHeader: {
         flexDirection: 'row',
@@ -330,10 +376,6 @@ const styles = StyleSheet.create((theme) => ({
     disclosureBody: {
         paddingTop: theme.space.s8,
         gap: theme.space.s12,
-    },
-    sectionTitle: {
-        ...Typography.variant('label', 'semiBold'),
-        color: theme.colors.text.primary,
     },
     rows: {
         gap: theme.space.s10,
