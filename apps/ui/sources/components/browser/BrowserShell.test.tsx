@@ -1383,9 +1383,10 @@ describe('BrowserShell', () => {
             />,
         );
 
-        // Diagnostics now render inside the collapsible bottom drawer; the
-        // host-owned fidelity/trust badge stays on the active section.
-        expect(screen.findByTestId('browser-shell-diagnostics-container-collapsed')).toBeTruthy();
+        // Diagnostics render inside the bottom drawer, which opens closed (the page leads); once
+        // opened, the host-owned fidelity/trust badge stays on the active section.
+        expect(screen.findByTestId('browser-shell-diagnostics-container-closed')).toBeTruthy();
+        await screen.pressByTestIdAsync('browser-shell-diagnostics-open');
         expect(screen.findByTestId('browser-shell-diagnostics-body')).toBeTruthy();
         expect(screen.findByTestId('browser-shell-diagnostics-body-fidelity-nativeCallback')).toBeTruthy();
 
@@ -1751,7 +1752,8 @@ describe('BrowserShell', () => {
         }));
         // Console is the default drawer section; its family panel + row render
         // inside the drawer body with the trust/fidelity badge preserved.
-        expect(screen.findByTestId('browser-shell-diagnostics-container-collapsed')).toBeTruthy();
+        expect(screen.findByTestId('browser-shell-diagnostics-container-closed')).toBeTruthy();
+        await screen.pressByTestIdAsync('browser-shell-diagnostics-open');
         expect(screen.findByTestId('browser-shell-diagnostics-body-fidelity-cdp')).toBeTruthy();
         expect(screen.findByTestId('browser-shell-diagnostics-body-console-panel')).toBeTruthy();
         expect(screen.findByTestId('browser-shell-diagnostics-body-console-row-evt_daemon_console_1')).toBeTruthy();
