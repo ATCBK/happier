@@ -349,7 +349,7 @@ export function PluginAppPageScreen(props: Readonly<{
                 <DetailsPaneSlotHost testID="plugin-app-page-details" mainColumn={{
                     hideLabel: t('panes.mainColumn.hidePage', { title: headerTitle }),
                     showLabel: t('panes.mainColumn.showPage', { title: headerTitle }),
-                    identity: <Text numberOfLines={1}>{headerTitle}</Text>,
+                    identity: { name: headerTitle },
                 }}>
                 <View testID="plugin-app-page-host" style={pageContentFrameStyle}>
                     <PluginPageBackStepProvider owner={locationOwner}>

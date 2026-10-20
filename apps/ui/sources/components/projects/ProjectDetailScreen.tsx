@@ -292,10 +292,10 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                 mainColumn={{
                     hideLabel: t('panes.mainColumn.hideProject'),
                     showLabel: t('panes.mainColumn.showProject'),
-                    identity: <>
-                        <Icon name="folder" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
-                        <Text numberOfLines={1}>{resolveWorkspaceRefDisplayName(workspaceRef)}</Text>
-                    </>,
+                    identity: {
+                        mark: <Icon name="folder" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
+                        name: resolveWorkspaceRefDisplayName(workspaceRef),
+                    },
                 }}
                 initialRight={multiPaneEnabled && deviceType === 'tablet'
                     ? { isOpen: true, activeTabId: resolveProjectRightTabId(null) }

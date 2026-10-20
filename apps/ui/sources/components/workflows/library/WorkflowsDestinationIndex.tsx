@@ -38,7 +38,7 @@ export const WorkflowsDestinationIndex = React.memo(function WorkflowsDestinatio
         size="line" kind="unavailable" title={t('workflows.triggers.legacy.notAvailable')} /> : null}{content}</>;
     if (wide && sessionId && access.kind === 'workflows') return <AppPaneScopeHost scopeId="workflows" main={main}
         mainColumn={{ hideLabel: t('panes.mainColumn.hideWorkflow'), showLabel: t('panes.mainColumn.showWorkflow'),
-            identity: <Text numberOfLines={1}>{t('workflows.title')}</Text> }}
+            identity: { name: t('workflows.title') } }}
         destinationDetails={{ onClose: close, pane: <View style={{ flex: 1, minHeight: 0 }}>
             <PaneHeader title={t('workflows.authoring.agent')} onClose={close} />
             <WorkflowAuthoringSessionPane sessionId={sessionId} serverId={params.authoringServerId} active composer />

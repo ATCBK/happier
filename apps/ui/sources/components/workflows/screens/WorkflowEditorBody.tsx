@@ -1512,10 +1512,10 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                 mainColumn={{
                     hideLabel: t('panes.mainColumn.hideWorkflow'),
                     showLabel: t('panes.mainColumn.showWorkflow'),
-                    identity: <>
-                        <Icon name="tree-structure" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
-                        <Text numberOfLines={1}>{draft.name.trim().length > 0 ? draft.name : t('workflows.page.untitled')}</Text>
-                    </>,
+                    identity: {
+                        mark: <Icon name="tree-structure" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
+                        name: draft.name.trim().length > 0 ? draft.name : t('workflows.page.untitled'),
+                    },
                 }}
                 main={page}
                 rightPaneBuiltinAdapter={flowAdapter}
