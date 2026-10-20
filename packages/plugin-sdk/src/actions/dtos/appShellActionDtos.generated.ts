@@ -15,7 +15,9 @@ export type AppShellActionInputById = {
     readonly "session.work.get": {
         sessionId: string;
     };
-    readonly "inbox.get": Record<string, never>;
+    readonly "inbox.get": {
+        [x: string]: never;
+    };
     readonly "inbox.mark_all_read": {
         targets: {
             serverId: string;

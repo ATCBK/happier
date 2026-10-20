@@ -824,6 +824,21 @@ test('public support roots preserve requested re-export aliases and explicit pro
   assert.equal(compile.status, 0, compile.stdout + compile.stderr);
 });
 
+test('code intelligence Action results expand family-local schema aliases before support projection', async () => {
+  const derived = await deriveActionDtoSchemas({ repoRoot: process.cwd(), onlyFamilies: ['code_intelligence'] });
+  const dto = [...derived.outputs.values()].join('\n');
+  assert.doesNotMatch(dto, /ActionSchema\d+Value/u,
+    'virtual row aliases cannot be resolved by the separate support compiler program');
+  const source = ts.createSourceFile('code.ts', dto, ts.ScriptTarget.ES2022, true);
+  const result = source.statements.find(node => ts.isTypeAliasDeclaration(node) && node.name.text === 'CodeIntelligenceActionResultById');
+  for (const id of ['code.hover.get', 'code.definition.get', 'code.references.list', 'code.symbols.list', 'code.diagnostics.list']) {
+    const row = result.type.members.find(member => member.name.text === id);
+    assert.ok(row && ts.isUnionTypeNode(row.type), `${id} must retain its concrete result union`);
+    assert.ok(row.type.types.some(arm => ts.isTypeLiteralNode(arm)
+      && arm.members.some(member => member.name.text === 'status' && member.type.literal?.text === 'ok')));
+  }
+});
+
 test('real messaging Action DTOs preserve concrete identity string input contracts', async () => {
   const derived = await deriveActionDtoSchemas({ repoRoot: process.cwd(), onlyFamilies: ['messaging'] });
   const dto = derived.outputs.get(resolve('packages/protocol/src/actions/messagingActionDtos.ts'));

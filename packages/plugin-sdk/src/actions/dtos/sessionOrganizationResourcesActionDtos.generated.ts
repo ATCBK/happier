@@ -4,7 +4,9 @@
 import type { JSONType } from './pluginActionDtoSupport.generated.js';
 
 export type SessionOrganizationResourcesActionInputById = {
-    readonly "session.folders.list": Record<string, never>;
+    readonly "session.folders.list": {
+        [x: string]: never;
+    };
     readonly "session.folders.create": {
         folderKey: string;
         parentFolderId: string | null;
@@ -37,7 +39,9 @@ export type SessionOrganizationResourcesActionInputById = {
         folderId: string;
         assignmentBehavior?: 'moveAssignmentsToParent' | undefined;
     };
-    readonly "session.tags.list": Record<string, never>;
+    readonly "session.tags.list": {
+        [x: string]: never;
+    };
     readonly "session.tags.create": {
         tagKey: string;
         sortKey: string | null;

@@ -4226,8 +4226,12 @@ export type ExecutionRunControlActionResultById = {
         [x: string]: unknown;
         ok: true;
     };
-    readonly "execution.run.ensure": JsonValue;
-    readonly "execution.run.ensure_or_start": JsonValue;
+    readonly "execution.run.ensure": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "execution.run.ensure_or_start": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
     readonly "execution.run.stream.start": {
         [x: string]: unknown;
         streamId: string;
@@ -4316,7 +4320,9 @@ export type ExecutionRunControlActionResultById = {
         error: string;
         errorCode: 'execution_run_not_found' | 'execution_run_not_current' | 'execution_run_turn_not_active' | 'execution_run_cancel_unsupported' | 'execution_run_cancel_failed';
     };
-    readonly "execution.run.action": JsonValue;
+    readonly "execution.run.action": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
     readonly "execution.run.permission.respond": {
         ok: true;
     };

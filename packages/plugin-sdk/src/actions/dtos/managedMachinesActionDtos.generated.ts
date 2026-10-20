@@ -3299,7 +3299,7 @@ export type ManagedMachinesActionInputById = {
         when: 'now';
         expectedRevision: number;
     } | {
-        intent: 'stop';
+        intent: 'stop' | 'suspend';
         homeId: string;
         managedId: string;
         when: 'after-idle';
@@ -4367,17 +4367,17 @@ export type ManagedMachinesActionResultById = {
             reason: string;
         } | undefined;
     };
-    readonly "machines.managed.references.get": Readonly<{
-        homeId: string;
-        machineId: string | null;
-        coverage: 'complete' | 'partial';
-        references: readonly Readonly<{
+    readonly "machines.managed.references.get": {
+        readonly homeId: string;
+        readonly machineId: string | null;
+        readonly coverage: 'complete' | 'partial';
+        readonly references: readonly Readonly<{
             kind: 'machine_pool' | 'profile' | 'board' | 'workflow_assignment' | 'automation_assignment';
             id: string;
             name: string;
         }>[];
-        unavailable: readonly ('target' | 'artifacts' | 'profiles' | 'pools' | 'assignments' | 'requester_authority')[];
-    }>;
+        readonly unavailable: readonly ('target' | 'artifacts' | 'profiles' | 'pools' | 'assignments' | 'requester_authority')[];
+    };
     readonly "machines.managed.inspect": {
         machine: {
             id: string;

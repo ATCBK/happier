@@ -1490,6 +1490,94 @@ export type TeamsActionResultById = {
                 };
                 sourceRevision: string;
                 availability: 'available' | 'resource_corrupt' | 'policy_denied' | 'source_owner_required';
+                sourceFacts?: {
+                    endpoint: {
+                        id: string;
+                        protocol: string;
+                        capabilities: {
+                            streaming: 'unknown' | 'supported' | 'unsupported';
+                            toolRoundTrips: 'unknown' | 'supported' | 'unsupported';
+                            statefulResponses: 'unknown' | 'supported' | 'unsupported';
+                            reasoningControls: 'unknown' | 'supported' | 'unsupported';
+                        };
+                    };
+                    credential?: {
+                        kind: 'apiKey';
+                        slotId: 'apiKey';
+                        required: boolean;
+                        transports: {
+                            id: string;
+                            protocols: string[];
+                            uses: ('management' | 'probe' | 'runtime')[];
+                            destination: {
+                                kind: 'httpHeader';
+                                name: string;
+                                format: 'raw' | 'bearer' | {
+                                    template: string;
+                                };
+                            } | {
+                                kind: 'queryParam';
+                                name: string;
+                                format: 'raw' | 'bearer' | {
+                                    template: string;
+                                };
+                            };
+                        }[];
+                        keyUrl?: string | undefined;
+                    } | undefined;
+                    compatibilityOverrides?: {
+                        agentTargetKey: string;
+                        protocol: string;
+                        status: 'incompatible' | 'verified' | 'experimental';
+                        reason: string;
+                        evidence?: {
+                            sourceUrls: string[];
+                            verifiedAt: string;
+                            providerVersion?: string | undefined;
+                            agentVersion?: string | undefined;
+                            testIds?: string[] | undefined;
+                        } | undefined;
+                    }[] | undefined;
+                } | undefined;
+                confirmationSource?: {
+                    connectionId: string;
+                    catalogSourceKey: string;
+                } | undefined;
+                compatibility?: {
+                    result: {
+                        status: 'verified';
+                        selectedProtocol: string;
+                        evidence: {
+                            sourceUrls: string[];
+                            verifiedAt: string;
+                            providerVersion?: string | undefined;
+                            agentVersion?: string | undefined;
+                            testIds?: string[] | undefined;
+                        };
+                    } | {
+                        status: 'experimental';
+                        selectedProtocol: string;
+                        reasons: ('no_compatible_protocol' | 'no_auth_unsupported' | 'credential_transport_unavailable' | 'optional_credential_no_auth_unsupported' | 'capability_streaming_unsupported' | 'capability_streaming_unknown' | 'capability_toolRoundTrips_unsupported' | 'capability_toolRoundTrips_unknown' | 'capability_statefulResponses_unsupported' | 'capability_statefulResponses_unknown' | 'capability_reasoningControls_unsupported' | 'capability_reasoningControls_unknown' | 'model_required_for_capability_resolution' | 'model_capability_toolRoundTrips_unsupported' | 'model_capability_toolRoundTrips_unknown' | 'model_capability_reasoningControls_unsupported' | 'model_capability_reasoningControls_unknown' | 'compatibility_override_incompatible' | 'compatibility_override_experimental' | 'compatibility_evidence_missing' | 'model_capability_evidence_required' | 'agent_external_providers_unsupported' | 'adapter_contract_invalid')[];
+                        confirmationScope: {
+                            kind: 'connection';
+                        } | {
+                            kind: 'model';
+                            modelId: string;
+                        };
+                        evidence?: {
+                            sourceUrls: string[];
+                            verifiedAt: string;
+                            providerVersion?: string | undefined;
+                            agentVersion?: string | undefined;
+                            testIds?: string[] | undefined;
+                        } | undefined;
+                    } | {
+                        status: 'incompatible';
+                        reasons: ('no_compatible_protocol' | 'no_auth_unsupported' | 'credential_transport_unavailable' | 'optional_credential_no_auth_unsupported' | 'capability_streaming_unsupported' | 'capability_streaming_unknown' | 'capability_toolRoundTrips_unsupported' | 'capability_toolRoundTrips_unknown' | 'capability_statefulResponses_unsupported' | 'capability_statefulResponses_unknown' | 'capability_reasoningControls_unsupported' | 'capability_reasoningControls_unknown' | 'model_required_for_capability_resolution' | 'model_capability_toolRoundTrips_unsupported' | 'model_capability_toolRoundTrips_unknown' | 'model_capability_reasoningControls_unsupported' | 'model_capability_reasoningControls_unknown' | 'compatibility_override_incompatible' | 'compatibility_override_experimental' | 'compatibility_evidence_missing' | 'model_capability_evidence_required' | 'agent_external_providers_unsupported' | 'adapter_contract_invalid')[];
+                    };
+                    compatibilityFingerprint: string;
+                    confirmed: boolean;
+                } | undefined;
                 direct?: {
                     sourceMemberKey: string;
                     sourceVersion: string;

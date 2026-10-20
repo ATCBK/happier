@@ -71,18 +71,28 @@ export type VoiceControlsActionInputById = {
     readonly "ui.voice_global.brief.close": {
         expectedAttemptId?: string | undefined;
     };
-    readonly "ui.voice_global.glance.open": Record<string, never>;
-    readonly "ui.voice_global.glance.close": Record<string, never>;
+    readonly "ui.voice_global.glance.open": {
+        [x: string]: never;
+    };
+    readonly "ui.voice_global.glance.close": {
+        [x: string]: never;
+    };
     readonly "ui.voice_global.transcript.set_visible": {
         visible: boolean;
     };
-    readonly "ui.voice_global.companion.reveal": Record<string, never>;
+    readonly "ui.voice_global.companion.reveal": {
+        [x: string]: never;
+    };
     readonly "ui.voice_global.position.set": {
         x: number;
         y: number;
     };
-    readonly "ui.voice_global.setup.open": Record<string, never>;
-    readonly "ui.voice_global.setup.close": Record<string, never>;
+    readonly "ui.voice_global.setup.open": {
+        [x: string]: never;
+    };
+    readonly "ui.voice_global.setup.close": {
+        [x: string]: never;
+    };
     readonly "ui.voice_global.open_conversation": {
         expectedAttempt: string;
     };
@@ -98,7 +108,9 @@ export type VoiceControlsActionInputById = {
     readonly "ui.voice_global.dictation.dismiss": {
         commandId: string;
     };
-    readonly "ui.voice_global.reset": Record<string, never>;
+    readonly "ui.voice_global.reset": {
+        [x: string]: never;
+    };
     readonly "ui.voice_agent.teleport": {
         [x: string]: unknown;
         sessionId?: string | undefined;
@@ -1773,6 +1785,10 @@ export type VoiceControlsActionResultById = {
         status: 'unavailable';
         code: 'dictation_field_unmounted' | 'dictation_field_unavailable' | 'dictation_consent_required' | 'dictation_microphone_unavailable' | 'dictation_capture_unavailable' | 'dictation_state_changed' | 'dictation_cancelled' | 'dictation_failed';
     };
-    readonly "ui.voice_global.reset": JsonValue;
-    readonly "ui.voice_agent.teleport": JsonValue;
+    readonly "ui.voice_global.reset": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "ui.voice_agent.teleport": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
 };

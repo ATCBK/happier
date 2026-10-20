@@ -221,7 +221,9 @@ export type PromptLibraryActionResultById = {
             bodyVersion: number;
         } | undefined;
     };
-    readonly "prompt_registry.install": JsonValue;
+    readonly "prompt_registry.install": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
     readonly "prompts.invocation.create": {
         status: 'updated';
         invocationId: string;

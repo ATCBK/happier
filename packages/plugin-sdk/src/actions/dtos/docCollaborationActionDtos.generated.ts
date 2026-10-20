@@ -170,6 +170,11 @@ export type DocCollaborationActionResultById = {
                     path: string;
                     sha: string;
                     runId?: string | undefined;
+                } | {
+                    rootPath: string;
+                    machineId: string;
+                    path: string;
+                    sha: string;
                 } | undefined;
                 restoredFromBodyVersion?: number | undefined;
             } | undefined;

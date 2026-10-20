@@ -255,6 +255,16 @@ export type DiscussionActionInputById = {
         publisherSessionId?: string | undefined;
         confirmedPreview?: {
             source: {
+                kind: 'session';
+                message: {
+                    kind: 'session';
+                    session: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    messageId: string;
+                };
+            } | {
                 kind: 'doc_passage';
                 doc: {
                     ref: {
@@ -266,16 +276,6 @@ export type DiscussionActionInputById = {
                         headerVersion: number;
                         bodyVersion: number;
                     };
-                };
-            } | {
-                kind: 'session';
-                message: {
-                    kind: 'session';
-                    session: {
-                        serverId: string;
-                        sessionId: string;
-                    };
-                    messageId: string;
                 };
             };
             sourceAudienceAccountIds: string[];
@@ -6074,6 +6074,13 @@ export type DiscussionActionResultById = {
         }[];
         participants: ({
             participant: {
+                kind: 'session';
+                sessionId: string;
+            };
+            answerPolicy: 'when_addressed' | 'reads_only' | 'drafts_for_approval' | 'watches_and_speaks_up';
+            createdAt: number;
+        } | {
+            participant: {
                 kind: 'model';
                 participantSlotId: string;
             };
@@ -6262,13 +6269,6 @@ export type DiscussionActionResultById = {
                 unlistedTools?: 'ask' | 'deny' | undefined;
             };
             sessionId: string | null;
-            answerPolicy: 'when_addressed' | 'reads_only' | 'drafts_for_approval' | 'watches_and_speaks_up';
-            createdAt: number;
-        } | {
-            participant: {
-                kind: 'session';
-                sessionId: string;
-            };
             answerPolicy: 'when_addressed' | 'reads_only' | 'drafts_for_approval' | 'watches_and_speaks_up';
             createdAt: number;
         })[];

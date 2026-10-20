@@ -603,6 +603,11 @@ function deriveProgram({ repoRoot, keys, bindings, extraNames = [], extraInputNa
     const file = ts.createSourceFile('dto.ts', `type Dto = ${text};`, ts.ScriptTarget.ES2022, true);
     if (file.parseDiagnostics.length) throw Error('Schema projection did not parse');
     const transformed = ts.transform(file.statements[0].type, [context => {
+      const expand = text => {
+        const source = ts.createSourceFile('expanded.ts', `type Expanded = ${text};`, ts.ScriptTarget.ES2022, true);
+        const synthesize = child => ts.setTextRange(ts.visitEachChild(child, synthesize, context), { pos: -1, end: -1 });
+        return synthesize(source.statements[0].type);
+      };
       const visit = node => {
         if (ts.isTypeLiteralNode(node) && node.members.some(member => ts.isPropertySignature(member)
           && member.type?.kind !== ts.SyntaxKind.NeverKeyword)) {
@@ -632,17 +637,22 @@ function deriveProgram({ repoRoot, keys, bindings, extraNames = [], extraInputNa
         if (ts.isTypeReferenceNode(node)) {
           const name = node.typeName.getText(file);
           if (/^(?:z\.)?Zod|^z\.core\.\$Zod/u.test(name)) return ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+          if (keys && /^ActionSchema\d+Value$/u.test(name)) {
+            // Complex row unions may retain their virtual alias inside a map.
+            // InTypeAlias expands that alias at the root, before the family
+            // overlay disappears and support dependencies are resolved.
+            const type = checker.getDeclaredTypeOfSymbol(findSymbol(name));
+            return expand(normalize(checker.typeToString(type, undefined, flags), input, parameters));
+          }
           if (input && name === 'PluginJsonValueV2' && ts.isUnionTypeNode(node.parent)) {
             // An optional JSON union is projected member by member: its outer
             // containers retain mutability while nested values use JsonValue.
             // Expand the canonical union rather than inventing another JSON type.
             const canonical = checker.getDeclaredTypeOfSymbol(findSymbol(name));
             const projected = normalize(checker.typeToString(canonical, undefined, flags), true, parameters);
-            const expanded = ts.createSourceFile('json-input.ts', `type JsonInput = ${projected};`, ts.ScriptTarget.ES2022, true).statements[0].type;
             // These nodes belong to a different source; detach their positions
             // before the enclosing declaration is printed against its source.
-            const synthesize = child => ts.setTextRange(ts.visitEachChild(child, synthesize, context), { pos: -1, end: -1 });
-            return synthesize(expanded);
+            return expand(projected);
           }
           if (name === 'ProtocolObjectProjection') {
             const [shape, projection] = node.typeArguments ?? [];

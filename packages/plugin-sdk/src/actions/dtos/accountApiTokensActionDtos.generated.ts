@@ -120,7 +120,9 @@ export type AccountApiTokensActionInputById = {
             } | null;
         } | undefined;
     };
-    readonly "account.apiTokens.list": Record<string, never>;
+    readonly "account.apiTokens.list": {
+        [x: string]: never;
+    };
     readonly "account.apiTokens.update": {
         tokenId: string;
         label?: string | undefined;
@@ -230,7 +232,9 @@ export type AccountApiTokensActionInputById = {
     readonly "account.apiTokens.revoke": {
         tokenId: string;
     };
-    readonly "account.apiTokens.revokeAll": Record<string, never>;
+    readonly "account.apiTokens.revokeAll": {
+        [x: string]: never;
+    };
 };
 export type AccountApiTokensActionResultById = {
     readonly "account.apiTokens.create": {

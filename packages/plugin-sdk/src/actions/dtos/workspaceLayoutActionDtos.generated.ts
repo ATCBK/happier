@@ -56,7 +56,9 @@ export type WorkspaceLayoutActionInputById = {
             kind: 'workingTree';
         } | undefined;
     };
-    readonly "workspace.tabs.list": Record<string, never>;
+    readonly "workspace.tabs.list": {
+        [x: string]: never;
+    };
     readonly "workspace.tabs.open": {
         href?: string | undefined;
         tabId?: string | undefined;
@@ -166,6 +168,47 @@ export type WorkspaceLayoutActionInputById = {
                 matchCase: boolean;
                 regex: boolean;
             } | undefined;
+        } | {
+            query: string;
+            target: {
+                kind: 'session-file';
+                sessionId: string;
+                serverId: string;
+                machineId: string;
+                rootPath: string;
+                path: string;
+                anchor?: {
+                    kind: 'fileLine';
+                    startLine: number;
+                    lineHash?: `lh1:${string}` | undefined;
+                } | {
+                    kind: 'diffLine';
+                    startLine: number;
+                    side: 'before' | 'after';
+                    oldLine: number | null;
+                    newLine: number | null;
+                    lineHash?: `lh1:${string}` | undefined;
+                } | {
+                    kind: 'line';
+                    filePath: string;
+                    line: number;
+                    side?: 'before' | 'after' | undefined;
+                    lineHash?: `lh1:${string}` | undefined;
+                } | {
+                    kind: 'range';
+                    filePath: string;
+                    startLine: number;
+                    endLine: number;
+                    side?: 'before' | 'after' | undefined;
+                    startLineHash?: `lh1:${string}` | undefined;
+                    endLineHash?: `lh1:${string}` | undefined;
+                    selectedTextHash?: `lh1:${string}` | undefined;
+                } | undefined;
+            };
+            options?: {
+                matchCase: boolean;
+                regex: boolean;
+            } | undefined;
         } | undefined;
         beforeTabId?: string | null | undefined;
         reuseExisting?: boolean | undefined;
@@ -189,7 +232,9 @@ export type WorkspaceLayoutActionInputById = {
     readonly "workspace.tabs.close_all": {
         groupId?: string | undefined;
     };
-    readonly "workspace.tabs.closed.list": Record<string, never>;
+    readonly "workspace.tabs.closed.list": {
+        [x: string]: never;
+    };
     readonly "workspace.tabs.reopen": {
         tabId?: string | undefined;
     };
@@ -215,7 +260,9 @@ export type WorkspaceLayoutActionInputById = {
     readonly "workspace.groups.maximize": {
         groupId: string;
     };
-    readonly "workspace.groups.restore": Record<string, never>;
+    readonly "workspace.groups.restore": {
+        [x: string]: never;
+    };
     readonly "workspace.split": {
         direction: 'left' | 'right' | 'up' | 'down';
         tabId?: string | undefined;

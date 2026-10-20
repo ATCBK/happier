@@ -4,7 +4,9 @@
 import type { ProviderCatalogParserV1 } from './pluginActionDtoSupport.generated.js';
 
 export type SavedSecretSharingActionInputById = {
-    readonly "secrets.shared.list": Record<string, never>;
+    readonly "secrets.shared.list": {
+        [x: string]: never;
+    };
     readonly "secrets.shared.create": {
         resourceId: string;
         displayName: string;
@@ -899,6 +901,7 @@ export type SavedSecretSharingActionInputById = {
                                 };
                                 groupId: string;
                             } | undefined;
+                            catalogSourceKey?: string | undefined;
                         }[];
                         machineGrants: {
                             v: 1;

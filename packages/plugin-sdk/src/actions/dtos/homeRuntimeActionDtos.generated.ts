@@ -4,7 +4,9 @@
 import type { SystemTaskJsonValue } from './pluginActionDtoSupport.generated.js';
 
 export type HomeRuntimeActionInputById = {
-    readonly "relay.access.status": Record<string, never>;
+    readonly "relay.access.status": {
+        [x: string]: never;
+    };
     readonly "relay.access.configure": {
         providerId: 'localOnly' | 'lan' | 'tailscaleServe' | 'tailscaleFunnel' | 'cloudflareNamed';
         config: {
@@ -23,7 +25,9 @@ export type HomeRuntimeActionInputById = {
         };
         upstreamUrl?: string | null | undefined;
     };
-    readonly "relay.access.disable": Record<string, never>;
+    readonly "relay.access.disable": {
+        [x: string]: never;
+    };
     readonly "relay.runtime.status": {
         runtimeTarget?: {
             channel: 'stable' | 'preview' | 'dev';
@@ -212,8 +216,12 @@ export type HomeRuntimeActionInputById = {
         sourceDescriptorRevision: number;
         recoveryAction?: 'finish_move' | 'return_to_source' | undefined;
     };
-    readonly "relay.runtime.personal_home.choose_archive": Record<string, never>;
-    readonly "relay.runtime.personal_home.choose_backup_destination": Record<string, never>;
+    readonly "relay.runtime.personal_home.choose_archive": {
+        [x: string]: never;
+    };
+    readonly "relay.runtime.personal_home.choose_backup_destination": {
+        [x: string]: never;
+    };
     readonly "relay.runtime.open_path": {
         path: string;
     };

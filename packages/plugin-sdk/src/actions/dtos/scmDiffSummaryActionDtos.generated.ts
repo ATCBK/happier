@@ -70,6 +70,75 @@ export type ScmDiffSummaryActionInputById = {
         checkpointReceiptId?: string | undefined;
         turnEvidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled' | undefined;
     };
+    readonly "scm.diffSummary.draftPullRequest": {
+        cwd: string;
+        source: {
+            kind: 'turnCheckpoint';
+            sessionId?: string;
+            turnId?: string;
+            checkpointReceiptId?: string;
+            evidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled';
+        } | {
+            kind: 'session';
+            sessionId: string;
+        } | {
+            kind: 'workingTree';
+        } | {
+            kind: 'branch';
+            head: string;
+            base: string;
+        } | {
+            kind: 'commit';
+            commit: string;
+            parent?: string;
+        } | {
+            kind: 'pullRequest';
+            locator: {
+                providerId: string;
+                repository: string;
+                number: number;
+                baseOid?: string;
+                headOid?: string;
+                sourceAction?: {
+                    action: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
+                };
+            };
+        };
+        sessionId?: string | undefined;
+        comparisonId?: string | undefined;
+        backendPreference?: {
+            kind: 'prefer';
+            backendId: string;
+        } | undefined;
+        turnId?: string | undefined;
+        checkpointReceiptId?: string | undefined;
+        turnEvidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled' | undefined;
+        modelSelector?: {
+            profileId?: string | undefined;
+            modelId?: string | undefined;
+            backendTargetKey?: string | undefined;
+        } | undefined;
+        cachePolicy?: {
+            mode: 'read_write' | 'bypass';
+            reason?: string | undefined;
+        } | undefined;
+        investigateSurroundingFiles?: boolean | undefined;
+        outputLanguage?: string | undefined;
+        pullRequestDraft?: {
+            providerId?: string | undefined;
+        } | undefined;
+        outputs?: ('summary' | 'walkthrough' | 'commitPlan')[] | undefined;
+    };
     readonly "scm.diffSummary.generate": {
         cwd: string;
         source: {
@@ -134,9 +203,14 @@ export type ScmDiffSummaryActionInputById = {
         } | undefined;
         investigateSurroundingFiles?: boolean | undefined;
         outputLanguage?: string | undefined;
+        pullRequestDraft?: {
+            providerId?: string | undefined;
+        } | undefined;
         outputs?: ('summary' | 'walkthrough' | 'commitPlan')[] | undefined;
     };
-    readonly "scm.diffSummary.result.list": Record<string, never>;
+    readonly "scm.diffSummary.result.list": {
+        [x: string]: never;
+    };
     readonly "scm.diffSummary.result.clear": {
         results: {
             cwd: string;
@@ -435,6 +509,7 @@ export type ScmDiffSummaryActionInputById = {
                     changeRefs: string[];
                     importance?: 'low' | 'medium' | 'high' | undefined;
                     findingRefs?: string[] | undefined;
+                    suggestedQuestions?: string[] | undefined;
                     reviewExplanations?: {
                         markdown: string;
                         findingRefs: {
@@ -648,7 +723,7 @@ export type ScmDiffSummaryActionResultById = {
         error: string;
         errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
     };
-    readonly "scm.diffSummary.generate": {
+    readonly "scm.diffSummary.draftPullRequest": {
         success: true;
         sourceKey: string;
         metadata: {
@@ -751,6 +826,7 @@ export type ScmDiffSummaryActionResultById = {
                         changeRefs: string[];
                         importance?: 'low' | 'medium' | 'high' | undefined;
                         findingRefs?: string[] | undefined;
+                        suggestedQuestions?: string[] | undefined;
                         reviewExplanations?: {
                             markdown: string;
                             findingRefs: {
@@ -952,6 +1028,420 @@ export type ScmDiffSummaryActionResultById = {
                         changeRefs: string[];
                         importance?: 'low' | 'medium' | 'high' | undefined;
                         findingRefs?: string[] | undefined;
+                        suggestedQuestions?: string[] | undefined;
+                        reviewExplanations?: {
+                            markdown: string;
+                            findingRefs: {
+                                runId: string;
+                                findingId: string;
+                            }[];
+                            provenance: {
+                                requestedBy: {
+                                    kind: 'unknown' | 'user' | 'agent' | 'plugin' | 'automation' | 'workflow';
+                                    id?: string | undefined;
+                                };
+                                requestedAtMs: number;
+                                generatedAtMs: number;
+                                modelId?: string | undefined;
+                                runId?: string | undefined;
+                            };
+                        }[] | undefined;
+                    }[];
+                    otherChangeRefs: string[];
+                    readingHint?: string | undefined;
+                } | undefined;
+                reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
+            } | undefined;
+            commitPlan?: {
+                state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
+                value?: {
+                    groups: {
+                        id: string;
+                        message: string;
+                        rationale: string;
+                        changeRefs: string[];
+                    }[];
+                    leftOutChangeRefs: string[];
+                } | undefined;
+                reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
+            } | undefined;
+        } | undefined;
+        analysis?: {
+            suppliedChangeRefs: string[];
+            analysedChangeRefs: string[];
+            remainingChangeRefs: string[];
+            parts?: {
+                admitted: number;
+                completed: number;
+                total: number;
+                phase: 'evidence' | 'merge' | 'done';
+            } | undefined;
+        } | undefined;
+        runId?: string | undefined;
+        resultId?: string | undefined;
+        revision?: number | undefined;
+        producer?: {
+            kind: 'generation' | 'review';
+            modelId?: string | undefined;
+            runId?: string | undefined;
+            seededFromRunId?: string | undefined;
+            reviewedBy?: string[] | undefined;
+            reviewedRuns?: {
+                runId: string;
+                callId: string;
+                backendId: string;
+                status: 'failed' | 'cancelled' | 'running' | 'succeeded' | 'timeout';
+                hasOutput: boolean;
+                comparisonId?: string | undefined;
+                reviewOutcome?: 'failed' | 'complete' | 'unavailable' | 'partial' | undefined;
+                reviewedFingerprint?: string | null | undefined;
+                commentIds?: string[] | undefined;
+                materialization?: {
+                    kind: 'complete';
+                } | {
+                    kind: 'partial';
+                    errorCode: string;
+                } | {
+                    kind: 'failed';
+                    errorCode: string;
+                } | undefined;
+            }[] | undefined;
+            narrationMode?: 'continued_review' | 'seeded_narrator' | undefined;
+            comparisonFreshness?: 'unknown' | 'unchanged' | 'changed' | undefined;
+            narratedAtMs?: number | undefined;
+            launchFailures?: {
+                engineId: string;
+                errorCode: string;
+                error: string;
+            }[] | undefined;
+        } | undefined;
+        nextAction?: 'chooseModel' | undefined;
+        sourceKey?: string | undefined;
+        checkpointReceiptId?: string | undefined;
+        metadata?: {
+            source: ScmComparisonSource;
+            sourceKey: string;
+            turnId?: string | undefined;
+            checkpointReceiptId?: string | undefined;
+            turnEvidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled' | undefined;
+            contentConfidence?: 'exact' | 'unavailable' | undefined;
+            attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
+        } | undefined;
+        cost?: {
+            [x: string]: unknown;
+            inputTokens?: number | undefined;
+            outputTokens?: number | undefined;
+            estimatedUsd?: number | undefined;
+        } | undefined;
+    };
+    readonly "scm.diffSummary.generate": {
+        success: true;
+        sourceKey: string;
+        metadata: {
+            source: ScmComparisonSource;
+            sourceKey: string;
+            turnId?: string | undefined;
+            checkpointReceiptId?: string | undefined;
+            turnEvidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled' | undefined;
+            contentConfidence?: 'exact' | 'unavailable' | undefined;
+            attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
+        };
+        comparison?: {
+            id: string;
+            source: ScmComparisonSource;
+            repository: {
+                rootPath: string;
+            };
+            endpoints: {
+                before?: string | undefined;
+                after?: string | undefined;
+            };
+            inventory: {
+                state: 'complete' | 'incomplete' | 'unavailable';
+                files: {
+                    path: string;
+                    changeKind: string;
+                    binary: boolean | null;
+                    generated: boolean;
+                    lockfile: boolean;
+                    evidence: {
+                        state: 'available';
+                        unifiedDiff: string;
+                    } | {
+                        state: 'unavailable';
+                        reason: string;
+                        unifiedDiff?: string | undefined;
+                    };
+                    occurrences: {
+                        id: string;
+                        alias: string;
+                        path: string;
+                        before: {
+                            startLine: number;
+                            lineCount: number;
+                        };
+                        after: {
+                            startLine: number;
+                            lineCount: number;
+                        };
+                        position: number;
+                        previousPath?: string | undefined;
+                        beforeBlobId?: string | undefined;
+                        afterBlobId?: string | undefined;
+                        layer?: 'staged' | 'unstaged' | 'untracked' | 'combined' | undefined;
+                        evidence?: {
+                            state: 'available';
+                        } | {
+                            state: 'unavailable';
+                            reason: string;
+                        } | undefined;
+                    }[];
+                    previousPath?: string | undefined;
+                    beforeBlobId?: string | undefined;
+                    afterBlobId?: string | undefined;
+                }[];
+                reasons: string[];
+            };
+            commitTarget?: {
+                headOid: string | null;
+                ref: string | null;
+            } | undefined;
+            pullRequest?: {
+                baseOid: string;
+            } | undefined;
+            freshness?: 'unknown' | 'current' | 'stale' | undefined;
+            attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
+        } | undefined;
+        requestedOutputs?: ('summary' | 'walkthrough' | 'commitPlan')[] | undefined;
+        outputs?: {
+            summary?: {
+                state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
+                value?: {
+                    summaryMarkdown: string;
+                    risks?: string[] | undefined;
+                    testImpact?: string | undefined;
+                    suggestedPrBody?: string | undefined;
+                } | undefined;
+                reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
+            } | undefined;
+            walkthrough?: {
+                state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
+                value?: {
+                    title: string;
+                    intro: string;
+                    stops: {
+                        id: string;
+                        title: string;
+                        explanationMarkdown: string;
+                        changeRefs: string[];
+                        importance?: 'low' | 'medium' | 'high' | undefined;
+                        findingRefs?: string[] | undefined;
+                        suggestedQuestions?: string[] | undefined;
+                        reviewExplanations?: {
+                            markdown: string;
+                            findingRefs: {
+                                runId: string;
+                                findingId: string;
+                            }[];
+                            provenance: {
+                                requestedBy: {
+                                    kind: 'unknown' | 'user' | 'agent' | 'plugin' | 'automation' | 'workflow';
+                                    id?: string | undefined;
+                                };
+                                requestedAtMs: number;
+                                generatedAtMs: number;
+                                modelId?: string | undefined;
+                                runId?: string | undefined;
+                            };
+                        }[] | undefined;
+                    }[];
+                    otherChangeRefs: string[];
+                    readingHint?: string | undefined;
+                } | undefined;
+                reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
+            } | undefined;
+            commitPlan?: {
+                state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
+                value?: {
+                    groups: {
+                        id: string;
+                        message: string;
+                        rationale: string;
+                        changeRefs: string[];
+                    }[];
+                    leftOutChangeRefs: string[];
+                } | undefined;
+                reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
+            } | undefined;
+        } | undefined;
+        analysis?: {
+            suppliedChangeRefs: string[];
+            analysedChangeRefs: string[];
+            remainingChangeRefs: string[];
+            parts?: {
+                admitted: number;
+                completed: number;
+                total: number;
+                phase: 'evidence' | 'merge' | 'done';
+            } | undefined;
+        } | undefined;
+        runId?: string | undefined;
+        resultId?: string | undefined;
+        revision?: number | undefined;
+        producer?: {
+            kind: 'generation' | 'review';
+            modelId?: string | undefined;
+            runId?: string | undefined;
+            seededFromRunId?: string | undefined;
+            reviewedBy?: string[] | undefined;
+            reviewedRuns?: {
+                runId: string;
+                callId: string;
+                backendId: string;
+                status: 'failed' | 'cancelled' | 'running' | 'succeeded' | 'timeout';
+                hasOutput: boolean;
+                comparisonId?: string | undefined;
+                reviewOutcome?: 'failed' | 'complete' | 'unavailable' | 'partial' | undefined;
+                reviewedFingerprint?: string | null | undefined;
+                commentIds?: string[] | undefined;
+                materialization?: {
+                    kind: 'complete';
+                } | {
+                    kind: 'partial';
+                    errorCode: string;
+                } | {
+                    kind: 'failed';
+                    errorCode: string;
+                } | undefined;
+            }[] | undefined;
+            narrationMode?: 'continued_review' | 'seeded_narrator' | undefined;
+            comparisonFreshness?: 'unknown' | 'unchanged' | 'changed' | undefined;
+            narratedAtMs?: number | undefined;
+            launchFailures?: {
+                engineId: string;
+                errorCode: string;
+                error: string;
+            }[] | undefined;
+        } | undefined;
+        inputId?: string | undefined;
+        summaryMarkdown?: string | undefined;
+        checkpointReceiptId?: string | undefined;
+        truncation?: {
+            [x: string]: unknown;
+            reason: 'fileBudget' | 'diffBytes' | 'fileCount';
+            droppedFiles?: number | undefined;
+        } | undefined;
+        generationState?: 'complete' | 'partial' | undefined;
+        cost?: {
+            [x: string]: unknown;
+            inputTokens?: number | undefined;
+            outputTokens?: number | undefined;
+            estimatedUsd?: number | undefined;
+        } | undefined;
+        risks?: string[] | undefined;
+        testImpact?: string | undefined;
+        suggestedPrBody?: string | undefined;
+    } | {
+        success: false;
+        error: string;
+        errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+        comparison?: {
+            id: string;
+            source: ScmComparisonSource;
+            repository: {
+                rootPath: string;
+            };
+            endpoints: {
+                before?: string | undefined;
+                after?: string | undefined;
+            };
+            inventory: {
+                state: 'complete' | 'incomplete' | 'unavailable';
+                files: {
+                    path: string;
+                    changeKind: string;
+                    binary: boolean | null;
+                    generated: boolean;
+                    lockfile: boolean;
+                    evidence: {
+                        state: 'available';
+                        unifiedDiff: string;
+                    } | {
+                        state: 'unavailable';
+                        reason: string;
+                        unifiedDiff?: string | undefined;
+                    };
+                    occurrences: {
+                        id: string;
+                        alias: string;
+                        path: string;
+                        before: {
+                            startLine: number;
+                            lineCount: number;
+                        };
+                        after: {
+                            startLine: number;
+                            lineCount: number;
+                        };
+                        position: number;
+                        previousPath?: string | undefined;
+                        beforeBlobId?: string | undefined;
+                        afterBlobId?: string | undefined;
+                        layer?: 'staged' | 'unstaged' | 'untracked' | 'combined' | undefined;
+                        evidence?: {
+                            state: 'available';
+                        } | {
+                            state: 'unavailable';
+                            reason: string;
+                        } | undefined;
+                    }[];
+                    previousPath?: string | undefined;
+                    beforeBlobId?: string | undefined;
+                    afterBlobId?: string | undefined;
+                }[];
+                reasons: string[];
+            };
+            commitTarget?: {
+                headOid: string | null;
+                ref: string | null;
+            } | undefined;
+            pullRequest?: {
+                baseOid: string;
+            } | undefined;
+            freshness?: 'unknown' | 'current' | 'stale' | undefined;
+            attributionScope?: 'unknown' | 'shared_worktree' | 'no_happier_checkpoint_overlap_observed' | undefined;
+        } | undefined;
+        requestedOutputs?: ('summary' | 'walkthrough' | 'commitPlan')[] | undefined;
+        outputs?: {
+            summary?: {
+                state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
+                value?: {
+                    summaryMarkdown: string;
+                    risks?: string[] | undefined;
+                    testImpact?: string | undefined;
+                    suggestedPrBody?: string | undefined;
+                } | undefined;
+                reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
+            } | undefined;
+            walkthrough?: {
+                state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
+                value?: {
+                    title: string;
+                    intro: string;
+                    stops: {
+                        id: string;
+                        title: string;
+                        explanationMarkdown: string;
+                        changeRefs: string[];
+                        importance?: 'low' | 'medium' | 'high' | undefined;
+                        findingRefs?: string[] | undefined;
+                        suggestedQuestions?: string[] | undefined;
                         reviewExplanations?: {
                             markdown: string;
                             findingRefs: {
@@ -1221,6 +1711,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -1422,6 +1913,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -1767,6 +2259,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -1968,6 +2461,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -2313,6 +2807,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -2514,6 +3009,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -2859,6 +3355,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -3060,6 +3557,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -3405,6 +3903,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -3606,6 +4105,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -3989,6 +4489,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -4190,6 +4691,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -4535,6 +5037,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -4736,6 +5239,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -5081,6 +5585,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -5282,6 +5787,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -5637,6 +6143,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -5838,6 +6345,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -6183,6 +6691,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -6384,6 +6893,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -6729,6 +7239,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {
@@ -6930,6 +7441,7 @@ export type ScmDiffSummaryActionResultById = {
                                 changeRefs: string[];
                                 importance?: 'low' | 'medium' | 'high' | undefined;
                                 findingRefs?: string[] | undefined;
+                                suggestedQuestions?: string[] | undefined;
                                 reviewExplanations?: {
                                     markdown: string;
                                     findingRefs: {

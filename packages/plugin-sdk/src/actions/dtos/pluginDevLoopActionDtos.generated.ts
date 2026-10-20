@@ -178,7 +178,9 @@ export type PluginDevLoopActionInputById = {
     readonly "plugins.reload": {
         pluginId: string;
     };
-    readonly "plugins.list": Record<string, never>;
+    readonly "plugins.list": {
+        [x: string]: never;
+    };
     readonly "plugins.change.status": {
         pendingChangeId: string;
     };

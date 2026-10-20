@@ -4,7 +4,9 @@
 import type { JsonValue } from '../../identity.js';
 
 export type CurrentUiContextActionInputById = {
-    readonly "ui.current_context.read": Record<string, never>;
+    readonly "ui.current_context.read": {
+        [x: string]: never;
+    };
     readonly "ui.current_context.command.invoke": {
         commandId: string;
     };
@@ -30,5 +32,7 @@ export type CurrentUiContextActionResultById = {
         } | undefined;
         detail?: JsonValue | undefined;
     };
-    readonly "ui.current_context.command.invoke": JsonValue;
+    readonly "ui.current_context.command.invoke": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
 };

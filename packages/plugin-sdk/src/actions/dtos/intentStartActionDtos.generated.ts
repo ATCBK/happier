@@ -422,10 +422,22 @@ export type IntentStartActionInputById = {
     };
 };
 export type IntentStartActionResultById = {
-    readonly "review.start": JsonValue;
-    readonly "review.walkthrough": JsonValue;
-    readonly "review.explain_findings": JsonValue;
-    readonly "subagents.plan.start": JsonValue;
-    readonly "subagents.delegate.start": JsonValue;
-    readonly "voice_agent.start": JsonValue;
+    readonly "review.start": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "review.walkthrough": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "review.explain_findings": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "subagents.plan.start": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "subagents.delegate.start": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "voice_agent.start": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
 };

@@ -655,6 +655,59 @@ export type DiscoveryActionResultById = {
                             endpointTemplateId: string;
                             protocol: string;
                         } | undefined;
+                        sourceFacts?: {
+                            endpoint: {
+                                id: string;
+                                protocol: string;
+                                capabilities: {
+                                    streaming: 'unknown' | 'supported' | 'unsupported';
+                                    toolRoundTrips: 'unknown' | 'supported' | 'unsupported';
+                                    statefulResponses: 'unknown' | 'supported' | 'unsupported';
+                                    reasoningControls: 'unknown' | 'supported' | 'unsupported';
+                                };
+                            };
+                            credential?: {
+                                kind: 'apiKey';
+                                slotId: 'apiKey';
+                                required: boolean;
+                                transports: {
+                                    id: string;
+                                    protocols: string[];
+                                    uses: ('probe' | 'runtime' | 'management')[];
+                                    destination: {
+                                        kind: 'httpHeader';
+                                        name: string;
+                                        format: 'raw' | 'bearer' | {
+                                            template: string;
+                                        };
+                                    } | {
+                                        kind: 'queryParam';
+                                        name: string;
+                                        format: 'raw' | 'bearer' | {
+                                            template: string;
+                                        };
+                                    };
+                                }[];
+                                keyUrl?: string | undefined;
+                            } | undefined;
+                            compatibilityOverrides?: {
+                                agentTargetKey: string;
+                                protocol: string;
+                                status: 'verified' | 'experimental' | 'incompatible';
+                                reason: string;
+                                evidence?: {
+                                    sourceUrls: string[];
+                                    verifiedAt: string;
+                                    providerVersion?: string | undefined;
+                                    agentVersion?: string | undefined;
+                                    testIds?: string[] | undefined;
+                                } | undefined;
+                            }[] | undefined;
+                        } | undefined;
+                        confirmationSource?: {
+                            connectionId: string;
+                            catalogSourceKey: string;
+                        } | undefined;
                         requestPolicySupport?: {
                             descriptor: {
                                 id: string;
@@ -820,5 +873,7 @@ export type DiscoveryActionResultById = {
             } | null;
         } | undefined;
     };
-    readonly "action.invoke": JsonValue;
+    readonly "action.invoke": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
 };

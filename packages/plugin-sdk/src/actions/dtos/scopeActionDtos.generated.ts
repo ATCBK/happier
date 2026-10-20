@@ -27,12 +27,16 @@ export type ScopeActionInputById = {
         } | undefined;
         blame?: boolean | undefined;
     };
-    readonly "workflow.library.view.get": Record<string, never>;
+    readonly "workflow.library.view.get": {
+        [x: string]: never;
+    };
     readonly "workflow.library.view.set": {
         view?: 'all' | 'triggered' | 'running' | undefined;
         searchQuery?: string | undefined;
     };
-    readonly "workflow.library.view.reset": Record<string, never>;
+    readonly "workflow.library.view.reset": {
+        [x: string]: never;
+    };
     readonly "session.list.view.get": {
         view?: {
             kind: 'global';

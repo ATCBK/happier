@@ -258,5 +258,7 @@ export type SessionPermissionsActionResultById = {
     readonly "session.control.switch": {
         switched: true;
     };
-    readonly "session.mode.set": JsonValue;
+    readonly "session.mode.set": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
 };

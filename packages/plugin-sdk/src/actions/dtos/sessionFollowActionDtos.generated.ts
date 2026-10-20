@@ -66,7 +66,7 @@ export type SessionFollowActionInputById = {
                     serverId: string;
                     tagId: string;
                 }>[];
-                source: 'direct' | 'all' | 'persisted';
+                source: 'all' | 'persisted' | 'direct';
             }>;
             v: 1;
             enabled: boolean;
@@ -142,7 +142,9 @@ export type SessionFollowActionInputById = {
             ruleId: string;
         };
     };
-    readonly "follow.preferences.get": Record<string, never>;
+    readonly "follow.preferences.get": {
+        [x: string]: never;
+    };
     readonly "follow.preferences.set": {
         assigned: boolean;
         direct: boolean;
@@ -216,7 +218,7 @@ export type SessionFollowActionInputById = {
                 serverId: string;
                 tagId: string;
             }>[];
-            source: 'direct' | 'all' | 'persisted';
+            source: 'all' | 'persisted' | 'direct';
         }>;
     };
     readonly "session.delivery.mute.set": {
@@ -413,7 +415,7 @@ export type SessionFollowActionResultById = {
                         serverId: string;
                         tagId: string;
                     }>[];
-                    source: 'direct' | 'all' | 'persisted';
+                    source: 'all' | 'persisted' | 'direct';
                 }>;
                 policy: FollowPolicyV1;
             };
@@ -556,7 +558,7 @@ export type SessionFollowActionResultById = {
                         serverId: string;
                         tagId: string;
                     }>[];
-                    source: 'direct' | 'all' | 'persisted';
+                    source: 'all' | 'persisted' | 'direct';
                 }>;
                 policy: FollowPolicyV1;
             };
@@ -715,7 +717,7 @@ export type SessionFollowActionResultById = {
                         serverId: string;
                         tagId: string;
                     }>[];
-                    source: 'direct' | 'all' | 'persisted';
+                    source: 'all' | 'persisted' | 'direct';
                 }>;
                 policy: FollowPolicyV1;
             };

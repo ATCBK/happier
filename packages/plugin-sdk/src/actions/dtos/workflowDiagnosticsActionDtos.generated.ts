@@ -39,7 +39,9 @@ export type WorkflowDiagnosticsActionInputById = {
             payload: JsonValue;
         };
     };
-    readonly "workflow.starters.list": Record<string, never>;
+    readonly "workflow.starters.list": {
+        [x: string]: never;
+    };
     readonly "workflow.starters.resolve": {
         key: 'ask-once' | 'review-pull-request' | 'work-through-each-file' | 'repair-until-it-passes' | 'triage-an-issue' | 'morning-digest' | 'notify-when-agent-waits' | 'daily-summary-in-session' | 'memory-upkeep-in-session' | 'install-deps-in-worktree' | 'test-after-every-turn';
         session?: {
@@ -332,7 +334,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'session';
                     } | {
                         kind: 'background_run';
-                        intent: 'scm_diff_summary' | 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message';
+                        intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                     } | undefined;
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
@@ -346,7 +348,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'session';
                     } | {
                         kind: 'background_run';
-                        intent: 'scm_diff_summary' | 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message';
+                        intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                     };
                     engine?: {
                         agentTargetKey: string;
@@ -691,7 +693,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'session';
                     } | {
                         kind: 'background_run';
-                        intent: 'scm_diff_summary' | 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message';
+                        intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                     } | undefined;
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
@@ -705,7 +707,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         kind: 'session';
                     } | {
                         kind: 'background_run';
-                        intent: 'scm_diff_summary' | 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message';
+                        intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                     };
                     engine?: {
                         agentTargetKey: string;

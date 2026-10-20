@@ -4,7 +4,9 @@
 import type { JsonValue } from '../../identity.js';
 
 export type DaemonAdminActionInputById = {
-    readonly "daemon.filesystem.listRoots": Record<string, never>;
+    readonly "daemon.filesystem.listRoots": {
+        [x: string]: never;
+    };
     readonly "daemon.filesystem.browseDirectory": {
         [x: string]: unknown;
         path: string;
@@ -26,9 +28,19 @@ export type DaemonAdminActionInputById = {
     };
 };
 export type DaemonAdminActionResultById = {
-    readonly "daemon.filesystem.listRoots": JsonValue;
-    readonly "daemon.filesystem.browseDirectory": JsonValue;
-    readonly "bugreport.collectDiagnostics": JsonValue;
-    readonly "bugreport.getLogTail": JsonValue;
-    readonly "bugreport.uploadArtifact": JsonValue;
+    readonly "daemon.filesystem.listRoots": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "daemon.filesystem.browseDirectory": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "bugreport.collectDiagnostics": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "bugreport.getLogTail": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
+    readonly "bugreport.uploadArtifact": string | number | boolean | readonly JsonValue[] | {
+        readonly [key: string]: JsonValue;
+    } | null;
 };

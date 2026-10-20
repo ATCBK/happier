@@ -70,6 +70,7 @@ export type ScmPullRequestActionInputById = {
         } | undefined;
         outcomeVersion?: 1 | undefined;
         providerId?: string | undefined;
+        includeTemplate?: boolean | undefined;
     };
     readonly "scm.pullRequest.checkout": {
         [x: string]: unknown;
@@ -2230,6 +2231,13 @@ export type ScmPullRequestActionResultById = {
             kind: 'none';
         };
         composeUrl?: string | undefined;
+        template?: {
+            kind: 'ready';
+            body?: string | undefined;
+        } | {
+            kind: 'needs_input';
+            error: string;
+        } | undefined;
     };
     readonly "scm.pullRequest.checkout": {
         [x: string]: unknown;

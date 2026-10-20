@@ -8,7 +8,9 @@ export type HomeHubLayoutActionInputById = {
     readonly "home.reachNudge.dismiss": {
         homeServerId: string;
     };
-    readonly "home.hub.layout.get": Record<string, never>;
+    readonly "home.hub.layout.get": {
+        [x: string]: never;
+    };
     readonly "home.hub.layout.update": {
         intent: {
             kind: 'move';
