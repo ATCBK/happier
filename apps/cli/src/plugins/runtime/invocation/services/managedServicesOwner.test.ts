@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -117,6 +117,73 @@ const MANAGED_SERVICE_CLEAN_EXIT: PluginProcessResult = Object.freeze({
 });
 
 describe('managed service requester process projection', () => {
+    it.each(['local', 'qualified', 'foreign', 'refused', 'arguments-refused'] as const)('honours the invocation-selected %s system tool for a detached Agent service', async identity => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-agent-service-tool-'));
+        const { owner } = createLifecycleHarness([], 'daemon');
+        const executable = { kind: 'systemTool' as const, id: identity === 'local'
+            ? 'native-agent' : { pluginId: identity === 'foreign' ? 'other.agent' : 'acme.agent', localId: 'native-agent' } };
+        // System-tool selection is an OS boundary. The process, managed-service
+        // owner, invocation factory and HTTP transport below are all real.
+        const owners = createProductionPluginInvocationServiceOwners({
+            loggerSink: { write() {} }, managedServices: owner,
+            exec: { resolveExecutable: async () => {
+                if (identity === 'foreign') return { command: process.execPath, args: ['-e',
+                    'require("node:http").createServer((req,res)=>res.end(JSON.stringify({cwd:process.cwd(),selection:"foreign-selected"}))).listen(Number(process.env.PORT),"127.0.0.1")'] };
+                if (identity === 'refused') return { command: process.execPath, args: ['-e',
+                    'require("node:http").createServer((req,res)=>res.end("ambient tool must not start")).listen(Number(process.env.PORT),"127.0.0.1")'] };
+                throw new PluginError({ code: 'plugin_system_tool_unavailable', message: 'No ambient installation' });
+            }, resolvePath: async () => directory },
+        });
+        const services = owners.createOperationServices({
+            plugin: { id: 'acme.agent', version: '1' },
+            contribution: { id: 'native-agent', qualifiedId: 'acme.agent/agents/native-agent' },
+            occurrenceId: 'detached-agent', correlationId: 'finite-judge', surface: 'agent',
+            signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+            processOwner: { kind: 'run', runId: 'finite-judge' },
+        }, {
+            filesystemRoots: { pluginData: directory, workspace: directory, projects: new Map() },
+            hostAccessRequests: [],
+            systemTools: { resolve: async request => {
+                if (identity === 'refused') throw new PluginError({
+                    code: 'plugin_system_tool_unavailable', message: 'Invocation selection is unavailable',
+                });
+                return {
+                    grantId: 'selected-native-tool', toolId: request.toolId, displayName: 'Native Agent', source: 'managed',
+                    executablePath: process.execPath,
+                    launch: { kind: 'binary', executablePath: process.execPath, args: ['-e',
+                        'require("node:http").createServer((req,res)=>res.end(JSON.stringify({cwd:process.cwd(),selection:process.env.SELECTED_TOOL}))).listen(Number(process.env.PORT),"127.0.0.1")'],
+                        env: { SELECTED_TOOL: 'invocation-selected' } },
+                    ...(identity === 'arguments-refused' ? { allowedArguments: [] } : {}),
+                };
+            } },
+        });
+        let service: ManagedServiceHandle | undefined;
+        try {
+            const establishment = services.managedServices.supervise({ id: 'native-server',
+                mode: { kind: 'spawn', launch: { executable, cwd: { root: 'workspace', relativePath: '' },
+                    ...(identity === 'arguments-refused' ? { args: ['--', 'blocked'] } : {}) },
+                    endpoint: { kind: 'assignAndInject', port: { kind: 'allocated' }, inject: { portEnvironmentKey: 'PORT' } } },
+                healthCheck: { kind: 'http', target: { kind: 'servicePath', path: '/health' } },
+            });
+            if (identity === 'refused' || identity === 'arguments-refused') {
+                await expect(establishment).rejects.toMatchObject({ code: 'plugin_managed_service_establishment_failed' });
+                return;
+            }
+            service = await establishment;
+            await service.waitUntilHealthy();
+            const response = await service.request({ pathAndQuery: '/verdict' });
+            expect(response.status).toBe(200);
+            expect(await new Response(response.body).json()).toEqual({
+                cwd: await realpath(directory), selection: identity === 'foreign' ? 'foreign-selected' : 'invocation-selected',
+            });
+        } finally {
+            await service?.dispose();
+            await owner.dispose();
+            await owners.dispose();
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
     it('retains sessionless admitted requester evidence through the real service custody and recipient projections', async () => {
         const target = { serverId: 'server', machineId: 'machine', installationId: 'installation' };
         const requester = { ...target, accountId: 'guest' };
