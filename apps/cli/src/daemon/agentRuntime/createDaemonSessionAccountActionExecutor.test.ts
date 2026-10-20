@@ -121,7 +121,12 @@ function createHarness(prepareExternalActionAuthorization?: Parameters<typeof cr
 
 describe('daemon Session Account authority', () => {
   it.each(['caller', 'authorization'] as const)('recovers a retryable %s Home read inside the accepted Action lifetime before delivering once', async phase => {
+    if (phase === 'caller') {
+      vi.useFakeTimers();
+      onTestFinished(() => vi.useRealTimers());
+    }
     const lifetime = new AbortController();
+    onTestFinished(() => lifetime.abort());
     let failures = 0;
     // Exceed the shared backoff's ordinary eight-attempt ceiling. The accepted
     // Action lifetime, rather than that unrelated default, owns this recovery.
@@ -140,7 +145,14 @@ describe('daemon Session Account authority', () => {
       await fetchAccountProfile({ token: 'alice-daemon-token', signal: lifetime.signal });
       return undefined;
     });
-    expect(await harness.execute(operation, { sessionId: 'bob-session', isCurrent: async () => true, signal: lifetime.signal }))
+    const pending = harness.execute(operation, { sessionId: 'bob-session', isCurrent: async () => true, signal: lifetime.signal });
+    if (phase === 'caller') {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(failures).toBe(1);
+      expect(harness.delivered).toEqual([]);
+      await vi.runAllTimersAsync();
+    }
+    expect(await pending)
       .toEqual({ ok: true, result: { attemptedChannels: 1, deliveredChannels: 1 } });
     expect(failures).toBe(failuresBeforeRecovery);
     expect(harness.delivered).toHaveLength(1);
