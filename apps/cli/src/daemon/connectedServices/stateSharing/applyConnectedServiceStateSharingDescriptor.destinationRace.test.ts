@@ -28,9 +28,11 @@ async function applyDescriptor(params: Readonly<{
   root: string;
   sourceRoot: string;
   targetRoot: string;
+  signal?: AbortSignal;
 }>): Promise<void> {
   const { applyConnectedServiceStateSharingDescriptor } = await import('./applyConnectedServiceStateSharingDescriptor');
   await applyConnectedServiceStateSharingDescriptor({
+    signal: params.signal,
     descriptor,
     nativeSourceContext: { sourceRoot: params.sourceRoot, sourceEnv: {} },
     target: { targetMaterializedRoot: params.targetRoot, targetMaterializedEnv: {} },
@@ -180,13 +182,14 @@ describe('applyConnectedServiceStateSharingDescriptor destination races', () => 
     },
   );
 
-  it('throws after exactly three destination races and removes the prepared temporary link', async () => {
+  it.each(['complete', 'cancel'] as const)('preserves six repeated destination races until %s and removes the prepared temporary link', async (outcome) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-state-link-race-exhausted-'));
     const sourceRoot = join(root, 'source');
     const targetRoot = join(root, 'target');
     const targetProjects = join(targetRoot, 'projects');
     const promotionSources: string[] = [];
-    const terminalError = createRenameError('EEXIST');
+    const controller = new AbortController();
+    const cancellation = new Error('Caller retired materialization');
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_785_907_024_119);
 
     try {
@@ -201,36 +204,51 @@ describe('applyConnectedServiceStateSharingDescriptor destination races', () => 
           rename: vi.fn(async (sourcePath: string, destinationPath: string) => {
             if (sourcePath.includes('projects.happier-link-') && destinationPath === targetProjects) {
               promotionSources.push(sourcePath);
-              await actual.mkdir(targetProjects, { recursive: true });
-              await actual.writeFile(join(targetProjects, `provider-${promotionSources.length}.txt`), 'preserve me');
-              if (promotionSources.length === 3) throw terminalError;
-              throw createRenameError('EEXIST');
+              if (promotionSources.length <= 6) {
+                await actual.mkdir(targetProjects, { recursive: true });
+                await actual.writeFile(join(targetProjects, `provider-${promotionSources.length}.txt`), 'preserve me');
+                if (outcome === 'cancel' && promotionSources.length === 6) controller.abort(cancellation);
+                throw createRenameError('EEXIST');
+              }
             }
             return await actual.rename(sourcePath, destinationPath);
           }),
         };
       });
 
-      await expect(applyDescriptor({ root, sourceRoot, targetRoot })).rejects.toBe(terminalError);
-      expect(promotionSources).toHaveLength(3);
+      const applied = applyDescriptor({ root, sourceRoot, targetRoot, signal: controller.signal });
+      if (outcome === 'cancel') {
+        await expect(applied).rejects.toBe(cancellation);
+      } else {
+        await applied;
+        expect((await lstat(targetProjects)).isSymbolicLink()).toBe(true);
+        await expect(readFile(join(targetProjects, 'session.jsonl'), 'utf8')).resolves.toBe('{}\n');
+      }
+      expect(promotionSources).toHaveLength(outcome === 'cancel' ? 6 : 7);
       expect(new Set(promotionSources).size).toBe(1);
       const targetEntries = await readdir(targetRoot);
       expect(targetEntries.some((name) => name.includes('.happier-link-'))).toBe(false);
-      expect(targetEntries.filter((name) => name.startsWith('projects.local-'))).toHaveLength(2);
-      await expect(readFile(join(targetProjects, 'provider-3.txt'), 'utf8')).resolves.toBe('preserve me');
+      const preserved = targetEntries.filter((name) => name.startsWith('projects.local-'));
+      expect(preserved).toHaveLength(outcome === 'cancel' ? 5 : 6);
+      for (let race = 1; race <= 6; race++) {
+        const directory = outcome === 'cancel' && race === 6
+          ? targetProjects
+          : join(targetRoot, preserved[race - 1]!);
+        await expect(readFile(join(directory, `provider-${race}.txt`), 'utf8')).resolves.toBe('preserve me');
+      }
     } finally {
       now.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('propagates a non-race rename error without retrying and removes the temporary link', async () => {
+  it.each(['EACCES', 'EPERM'])('propagates permanent %s without retrying and removes the temporary link', async (code) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-state-link-race-nonretry-'));
     const sourceRoot = join(root, 'source');
     const targetRoot = join(root, 'target');
     const targetProjects = join(targetRoot, 'projects');
     const promotionSources: string[] = [];
-    const permissionError = createRenameError('EACCES');
+    const permissionError = createRenameError(code);
 
     try {
       await mkdir(join(sourceRoot, 'projects'), { recursive: true });
