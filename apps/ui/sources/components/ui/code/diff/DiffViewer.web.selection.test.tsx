@@ -4,6 +4,9 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { InitialPresentationReadinessProvider } from '@/components/ui/presentation/InitialPresentationReadinessContext';
 import { storage } from '@/sync/domains/state/storageStore';
+import { BrowserWorker } from './pierre/pierreWorkerTestHelpers';
+
+let fileDiffMounts = 0;
 
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -16,7 +19,10 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 vi.mock('@pierre/diffs/react', async importOriginal => {
     const actual = await importOriginal<typeof import('@pierre/diffs/react')>();
     return { ...actual,
-        FileDiff: (props: React.ComponentProps<typeof actual.FileDiff>) => React.createElement('pierre-file-diff', props),
+        FileDiff: (props: React.ComponentProps<typeof actual.FileDiff>) => {
+            React.useEffect(() => { fileDiffMounts += 1; }, []);
+            return React.createElement('pierre-file-diff', props);
+        },
         Virtualizer: ({ children }: React.PropsWithChildren) => React.createElement(React.Fragment, null, children),
     };
 });
@@ -35,9 +41,9 @@ describe('DiffViewer (web renderer selection)', () => {
         process.env.EXPO_PUBLIC_HAPPIER_PIERRE_DIFFS__ENABLED = previousEnv;
 
         browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
-        vi.stubGlobal('Worker', class Worker {
-            constructor() { throw new Error('Native worker construction is unavailable in the renderer-selection fixture'); }
-        });
+        BrowserWorker.reset();
+        vi.stubGlobal('Worker', BrowserWorker);
+        fileDiffMounts = 0;
         storage.setState({ settings: { ...storage.getState().settings, filesDiffRendererMode: 'pierre' } });
     });
 
@@ -117,22 +123,27 @@ describe('DiffViewer (web renderer selection)', () => {
         expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeNull();
     });
 
-    it('retains the Pierre owner when range interaction starts and ends', async () => {
+    it('retains the Pierre host while Find and range selection open and close', async () => {
         const { DiffViewer } = await import('./DiffViewer.web');
-
+        const patch = '--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before\n+after\n';
+        const onPressLineRange = () => {};
         const screen = await renderScreen(
             <DiffViewer
                 mode="unified"
-                unifiedDiff={'diff --git a/a.ts b/a.ts'}
+                unifiedDiff={patch}
                 filePath="a.ts"
-                interactionMode="commitSelection"
-                onPressLineRange={() => {}}
+                interactionMode="read"
+                onPressLineRange={onPressLineRange}
             />,
         );
 
-        const owner = screen.findAllByType(pierreViewerType)[0];
-        expect(owner).toBeTruthy();
-        await screen.update(<DiffViewer mode="unified" unifiedDiff={'diff --git a/a.ts b/a.ts'} filePath="a.ts" interactionMode="read" onPressLineRange={() => {}} />);
-        expect(screen.findAllByType(pierreViewerType)[0]).toBe(owner);
+        const host = screen.findAllByType('pierre-file-diff')[0];
+        expect(host).toBeTruthy();
+        for (const [findActive, interactionMode] of [[true, 'read'], [false, 'commitSelection'], [false, 'read']] as const) {
+            await screen.update(<DiffViewer mode="unified" unifiedDiff={patch} filePath="a.ts"
+                findActive={findActive} interactionMode={interactionMode} onPressLineRange={onPressLineRange} />);
+            expect(screen.findAllByType('pierre-file-diff')[0]).toBe(host);
+        }
+        expect(fileDiffMounts).toBe(1);
     });
 });
