@@ -103,9 +103,20 @@ native masking. Other Agents may still declare their own static plugin patterns.
 
 Claude SDK launches keep their requested MCP isolation when organization policy
 rejects strict or dynamic MCP configuration. In development source, that startup
-refusal becomes `claude_managed_mcp_policy_conflict`; there is no retry with
-weaker restrictions. A terminal launch still presents the native refusal because
-its inherited terminal output does not enter the SDK error classifier.
+refusal becomes non-retryable `claude_managed_mcp_policy_conflict`, including
+public Session/Run rejections before input effects; there is no weaker retry.
+Managed-file presence alone does not prove that native policy loaded. A terminal
+launch still presents the native refusal because its inherited terminal output
+does not enter the SDK error classifier.
+
+Claude's development-source Session skill catalog uses the existing
+`sessions.catalog` facet. Native initialization supplies membership, including
+user-only skills; source-file metadata only attaches an unambiguous path.
+The host's existing catalog projection and send-time identity resolver consume
+those entries. Claude's shared native submission boundary preserves the user's
+text and supplies references to explicitly selected skill files, so several
+user-only invocations do not depend on the model-side Skill tool. Skill bodies
+are not pasted, and literal dollar-prefixed words are not parsed as invocations.
 
 Declarative ACP Agents use the same lazy normalizer and one host ACP composer.
 The optional `skills.sessionDelivery` block selects `env_path_list`,
