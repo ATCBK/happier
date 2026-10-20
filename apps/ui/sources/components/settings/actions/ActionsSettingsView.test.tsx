@@ -139,11 +139,19 @@ installSettingsViewCommonModuleMocks({
   storage: async (importOriginal) => {
     const { createStorageModuleMock } =
       await import('@/dev/testkit/mocks/storage');
+    const { settingsDefaults } =
+      await import('@/sync/domains/settings/settings');
     return createStorageModuleMock({
       importOriginal,
       overrides: {
         useSetting: createUseSettingMock({
-          fallback: key => key === 'actionsSettingsV1' ? { v: 1, actions: {} } : ({ privacy: { shareDeviceInventory: true } }),
+          values: {
+            voice: {
+              ...settingsDefaults.voice,
+              privacy: { ...settingsDefaults.voice.privacy, shareDeviceInventory: true },
+            },
+          },
+          fallback: key => settingsDefaults[key],
         }),
       },
     });
