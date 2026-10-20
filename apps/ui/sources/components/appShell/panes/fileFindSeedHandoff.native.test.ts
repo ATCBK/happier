@@ -7,6 +7,9 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { createDeferred } from '@/dev/testkit';
+import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
+import type { UnsavedChangesDecision } from '@/utils/ui/promptUnsavedChangesAlert';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -27,6 +30,7 @@ beforeEach(async () => {
     getStorage().setState({ profileScope: { serverId, accountId: 'account' } });
 });
 afterEach(async () => {
+    clearActiveUnsavedChangesGuard();
     await connection?.dispose();
     connection = undefined;
     await homes.reset();
@@ -34,6 +38,28 @@ afterEach(async () => {
 });
 
 describe('native History launch input at the chat handoff owner', () => {
+    it('does not publish a query from an Account retired while its navigation decision was pending', async () => {
+        const handoff = createFileFindSeedHandoff();
+        const authority = captureActiveServerAccountScopeLifetime();
+        if (!authority) throw new Error('Expected real Account lifetime');
+        const decision = createDeferred<UnsavedChangesDecision>();
+        setActiveUnsavedChangesGuard({ isDirtyRef: { current: true }, requestDecision: () => decision.promise,
+            tag: 'native-find-retirement' });
+        const open = vi.fn();
+        const opening = openChatWithFindSeed({ handoff, authority,
+            destination: { sessionId: 'retired-launch', serverId },
+            seed: { query: 'private retired query', options: { matchCase: false, regex: false },
+                target: { kind: 'route-message-id', routeMessageId: 'row' } },
+            open,
+        });
+        await connection?.dispose();
+        connection = undefined;
+        decision.resolve('discard');
+        await opening;
+        expect(open).not.toHaveBeenCalled();
+        expect(handoff.peekChatCurrent({ sessionId: 'retired-launch', serverId })).toBeNull();
+        handoff.dispose();
+    });
     it('keeps the native query when reopening an existing Session through its local Home alias', async () => {
         const handoff = createFileFindSeedHandoff();
         const authority = captureActiveServerAccountScopeLifetime();

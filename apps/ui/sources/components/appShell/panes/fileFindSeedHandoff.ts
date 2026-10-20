@@ -6,6 +6,7 @@ import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protoco
 import type { WorkspaceChatFindSeedSchema } from '@happier-dev/protocol/actions/workspaceActionFamily';
 import type { z } from 'zod/mini';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 
 /** A travelling query is launch input for one file, never a tab resource or URL parameter. */
 export type FileFindSeed = Readonly<{
@@ -140,14 +141,21 @@ export async function openChatWithFindSeed(input: Readonly<{
     authority?: ServerAccountScopeLifetime | null;
     open(): void | Promise<void>;
 }>) {
-    let cancel: (() => void) | undefined;
+    // Workspace routers return void while a departure guard can still be pending.
+    // Await that owner's verdict before opening; its existing reentry contract
+    // lets the nested router consume the same admitted departure without asking again.
+    let opened = false;
+    let completion: void | Promise<void> = undefined;
+    const admitted = await runGuardedNavigation(() => {
+        if (input.authority?.isCurrent() === false) return;
+        completion = input.open();
+        opened = true;
+        return completion;
+    });
+    if (admitted !== true || !opened) return;
+    await completion;
+    // Only the destination chosen by successful navigation may take this launch.
     if (input.seed && input.authority?.isCurrent()) {
-        cancel = input.handoff?.stageChat({ ...input.destination, accountId: input.authority.scope.accountId }, input.seed, input.authority);
-    }
-    try {
-        await input.open();
-    } catch (error) {
-        cancel?.();
-        throw error;
+        input.handoff?.stageChat({ ...input.destination, accountId: input.authority.scope.accountId }, input.seed, input.authority);
     }
 }
