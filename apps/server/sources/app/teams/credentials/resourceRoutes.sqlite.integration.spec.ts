@@ -1499,6 +1499,19 @@ describe("Team credential resource routes (SQLite integration)", () => {
             brokerPresentation: { selectedTarget: { machineId: online.id, availability: "available" } },
         });
 
+        const observedPresence = app.machineDaemonPresence;
+        app.machineDaemonPresence = { in: () => ({ fetchSockets: async () => { throw new Error("presence unavailable"); } }) };
+        try {
+            const unknown = await post("/v1/teams/credential-resources/get", custodian.id, { resourceId: resource.id });
+            expect(unknown.statusCode, unknown.body).toBe(200);
+            expect(unknown.json()).toMatchObject({
+                readiness: { kind: "broker_unavailable", reason: "projection_unavailable" },
+                brokerPresentation: { selectedTarget: { machineId: online.id, availability: "not_verified" } },
+            });
+        } finally {
+            app.machineDaemonPresence = observedPresence;
+        }
+
         const changed = await post("/v1/teams/credential-resources/update", custodian.id, {
             resourceId: resource.id,
             expectedRevision: resource.revision,
@@ -1947,6 +1960,39 @@ describe("Team credential resource routes (SQLite integration)", () => {
             method: `${broker.id}:daemon.providers.model.projection`,
             params: expect.objectContaining({ machineId: broker.id }),
         }));
+
+        for (const [result, reason] of [
+            [{ status: "success", agentTargetKey: application.agentTargetKey, groups: [] }, "catalog_empty"],
+            [{}, "response_invalid"],
+            [{ status: "error", error: { v: 1, code: "provider_endpoint_unavailable", retryable: true, action: "retry" } }, "projection_unavailable"],
+        ] as const) {
+            app.forwardRpcForUser = vi.fn(async () => ({ ok: true as const, result }));
+            const failed = await post("/v1/teams/credential-resources/entitled/list", recipient.id, { teamId: team.id, application });
+            expect(failed.statusCode, failed.body).toBe(200);
+            expect(failed.json().resources.find((resource: { id: string }) => resource.id === combinedResource.id)).toMatchObject({
+                readiness: { kind: "broker_unavailable", reason },
+                mayBroker: true,
+                mayReceiveDirect: true,
+                providerModels: [],
+            });
+            expect(failed.body).not.toContain(source.connectionId);
+            expect(failed.body).not.toContain(broker.id);
+        }
+        app.forwardRpcForUser = vi.fn(async () => ({ ok: false as const, error: "machine_offline" }));
+        const offline = await post("/v1/teams/credential-resources/entitled/list", recipient.id, { teamId: team.id, application });
+        expect(offline.statusCode, offline.body).toBe(200);
+        expect(offline.json().resources.find((resource: { id: string }) => resource.id === combinedResource.id)).toMatchObject({
+            readiness: { kind: "broker_unavailable", reason: "projection_unavailable" },
+            recoveryAction: "retry",
+        });
+        app.forwardRpcForUser = vi.fn(async () => { throw new Error("private source details"); });
+        const rejected = await post("/v1/teams/credential-resources/entitled/list", recipient.id, { teamId: team.id, application });
+        expect(rejected.statusCode, rejected.body).toBe(200);
+        expect(rejected.json().resources.find((resource: { id: string }) => resource.id === combinedResource.id)).toMatchObject({
+            readiness: { kind: "broker_unavailable", reason: "projection_unavailable" },
+            mayBroker: true,
+        });
+        expect(rejected.body).not.toContain("private source details");
     });
 
     it("does not read source-custodian presence before resource Test authorization", async () => {
@@ -2347,12 +2393,13 @@ describe("Team credential resource routes (SQLite integration)", () => {
         expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ brokerMachineId: machineB.id }));
 
         // Refusal details are a Pool fact only when every candidate agrees.
-        // Unknown transport/schema outcomes and differing refusals stay generic.
+        // Unknown transport/schema outcomes remain distinguishable from
+        // differing observed refusals without disclosing candidate identities.
         for (const scenario of [
             { first: "model_unavailable", second: "model_unavailable", reason: "model_unavailable" },
             { first: "application_unavailable", second: "application_unavailable", reason: "application_unavailable" },
             { first: "model_unavailable", second: "application_unavailable", reason: null },
-            { first: "model_unavailable", second: null, reason: null },
+            { first: "model_unavailable", second: null, reason: "projection_unavailable" },
         ]) {
             eligibilityOverrides.set(machineA.id, { status: "unavailable", reason: scenario.first });
             eligibilityOverrides.set(machineB.id, scenario.second === null

@@ -187,6 +187,74 @@ describe('canonical Session creation admission', () => {
     expect(spawn.mock.calls[0]![0]).toMatchObject({ initialTriggers });
   });
 
+  it.each(['returned', 'thrown'] as const)('preserves a confirmed Home rollback through plugin spawn and rejoins the same birth after retry (%s)', async responseKind => {
+    const attestedContext = { externalPrincipalId: 'principal-rollback', sourceMessageId: 'message-rollback' };
+    fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(FeaturesResponseSchema.parse({ features: {},
+      capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } })),
+    { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    vi.mocked(axios.get).mockImplementation(async (url) => {
+      if (String(url).includes('/v1/access-keys/')) return { status: 200, data: { accessKey: 'existing' } };
+      throw new Error(`Unexpected HTTP read ${url}`);
+    });
+    let refuse = true;
+    const rows = new Map<string, Record<string, unknown>>();
+    vi.mocked(axios.post).mockImplementation(async (url, raw) => {
+      if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: [...rows.values()] } };
+      if (String(url).endsWith('/v1/sessions')) {
+        if (refuse) {
+          const response = { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
+          if (responseKind === 'thrown') throw Object.assign(new Error('Home rollback'), { isAxiosError: true, response });
+          return response;
+        }
+        const input = raw as ReturnType<typeof buildSessionMetadataEnvelopeCreateFields> & { tag: string };
+        SessionOwnerMetadataEnvelopeV1Schema.parse(input.ownerMetadata);
+        let row = rows.get(input.tag);
+        if (!row) {
+          row = { id: 'session-created', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+            metadataVersion: 1, metadataLayoutVersion: 1, metadata: input.sharedMetadata.ciphertext,
+            ownerMetadata: input.ownerMetadata, encryptionMode: 'plain', agentState: null, agentStateVersion: 0,
+            dataEncryptionKey: null, share: null };
+          rows.set(input.tag, row);
+        }
+        return { status: 200, data: { session: row, created: true } };
+      }
+      throw new Error(`Unexpected HTTP write ${url}`);
+    });
+    spawn.mockResolvedValue({ type: 'success', sessionId: 'session-created' });
+    const executor = createActionExecutor(createCliActionDeps({
+      token: params.credentials.token, credentials: params.credentials, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test',
+      actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({}) }),
+      sessionSpawnDirectTargetTransport: { machineId: 'machine-1',
+        prepare: async () => ({ ok: true, directory: '/repo', directoryKind: 'path', directoryCreationRequired: false, checkout: null }),
+        spawnedSession: { spawn, resolveSpawnSessionByNonce } },
+    }));
+    const input = SessionSpawnNewInputV2Schema.parse({ creationKey: 'channel-thread:rollback-router:rollback-root',
+      executionTarget: { serverId: 'home-a', machineId: 'machine-1' }, directory: { kind: 'path', path: '/repo' },
+      agentTarget: params.agentTarget, connectedServices: { v: 2, bindingsByServiceId: {} }, memoryEnabled: false, attestedContext });
+    const context = { surface: 'plugin' as const, authority: 'account_automation' as const, serverId: 'home-a',
+      actionCaller: { kind: 'plugin' as const, pluginId: 'happier.channels' } };
+    expect(await executor.execute('session.spawn_new', input, context)).toMatchObject({ ok: true,
+      result: { type: 'error', code: 'spawn_failed', retryable: true,
+        launchError: { code: 'database_transaction_conflict_exhausted' } } });
+    expect(rows.size).toBe(0);
+    expect(spawn).not.toHaveBeenCalled();
+    refuse = false;
+    spawn.mockResolvedValueOnce({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+      errorMessage: 'Runner refused after the Home committed the Session' });
+    expect(await executor.execute('session.spawn_new', input, context)).toMatchObject({ ok: true,
+      result: { type: 'error', code: 'spawn_failed' } });
+    expect(rows.size).toBe(1);
+    // The child binding may be missing after Session birth. A replay recovers
+    // that birth through the real tag/correspondence reader without relaunch.
+    expect(await executor.execute('session.spawn_new', input, context)).toMatchObject({ ok: true,
+      result: { type: 'success', disposition: 'rejoined', sessionId: 'session-created', attestedContext } });
+    expect(rows.size).toBe(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('composes plugin spawn private birth and rejoin with real attested HTTP MCP calls', async () => {
     const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
     fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,

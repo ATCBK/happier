@@ -1,6 +1,7 @@
 import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
-import type { ProviderBoundModelRef } from '@happier-dev/protocol';
+import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
+import type { ProviderBoundModelRef, ProviderModelDescriptorV1 } from '@happier-dev/protocol';
 import {
   getAgentModelConfig,
   getAgentSessionModeDescriptor,
@@ -48,6 +49,7 @@ export type AgentNativeSpawnDefinitiveRejectionResult =
 export function resolveAgentNativeSpawnDefinitiveRejection(input: Readonly<{
   agentId: AgentId | null;
   selection: ProviderLaunchSelectionInput;
+  sourceModel?: ProviderModelDescriptorV1;
 }>): AgentNativeSpawnDefinitiveRejectionResult {
   const sessionConfigOptionOverrides = input.selection.sessionConfigOptionOverrides;
   if (
@@ -81,6 +83,10 @@ export function resolveAgentNativeSpawnDefinitiveRejection(input: Readonly<{
   }
 
   const modelId = input.selection.modelId;
+  if (input.sourceModel !== undefined) {
+    const sourceModel = ProviderModelDescriptorV1Schema.safeParse(input.sourceModel);
+    return { ok: sourceModel.success && sourceModel.data.id === modelId };
+  }
   if (modelId === undefined || modelId === 'default') return { ok: true };
   if (typeof modelId !== 'string' || modelId.trim().length === 0) return { ok: false };
 

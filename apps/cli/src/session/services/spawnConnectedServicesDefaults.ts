@@ -6,7 +6,7 @@ import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/co
 import { TeamCredentialResourceEntitledPageV1Schema, resolveTeamResourceConnectedServiceSelectionV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { buildQualifiedPluginContributionKey, parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { projectAgentConnectedAccountPurposeDefaultsToSessionBindings, resolveAgentConnectedAccountPurposeDefaults } from '@happier-dev/protocol/account/settings/connected-services';
-import type { ActionExecutorDeps, AgentConnectedAccountPurposeDefault, QualifiedConnectedAccountPurposeV1, ConnectedServiceBindingSelectionV1, ConnectedServiceBindingSelectionV2, ConnectedServiceBindingsV2, TeamCredentialResourceCatalogEntryV1, TeamResourceConnectedServiceSelectionV2 } from '@happier-dev/protocol';
+import type { ActionExecutorDeps, AgentConnectedAccountPurposeDefault, QualifiedConnectedAccountPurposeV1, ConnectedServiceBindingSelectionV1, ConnectedServiceBindingSelectionV2, ConnectedServiceBindingsV2, ProviderBrokerApplicationBindingV1, TeamCredentialResourceCatalogEntryV1, TeamResourceConnectedServiceSelectionV2 } from '@happier-dev/protocol';
 import { SessionTeamCredentialBindingIntentsV1Schema, sessionTeamCredentialSlotKeyV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import type { SessionTeamCredentialBindingIntentListV1, SessionTeamCredentialBindingIntentV1 } from '@happier-dev/protocol/teams';
 
@@ -46,6 +46,7 @@ export type SpawnConnectedServicesTeamResourceCatalog = Readonly<{
 
 export type ResolveSpawnConnectedServicesTeamResourceCatalog = (params: Readonly<{
   teamIds: readonly string[];
+  application?: ProviderBrokerApplicationBindingV1;
   signal?: AbortSignal;
 }>) => Promise<SpawnConnectedServicesTeamResourceCatalog | null>;
 
@@ -59,15 +60,29 @@ export function createSpawnConnectedServicesTeamResourceCatalogResolver(params: 
   serverId: string;
   accountId: string;
 }>): ResolveSpawnConnectedServicesTeamResourceCatalog {
-  return async ({ teamIds, signal }) => {
+  return async (request) => {
+    const resources = await readSpawnConnectedServicesTeamResources({ ...params, ...request });
+    return resources ? { serverId: params.serverId, accountId: params.accountId, resources } : null;
+  };
+}
+
+/** The shared paginated recipient read, through the already Home-bound Action transport. */
+export async function readSpawnConnectedServicesTeamResources(params: Readonly<{
+  homeDomainAction: NonNullable<ActionExecutorDeps['homeDomainAction']>;
+  serverId?: string;
+  teamIds: readonly string[];
+  application?: ProviderBrokerApplicationBindingV1;
+  signal?: AbortSignal;
+}>): Promise<readonly TeamCredentialResourceCatalogEntryV1[] | null> {
     const resources: TeamCredentialResourceCatalogEntryV1[] = [];
-    for (const teamId of teamIds) {
+    for (const teamId of params.teamIds) {
       let cursor: string | null = null;
       do {
         const raw = await params.homeDomainAction({
-          actionId: 'teams.credentials.entitled.list', input: { teamId, ...(cursor ? { cursor } : {}) },
-          context: { surface: 'cli', serverId: params.serverId },
-          ...(signal ? { signal } : {}),
+          actionId: 'teams.credentials.entitled.list', input: { teamId, ...(cursor ? { cursor } : {}),
+            ...(params.application ? { application: params.application } : {}) },
+          context: { surface: 'cli', ...(params.serverId ? { serverId: params.serverId } : {}) },
+          ...(params.signal ? { signal: params.signal } : {}),
         });
         if (raw && typeof raw === 'object' && 'ok' in raw && raw.ok === false) return null;
         const parsed = TeamCredentialResourceEntitledPageV1Schema.safeParse(raw);
@@ -76,12 +91,7 @@ export function createSpawnConnectedServicesTeamResourceCatalogResolver(params: 
         cursor = readRecipientCatalogNextCursor(parsed.data);
       } while (cursor);
     }
-    return {
-      serverId: params.serverId,
-      accountId: params.accountId,
-      resources,
-    };
-  };
+    return resources;
 }
 
 /**
@@ -310,7 +320,7 @@ function resolveCurrentTeamResourceDefault(params: Readonly<{
   serviceId: string | readonly string[];
   teamId: string;
   selection: TeamResourceConnectedServiceSelectionV2;
-  catalog: SpawnConnectedServicesTeamResourceCatalog | undefined;
+  catalog: Pick<SpawnConnectedServicesTeamResourceCatalog, 'resources'> | undefined;
 }>): Readonly<{
   resource: TeamCredentialResourceCatalogEntryV1;
   selection: TeamResourceConnectedServiceSelectionV2;
@@ -350,7 +360,7 @@ export type PurposeTeamResourceSelectionForSession = Readonly<{
  */
 export function resolvePurposeTeamCredentialBindingIntents(params: Readonly<{
   teamResourceSelections: readonly PurposeTeamResourceSelectionForSession[];
-  teamCredentialResourceCatalog: SpawnConnectedServicesTeamResourceCatalog | undefined;
+  teamCredentialResourceCatalog: Pick<SpawnConnectedServicesTeamResourceCatalog, 'resources'> | undefined;
 }>): SessionTeamCredentialBindingIntentListV1 {
   const intents: SessionTeamCredentialBindingIntentV1[] = [];
   for (const entry of params.teamResourceSelections) {

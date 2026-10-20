@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import {
   DaemonProviderModelProjectionResponseV1Schema,
   type DaemonProviderModelProjectionRequestV1,
@@ -144,7 +145,21 @@ describe('resolveTeamCredentialResourceTestCandidate', () => {
       expectedResourceRevision: 3,
       agentTargetKeys: ['agent:acme.example/a'], projectModels: async () => stale,
       createRequestId: () => 'unused',
-    })).resolves.toBeNull();
+    })).rejects.toMatchObject({ status: 'unavailable', reason: 'projection_unavailable' });
+    await expect(resolveTeamCredentialResourceTestCandidate({
+      machineId: 'machine-1', teamId: 'team-1', resourceId: 'resource-1', source,
+      expectedResourceRevision: 3,
+      agentTargetKeys: ['agent:acme.example/a', 'agent:acme.example/z'],
+      projectModels: async ({ agentTargetKey }) => agentTargetKey.endsWith('/a')
+        ? stale : projection(agentTargetKey, 'model-a'),
+      createRequestId: () => 'request-1',
+    })).resolves.toMatchObject({ application: { agentTargetKey: 'agent:acme.example/z' } });
+    const interrupted = new Error('source read interrupted');
+    await expect(resolveTeamCredentialResourceTestCandidate({
+      machineId: 'machine-1', teamId: 'team-1', resourceId: 'resource-1', source,
+      expectedResourceRevision: 3, agentTargetKeys: ['agent:acme.example/a', 'agent:acme.example/z'],
+      projectModels: async () => { throw interrupted; }, createRequestId: () => 'unused',
+    })).rejects.toBe(interrupted);
   });
 
   it('discovers a Connected Account application from its exact target without caller application input', async () => {
@@ -291,22 +306,56 @@ describe('resolveTeamCredentialBrokerEligibility', () => {
     expect(result).not.toHaveProperty('request');
     expect(projectModels).toHaveBeenCalledTimes(1);
   });
+
+  it('preserves a typed source-row refusal in exact and source-only eligibility while keeping an observed empty catalog distinct', async () => {
+    const current = projection(application.agentTargetKey, 'model-a');
+    const denied: DaemonProviderModelProjectionResponseV1 = {
+      ...current,
+      groups: current.groups.map(group => ({
+        ...group,
+        authorization: { authorized: false as const, error: createProviderErrorV1('provider_not_enabled_on_machine') },
+      })),
+    };
+    const base = {
+      machineId: 'machine-1', teamId: 'team-1', resourceId: 'resource-1',
+      expectedResourceRevision: 3, source,
+    };
+    const exact = { application, modelId: 'model-a', sourceRevision: 'source-revision' };
+    const sourceOnly = { scope: 'source_any' as const, agentTargetKeys: [application.agentTargetKey] };
+    for (const selection of [exact, sourceOnly]) {
+      await expect(resolveTeamCredentialBrokerEligibility({
+        ...base, ...selection, projectModels: async () => denied,
+      })).resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
+    }
+    for (const [selection, reason] of [[exact, 'application_unavailable'], [sourceOnly, 'model_unavailable']] as const) {
+      await expect(resolveTeamCredentialBrokerEligibility({
+        ...base, ...selection, projectModels: async () => ({ ...current, groups: [] }),
+      })).resolves.toEqual({ status: 'unavailable', reason });
+    }
+  });
 });
 
 describe('resolveTeamCredentialResourceCatalogApplications', () => {
   it('enumerates every exact current application without choosing a protocol default', async () => {
-    const result = await resolveTeamCredentialResourceCatalogApplications({
+    const input = {
       machineId: 'machine-1', teamId: 'team-1', resourceId: 'resource-1', source,
       expectedResourceRevision: 3,
-      agentTargetKeys: ['agent:acme.example/responses', 'agent:acme.example/chat'],
-      projectModels: async ({ agentTargetKey }) => projection(
-        agentTargetKey,
-        'shared-model',
-        agentTargetKey.endsWith('/chat') ? 'openai-chat' : 'openai-responses',
-      ),
-    });
-
+      agentTargetKeys: ['agent:acme.example/a-stale', 'agent:acme.example/responses', 'agent:acme.example/chat'],
+      projectModels: async ({ agentTargetKey }) => {
+        const current = projection(agentTargetKey, 'shared-model', agentTargetKey.endsWith('/chat') ? 'openai-chat' : 'openai-responses');
+        return agentTargetKey.endsWith('/a-stale') ? {
+          ...current,
+          groups: current.groups.map(group => ({
+            ...group, rows: group.rows.map(row => ({ ...row, catalog: { stale: true } })),
+          })),
+        } : current;
+      },
+    } satisfies Parameters<typeof resolveTeamCredentialResourceCatalogApplications>[0];
+    const result = await resolveTeamCredentialResourceCatalogApplications(input);
     expect(result.map(({ protocol }) => protocol)).toEqual(['openai-chat', 'openai-responses']);
+    await expect(resolveTeamCredentialResourceCatalogApplications({
+      ...input, agentTargetKeys: ['agent:acme.example/a-stale'],
+    })).rejects.toMatchObject({ status: 'unavailable', reason: 'projection_unavailable' });
   });
 });
 

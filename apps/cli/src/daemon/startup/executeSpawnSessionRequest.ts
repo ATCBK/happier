@@ -4,6 +4,12 @@ import type { SpawnFailureLimitsReader } from '@/processes/spawnFailure/classify
 import { createSessionInitialAccessFile } from '../spawn/sessionInitialAccessFile';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { projectAgentProviderBrokerApplications } from '@/providers/broker/applicationProjection';
+import { readLeasedAgentProviderRequirements } from '@/plugins/runtime/providerBindings/adapter';
+import { normalizeSessionTeamCredentialLaunch, readSessionTeamCredentialResourceCatalog,
+    SessionTeamCredentialLaunchUnavailableError, type NormalizedSessionTeamCredentialLaunch } from '@/session/services/sessionTeamCredentialLaunch';
 import { validateEnvVarRecordStrict } from '@/terminal/runtime/envVarSanitization';
 import { resolveTerminalRequestFromSpawnOptions } from '@/terminal/runtime/terminalConfig';
 import { prepareHerdrTerminalContext } from '@/terminal/runtime/prepareHerdrTerminalContext';
@@ -536,6 +542,44 @@ export async function executeSpawnSessionRequest(
                 ?? null;
             const appliedPluginRuntimeLease = await pluginRuntimeLease.acquire();
             recordPreparationPhase('plugin_runtime');
+            let teamModelRow: NormalizedSessionTeamCredentialLaunch['teamModelRow'] = null;
+            const hasTeamSelection = options.teamCredentialBindings?.some(binding => (
+                binding.slot.kind === 'provider_model' && binding.resourceId !== null
+            )) || Object.values(options.connectedServices?.bindingsByServiceId ?? {}).some(binding => binding.source === 'team_resource');
+            if (hasTeamSelection) {
+                const homeDomainAction = createAccountServerActionDeps({
+                    token: params.credentials.token, credentials: params.credentials,
+                }).homeDomainAction;
+                if (!catalogAgentId || !homeDomainAction) return await refuseSpawn({ type: 'error',
+                    errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+                    errorMessage: 'team_credential_provider_selection_not_current' });
+                const agentTargetKey = buildBackendTargetKeyV2(effectiveBackendTargetV2);
+                const applications = projectAgentProviderBrokerApplications({
+                    registry: appliedPluginRuntimeLease.registry.contributes,
+                    agentTargetKey,
+                    acceptedProtocols: readLeasedAgentProviderRequirements({
+                        lease: appliedPluginRuntimeLease, agentId: catalogAgentId,
+                    })?.acceptsProtocols ?? [],
+                });
+                try {
+                    const normalized = await normalizeSessionTeamCredentialLaunch({
+                        options: { ...options, ...(modelSelection ? { modelSelection } : {}),
+                            ...(normalizedExistingSessionId ? { existingSessionId: normalizedExistingSessionId } : {}) },
+                        agentId: catalogAgentId, agentTargetKey,
+                        contributions: appliedPluginRuntimeLease.registry.contributes,
+                        applications,
+                        readCatalog: () => readSessionTeamCredentialResourceCatalog({
+                            homeDomainAction, applications, ...(params.signal ? { signal: params.signal } : {}),
+                        }),
+                    });
+                    options = normalized.options;
+                    teamModelRow = normalized.teamModelRow;
+                } catch (error) {
+                    if (!(error instanceof SessionTeamCredentialLaunchUnavailableError)) throw error;
+                    return await refuseSpawn({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+                        errorMessage: error.code });
+                }
+            }
             // The Provider decision runs before the workspace is created and
             // before any runner bootstrap material is written or the Agent
             // runtime contribution is activated. Cleanup can remove a bootstrap
@@ -565,6 +609,7 @@ export async function executeSpawnSessionRequest(
                 effectiveBackendTarget: effectiveBackendTargetV2,
                 catalogAgentId,
                 ...(modelSelection ? { modelSelection } : {}),
+                ...(teamModelRow ? { teamModelRow } : {}),
                 profileEnvironmentVariables: profileLaunchEnvironment,
                 launchProfileArtifacts,
                 daemonSpawnHooks,

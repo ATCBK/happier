@@ -70,6 +70,29 @@ export function projectManagedProviderBrokerApplication(input: Readonly<{
   });
 }
 
+/** Enumerates declared managed applications for the worker's accepted protocols.
+ * This is catalog composition only; source projection still owns model
+ * membership, compatibility and availability. */
+export function projectAgentProviderBrokerApplications(input: Readonly<{
+  registry: ProviderContributionRegistryView;
+  agentTargetKey: string;
+  acceptedProtocols: readonly ProviderWireProtocol[];
+}>): readonly ProviderBrokerApplicationBindingV1[] {
+  return [...input.registry.providersByContributionKey.values()].flatMap(provider => (
+    provider.definition.managedRuntime
+      ? provider.definition.endpointTemplates.flatMap(endpoint => {
+          if (!input.acceptedProtocols.includes(endpoint.protocol)) return [];
+          const application = projectManagedProviderBrokerApplication({
+            registry: input.registry, implementationIdentity: provider.identity,
+            agentTargetKey: input.agentTargetKey, protocol: endpoint.protocol,
+            endpointTemplateId: endpoint.id,
+          });
+          return application ? [application] : [];
+        })
+      : []
+  ));
+}
+
 export function resolveManagedProviderBrokerPurpose(input: Readonly<{
   registry: ProviderContributionRegistryView;
   application: ProviderBrokerApplicationBindingV1;

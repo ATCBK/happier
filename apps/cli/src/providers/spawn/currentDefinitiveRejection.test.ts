@@ -6,9 +6,23 @@ import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixtu
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
-import { resolveCurrentProviderSpawnDefinitiveRejection } from './currentDefinitiveRejection';
+import { resolveAgentNativeSpawnDefinitiveRejection, resolveCurrentProviderSpawnDefinitiveRejection } from './currentDefinitiveRejection';
 
 describe('resolveCurrentProviderSpawnDefinitiveRejection', () => {
+  it('uses an offered Provider model instead of a static native model catalog while retaining mode and syntax checks', () => {
+    const input = { agentId: 'qwen', selection: { modelId: 'team-only-model', providerConnectionId: null },
+      sourceModel: { id: 'team-only-model', name: 'Team model' } };
+    const native = { ...input, sourceModel: undefined };
+    const differentSourceModel = { ...input, sourceModel: { id: 'a-different-model', name: 'Different model' } };
+    expect(resolveAgentNativeSpawnDefinitiveRejection(input)).toEqual({ ok: true });
+    expect(resolveAgentNativeSpawnDefinitiveRejection(native)).toEqual({ ok: false });
+    expect(resolveAgentNativeSpawnDefinitiveRejection(differentSourceModel)).toEqual({ ok: false });
+    expect(resolveAgentNativeSpawnDefinitiveRejection({ ...input, selection: { ...input.selection,
+      sessionConfigOptionOverrides: { v: 0 } } })).toEqual({ ok: false });
+    expect(resolveAgentNativeSpawnDefinitiveRejection({ ...input, agentId: 'gemini',
+      selection: { ...input.selection, acpSessionModeId: 'plan' } })).toEqual({ ok: false });
+  });
+
   it('rejects a missing admitted connection without rejecting a valid route or an unavailable catalog', async () => {
     const provider = ProviderContributionV1Schema.parse({ v: 1, id: 'gateway', name: 'Gateway', kind: 'cloud',
       endpointTemplates: [{ id: 'responses', protocol: 'openai-responses', baseUrl: 'https://gateway.example/v1',

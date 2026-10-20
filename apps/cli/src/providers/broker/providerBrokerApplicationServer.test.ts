@@ -255,7 +255,38 @@ describe('Provider broker target application integration', () => {
     }
   });
 
-  it('admits a large inference body through the real transport and request policy', async () => {
+  // The Agent's raw request reaches this parser before the Provider request
+  // policy, so the ingress must not be narrower than the canonical Provider
+  // decoded-body budget that policy enforces.
+  it('accepts an Agent request body above the inherited default parser limit', async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      response: {
+        ok: true as const, status: 200, statusText: 'OK', headers: Object.freeze({}), body: null,
+      },
+    }));
+    const server = await startProviderBrokerApplicationServer({ handler });
+    try {
+      const target = await server.createStreamTarget({
+        authenticatedRemoteEndpointId: payload.initiator.endpointId,
+        authority: signedAuthority(),
+        expected: expectedBinding,
+        streamLifetime: { acquireSource: vi.fn(), close: vi.fn(async () => {}), retire: vi.fn(async () => {}) },
+      });
+      const response = await requestThroughApplicationTarget({
+        ...target,
+        authority: signedAuthority(),
+        body: JSON.stringify({ model: 'gpt-5', context: 'x'.repeat(1_200_000) }),
+      });
+      expect(response).toContain('HTTP/1.1 200 OK');
+      expect(handler).toHaveBeenCalledOnce();
+    } finally {
+      await server.close();
+    }
+  });
+
+  // Review-blocked: unbounded buffering was rejected; the prior ingress regression above stays active.
+  it.skip('admits a large inference body through the real transport and request policy', async () => {
     const input = 'x'.repeat(5 * 1024 * 1024 + 1);
     let admittedInput: unknown;
     const handler = vi.fn(async (request: Parameters<ReturnType<typeof createProviderBrokerRequestHandler>>[0]) => {

@@ -8,6 +8,7 @@ import type {
 } from '@happier-dev/protocol';
 import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import type { TeamCredentialProviderModelCatalogEntryV1 } from '@happier-dev/protocol/teams';
 
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import type { DaemonSpawnHooks } from '@/daemon/spawnHooks';
@@ -58,6 +59,8 @@ export async function prepareDaemonProviderLaunch(input: Readonly<{
     effectiveBackendTarget: BackendTargetRefV2;
     catalogAgentId: CatalogAgentId | null;
     modelSelection?: SessionModelSelectionV1;
+    /** Exact offered source row resolved by Session launch composition. Not authentication authority. */
+    teamModelRow?: TeamCredentialProviderModelCatalogEntryV1;
     profileEnvironmentVariables: Readonly<Record<string, string>>;
     daemonSpawnHooks: DaemonSpawnHooks | null;
     persistedProviderBinding: SessionProviderBindingMetadataV1 | null;
@@ -74,8 +77,16 @@ export async function prepareDaemonProviderLaunch(input: Readonly<{
     savedSecretOperationContext?: SavedSecretOperationContextV1;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
 }>): Promise<PreparedDaemonProviderLaunch | DaemonProviderLaunchRefusal> {
+    const sourceModel = input.teamModelRow;
+    if (sourceModel && (sourceModel.availability !== 'available'
+        || sourceModel.selection.agentTargetKey !== input.modelSelection?.ref.agentTargetKey
+        || sourceModel.selection.modelId !== input.modelSelection?.ref.modelId)) {
+        return { ok: false, result: { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+            errorMessage: 'team_credential_provider_selection_not_current' } };
+    }
     const nativePreflight = resolveAgentNativeSpawnDefinitiveRejection({
         agentId: input.catalogAgentId,
+        ...(sourceModel ? { sourceModel: sourceModel.descriptor } : {}),
         selection: {
             modelId: input.modelSelection?.ref.modelId,
             providerConnectionId: input.modelSelection?.ref.providerConnectionId,
