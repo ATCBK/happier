@@ -1,6 +1,6 @@
-import { copyFile, mkdir, open, readdir, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, open, readdir, readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 
 import { writeAtomicJsonFile } from '@happier-dev/plugin-sdk/fs';
 
@@ -34,7 +34,7 @@ export function resolveGeminiDirForEnv(env: Readonly<Record<string, string | und
   return join(home, '.gemini');
 }
 
-async function readGeminiProjectsMap(geminiDir: string): Promise<Record<string, string>> {
+export async function readGeminiProjectsMap(geminiDir: string): Promise<Record<string, string>> {
   let raw: string;
   try {
     raw = await readFile(join(geminiDir, 'projects.json'), 'utf8');
@@ -56,10 +56,41 @@ async function readGeminiProjectsMap(geminiDir: string): Promise<Record<string, 
 }
 
 function isGeminiChatSessionFileName(fileName: string): boolean {
-  return fileName.startsWith('session-') && fileName.toLowerCase().endsWith('.jsonl');
+  return fileName.startsWith('session-') && /\.jsonl?$/i.test(fileName);
 }
 
-function chatSessionFileNameMatchesSessionId(fileName: string, sessionId: string): boolean {
+/** Shared read-only inventory for resume import and External Sessions. Only the
+ * native tmp/<project>/chats layout is traversed; symlink escapes are rejected. */
+export async function listGeminiChatSessionFiles(geminiDir: string, signal?: AbortSignal): Promise<readonly GeminiChatSessionFileMatch[]> {
+  const tmpDir = join(await realpath(geminiDir), 'tmp');
+  const projects = await readdir(tmpDir, { withFileTypes: true }).catch((error: unknown) => {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const files: GeminiChatSessionFileMatch[] = [];
+  for (const project of projects) {
+    signal?.throwIfAborted();
+    if (!project.isDirectory()) continue;
+    const chats = join(tmpDir, project.name, 'chats');
+    const entries = await readdir(chats, { withFileTypes: true }).catch((error: unknown) => {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      signal?.throwIfAborted();
+      if (!entry.isFile() || !isGeminiChatSessionFileName(entry.name)) continue;
+      const filePath = await realpath(join(chats, entry.name));
+      const child = relative(tmpDir, filePath);
+      if (child === '..' || child.startsWith('../') || child.startsWith('..\\') || isAbsolute(child)) {
+        throw new Error('Gemini session file is outside the native history root');
+      }
+      files.push({ filePath, projectSlug: project.name });
+    }
+  }
+  return files.sort((a, b) => a.filePath < b.filePath ? -1 : a.filePath > b.filePath ? 1 : 0);
+}
+
+export function geminiChatSessionFileNameMatchesSessionId(fileName: string, sessionId: string): boolean {
   const shortId = sessionId.slice(0, 8);
   return isGeminiChatSessionFileName(fileName) && fileName.endsWith(`-${shortId}.jsonl`);
 }
@@ -87,44 +118,18 @@ export async function readGeminiChatSessionFileSessionId(filePath: string): Prom
   }
 }
 
-async function readDirEntriesBestEffort(dirPath: string): Promise<string[]> {
-  try {
-    return await readdir(dirPath);
-  } catch {
-    return [];
-  }
-}
-
 export async function findGeminiChatSessionFile(params: Readonly<{
   geminiDir: string;
   sessionId: string;
   cwd?: string | null;
 }>): Promise<GeminiChatSessionFileMatch | null> {
-  const tmpDir = join(params.geminiDir, 'tmp');
   const cwd = asNonEmptyString(params.cwd);
   const cwdSlug = cwd ? (await readGeminiProjectsMap(params.geminiDir))[cwd] ?? null : null;
-
-  const slugs: string[] = [];
-  if (cwdSlug) slugs.push(cwdSlug);
-  for (const entry of await readDirEntriesBestEffort(tmpDir)) {
-    if (!slugs.includes(entry)) slugs.push(entry);
-  }
-
-  for (const slug of slugs) {
-    const chatsDir = join(tmpDir, slug, 'chats');
-    const files = await readDirEntriesBestEffort(chatsDir);
-    const nameMatches = files.filter((file) => chatSessionFileNameMatchesSessionId(file, params.sessionId));
-    const candidates = nameMatches.length > 0
-      ? nameMatches
-      : slug === cwdSlug
-        ? files.filter(isGeminiChatSessionFileName)
-        : [];
-    for (const file of candidates) {
-      const filePath = join(chatsDir, file);
-      if (await readGeminiChatSessionFileSessionId(filePath) === params.sessionId) {
-        return { filePath, projectSlug: slug };
-      }
-    }
+  const files = await listGeminiChatSessionFiles(params.geminiDir).catch(() => []);
+  const ordered = [...files.filter(file => file.projectSlug === cwdSlug), ...files.filter(file => file.projectSlug !== cwdSlug)];
+  for (const file of ordered) {
+    if (!geminiChatSessionFileNameMatchesSessionId(basename(file.filePath), params.sessionId) && file.projectSlug !== cwdSlug) continue;
+    if (await readGeminiChatSessionFileSessionId(file.filePath) === params.sessionId) return file;
   }
   return null;
 }

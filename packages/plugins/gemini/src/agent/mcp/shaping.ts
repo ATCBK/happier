@@ -1,8 +1,8 @@
 import { createSecureTempDirectorySync, linkDirectoryChildren } from '@happier-dev/plugin-sdk/fs';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { resolveGeminiConfigPaths } from '../utils/configPaths.js';
-import type { AgentSessionConfigurationSnapshot } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionConfigurationSnapshot, AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 
 type EnvLike = Readonly<Record<string, string | undefined>>;
 type JsonObject = Record<string, unknown>;
@@ -131,6 +131,7 @@ function scrubCopiedGeminiSettingsMcpServers(targetEnv: EnvLike): void {
 export async function prepareGeminiNativeMcpShaping(
   sourceEnv: EnvLike = process.env,
   configuration?: Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>,
+  skills?: AgentSessionSkillDelivery,
 ) {
   const tempDirectory = createSecureTempDirectorySync({ prefix: 'happier-gemini-mcp-home' });
   const cliHomeDir = tempDirectory.path;
@@ -163,6 +164,33 @@ export async function prepareGeminiNativeMcpShaping(
       source: join(sourceHome, ...segments),
       destination: join(cliHomeDir, ...segments),
     })));
+    if (skills) {
+      const destination = join(cliHomeDir, '.agents', 'skills');
+      for (const item of skills.items) {
+        if (!statSync(join(skills.skillsRoot, item.name, 'SKILL.md')).isFile()) {
+          throw new Error('Gemini session skill is unavailable');
+        }
+        if (process.platform === 'win32' && !existsSync(join(destination, item.name))) {
+          cpSync(join(skills.skillsRoot, item.name), join(destination, item.name), { recursive: true });
+        }
+      }
+      if (process.platform !== 'win32') {
+        await linkDirectoryChildren({ source: skills.skillsRoot, destination });
+      }
+      if (skills.nativeDisables.length > 0) {
+        const settingsPath = resolveGeminiConfigPaths(baseEnv).userSettingsPath;
+        const settings = readJsonObjectWithComments(settingsPath).value;
+        const existing = settings.skills;
+        const skillSettings = existing && typeof existing === 'object' && !Array.isArray(existing)
+          ? existing as JsonObject : {};
+        const disabled = Array.isArray(skillSettings.disabled)
+          ? skillSettings.disabled.filter((name): name is string => typeof name === 'string') : [];
+        ensureParentDir(settingsPath);
+        writeFileSync(settingsPath, JSON.stringify({ ...settings, skills: { ...skillSettings,
+          disabled: [...new Set([...disabled, ...skills.nativeDisables.map(item => item.name)].map(name => name.toLowerCase()))],
+        } }), 'utf8');
+      }
+    }
   } catch (error) {
     tempDirectory.cleanup();
     throw error;

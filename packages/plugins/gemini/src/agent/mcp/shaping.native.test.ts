@@ -18,6 +18,37 @@ afterEach(async () => {
 });
 
 describe('prepareGeminiNativeMcpShaping', () => {
+  it('delivers a linked session skill and unions native disables only in the copied settings', async () => {
+    const sourceHome = createSourceHome();
+    const deliveryRoot = createSourceHome();
+    mkdirSync(join(sourceHome, '.agents', 'skills', 'retained'), { recursive: true });
+    writeFileSync(join(sourceHome, '.agents', 'skills', 'retained', 'SKILL.md'), 'native bytes');
+    mkdirSync(join(sourceHome, '.gemini'), { recursive: true });
+    const settings = { theme: 'dark', skills: { disabled: ['already-disabled'], enabled: true } };
+    writeFileSync(join(sourceHome, '.gemini', 'settings.json'), JSON.stringify(settings));
+    const skillsRoot = join(deliveryRoot, 'skills');
+    mkdirSync(join(skillsRoot, 'session-skill', 'references'), { recursive: true });
+    writeFileSync(join(skillsRoot, 'session-skill', 'SKILL.md'), 'Session skill');
+    writeFileSync(join(skillsRoot, 'session-skill', 'references', 'note.md'), 'Supporting file');
+    const prepared = await prepareGeminiNativeMcpShaping({ HOME: sourceHome }, undefined, {
+      pluginRoot: deliveryRoot, skillsRoot,
+      items: [{ name: 'session-skill', skillId: 'fixture:skill', digest: 'sha256:fixture' }],
+      nativeDisables: [{ name: 'RETAINED', path: join(sourceHome, '.agents', 'skills', 'retained', 'SKILL.md') }],
+    });
+    cleanups.push(prepared.cleanup);
+    const privateRoot = join(prepared.env.HOME, '.agents', 'skills');
+    expect(readFileSync(join(privateRoot, 'session-skill', 'references', 'note.md'), 'utf8')).toBe('Supporting file');
+    if (process.platform !== 'win32') {
+      expect(realpathSync(join(privateRoot, 'session-skill'))).toBe(realpathSync(join(skillsRoot, 'session-skill')));
+    }
+    expect(JSON.parse(readFileSync(join(prepared.env.HOME, '.gemini', 'settings.json'), 'utf8'))).toEqual({
+      ...settings, skills: { ...settings.skills, disabled: ['already-disabled', 'retained'] },
+    });
+    expect(readFileSync(join(sourceHome, '.agents', 'skills', 'retained', 'SKILL.md'), 'utf8')).toBe('native bytes');
+    expect(JSON.parse(readFileSync(join(sourceHome, '.gemini', 'settings.json'), 'utf8'))).toEqual(settings);
+    expect(readdirSync(join(sourceHome, '.agents', 'skills'))).toEqual(['retained']);
+  });
+
   it('links user skills and extensions as children of real private directories without writing native folders', async () => {
     const sourceHome = createSourceHome();
     const entries = [

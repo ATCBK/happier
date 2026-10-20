@@ -11,6 +11,7 @@ import { resolveGeminiDaemonSpawnPrerequisites } from './agent/lifecycle/spawnHo
 import { createGeminiAgentRuntime } from './agent/runtime/factory.js';
 import { geminiConnectedAccountRuntime } from './connectedAccounts/runtime.js';
 import { GEMINI_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
+import { geminiExternalSessionsContribution } from './agent/surfaces/sessions/external/contribution.js';
 
 const resolveGeminiDaemonSpawnPrerequisitesHook: HookHandler =
   (event, context) =>
@@ -24,6 +25,9 @@ export const GEMINI_PLUGIN = definePlugin({
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: {
     required: [{
+      id: 'gemini-native-history', capability: 'filesystem', reason: 'Read native Gemini conversation history.',
+      scope: { locations: [{ root: 'workspace' }], access: ['read'] },
+    }, {
       id: 'gemini-process',
       capability: 'process',
       reason: 'Run the declared Gemini CLI executable.',
@@ -128,9 +132,23 @@ export const GEMINI_PLUGIN = definePlugin({
           materializationKinds: ['files', 'environment'],
           credentialKinds: ['token'],
         }],
+        surfaces: {
+          externalSession: {
+            externalLinkedTakeover: { writerSafety: 'unsupported' },
+            sources: [{
+              sourceKind: 'geminiConfigDir',
+              contentSearch: false,
+              schema: { fields: [{ kind: 'literal', name: 'kind', value: 'geminiConfigDir' },
+                { kind: 'string', name: 'configDir', min: 1, max: 10_000, nullish: true }] },
+              key: { segments: [{ kind: 'literal', value: 'geminiConfigDir' }, { kind: 'field', field: 'configDir' }] },
+              instances: [{ kind: 'default', constants: {} }],
+            }],
+          },
+        },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          surfaces: ['externalSessions'],
           skills: {
-            delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+            delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'unsupported',
             nativeRoots: {
               user: [['.gemini', 'skills'], ['.agents', 'skills']],
               project: [['.gemini', 'skills'], ['.agents', 'skills']],
@@ -144,6 +162,7 @@ export const GEMINI_PLUGIN = definePlugin({
           },
         }),
       },
+      externalSessions: geminiExternalSessionsContribution,
       factory: createGeminiAgentRuntime,
       preflightSessionControls: GEMINI_PREFLIGHT_SESSION_CONTROLS,
       connectedAccountLaunch: {

@@ -89,7 +89,16 @@ async function openGeminiAcpRuntime<Runtime extends Readonly<{ dispose(): void |
   const auth = resolveGeminiAuthConfig(sourceEnv, resolveGeminiApiKeyFromEnv(sourceEnv));
   const authControlEnv = ignoredGeminiAcpAuthControlEnv(sourceEnv);
   const noTools = request.configuration?.unlistedTools === 'deny' && request.configuration.allowedTools?.length === 0;
-  const shaping = await prepareGeminiNativeMcpShaping(sourceEnv, request.configuration);
+  let shaping: Awaited<ReturnType<typeof prepareGeminiNativeMcpShaping>>;
+  let skillsDelivered = request.skills ? true : undefined;
+  try {
+    shaping = await prepareGeminiNativeMcpShaping(sourceEnv, request.configuration, request.skills);
+  } catch (error) {
+    if (!request.skills) throw error;
+    // Reuse the native-home owner without the optional skills after failed delivery.
+    shaping = await prepareGeminiNativeMcpShaping(sourceEnv, request.configuration);
+    skillsDelivered = false;
+  }
   try {
     const launchEnvironmentOverrides = {
       ...shaping.env,
@@ -129,6 +138,7 @@ async function openGeminiAcpRuntime<Runtime extends Readonly<{ dispose(): void |
     let disposed = false;
     return {
       ...session,
+      ...(skillsDelivered !== undefined ? { skillsDelivered } : {}),
       async dispose() {
         if (disposed) return;
         disposed = true;

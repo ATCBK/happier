@@ -34,7 +34,7 @@ function context() {
     }) } },
     protocols: { acp: { open: async (prepared: AgentSessionOpenRequest, options: Parameters<AgentSessionRuntimeContext['protocols']['acp']['open']>[1]) => {
       recordLaunch(prepared, options);
-      // The real ACP composer refuses skills when its definition has no delivery knob.
+      // The ACP port applies no data knob; Gemini's leaf owns its private-home delivery.
       return { skillsDelivered: prepared.skills ? false : undefined,
         send: async () => ({ status: 'admitted' as const }), watch: () => ({ dispose() {} }), dispose: async () => {} };
     }, openExecutionRunV1: async (prepared: AgentExecutionRunOpenRequest, options: Parameters<AgentSessionRuntimeContext['protocols']['acp']['open']>[1]) => {
@@ -51,36 +51,48 @@ async function openSession(request: AgentSessionOpenRequest): Promise<AgentSessi
     context() as unknown as AgentSessionRuntimeContext);
 }
 
-const agent = PLUGIN_MANIFEST.contributes.agents.find((candidate) => candidate.id === 'gemini');
-if (!agent) throw new Error('Gemini Agent contribution is missing');
-it('declares native roots while keeping unprobed session delivery unsupported', () => {
-  expect(agent.capabilities.skills).toEqual({ delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
-    nativeRoots: { user: [['.gemini', 'skills'], ['.agents', 'skills']], project: [['.gemini', 'skills'], ['.agents', 'skills']] } });
-});
-runAgentSkillDeliveryContract({ agent, openSession, observeLaunch: observer.observeLaunch, variants: [
-  { id: 'create', open: openSession, expect: 'unsupported' },
-  { id: 'resume', open: (request) => openSession({ ...request, kind: 'resume', providerSessionId: 'gemini-checkpoint' }), expect: 'unsupported' },
-] });
-
-it('K10 keeps detached Runs on the index path and preserves native skills in their private home', async () => {
+async function openRun(request: AgentSessionOpenRequest): Promise<AgentSessionRuntime> {
   boundaries.reset();
   const run = await createGeminiAgentRuntime().sessions.executionRunContextV1!.open({
-    kind: 'resume', checkpointId: 'gemini-checkpoint', runId: 'gemini-skill-run', cwd: home,
-    profile: { pluginId: 'happier.agent.gemini', localId: 'gemini' },
-    skills: { pluginRoot: '/fixture/session', skillsRoot: '/fixture/session/skills', items: [], nativeDisables: [] },
+    kind: 'resume', checkpointId: 'gemini-checkpoint', runId: 'gemini-skill-run', cwd: request.cwd,
+    profile: { pluginId: 'happier.agent.gemini', localId: 'gemini' }, skills: request.skills,
     launchEnvironment: { values: { HOME: home, GEMINI_API_KEY: 'fixture-gemini-api-key' }, unset: [] },
   }, { ...context(), scope: { kind: 'execution_run', executionRunId: 'gemini-skill-run' },
     executionRun: { id: 'gemini-skill-run', services: {} } } as unknown as AgentExecutionRunRuntimeContextV1);
+  const privateHome = observer.observeLaunch().env.GEMINI_CLI_HOME!;
+  return { ...run, async dispose() {
+    await run.dispose();
+    expect(existsSync(privateHome)).toBe(false);
+  } } as unknown as AgentSessionRuntime;
+}
+
+const agent = PLUGIN_MANIFEST.contributes.agents.find((candidate) => candidate.id === 'gemini');
+if (!agent) throw new Error('Gemini Agent contribution is missing');
+it('declares the probed private-home delivery and native disable overlay', () => {
+  expect(agent.capabilities.skills).toEqual({ delivery: 'session_dir', nativeDisable: 'supported', liveReload: 'unsupported',
+    nativeRoots: { user: [['.gemini', 'skills'], ['.agents', 'skills']], project: [['.gemini', 'skills'], ['.agents', 'skills']] } });
+});
+runAgentSkillDeliveryContract({ agent, openSession, observeLaunch: observer.observeLaunch, variants: [
+  { id: 'create', open: openSession, expect: 'delivers' },
+  { id: 'resume', open: (request) => openSession({ ...request, kind: 'resume', providerSessionId: 'gemini-checkpoint' }), expect: 'delivers' },
+  { id: 'detached Run', open: openRun, expect: 'delivers' },
+] });
+
+it('refuses unavailable skills while retaining Session startup and native skills', async () => {
+  const session = await openSession({ kind: 'create', cwd: home, sessionId: 'unavailable-skill',
+    skills: { pluginRoot: join(home, 'missing'), skillsRoot: join(home, 'missing', 'skills'),
+      items: [{ name: 'missing', skillId: 'fixture:missing', digest: 'sha256:missing' }], nativeDisables: [] },
+  });
   const launch = observer.observeLaunch();
   const privateHome = launch.env.GEMINI_CLI_HOME!;
   try {
-    expect(JSON.stringify(launch)).not.toContain('/fixture/session');
+    expect(session.skillsDelivered).toBe(false);
     for (const root of ['.gemini/skills', '.agents/skills']) {
       expect(readFileSync(join(privateHome, root, 'retained-native', 'SKILL.md'), 'utf8')).toBe('Native skill bytes stay unchanged.');
     }
     expect(launch.filesWritten).toEqual([]);
   } finally {
-    await run.dispose();
+    await session.dispose();
   }
   expect(existsSync(privateHome)).toBe(false);
 });
