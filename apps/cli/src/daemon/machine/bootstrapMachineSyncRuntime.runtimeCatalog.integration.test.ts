@@ -242,6 +242,8 @@ describe('bootstrapMachineSyncRuntime', () => {
             const requesterIds = ['c333333333333333333333333', 'c444444444444444444444444'];
             const firstStartup = createDeferred();
             const firstReplyRecovery = createDeferred();
+            const firstStartupEntered = createDeferred();
+            const firstReplyRecoveryEntered = createDeferred();
             const effects: string[] = [];
             const sessions = sessionIds.map(id => createSessionRecordFixture({ id, encryptionMode: 'plain',
                 metadataLayoutVersion: 0, active: false, pendingCount: 1, pendingVersion: 1,
@@ -273,7 +275,10 @@ describe('bootstrapMachineSyncRuntime', () => {
                 getPeerMediationMachineRpcHandlerManager: () => ({ invokeLocal: async () => ({ ok: true }) }),
                 requestSessionMessageReplyRecoveryForSession: async (sessionId: string) => {
                     effects.push(`requester:${sessionId}`);
-                    if (sessionId === requesterIds[0]) await firstReplyRecovery.promise;
+                    if (sessionId === requesterIds[0]) {
+                        firstReplyRecoveryEntered.resolve();
+                        await firstReplyRecovery.promise;
+                    }
                 },
             };
             let runtime: BootstrapMachineSyncRuntimeResult | undefined;
@@ -290,7 +295,10 @@ describe('bootstrapMachineSyncRuntime', () => {
                     // Pending eligibility, snapshots and activation run for real.
                     spawnSessionForInternalResume: async options => {
                         effects.push(`spawn:${options.existingSessionId}`);
-                        if (options.existingSessionId === sessionIds[0]) await firstStartup.promise;
+                        if (options.existingSessionId === sessionIds[0]) {
+                            firstStartupEntered.resolve();
+                            await firstStartup.promise;
+                        }
                         return { type: 'success', sessionId: options.existingSessionId! };
                     },
                     spawnSession: async () => { throw new Error('Recovery must use internal resume'); },
@@ -310,7 +318,8 @@ describe('bootstrapMachineSyncRuntime', () => {
                 if (!connectOptions?.onConnect) throw new Error('Machine connect callback missing');
                 let connected = false;
                 connecting = Promise.resolve(connectOptions.onConnect()).then(() => { connected = true; });
-                await vi.waitFor(() => expect(effects).toEqual(expect.arrayContaining([
+                await Promise.all([firstStartupEntered.promise, firstReplyRecoveryEntered.promise]);
+                await vi.waitFor(() => expect([...effects]).toEqual(expect.arrayContaining([
                     `spawn:${sessionIds[0]}`, `spawn:${sessionIds[1]}`,
                     `requester:${requesterIds[0]}`, `requester:${requesterIds[1]}`, 'follow', 'workflow:startup',
                 ])));
