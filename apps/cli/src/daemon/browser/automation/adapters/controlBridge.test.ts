@@ -45,7 +45,10 @@ const HANDLE: BrowserSidecarCdpPageHandle = { targetId: 'target_1', sessionId: '
 
 // Only the websocket/CDP peer is substituted. Controller, page binding, input adapter and
 // settlement remain the production path, including known pre-send boundary failures.
-async function inputSettlementBoundary(evaluatePage?: (expression: string) => unknown) {
+async function inputSettlementBoundary(
+  evaluatePage?: (expression: string) => unknown,
+  applyInput?: (method: string, params?: Record<string, unknown>) => void,
+) {
   const listeners = new Set<(message: unknown) => void | Promise<void>>();
   let closePeer: () => void = () => undefined;
   const state = { loseAck: false, disposedBeforeInput: false, failedRead: false, dialogOnRead: false, dialogRaised: false };
@@ -60,6 +63,7 @@ async function inputSettlementBoundary(evaluatePage?: (expression: string) => un
         || command.method === 'Page.handleJavaScriptDialog' || mutatingExpression) {
         effects.push(command.method);
         if (state.loseAck) { closePeer(); return; }
+        if (command.method.startsWith('Input.')) applyInput?.(command.method, command.params);
       }
       const result = command.method === 'Target.createTarget' ? { targetId: HANDLE.targetId }
         : command.method === 'Target.attachToTarget' ? { sessionId: HANDLE.sessionId }
@@ -288,6 +292,21 @@ function cdpEvaluateValue(value: unknown): Readonly<{ result: { type: string; va
   };
 }
 
+function createLocatorBridgeDocument() {
+  const rect = { left: 20, top: 14, width: 40, height: 20 };
+  const save = bridgeElement({ tagName: 'button', textContent: 'Save', attributes: { id: 'save' }, rect });
+  const next = bridgeElement({ tagName: 'a', textContent: 'Continue', rect });
+  const email = bridgeElement({ tagName: 'input', textContent: '',
+    attributes: { 'data-testid': 'email-field', 'aria-label': 'Email' }, rect });
+  return {
+    querySelectorAll(selector: string) {
+      return selector === '*' ? [save, next, email]
+        : selector === '#save' ? [save]
+          : selector === '[data-testid]' || selector === '[data-testid="email-field"]' ? [email] : [];
+    },
+  };
+}
+
 function createAggregateTextDocument(): Readonly<{
   button: FakeBridgeElement;
   documentValue: Readonly<{ querySelectorAll(selector: string): readonly FakeBridgeElement[] }>;
@@ -327,6 +346,49 @@ function createAggregateTextDocument(): Readonly<{
 }
 
 describe('control adapter automation transport bridge', () => {
+  it.each(['focused', 'missing', 'unfocusable'] as const)('press targets the requested element and refuses unresolved focus (%s)', async state => {
+    const received = { previous: [] as string[], target: [] as string[] };
+    const previous = bridgeElement({ tagName: 'input', textContent: '', rect: { left: 0, top: 0, width: 80, height: 20 } });
+    let activeElement: FakeBridgeElement = previous;
+    const target: FakeBridgeElement = {
+      ...bridgeElement({ tagName: 'input', textContent: '', rect: { left: 100, top: 0, width: 80, height: 20 } }),
+      focus() { if (state === 'focused') activeElement = target; },
+    };
+    const documentValue = {
+      get activeElement() { return activeElement; },
+      querySelector: (selector: string) => selector === '#target' && state !== 'missing' ? target : null,
+      querySelectorAll: (selector: string) => selector === '#target' && state !== 'missing' ? [target] : [],
+    };
+    const boundary = await inputSettlementBoundary(expression => evaluateBridgeExpression(expression, documentValue), (method, params) => {
+      if (method === 'Input.dispatchKeyEvent' && params?.type === 'keyDown') {
+        received[activeElement === target ? 'target' : 'previous'].push(String(params.key));
+      }
+    });
+    try {
+      const result = await boundary.execute('press', { selector: '#target', key: 'Enter' });
+      expect(received.previous).toEqual([]);
+      expect(received.target).toEqual(state === 'focused' ? ['Enter'] : []);
+      expect(result).toMatchObject(state === 'focused'
+        ? { status: 'succeeded' }
+        : { status: 'failed', errorCode: 'selector_not_found' });
+    } finally { boundary.dispose(); }
+  });
+
+  it.each(['type', 'focus'] as const)('refuses %s when the requested element cannot take focus', async actionKind => {
+    const previous = bridgeElement({ tagName: 'input', textContent: '', rect: { left: 0, top: 0, width: 80, height: 20 } });
+    const target = bridgeElement({ tagName: 'input', textContent: '', rect: { left: 100, top: 0, width: 80, height: 20 } });
+    const documentValue = { activeElement: previous, querySelector: () => target, querySelectorAll: () => [target] };
+    let inserted = '';
+    const boundary = await inputSettlementBoundary(expression => evaluateBridgeExpression(expression, documentValue), (method, params) => {
+      if (method === 'Input.insertText') inserted += String(params?.text);
+    });
+    try {
+      expect(await boundary.execute(actionKind, { selector: '#target', text: 'wrong field' }))
+        .toMatchObject({ status: 'failed', errorCode: 'selector_not_found' });
+      expect(inserted).toBe('');
+    } finally { boundary.dispose(); }
+  });
+
   it('observes only the verified credential descriptor on a password page through the real context routes', async () => {
     const boundary = confidentialBoundary();
     const control = createSurfaceInputControl();
@@ -394,7 +456,8 @@ describe('control adapter automation transport bridge', () => {
       expect('resultSummary' in full && full.resultSummary?.elements).toHaveLength(nodes.length);
       expect('resultSummary' in full && full.resultSummary?.elements).toEqual(nodes.map(() => ({ tag: 'button', name })));
       const semantic = await query(`role=button[name="${name}"]`, 'semantic-query');
-      expect(semantic).toMatchObject({ status: 'succeeded', resultSummary: { count: 1, elements: [{ tag: 'button', name }], truncated: false } });
+      expect(semantic).toMatchObject({ status: 'succeeded', resultSummary: { count: nodes.length, truncated: false } });
+      expect('resultSummary' in semantic && semantic.resultSummary?.elements).toEqual(nodes.map(() => ({ tag: 'button', name })));
       const snapshot = await boundary.execute('semanticSnapshot');
       expect(snapshot).toMatchObject({ status: 'succeeded', resultSummary: { truncated: true } });
       expect(snapshot.resultSummary?.elements).toHaveLength(SNAPSHOT_MAX_INTERACTIVE_ELEMENTS);
@@ -1190,34 +1253,11 @@ describe('control adapter automation transport bridge', () => {
   });
 
   it('resolves semantic and CSS locators through the production query and wait paths', async () => {
+    const documentValue = createLocatorBridgeDocument();
     const { surface } = fakeContextCapture((method, params) => {
       if (method !== 'Runtime.evaluate') return {};
       const expression = typeof params?.expression === 'string' ? params.expression : '';
-      if (expression.includes('querySelectorAll("role=') || expression.includes('querySelector("role=')) {
-        return { result: { type: 'object', value: { error: 'invalid_selector' } } };
-      }
-      if (expression.includes('querySelectorAll("text=') || expression.includes('querySelector("text=')) {
-        return { result: { type: 'object', value: { error: 'invalid_selector' } } };
-      }
-      if (expression.includes('querySelectorAll("data-testid=') || expression.includes('querySelector("data-testid=')) {
-        return { result: { type: 'object', value: { error: 'invalid_selector' } } };
-      }
-      if (expression.includes('!!(') && expression.includes('getAttribute') && expression.includes('role')) {
-        return { result: { type: 'boolean', value: true } };
-      }
-      if (expression.includes('getAttribute') && expression.includes('role') && expression.includes('Save')) {
-        return { result: { type: 'object', value: { count: 1, elements: [{ tag: 'button', name: 'Save' }] } } };
-      }
-      if (expression.includes('textContent') && expression.includes('Continue')) {
-        return { result: { type: 'object', value: { count: 1, elements: [{ tag: 'a', name: 'Continue' }] } } };
-      }
-      if (expression.includes('data-testid') && expression.includes('email-field')) {
-        return { result: { type: 'object', value: { count: 1, elements: [{ tag: 'input', name: 'Email' }] } } };
-      }
-      if (expression.includes('querySelectorAll("#save")')) {
-        return { result: { type: 'object', value: { count: 1, elements: [{ tag: 'button', name: 'Save' }] } } };
-      }
-      return { result: { type: 'object', value: { count: 0, elements: [] } } };
+      return cdpEvaluateValue(evaluateBridgeExpression(expression, documentValue));
     });
     const transport = createControlAdapterAutomationTransport({ adapter: controlAdapter(), contextCapture: surface });
 
@@ -1242,6 +1282,17 @@ describe('control adapter automation transport bridge', () => {
     expect(waitResult.ok).toBe(true);
     if (!waitResult.ok) return;
     expect(waitResult.data).toMatchObject({ present: true });
+  });
+
+  it.each(['role=button', 'text=Continue'])('queries every matching element for a semantic locator (%s)', async selector => {
+    const elements = [10, 50].map(left => bridgeElement({ tagName: 'button', textContent: 'Continue',
+      rect: { left, top: 10, width: 20, height: 20 } }));
+    const documentValue = { querySelectorAll: () => elements };
+    const { surface } = fakeContextCapture((method, params) => method === 'Runtime.evaluate'
+      ? cdpEvaluateValue(evaluateBridgeExpression(String(params?.expression), documentValue)) : {});
+    const transport = createControlAdapterAutomationTransport({ adapter: controlAdapter(), contextCapture: surface });
+    expect(await transport.dispatchPageQuery({ ...view, actionKind: 'queryElements', navigationGeneration: 1, payload: { selector } }))
+      .toMatchObject({ ok: true, data: { count: 2, elements: [{ tag: 'button', name: 'Continue' }, { tag: 'button', name: 'Continue' }], truncated: false } });
   });
 
   it('executes text locators against aggregate DOM text without targeting structural ancestors', async () => {
@@ -1338,23 +1389,11 @@ describe('control adapter automation transport bridge', () => {
   });
 
   it('resolves semantic and CSS locators before dispatching input commands', async () => {
+    const documentValue = createLocatorBridgeDocument();
     const { surface, calls } = fakeContextCapture((method, params) => {
       if (method !== 'Runtime.evaluate') return {};
       const expression = typeof params?.expression === 'string' ? params.expression : '';
-      if (expression.includes('querySelector("role=')
-        || expression.includes('querySelector("text=')
-        || expression.includes('querySelector("data-testid=')) {
-        return { result: { type: 'object', value: null } };
-      }
-      if (
-        (expression.includes('getAttribute') && expression.includes('role') && expression.includes('Save'))
-        || (expression.includes('textContent') && expression.includes('Continue'))
-        || (expression.includes('data-testid') && expression.includes('email-field'))
-        || expression.includes('querySelector("#save")')
-      ) {
-        return { result: { type: 'object', value: { x: 40, y: 24 } } };
-      }
-      return { result: { type: 'object', value: null } };
+      return cdpEvaluateValue(evaluateBridgeExpression(expression, documentValue));
     });
     const transport = createControlAdapterAutomationTransport({ adapter: controlAdapter(), contextCapture: surface });
 

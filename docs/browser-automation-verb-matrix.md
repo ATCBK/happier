@@ -102,6 +102,20 @@ navigation generation and interaction state before delivery. Sidecar-owned views
 the daemon diagnostics adapter and CDP. These are current source contracts, not loaded-runtime or native-platform
 certification.
 
+In development source, injected and managed engines share the Protocol locator parser and
+page resolver. `selector` and string `locator` inputs accept CSS, `role=`, `text=` and test-id
+locators; retained structured locators normalize at that same boundary. Field contents never
+select the target. Queries return every match. `setValue` replaces existing content, while `type`
+appends. Targeted keyboard input establishes focus before dispatch and refuses a missing or
+unfocusable target. Injected uploads attach the complete admitted file set or return a typed
+refusal. `waitFor` uses the containing Action's deadline, and cancellation retires its page timer.
+
+Diagnostic scalar results and property expansion preserve full supported values. Object previews
+retain their presentation bounds and disclose clipped values or omitted properties; the inspector
+marks a partial preview with an ellipsis and keeps Expand available. Console and network summaries
+read the canonical retained diagnostics and select newest evidence under the context protocol's
+output budget before presenting it chronologically. Omitted summary material is flagged truncated.
+
 The overflow menu and non-framable/slow-frame escape use `browser.view.openExternal`. Its closed
 input names the Browser Session, view and command; the runtime resolves the current page URL from
 that mounted owner and opens it in the answering client's system browser without navigating or

@@ -18,7 +18,7 @@
  * unit-tested resolver is a faithful model of the in-page behavior.
  */
 
-import type { ParsedLocator } from '@happier-dev/protocol';
+import { resolveBrowserLocatorElements, type ParsedLocator } from '@happier-dev/protocol/browser/automation/locators';
 
 /** Minimal DOM element model: enough to resolve every locator strategy deterministically. */
 export type LocatorElement = Readonly<{
@@ -148,61 +148,11 @@ export function synthesizeLocatorNameExpression(element: string): string {
 }
 
 export function synthesizeLocatorElementExpression(locator: ParsedLocator): string {
-  switch (locator.strategy) {
-    case 'css':
-      return `(() => { try { return document.querySelector(${JSON.stringify(locator.selector)}); } catch { return null; } })()`;
-    case 'testid':
-      return `(() => { try { return document.querySelector(${JSON.stringify(`[data-testid="${cssString(locator.testId)}"]`)}); } catch { return null; } })()`;
-    case 'text': {
-      const needle = JSON.stringify(locator.text);
-      const structuralTags = JSON.stringify(TEXT_LOCATOR_STRUCTURAL_TAGS);
-      return `(() => {
-        const structural = new Set(${structuralTags});
-        const textOf = (el) => ${synthesizeLocatorNameExpression('el')};
-        const candidateMatches = (el) => !structural.has(el.tagName.toLowerCase()) && textOf(el).includes(${needle});
-        const descendantMatches = (el) => {
-          const stack = Array.prototype.slice.call(el.children || []);
-          while (stack.length > 0) {
-            const child = stack.shift();
-            if (candidateMatches(child)) return true;
-            stack.push(...Array.prototype.slice.call(child.children || []));
-          }
-          return false;
-        };
-        const all = document.querySelectorAll('*');
-        for (const el of all) {
-          if (candidateMatches(el) && !descendantMatches(el)) return el;
-        }
-        return null;
-      })()`;
-    }
-    case 'role': {
-      const role = JSON.stringify(locator.role);
-      const name = locator.name === undefined ? 'undefined' : JSON.stringify(locator.name);
-      return `(() => {
-        const implicit = { a: 'link', button: 'button', input: 'textbox', textarea: 'textbox', select: 'combobox', h1: 'heading', h2: 'heading', h3: 'heading', nav: 'navigation' };
-        const wanted = ${role};
-        const wantedName = ${name};
-        const all = document.querySelectorAll('*');
-        for (const el of all) {
-          const r = (el.getAttribute('role') || implicit[el.tagName.toLowerCase()] || el.tagName.toLowerCase()).toLowerCase();
-          if (r !== wanted) continue;
-          if (wantedName !== undefined) {
-            const n = ${synthesizeLocatorNameExpression('el')};
-            if (n !== wantedName) continue;
-          }
-          return el;
-        }
-        return null;
-      })()`;
-    }
-    default:
-      return 'null';
-  }
+  return `(${synthesizeLocatorElementsExpression(locator)}[0] || null)`;
 }
 
-function cssString(value: string): string {
-  return value.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"');
+export function synthesizeLocatorElementsExpression(locator: ParsedLocator): string {
+  return `(${resolveBrowserLocatorElements.toString()})(${JSON.stringify(locator)}, document)`;
 }
 
 function resolveExpression(elementExpression: string): string {

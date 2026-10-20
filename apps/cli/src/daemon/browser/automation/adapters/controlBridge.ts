@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { BrowserActiveTargetV1Schema, normalizeBrowserActiveTargetRect, readBrowserActiveTargetLabel } from '@happier-dev/protocol/browser/events/activeTarget';
 import { browserViewContextId } from '@happier-dev/protocol/browser/view/key';
-import { parseLocator } from '@happier-dev/protocol/browser/automation/locators';
+import { normalizeBrowserAutomationLocator, parseLocator, type ParsedLocator } from '@happier-dev/protocol/browser/automation/locators';
 import type { BrowserAutomationSecretFillRequestV1 } from '@happier-dev/protocol/browser/automation/v1';
 import type { SecretFillSettlementV1 } from '@happier-dev/protocol/computer/v1';
 import type { ConfidentialSecretFillTarget } from '../../../surfaces/confidentialSecretFill';
@@ -21,6 +21,7 @@ import type { BrowserAutomationAdapterExecuteResult, BrowserAutomationAdapterExe
 import type { BrowserAutomationViewRef } from '../owners';
 import {
   synthesizeLocatorElementExpression,
+  synthesizeLocatorElementsExpression,
   synthesizeLocatorNameExpression,
 } from '../locators';
 import type {
@@ -78,52 +79,24 @@ function readCurrentHistoryEntry(history: unknown): Record<string, unknown> | nu
 const DOM_TEXT_EXPRESSION =
   "(() => { const b = document.body; return b && b.innerText ? b.innerText : ''; })()";
 
-function queryElementsExpression(selector: string): string {
-  const safeSelector = JSON.stringify(selector);
+function queryLocatorExpression(selector: string | ParsedLocator): string {
+  const locator = parseLocator(selector);
   return `(() => {
-    const out = [];
-    let nodes;
-    try { nodes = document.querySelectorAll(${safeSelector}); } catch { return { error: 'invalid_selector' }; }
-    for (let i = 0; i < nodes.length; i++) {
-      const el = nodes[i];
-      const name = ${synthesizeLocatorNameExpression('el')};
-      out.push({ tag: el.tagName.toLowerCase(), name });
-    }
-    return { count: nodes.length, elements: out, truncated: false };
+    const nodes = ${synthesizeLocatorElementsExpression(locator)};
+    const elements = nodes.map(el => ({ tag: el.tagName.toLowerCase(), name: ${synthesizeLocatorNameExpression('el')} }));
+    return { count: elements.length, elements, truncated: false };
   })()`;
 }
 
-function queryLocatorExpression(selector: string): string {
+function waitForLocatorExpression(selector: string | ParsedLocator): string {
   const locator = parseLocator(selector);
-  if (locator.strategy === 'css') {
-    return queryElementsExpression(locator.selector);
-  }
-  const elementExpression = synthesizeLocatorElementExpression(locator);
-  return `(() => {
-    const el = ${elementExpression};
-    if (!el) return { count: 0, elements: [] };
-    const name = ${synthesizeLocatorNameExpression('el')};
-    return { count: 1, elements: [{ tag: el.tagName.toLowerCase(), name }], truncated: false };
-  })()`;
-}
-
-function waitForExpression(selector: string): string {
-  const safeSelector = JSON.stringify(selector);
-  return `(() => { try { return !!document.querySelector(${safeSelector}); } catch { return false; } })()`;
-}
-
-function waitForLocatorExpression(selector: string): string {
-  const locator = parseLocator(selector);
-  if (locator.strategy === 'css') {
-    return waitForExpression(locator.selector);
-  }
   const elementExpression = synthesizeLocatorElementExpression(locator);
   return `(() => !!(${elementExpression}))()`;
 }
 
 // Resolves a selector to its center viewport point + focuses it (so keyboard verbs target it).
 // Returns null when the selector is invalid/absent. Read+focus only; never carries field values.
-function elementCenterExpression(selector: string, prepareInput = true): string {
+function elementCenterExpression(selector: string | ParsedLocator, prepareInput = true, requireFocus = false): string {
   const locator = parseLocator(selector);
   const locatorLabel = locator.strategy === 'role' ? locator.name : locator.strategy === 'text' ? locator.text : undefined;
   return `(() => {
@@ -132,6 +105,7 @@ function elementCenterExpression(selector: string, prepareInput = true): string 
     ${prepareInput ? "el.scrollIntoView({ block: 'center', inline: 'center' });" : ''}
     const r = el.getBoundingClientRect();
     ${prepareInput ? "if (typeof el.focus === 'function') { try { el.focus(); } catch {} }" : ''}
+    ${requireFocus ? 'if (document.activeElement !== el) return null;' : ''}
     const w = typeof innerWidth === 'number' ? innerWidth : 0;
     const h = typeof innerHeight === 'number' ? innerHeight : 0;
     const activeTarget = (${normalizeBrowserActiveTargetRect.toString()})({ x: r.left, y: r.top, width: r.width, height: r.height }, { width: w, height: h });
@@ -141,7 +115,7 @@ function elementCenterExpression(selector: string, prepareInput = true): string 
   })()`;
 }
 
-function setValueExpression(selector: string, value: string): string {
+function setValueExpression(selector: string | ParsedLocator, value: string): string {
   const safeValue = JSON.stringify(value);
   return `(() => {
     const el = ${synthesizeLocatorElementExpression(parseLocator(selector))};
@@ -155,7 +129,7 @@ function setValueExpression(selector: string, value: string): string {
   })()`;
 }
 
-function selectOptionExpression(selector: string, value: string): string {
+function selectOptionExpression(selector: string | ParsedLocator, value: string): string {
   const safeValue = JSON.stringify(value);
   return `(() => {
     const el = ${synthesizeLocatorElementExpression(parseLocator(selector))};
@@ -627,7 +601,7 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
           return { ok: true, data: { elements: parsed.elements, truncated: parsed.truncated } };
         }
         case 'queryElements': {
-          const selector = typeof query.payload.selector === 'string' ? query.payload.selector : '';
+          const selector = normalizeBrowserAutomationLocator(query.payload);
           if (!selector) {
             return { ok: false, errorCode: 'unsupported_action' };
           }
@@ -663,7 +637,7 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
           };
         }
         case 'waitFor': {
-          const selector = typeof query.payload.selector === 'string' ? query.payload.selector : '';
+          const selector = normalizeBrowserAutomationLocator(query.payload);
           if (!selector) {
             return { ok: false, errorCode: 'unsupported_action' };
           }
@@ -697,7 +671,7 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
     if (!handle) {
       return { ok: false, errorCode: 'view_closed' };
     }
-    const selector = typeof command.payload.selector === 'string' ? command.payload.selector : typeof command.payload.locator === 'string' ? command.payload.locator : '';
+    const selector = normalizeBrowserAutomationLocator(command.payload) ?? '';
     const heldInput: { mouse: Record<string, unknown> | null; key: string | null } = { mouse: null, key: null };
     let uncertainEffect = false;
     let cleanupFailed = false;
@@ -744,8 +718,8 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
       return result;
     };
 
-    const targetPoint = async (locator = selector, prepareInput = true) => {
-      const value = evaluateValue(await readAndCheck(elementCenterExpression(locator, prepareInput), prepareInput));
+    const targetPoint = async (locator: string | ParsedLocator = selector, prepareInput = true, requireFocus = false) => {
+      const value = evaluateValue(await readAndCheck(elementCenterExpression(locator, prepareInput, requireFocus), prepareInput));
       const target = BrowserActiveTargetV1Schema.safeParse(record(value)?.activeTarget);
       if (target.success) command.onActiveTarget?.(target.data);
       return readPoint(value);
@@ -780,14 +754,14 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
         }
         case 'focus': {
           if (!selector) return { ok: false, errorCode: 'unsupported_action' };
-          const point = await targetPoint();
+          const point = await targetPoint(selector, true, true);
           if (!point) return { ok: false, errorCode: 'selector_not_found' };
           return { ok: true };
         }
         case 'type': {
           // Optionally focus a target selector first, then insert text at the focused element.
           if (selector) {
-            const point = await targetPoint();
+            const point = await targetPoint(selector, true, true);
             if (!point) return { ok: false, errorCode: 'selector_not_found' };
           }
           const text = typeof command.payload.text === 'string' ? command.payload.text : '';
@@ -846,9 +820,9 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
           }
         }
         case 'drag': {
-          const source = command.payload.from ?? command.payload.source ?? command.payload.locator;
-          const target = command.payload.to ?? command.payload.target ?? command.payload.destination;
-          if (typeof source !== 'string' || typeof target !== 'string') return { ok: false, errorCode: 'unsupported_action' };
+          const source = normalizeBrowserAutomationLocator({ locator: command.payload.from ?? command.payload.source ?? command.payload.locator });
+          const target = normalizeBrowserAutomationLocator({ locator: command.payload.to ?? command.payload.target ?? command.payload.destination });
+          if (!source || !target) return { ok: false, errorCode: 'unsupported_action' };
           const from = await targetPoint(source);
           const to = await targetPoint(target);
           if (!from || !to) return { ok: false, errorCode: 'selector_not_found' };
@@ -859,7 +833,7 @@ export function createControlAdapterAutomationTransport(input: Readonly<{
           return { ok: true };
         }
         case 'press': {
-          if (selector) await targetPoint(selector, false);
+          if (selector && !await targetPoint(selector, true, true)) return { ok: false, errorCode: 'selector_not_found' };
           const key = typeof command.payload.key === 'string' ? command.payload.key : '';
           if (!key) return { ok: false, errorCode: 'unsupported_action' };
           await send('Input.dispatchKeyEvent', { type: 'keyDown', key });

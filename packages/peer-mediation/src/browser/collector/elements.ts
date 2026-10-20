@@ -1,6 +1,7 @@
 import { INJECTED_PAGE_AUTOMATION_ACTIONS } from './actions.js';
 import { isBrowserAutomationMutatingActionKind } from '@happier-dev/protocol/browser/automation/v1';
 import { normalizeBrowserActiveTargetRect, readBrowserActiveTargetLabel } from '@happier-dev/protocol/browser/events/activeTarget';
+import { normalizeBrowserAutomationLocator, parseLocator, resolveBrowserLocatorElements } from '@happier-dev/protocol/browser/automation/locators';
 
 export const INJECTED_ELEMENTS_RUNTIME = `
   function backendNodeRefFor(node) {
@@ -389,35 +390,13 @@ export const INJECTED_ELEMENTS_RUNTIME = `
     };
   }
 
-  function automationLocatorPayload(payload) {
-    if (!payload || typeof payload !== 'object') return {};
-    var locator = payload.locator;
-    if (locator && typeof locator === 'object') return locator;
-    return payload;
-  }
+  var parseLocator = ${parseLocator.toString()};
+  var normalizeBrowserAutomationLocator = ${normalizeBrowserAutomationLocator.toString()};
+  var resolveBrowserLocatorElements = ${resolveBrowserLocatorElements.toString()};
 
   function queryAutomationElements(payload) {
-    var locator = automationLocatorPayload(payload);
-    var kind = String(locator.kind || locator.type || '').trim();
-    var value = String(locator.value || locator.selector || locator.text || locator.testId || '').trim();
-    var elements = [];
-
-    try {
-      if ((kind === 'css' || kind === 'selector' || (!kind && value.charAt(0) === '#')) && value && typeof document.querySelectorAll === 'function') {
-        elements = Array.prototype.slice.call(document.querySelectorAll(value));
-      } else if ((kind === 'testId' || kind === 'testid') && value && typeof document.querySelectorAll === 'function') {
-        elements = Array.prototype.slice.call(document.querySelectorAll('[data-testid="' + String(value).replace(/"/g, '\\\\"') + '"]'));
-      } else if ((kind === 'text' || !kind) && value && typeof document.querySelectorAll === 'function') {
-        var candidates = Array.prototype.slice.call(document.querySelectorAll('button,input,textarea,select,a,[role],label,[tabindex]'));
-        elements = candidates.filter(function (candidate) {
-          return accessibleNameFor(candidate).toLowerCase().indexOf(value.toLowerCase()) >= 0;
-        });
-      }
-    } catch (_error) {
-      elements = [];
-    }
-
-    return elements.filter(Boolean);
+    var locator = normalizeBrowserAutomationLocator(payload || {});
+    return locator ? resolveBrowserLocatorElements(locator, document) : [];
   }
 
   function firstAutomationElement(payload) {
@@ -519,7 +498,7 @@ export const INJECTED_ELEMENTS_RUNTIME = `
     }
     var payload = command.payload || {};
     var text = typeof payload.text === 'string' ? payload.text : String(payload.value || '');
-    var append = payload.append !== false;
+    var append = command.commandName !== 'setValue' && payload.append !== false;
     try {
       if (typeof node.focus === 'function') node.focus();
       if (!setAutomationValue(node, text, append)) {
@@ -537,9 +516,11 @@ export const INJECTED_ELEMENTS_RUNTIME = `
   }
 
   function automationFileFrom(descriptor) {
-    if (!descriptor || typeof descriptor !== 'object') return null;
-    var name = String(descriptor.name || 'upload.bin').slice(0, 255);
-    var mimeType = String(descriptor.mimeType || 'application/octet-stream').slice(0, 128);
+    if (!descriptor || typeof descriptor !== 'object' || typeof descriptor.name !== 'string'
+        || !descriptor.name || descriptor.name === '.' || descriptor.name === '..'
+        || /[\\\\/\u0000]/.test(descriptor.name) || typeof descriptor.text !== 'string') return null;
+    var name = descriptor.name;
+    var mimeType = typeof descriptor.mimeType === 'string' ? descriptor.mimeType : 'application/octet-stream';
     // 'text' is the only content field: the egress redactor already reduces that key to a length,
     // so uploaded content can never reach a timeline. Binary is carried base64-encoded in it.
     var text = typeof descriptor.text === 'string' ? descriptor.text : '';
@@ -569,8 +550,8 @@ export const INJECTED_ELEMENTS_RUNTIME = `
       postAutomationResult(command, startedAt, false, {}, 'unsupported_action');
       return;
     }
-    var descriptors = Array.isArray(payload.files) ? payload.files.slice(0, 10) : [];
-    if (descriptors.length < 1) {
+    var descriptors = Array.isArray(payload.files) ? payload.files : [];
+    if (descriptors.length < 1 || (descriptors.length > 1 && !node.multiple)) {
       postAutomationResult(command, startedAt, false, {}, 'unsupported_action');
       return;
     }
@@ -583,7 +564,10 @@ export const INJECTED_ELEMENTS_RUNTIME = `
       var attached = 0;
       for (var index = 0; index < descriptors.length; index += 1) {
         var file = automationFileFrom(descriptors[index]);
-        if (!file) continue;
+        if (!file) {
+          postAutomationResult(command, startedAt, false, {}, 'unsupported_action');
+          return;
+        }
         transfer.items.add(file);
         attached += 1;
       }
@@ -592,6 +576,10 @@ export const INJECTED_ELEMENTS_RUNTIME = `
         return;
       }
       node.files = transfer.files;
+      if (!node.files || node.files.length !== descriptors.length) {
+        postAutomationResult(command, startedAt, false, {}, 'runtime_unavailable');
+        return;
+      }
       var notified = dispatchAutomationEvent(node, 'input');
       notified = dispatchAutomationEvent(node, 'change') && notified;
       if (!notified) {
@@ -788,36 +776,37 @@ export const INJECTED_ELEMENTS_RUNTIME = `
 
   function handleAutomationWaitFor(command, startedAt) {
     var payload = command.payload || {};
-    var timeoutMs = Math.max(1, Math.min(Number(payload.timeoutMs || 2000), 60000));
     var pollMs = Math.max(25, Math.min(Number(payload.pollMs || 100), 1000));
-    var expiresAt = now() + timeoutMs;
+    // The containing Action chooses expiry. Poll cadence is not another operation budget.
+    var expiresAt = typeof payload.deadlineMs === 'number' ? payload.deadlineMs : undefined;
+    var settled = false;
+    var pending = { commandId: command.commandId, cancel: function () { finish(false, 'user_canceled'); } };
+    automationTimers.push(pending);
 
     function finish(ok, errorCode) {
+      if (settled) return;
+      settled = true;
       if (timerId) {
         clearTimeout(timerId);
       }
-      automationTimers = automationTimers.filter(function (timer) { return timer !== timerId; });
+      automationTimers = automationTimers.filter(function (wait) { return wait !== pending; });
       postAutomationResult(command, startedAt, ok, ok ? { matched: true } : {}, errorCode);
     }
 
     function check() {
+      if (settled) return;
+      if (expiresAt !== undefined && now() >= expiresAt) {
+        finish(false, 'timed_out');
+        return;
+      }
       if (queryAutomationElements(payload).length > 0) {
         finish(true);
         return;
       }
-      if (now() >= expiresAt) {
-        finish(false, 'timed_out');
-        return;
-      }
-      var nextTimerId = setTimeout(function () {
-        automationTimers = automationTimers.filter(function (timer) { return timer !== nextTimerId; });
-        if (timerId === nextTimerId) {
-          timerId = null;
-        }
+      timerId = setTimeout(function () {
+        timerId = null;
         check();
-      }, pollMs);
-      timerId = nextTimerId;
-      automationTimers.push(nextTimerId);
+      }, expiresAt === undefined ? pollMs : Math.min(pollMs, Math.max(0, expiresAt - now())));
     }
 
     var timerId = null;
@@ -826,6 +815,12 @@ export const INJECTED_ELEMENTS_RUNTIME = `
 
   function handleAutomationCommand(message) {
     if (!isCurrentAutomationCommand(message)) return;
+    if (message.commandName === 'cancel') {
+      automationTimers.slice().forEach(function (wait) {
+        if (wait.commandId === message.commandId) wait.cancel();
+      });
+      return;
+    }
     var startedAt = now();
     var restoreDialogGuard = installAutomationDialogGuard();
     try {
