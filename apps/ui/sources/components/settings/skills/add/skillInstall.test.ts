@@ -76,6 +76,30 @@ describe('installSkills (Add to library)', () => {
 });
 
 describe('previewSkillInstall (From a link)', () => {
+    it('retains every reviewed repository pin from a multi-origin link through the install schema', async () => {
+        const { SkillInstallPreviewV1Schema, SKILL_ACTION_INPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1');
+        const source = { kind: 'link' as const, url: 'https://example.test/marketplace.json' };
+        const items = ['first', 'second'].map((name, index) => SkillInstallPreviewV1Schema.parse({
+            path: `skills/${name}`, name, description: null, files: [], trust: 'text_only', cost: { descriptionTokens: 0, bodyTokens: 1 },
+            provenance: { kind: 'link', url: source.url, ref: { kind: 'gitTree', repo: `https://github.com/fixture/${name}`,
+                path: `skills/${name}`, commit: String(index + 1).repeat(40), treeSha: 'a'.repeat(40) } },
+        }));
+        const { execute, calls } = home((_actionId, input) => (input as { dryRun?: boolean }).dryRun
+            ? { ok: true, result: { items } } : { ok: true, result: { skillIds: ['first', 'second'], includedInSessionId: null } });
+        const preview = await previewSkillInstall(execute, source);
+        if (!preview.ok) throw new Error(preview.error);
+        await installSkills(execute, { source: preview.source });
+        const consumed = SKILL_ACTION_INPUT_SCHEMAS_V1['skills.install'].parse(calls[1]!.input);
+        expect(consumed.source).toEqual({ ...source, refs: items.map(item => item.provenance.kind === 'link' ? item.provenance.ref : null) });
+    });
+
+    it('reports an unusable link preview instead of falling back to an unpinned Add', async () => {
+        const { execute } = home(() => ({ ok: true, result: { items: [{ path: '', name: 'sample', description: null, files: [],
+            trust: 'text_only', cost: { descriptionTokens: 0, bodyTokens: 1 }, provenance: { kind: 'upload', importedAt: 1 } }] } }));
+        expect(await previewSkillInstall(execute, { kind: 'link', url: 'https://example.test/skills.git' }))
+            .toEqual({ ok: false, error: 'skill_preview_pin_missing' });
+    });
+
     it('keeps the registry owner\'s typed failure so the link can say "try again at" instead of a generic error', async () => {
         const { execute } = home(() => ({ ok: false, errorCode: 'rate_limited', error: 'rate_limited',
             details: { registryStatus: { state: 'rate_limited', retryAt: 1_791_938_301_000 } } }));
