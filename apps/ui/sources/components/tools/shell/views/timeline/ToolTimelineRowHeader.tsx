@@ -39,6 +39,11 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
     findBlocks?: TranscriptFindRowSnapshot['blocks'];
     findRevealBlockId?: string;
     subtitle?: string | null;
+    /**
+     * The subtitle is a sentence to read whole (a Happier Action's own line): when it does not fit beside the
+     * title it drops to its own line under it instead of ending in a one-word ellipsis.
+     */
+    subtitleWraps?: boolean;
     statusText?: string | null;
     /** Why a refused or failed call ended, in words: its own quiet line under the title, so a narrow row never clips it. */
     causeText?: string | null;
@@ -145,7 +150,7 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
                         <ToolTimelineIconFrame icon={props.icon} />
                     )}
                 </View>
-                <View style={styles.text}>
+                <View style={[styles.text, props.subtitleWraps ? styles.textWrapping : null]}>
                     <Text
                         style={[styles.title, props.density === 'compact' ? styles.titleCompact : null]}
                         numberOfLines={props.findRevealBlockId === 'tool-title' ? undefined : 1}
@@ -153,7 +158,7 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
                         {findRanges('tool-title')?.length ? <FindHighlightedText text={props.title} ranges={findRanges('tool-title')} /> : props.title}
                     </Text>
                     {showSubtitleInline ? (
-                        <Text style={styles.subtitleInline} numberOfLines={props.findRevealBlockId === 'tool-subtitle' ? undefined : 1}>
+                        <Text style={styles.subtitleInline} numberOfLines={props.findRevealBlockId === 'tool-subtitle' ? undefined : props.subtitleWraps ? 3 : 1}>
                             {findRanges('tool-subtitle')?.length ? <FindHighlightedText text={props.subtitle!} ranges={findRanges('tool-subtitle')} /> : props.subtitle}
                         </Text>
                     ) : null}
@@ -292,6 +297,10 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         justifyContent: 'flex-start',
         gap: theme.space.s8,
         fontSize: 13,
+    },
+    textWrapping: {
+        flexWrap: 'wrap',
+        rowGap: 0,
     },
     title: {
         ...Typography.variant('body', 'semiBold'),

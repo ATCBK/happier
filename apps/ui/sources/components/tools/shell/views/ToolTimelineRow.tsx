@@ -48,6 +48,7 @@ import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveIna
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
 import { ToolOutcomeStatus } from '@/components/tools/shell/presentation/ToolOutcomeStatus';
+import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
 import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { buildApprovalToolCallLocation, doesApprovalMatchToolCall } from './toolApprovalPromptMatching';
@@ -456,6 +457,7 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
         findBlocks: find?.blocks,
         findRevealBlockId: find?.reveal?.blockId,
         subtitle: headerSubtitle,
+        subtitleWraps: readHappierActionCallId(toolForRendering.name, toolForRendering.input) !== null,
         statusText: headerStatusText,
         causeText: actionFailure?.summary ?? null,
         onPress: onPress,
