@@ -54,6 +54,7 @@ import type { Metadata } from '../domains/state/storageTypes';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { supportsSessionForkRequestId } from '@/utils/system/versionUtils';
 import { throwIfSessionArchiveAborted, withSessionArchiveDeadline, type SessionArchiveRequestOptions } from './sessionArchiveLifecycle';
+import { AsyncTimeoutError } from '@/utils/timing/time';
 export { sessionRipgrep } from './sessionRipgrep';
 export type { SessionRipgrepResponse } from './sessionRipgrep';
 
@@ -890,28 +891,34 @@ export async function sessionArchiveWithServerScope(
     try {
         const serverId = resolveSessionArchiveServerId(opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId));
         const archive = async (signal: AbortSignal): Promise<SessionArchiveResponse> => {
-            throwIfSessionArchiveAborted(signal);
-            const result = await archiveRequestWithContext({ sessionId, serverId, action: 'archive', signal }, async (response): Promise<SessionArchiveResponse> => {
-                if (!response.ok) {
-                    const message = await response.text().catch(() => '');
-                    throwIfSessionArchiveAborted(signal);
-                    if (response.status === 409) {
-                        return { success: false, message: SESSION_ACTIVE_ARCHIVE_MESSAGE, code: 'session_active' };
-                    }
-                    return { success: false, message: message || 'Failed to archive session' };
-                }
-                const json: unknown = await response.json().catch(() => null);
+            try {
                 throwIfSessionArchiveAborted(signal);
-                const archivedAt = json !== null && typeof json === 'object' && 'archivedAt' in json && typeof json.archivedAt === 'number'
-                    ? json.archivedAt
-                    : null;
-                return { success: true, archivedAt };
-            });
-            throwIfSessionArchiveAborted(signal);
-            if (result.success) {
-                await applyArchivedAtToLocalSession(sessionId, result.archivedAt ?? null, serverId);
+                const result = await archiveRequestWithContext({ sessionId, serverId, action: 'archive', signal }, async (response): Promise<SessionArchiveResponse> => {
+                    if (!response.ok) {
+                        const message = await response.text().catch(() => '');
+                        throwIfSessionArchiveAborted(signal);
+                        if (response.status === 409) {
+                            return { success: false, message: SESSION_ACTIVE_ARCHIVE_MESSAGE, code: 'session_active' };
+                        }
+                        return { success: false, message: message || 'Failed to archive session' };
+                    }
+                    const json: unknown = await response.json().catch(() => null);
+                    throwIfSessionArchiveAborted(signal);
+                    const archivedAt = json !== null && typeof json === 'object' && 'archivedAt' in json && typeof json.archivedAt === 'number'
+                        ? json.archivedAt
+                        : null;
+                    return { success: true, archivedAt };
+                });
+                throwIfSessionArchiveAborted(signal);
+                if (result.success) {
+                    await applyArchivedAtToLocalSession(sessionId, result.archivedAt ?? null, serverId);
+                }
+                return result;
+            } catch (error) {
+                // Fetch may replace the controller's timeout reason with a generic AbortError.
+                throwIfSessionArchiveAborted(signal);
+                throw error;
             }
-            return result;
         };
         // Stop-and-archive supplies one enclosing deadline across all 409 attempts. Direct archive
         // owns the same finite lifecycle here; a caller-provided signal never starts another timer.
@@ -919,6 +926,7 @@ export async function sessionArchiveWithServerScope(
             ? await archive(opts.signal)
             : await withSessionArchiveDeadline(async ({ signal }) => await archive(signal));
     } catch (error) {
+        if (error instanceof AsyncTimeoutError) return { success: false, code: 'session_archive_timeout' };
         return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
     }
 }

@@ -1,6 +1,6 @@
 import { HappyError } from '@/utils/errors/errors';
 import { storage } from '@/sync/domains/state/storage';
-import { delay } from '@/utils/timing/time';
+import { AsyncTimeoutError, delay } from '@/utils/timing/time';
 import { t } from '@/text';
 import type { SessionStopRecovery } from '@/sync/ops/sessionStopContract';
 import { readSessionArchivePending, resolveSessionArchiveServerId } from '@/sync/domains/session/listing/sessionArchiveState';
@@ -52,23 +52,28 @@ async function archiveAfterStopWithRetry(params: Readonly<{
     archiveErrorMessage: string;
     waitForInactive?: boolean;
 }>): Promise<void> {
-    await withSessionArchiveDeadline(async ({ signal, deadlineMs, retryActiveSession }) => {
-        let archiveResult = await params.archiveSession({ signal });
-        const retryDelayMs = readSessionArchiveAfterStopRetryDelayMsFromEnv();
+    try {
+        await withSessionArchiveDeadline(async ({ signal, deadlineMs, retryActiveSession }) => {
+            let archiveResult = await params.archiveSession({ signal });
+            const retryDelayMs = readSessionArchiveAfterStopRetryDelayMsFromEnv();
 
-        while (retryActiveSession && params.waitForInactive !== false && isSessionActiveArchiveResult(archiveResult) && Date.now() < deadlineMs) {
-            await delay(Math.min(retryDelayMs, Math.max(0, deadlineMs - Date.now())));
-            if (signal.aborted || Date.now() >= deadlineMs) break;
-            archiveResult = await params.archiveSession({ signal });
-        }
+            while (retryActiveSession && params.waitForInactive !== false && isSessionActiveArchiveResult(archiveResult) && Date.now() < deadlineMs) {
+                await delay(Math.min(retryDelayMs, Math.max(0, deadlineMs - Date.now())));
+                if (signal.aborted || Date.now() >= deadlineMs) break;
+                archiveResult = await params.archiveSession({ signal });
+            }
 
-        if (!archiveResult.success) {
-            const message = isSessionActiveArchiveResult(archiveResult)
-                ? params.archiveErrorMessage
-                : archiveResult.message || params.archiveErrorMessage;
-            throw new HappyError(message, false);
-        }
-    });
+            if (!archiveResult.success) {
+                const message = isSessionActiveArchiveResult(archiveResult)
+                    ? params.archiveErrorMessage
+                    : archiveResult.message || params.archiveErrorMessage;
+                throw new HappyError(message, false);
+            }
+        });
+    } catch (error) {
+        if (error instanceof AsyncTimeoutError) throw new HappyError(params.archiveErrorMessage, false);
+        throw error;
+    }
 }
 
 export function isSessionArchivePending(sessionId: string, serverId?: string | null): boolean {

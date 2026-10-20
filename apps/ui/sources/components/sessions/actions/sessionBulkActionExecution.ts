@@ -429,7 +429,7 @@ async function executeArchiveAction(params: Readonly<{
             return resultFromMutation(
                 target,
                 result,
-                DEFAULT_ARCHIVE_ERROR_MESSAGE,
+                params.context.archiveErrorMessage ?? DEFAULT_ARCHIVE_ERROR_MESSAGE,
             );
         },
     });

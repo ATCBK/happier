@@ -118,7 +118,11 @@ describe('archive request recovery', () => {
             await vi.advanceTimersByTimeAsync(Number(budget) || 75_000);
             expect({ settled, aborted: network.signal?.aborted, pending: isSessionArchivePending(sessionId, targetServerId) })
                 .toEqual({ settled: true, aborted: true, pending: false });
-            expect(await outcome).toMatchObject(afterStop ? { error: expect.any(Error) } : { value: { success: false } });
+            if (afterStop) {
+                expect(await outcome).toMatchObject({ error: { message: 'archive failed' } });
+            } else {
+                expect(await outcome).toEqual({ value: { success: false, code: 'session_archive_timeout' } });
+            }
             expect(peekServerReachabilityState(targetServerUrl)?.phase).toBe('online');
             expect(storage.getState().sessions[sessionId]?.archivedAt).toBeNull();
             await expect(archiveSessionWithPendingState(sessionId,

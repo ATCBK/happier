@@ -29,6 +29,18 @@ function target(input: Partial<SessionBulkActionTarget> & Pick<SessionBulkAction
 }
 
 describe('executeSessionBulkAction', () => {
+    it('uses the caller archive error when a direct archive fails without a display message', async () => {
+        const result = await executeSessionBulkAction({
+            action: { id: SESSION_BULK_ACTION_IDS.archive },
+            targets: [target({ key: 'server-a:timeout', sessionId: 'timeout' })],
+            context: {
+                archiveSession: async () => ({ success: false, code: 'session_archive_timeout' }),
+                archiveErrorMessage: 'localized archive failure',
+            },
+        });
+        expect(result.failed.map((entry) => entry.reason)).toEqual(['localized archive failure']);
+    });
+
     it('captures the server for queued archive targets before active-server changes', async () => {
         const original = upsertServerProfile({ serverUrl: 'https://bulk-original.example' });
         const next = upsertServerProfile({ serverUrl: 'https://bulk-next.example' });
