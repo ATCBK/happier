@@ -13,7 +13,7 @@ import { expandHome } from '../paths/canonical_home.mjs';
 import { applyStackInfraProcessKind } from './stack_process_kind.mjs';
 export { applyStackInfraProcessKind };
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './cliDistBuildLock.mjs';
-import { inspectDependencyRefresh, resolveDependencyInstallRoot, withDependencyRefresh } from './dependency_refresh.mjs';
+import { inspectDependencyRefresh, resolveDependencyInstallRoot, resolveLockedInstallEnv, withDependencyRefresh } from './dependency_refresh.mjs';
 export { resolveDependencyInstallRoot } from './dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs as prepareUiPostinstallOutputs, inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
@@ -302,10 +302,10 @@ async function repairCorruptedCliPkgrollInstallIfNeeded(cliDir, { quiet = false,
     // eslint-disable-next-line no-console
     console.log(`[local] repairing corrupted pkgroll install at ${pkgrollCliPath}...`);
   }
-  await withDependencyRefresh({ installDir, componentDir: cliDir, env, force: true }, async () => {
+  await withDependencyRefresh({ installDir, componentDir: cliDir, env, force: true }, async ({ env: installEnv }) => {
     // A concurrent repair may have finished while this caller waited.
     if ((await readScriptEntrypointKind(pkgrollCliPath)) !== 'shell-wrapper') return;
-    await runPm(pm, repairArgs, { cwd: installDir, stdio, env });
+    await runPm(pm, repairArgs, { cwd: installDir, stdio, env: installEnv });
     const monorepoRoot = coerceHappyMonorepoRootFromPath(cliDir);
     await ensureUiPostinstallOutputs(monorepoRoot ? join(monorepoRoot, 'apps', 'ui') : cliDir,
       installDir, { quiet, env, pm, force: true });
@@ -691,19 +691,13 @@ async function ensureComponentDependenciesInstalled(
   const installDir = resolveDependencyInstallRoot(componentDir);
   const nodeModules = join(installDir, 'node_modules');
   const stdio = quiet ? 'ignore' : 'inherit';
-  const env = await preparePmEnv(installDir, envIn);
-  // Stack explicitly prepares component-owned lifecycle outputs. Keep Yarn
-  // from compiling every first-party workspace
-  // as an incidental install side effect while preserving third-party install
-  // scripts and the CLI postinstall that owns real runtime prerequisites. UI
-  // postinstall is run explicitly below: Yarn may skip lifecycle scripts after
-  // a scriptless bootstrap, and its outputs must precede freshness publication.
-  // Server provider generation is already owned explicitly by
-  // ensureComponentPrerequisites; its postinstall also runs build:shared and
-  // would duplicate the source-dev/package publication owners.
-  if (!String(env.HAPPIER_INSTALL_SCOPE ?? '').trim()) {
-    env.HAPPIER_INSTALL_SCOPE = 'cli';
-  }
+  // Stack explicitly prepares component-owned lifecycle outputs. UI postinstall
+  // is run explicitly below: Yarn may skip lifecycle scripts after a scriptless
+  // bootstrap, and its outputs must precede freshness publication. Server
+  // provider generation is already owned explicitly by ensureComponentPrerequisites;
+  // its postinstall also runs build:shared and would duplicate the source-dev/package
+  // publication owners.
+  const env = resolveLockedInstallEnv(await preparePmEnv(installDir, envIn));
   const pm = await getComponentPm(installDir, env);
   if (onDependenciesReady && pm.name !== 'yarn') {
     throw new Error(`[local] ${label} dependency-ready actions require the canonical Yarn dependency refresh owner`);
