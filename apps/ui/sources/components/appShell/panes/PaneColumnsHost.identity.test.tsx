@@ -46,3 +46,22 @@ it('retains pane layout subscribers across content updates and publishes an actu
     expect(snapshots.at(-1)?.containerWidthPx).toBe(375);
     expect(snapshots.at(-1)?.layout.kind).not.toBe(withRightPane?.layout.kind);
 });
+
+it('remembers dock dimensions and their viewport basis when the Settings Action is off', async () => {
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    storage.setState({ settings: settingsParse({
+        actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+    }) });
+    const screen = await renderScreen(<PaneColumnsHost main={<div />} />);
+    const columns = screen.tree.find(node => typeof node.props.onCommitRightDockWidthPx === 'function');
+    await act(async () => {
+        columns.props.onCommitRightDockWidthPx(330);
+        columns.props.onCommitDetailsDockWidthPx(470);
+        columns.props.onCommitBottomDockHeightPx(260);
+    });
+    expect(storage.getState().localSettings).toMatchObject({
+        rightPaneWidthPx: 330, rightPaneWidthBasisPx: 1200,
+        detailsPaneWidthPx: 470, detailsPaneWidthBasisPx: 1200,
+        bottomPaneHeightPx: 260, bottomPaneHeightBasisPx: 800,
+    });
+});

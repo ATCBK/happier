@@ -8,7 +8,8 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { t, type TranslationKeyNoParams } from '@/text';
-import { useLocalSettingMutable, useSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { normalizeComposerBannerCollapseRecord } from '@/components/sessions/composerBanners/composerBannerCollapse';
 import type { BusySteerSendPolicy, MessageSendMode } from '@/sync/domains/session/control/submitMode';
 import type { NewSessionPresentationModeV1 } from '@/sync/domains/settings/registry/account/accountSessionCreationSettingDefinitions';
@@ -59,7 +60,7 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
     const [composerSurfaceStyle, setComposerSurfaceStyle] = useSettingMutable('composerSurfaceStyle');
     const [composerPromptLibraryButtonEnabled, setComposerPromptLibraryButtonEnabled] = useSettingMutable('composerPromptLibraryButtonEnabled');
     const [rememberBannerVisibility, setRememberBannerVisibility] = useSettingMutable('sessionComposerRememberBannerVisibility');
-    const [collapsedBannerKinds, setCollapsedBannerKinds] = useLocalSettingMutable('sessionComposerCollapsedBannerKinds');
+    const collapsedBannerKinds = useLocalSetting('sessionComposerCollapsedBannerKinds');
     const hiddenBannerCount = Object.keys(normalizeComposerBannerCollapseRecord(collapsedBannerKinds)).length;
     const enterToSendEnabled = Platform.OS === 'web' ? agentInputEnterToSend : agentInputEnterToSendNative;
     const setEnterToSendEnabled = Platform.OS === 'web' ? setAgentInputEnterToSend : setAgentInputEnterToSendNative;
@@ -364,7 +365,7 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
                         title={t('settingsSession.banners.resetHiddenTitle')}
                         subtitle={t('settingsSession.banners.resetHiddenSubtitle')}
                         detail={String(hiddenBannerCount)}
-                        onPress={() => setCollapsedBannerKinds({})}
+                        onPress={() => getStorage().getState().applyLocalSettings({ sessionComposerCollapsedBannerKinds: {} }, { source: 'ui' })}
                         showChevron={false}
                     />
                 ) : null}

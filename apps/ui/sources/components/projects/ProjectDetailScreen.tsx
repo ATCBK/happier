@@ -4,7 +4,8 @@ import { View } from 'react-native';
 import { PopoverScope } from '@/components/ui/popover';
 
 import { t } from '@/text';
-import { useLocalSetting, useLocalSettingMutable, useWorkspaceRefs } from '@/sync/domains/state/storage';
+import { useLocalSetting, useWorkspaceRefs } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { readProjectSelectionPreference, resolveProjectSelectionPreferenceKeys, writeProjectSelectionPreference } from '@/sync/domains/settings/projectSelectionPersistence';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { AppPaneScopeHost } from '@/components/appShell/panes/AppPaneScopeHost';
@@ -57,8 +58,6 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     const lastActiveRootPathByWorkspaceRefId = useLocalSetting('projectLastActiveRootPathByWorkspaceRefId');
     const lastActiveWorktreeIdByWorkspaceRefId = useLocalSetting('projectLastActiveWorktreeIdByWorkspaceRefId');
-    const [, setLastActiveRootPathByWorkspaceRefId] = useLocalSettingMutable('projectLastActiveRootPathByWorkspaceRefId');
-    const [, setLastActiveWorktreeIdByWorkspaceRefId] = useLocalSettingMutable('projectLastActiveWorktreeIdByWorkspaceRefId');
     const workspaceRef = useWorkspaceRefById(props.workspaceRefId, props.serverId);
     const scopeId = useDestinationPaneScopeId(buildProjectPaneScopeId(props.workspaceRefId, workspaceRef?.serverId ?? props.serverId));
     const pane = useAppPaneScope(scopeId);
@@ -142,8 +141,10 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
         if (controlledActiveRootPath == null) {
             setLocalSelection({ storageKey: preferenceKeys.storageKey, rootPath: trimmedPath });
         }
-        setLastActiveRootPathByWorkspaceRefId(writeProjectSelectionPreference(lastActiveRootPathByWorkspaceRefId, preferenceKeys, trimmedPath));
-        setLastActiveWorktreeIdByWorkspaceRefId(writeProjectSelectionPreference(lastActiveWorktreeIdByWorkspaceRefId, preferenceKeys, nextWorktreeId ?? PROJECT_ROUTE_ROOT_SENTINEL));
+        getStorage().getState().applyLocalSettings({
+            projectLastActiveRootPathByWorkspaceRefId: writeProjectSelectionPreference(lastActiveRootPathByWorkspaceRefId, preferenceKeys, trimmedPath),
+            projectLastActiveWorktreeIdByWorkspaceRefId: writeProjectSelectionPreference(lastActiveWorktreeIdByWorkspaceRefId, preferenceKeys, nextWorktreeId ?? PROJECT_ROUTE_ROOT_SENTINEL),
+        }, { source: 'ui' });
         props.onSelectRootPath?.(trimmedPath);
     }, [
         availableWorktrees,
@@ -153,8 +154,6 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
         props.onSelectRootPath,
         props.workspaceRefId,
         preferenceKeys,
-        setLastActiveRootPathByWorkspaceRefId,
-        setLastActiveWorktreeIdByWorkspaceRefId,
         workspaceRef,
     ]);
 
@@ -163,8 +162,10 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
         if (!workspaceRef || !preferenceKeys) return;
         if (requestedRootPath === resolvedActiveRootPath) return;
 
-        setLastActiveRootPathByWorkspaceRefId(writeProjectSelectionPreference(lastActiveRootPathByWorkspaceRefId, preferenceKeys, resolvedActiveRootPath));
-        setLastActiveWorktreeIdByWorkspaceRefId(writeProjectSelectionPreference(lastActiveWorktreeIdByWorkspaceRefId, preferenceKeys, resolvedActiveWorktreeId ?? PROJECT_ROUTE_ROOT_SENTINEL));
+        getStorage().getState().applyLocalSettings({
+            projectLastActiveRootPathByWorkspaceRefId: writeProjectSelectionPreference(lastActiveRootPathByWorkspaceRefId, preferenceKeys, resolvedActiveRootPath),
+            projectLastActiveWorktreeIdByWorkspaceRefId: writeProjectSelectionPreference(lastActiveWorktreeIdByWorkspaceRefId, preferenceKeys, resolvedActiveWorktreeId ?? PROJECT_ROUTE_ROOT_SENTINEL),
+        }, { source: 'ui' });
 
         if (controlledActiveRootPath == null) {
             setLocalSelection({ storageKey: preferenceKeys.storageKey, rootPath: resolvedActiveRootPath });
@@ -184,8 +185,6 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
         requestedRootPath,
         resolvedActiveRootPath,
         resolvedActiveWorktreeId,
-        setLastActiveRootPathByWorkspaceRefId,
-        setLastActiveWorktreeIdByWorkspaceRefId,
         workspaceRef,
     ]);
 

@@ -18,7 +18,8 @@ import type { GhosttyRendererSelectionOptions } from '@/components/terminal/ghos
 import type { TermuxRendererSelectionOptions } from '@/components/terminal/termux/availability';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text, TextInput } from '@/components/ui/text/Text';
-import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 import { createTerminalQaSession } from './session';
@@ -56,7 +57,7 @@ function TerminalQaScreenEnabled(): React.ReactElement {
     }), [runIdentity]);
     const snapshot = React.useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
     const [terminalRendererPreference, setTerminalRendererPreference] = useLocalSettingMutable('terminalRendererPreference');
-    const [nativeQuarantine, setNativeQuarantine] = useLocalSettingMutable('terminalNativeRendererQuarantine');
+    const nativeQuarantine = useLocalSetting('terminalNativeRendererQuarantine');
     const [detectedUrl, setDetectedUrl] = React.useState<EmbeddedTerminalPaneController['detectedUrl']>(null);
     const [pasteText, setPasteText] = React.useState('line one\nline two');
     const qaCapabilities = React.useMemo(() => getTerminalNativeQaCapabilities(), []);
@@ -174,7 +175,7 @@ function TerminalQaScreenEnabled(): React.ReactElement {
                         <QaButton
                             testID="terminal-qa-clear-quarantine"
                             title="Clear quarantine"
-                            onPress={() => setNativeQuarantine(null)}
+                            onPress={() => getStorage().getState().applyLocalSettings({ terminalNativeRendererQuarantine: null }, { source: 'ui' })}
                         />
                     </ButtonRow>
                     <Text style={{ color: theme.colors.text.secondary }}>

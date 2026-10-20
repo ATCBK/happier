@@ -10,7 +10,8 @@ import { usePathname } from '@/components/appShell/workspace/destinationRoute';
 import { EXTERNAL_SESSION_STATUS_DEMAND_MAX_ENTRIES_V1 } from '@happier-dev/protocol/sessions/external/statusDemandV1';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { resolveWorkflowRunParentSessionId } from '@/sync/domains/session/listing/nestSessionListReports';
-import { useWorkspaceRefs, useSetting, useSettingMutable, useMachineDisplayById, useProfile, useLocalSetting, useLocalSettingMutable, useSessionListRowRenderablesForItems, useSessionOrganizationProjections } from '@/sync/domains/state/storage';
+import { useWorkspaceRefs, useSetting, useSettingMutable, useMachineDisplayById, useProfile, useLocalSetting, useSessionListRowRenderablesForItems, useSessionOrganizationProjections } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { useSessionListSelectionState } from '@/hooks/session/useSessionListSelectionState';
 import { getAllKnownTags, getTagsForSession, sessionTagKey } from './sessionTagUtils';
@@ -531,9 +532,15 @@ export function useSessionListViewStateFromPaneState(
     const workspacePathDisplayModeV1 = useSetting('workspacePathDisplayModeV1');
     const workspaceFaviconsEnabled = useSetting('workspaceFaviconsEnabled') !== false;
     const workspaceMachineSubtitlesEnabled = useSetting('workspaceMachineSubtitlesEnabled') !== false;
-    const [collapsedGroupKeysV1, setCollapsedGroupKeysV1] = useLocalSettingMutable('collapsedGroupKeysV1');
+    const collapsedGroupKeysV1 = useLocalSetting('collapsedGroupKeysV1');
+    const setCollapsedGroupKeysV1 = React.useCallback((next: typeof collapsedGroupKeysV1) => {
+        getStorage().getState().applyLocalSettings({ collapsedGroupKeysV1: next }, { source: 'ui' });
+    }, []);
     const sessionMruOrderV1 = useLocalSetting('sessionMruOrderV1');
-    const [sessionListFocusedFolderV1, setSessionListFocusedFolderV1] = useLocalSettingMutable('sessionListFocusedFolderV1');
+    const sessionListFocusedFolderV1 = useLocalSetting('sessionListFocusedFolderV1');
+    const setSessionListFocusedFolderV1 = React.useCallback((next: typeof sessionListFocusedFolderV1) => {
+        getStorage().getState().applyLocalSettings({ sessionListFocusedFolderV1: next }, { source: 'ui' });
+    }, []);
     const folderFeatureEnabledServerIds = renderPaneState.folderFeatureEnabledServerIds ?? EMPTY_KNOWN_TAGS;
     const folderFeatureEnabledServerIdSet = React.useMemo(
         () => new Set(folderFeatureEnabledServerIds),

@@ -14,7 +14,8 @@ import { resolveCodeEditorFontMetrics } from '@/components/ui/code/editor/codeEd
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useScreenReaderEnabled } from '@/hooks/ui/useScreenReaderEnabled';
-import { useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 import { getClipboardStringTrimmedSafe } from '@/utils/ui/clipboard';
 import {
@@ -57,7 +58,7 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNati
     const uiFontScale = useLocalSetting('uiFontScale');
     const terminalRendererPreference = useLocalSetting('terminalRendererPreference');
     const screenReaderActive = useScreenReaderEnabled();
-    const [nativeRendererQuarantine, setNativeRendererQuarantine] = useLocalSettingMutable('terminalNativeRendererQuarantine');
+    const nativeRendererQuarantine = useLocalSetting('terminalNativeRendererQuarantine');
     const osFontScale = typeof PixelRatio.getFontScale === 'function' ? PixelRatio.getFontScale() : 1;
     const fontMetrics = React.useMemo(() => resolveCodeEditorFontMetrics({ uiFontScale, osFontScale }), [osFontScale, uiFontScale]);
     const keyboardBottomInset = useKeyboardHeight();
@@ -118,9 +119,9 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNati
     }, [quarantineActive, selectedRenderer]);
     React.useEffect(() => {
         if (nativeRendererQuarantine && nativeRendererQuarantine.expiresAtMs <= Date.now()) {
-            setNativeRendererQuarantine(null);
+            getStorage().getState().applyLocalSettings({ terminalNativeRendererQuarantine: null }, { source: 'ui' });
         }
-    }, [nativeRendererQuarantine, setNativeRendererQuarantine]);
+    }, [nativeRendererQuarantine]);
     const effectiveRenderer = nativeRendererFailed || quarantineActive ? 'xterm-webview' : selectedRenderer;
     const onNativeUnavailable = React.useCallback(() => {
         setNativeRendererFailed(true);
@@ -128,11 +129,11 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneNati
     const onRendererCrash = React.useCallback((event: TerminalNativeRendererCrashEvent) => {
         setNativeRendererFailed(true);
         if (selectedRenderer !== 'ios-ghosttykit' && selectedRenderer !== 'android-termux') return;
-        setNativeRendererQuarantine({
+        getStorage().getState().applyLocalSettings({ terminalNativeRendererQuarantine: {
             renderer: selectedRenderer,
             expiresAtMs: Date.now() + 24 * 60 * 60 * 1000,
-        });
-    }, [selectedRenderer, setNativeRendererQuarantine]);
+        } }, { source: 'ui' });
+    }, [selectedRenderer]);
     const onWebViewRendererFailure = React.useCallback((_failure: XtermWebViewRendererFailure) => {
         props.controller.retryConnect();
         requestWebViewRecovery();
