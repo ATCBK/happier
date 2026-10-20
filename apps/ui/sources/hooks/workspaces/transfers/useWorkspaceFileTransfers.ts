@@ -66,6 +66,13 @@ export type WorkspaceDownloadState =
 
 export type WorkspaceFileDownloadAction = 'save' | 'open' | 'share';
 
+export type WorkspaceFileDownloadInput = Readonly<{
+    path: string;
+    asZip: boolean;
+    action?: WorkspaceFileDownloadAction;
+    cachedContent?: WorkspaceFileCachedContent | null;
+}>;
+
 export type WorkspaceTransferResult = { ok: true } | { ok: false; error: string; canceled?: true };
 
 function joinRepoPath(parentDir: string, relativePath: string): string {
@@ -310,7 +317,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
     downloadState: WorkspaceDownloadState;
     startUploads: (input: Readonly<{ entries: readonly WorkspaceUploadEntry[]; destinationDir: string }>) => Promise<WorkspaceTransferResult>;
     cancelUploads: () => void;
-    startDownload: (input: Readonly<{ path: string; asZip: boolean; action?: WorkspaceFileDownloadAction }>) => Promise<WorkspaceTransferResult>;
+    startDownload: (input: WorkspaceFileDownloadInput) => Promise<WorkspaceTransferResult>;
     cancelDownload: () => void;
 }> {
     const {
@@ -555,7 +562,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         }
     }, [maxConcurrentUploads, onAfterUploadSuccess, onResolveUploadConflicts, stableWorkspaceScope]);
 
-    const startDownload = React.useCallback(async (input: Readonly<{ path: string; asZip: boolean; action?: WorkspaceFileDownloadAction; cachedContent?: WorkspaceFileCachedContent | null }>): Promise<WorkspaceTransferResult> => {
+    const startDownload = React.useCallback(async (input: WorkspaceFileDownloadInput): Promise<WorkspaceTransferResult> => {
         if (downloadOperationRef.current) {
             return { ok: false, error: 'Download already in progress' };
         }
