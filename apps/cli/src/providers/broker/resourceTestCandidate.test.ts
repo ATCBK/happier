@@ -154,7 +154,9 @@ describe('resolveTeamCredentialResourceTestCandidate', () => {
         ? stale : projection(agentTargetKey, 'model-a'),
       createRequestId: () => 'request-1',
     })).resolves.toMatchObject({ application: { agentTargetKey: 'agent:acme.example/z' } });
-    const interrupted = new Error('source read interrupted');
+    const interrupted = Object.assign(new Error('source read interrupted'), {
+      status: 'unavailable', reason: 'projection_unavailable',
+    });
     await expect(resolveTeamCredentialResourceTestCandidate({
       machineId: 'machine-1', teamId: 'team-1', resourceId: 'resource-1', source,
       expectedResourceRevision: 3, agentTargetKeys: ['agent:acme.example/a', 'agent:acme.example/z'],

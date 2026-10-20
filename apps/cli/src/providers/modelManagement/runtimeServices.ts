@@ -84,6 +84,7 @@ import {
   type ResolveManagedProviderPurposeBindingIntent,
 } from '@/providers/managed/resolvePurposeBindingSnapshot';
 import {
+  isTeamCredentialSourceModelProjectionFailureV1,
   projectTeamCredentialSourceModelFilter,
   resolveTeamCredentialBrokerEligibility,
   resolveTeamCredentialResourceTestCandidate,
@@ -1100,7 +1101,16 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       }, undefined, signal),
       createRequestId: randomUUID,
       ...(signal ? { signal } : {}),
+    }).catch(caught => {
+      if (!isTeamCredentialSourceModelProjectionFailureV1(caught)) throw caught;
+      return {
+        status: 'unavailable' as const,
+        reason: caught.reason === 'incompatible' ? 'model_unavailable' as const : 'source_unavailable' as const,
+      };
     });
+    if (candidate && 'status' in candidate) {
+      return DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema.parse(candidate);
+    }
     return DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema.parse(candidate
       ? { status: 'success', ...candidate }
       : {

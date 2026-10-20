@@ -536,12 +536,16 @@ describe('runtime provider model-management composition', () => {
     }] } };
     let observedCatalog = splitProviderSettingsV1(settings).catalog;
     let observedRevision = 1;
+    let catalogReadGate: Promise<void> | undefined;
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
         settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
-      if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
-        status: 'present', revision: observedRevision, content: { t: 'plain', v: observedCatalog } } };
+      if (path === '/v1/account/entity-rows/provider-connections') {
+        await catalogReadGate;
+        return { status: 200, data: { status: 'present', revision: observedRevision,
+          content: { t: 'plain', v: observedCatalog } } };
+      }
       if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
       if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
       const history = emptyAccountSettingsHistoryCaptureResponse(path);
@@ -823,10 +827,25 @@ describe('runtime provider model-management composition', () => {
       registry, dnsEvidenceByEndpointUrl: new Map([['https://models.example/v1', ['1.1.1.1']]]), lease,
     });
     if (!authorization.ok) throw new Error('Expected provider authorization');
-    await expect(services.resolveBindingStatus({
-      machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex', selection,
-      launchBinding: authorization.authorization.sessionBindingMetadata,
-    })).resolves.toEqual({ status: 'current' });
+    if (custody === 'ambient') {
+      // Binding status reads current Home authority; it sends no endpoint probe.
+      // A slow but valid Home read must not inherit the probe's 30 s budget.
+      let releaseCatalog!: () => void;
+      catalogReadGate = new Promise<void>(resolve => { releaseCatalog = resolve; });
+      vi.useFakeTimers();
+      const pending = services.resolveBindingStatus({ machineId: 'machine-a',
+        agentTargetKey: 'agent:happier.agent.codex/codex', selection,
+        launchBinding: authorization.authorization.sessionBindingMetadata });
+      try {
+        await vi.advanceTimersByTimeAsync(35_000);
+        releaseCatalog();
+        await expect(pending).resolves.toEqual({ status: 'current' });
+      } finally { releaseCatalog(); catalogReadGate = undefined; await pending; vi.useRealTimers(); }
+    } else {
+      await expect(services.resolveBindingStatus({ machineId: 'machine-a',
+        agentTargetKey: 'agent:happier.agent.codex/codex', selection,
+        launchBinding: authorization.authorization.sessionBindingMetadata })).resolves.toEqual({ status: 'current' });
+    }
     await expect(services.resolveBindingStatus({
       machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.codex/codex', selection,
       launchBinding: {

@@ -2,7 +2,7 @@ import { TeamCredentialProviderModelCatalogEntryV1Schema } from '@happier-dev/pr
 import { TeamCredentialResourceTestApplicationRequestV1Schema } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import type { TeamCredentialResourceTestApplicationRequestV1, TeamCredentialSourceBindingV1, TeamCredentialProviderModelCatalogEntryV1 } from '@happier-dev/protocol/teams';
 import type { DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
-import { admitTeamCredentialSourceModelRowsV1 } from '@happier-dev/protocol/rpc/providers';
+import { admitTeamCredentialSourceModelRowsV1, type TeamCredentialSourceModelProjectionFailureV1 } from '@happier-dev/protocol/rpc/providers';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol';
 import {
@@ -59,7 +59,7 @@ function sourceCatalogsFromProjection(input: Readonly<{
   resourceRevision: number;
 }>): readonly TeamCredentialModelCatalogResolver[] {
   const admitted = admitTeamCredentialSourceModelRowsV1(input.projection);
-  if (admitted.status !== 'success') return [];
+  if (admitted.status !== 'success') throw admitted;
   const catalogs = new Map<string, {
     application: ProviderBrokerApplicationBindingV1;
     rows: TeamCredentialProviderModelCatalogEntryV1[];
@@ -102,6 +102,17 @@ function candidatesFromProjection(input: Parameters<typeof sourceCatalogsFromPro
     modelId: row.descriptor.id,
     sourceRevision: row.sourceRevision,
   })));
+}
+
+export function isTeamCredentialSourceModelProjectionFailureV1(
+  caught: unknown,
+): caught is Pick<TeamCredentialSourceModelProjectionFailureV1, 'status' | 'reason'> {
+  return !(caught instanceof Error) && typeof caught === 'object' && caught !== null
+    && 'status' in caught && caught.status === 'unavailable'
+    && 'reason' in caught && (
+      caught.reason === 'response_invalid' || caught.reason === 'projection_unavailable'
+      || caught.reason === 'not_granted' || caught.reason === 'incompatible'
+    );
 }
 
 /** Canonical exact-source filter for every daemon model projection that starts
@@ -164,8 +175,12 @@ export async function resolveTeamCredentialBrokerEligibility(input: Readonly<{
         source: input.source,
         agentTargetKey,
         projectModels: input.projectModels,
-      }).catch(() => {
-        sourceUnavailable = true;
+      }).catch(caught => {
+        // An incompatible or unconfirmed row is a current source with no
+        // admitted model for this Agent, not an unavailable source.
+        if (!isTeamCredentialSourceModelProjectionFailureV1(caught) || caught.reason !== 'incompatible') {
+          sourceUnavailable = true;
+        }
         return [];
       });
       if (candidates.length > 0) return { status: 'eligible' };
@@ -182,8 +197,12 @@ export async function resolveTeamCredentialBrokerEligibility(input: Readonly<{
     source: input.source,
     agentTargetKey: input.application.agentTargetKey,
     projectModels: input.projectModels,
-  }).catch(() => null);
-  if (candidates === null) return { status: 'unavailable', reason: 'source_unavailable' };
+  }).catch(caught => ({
+    status: 'unavailable' as const,
+    reason: isTeamCredentialSourceModelProjectionFailureV1(caught) && caught.reason === 'incompatible'
+      ? 'application_unavailable' as const : 'source_unavailable' as const,
+  }));
+  if ('status' in candidates) return candidates;
   const sameApplication = candidates.filter((candidate) => pluginJsonValuesEqual(candidate.application, input.application));
   if (sameApplication.length === 0) return { status: 'unavailable', reason: 'application_unavailable' };
   const sameModel = sameApplication.filter((candidate) => candidate.modelId === input.modelId);
@@ -208,7 +227,6 @@ async function projectCandidates(input: Readonly<{
     ...projectTeamCredentialSourceModelFilter(input.source),
     mode: 'picker',
   });
-  if (projection.status === 'error') throw projection.error;
   return candidatesFromProjection({
     projection,
     teamId: input.teamId,
@@ -264,6 +282,7 @@ export async function resolveTeamCredentialResourceCatalogApplications(input: Re
   signal?: AbortSignal;
 }>): Promise<readonly ProviderBrokerApplicationBindingV1[]> {
   const applications = new Map<string, ProviderBrokerApplicationBindingV1>();
+  let sourceFailure: unknown;
   for (const agentTargetKey of [...new Set(input.agentTargetKeys)].sort()) {
     input.signal?.throwIfAborted();
     const candidates = await projectCandidates({
@@ -274,11 +293,16 @@ export async function resolveTeamCredentialResourceCatalogApplications(input: Re
       source: input.source,
       agentTargetKey,
       projectModels: input.projectModels,
+    }).catch(caught => {
+      if (!isTeamCredentialSourceModelProjectionFailureV1(caught)) throw caught;
+      sourceFailure ??= caught;
+      return [];
     });
     for (const candidate of candidates) {
       applications.set(applicationKey(candidate.application), candidate.application);
     }
   }
+  if (applications.size === 0 && sourceFailure !== undefined) throw sourceFailure;
   return Object.freeze([...applications.values()].sort((left, right) => (
     applicationKey(left) < applicationKey(right) ? -1 : applicationKey(left) > applicationKey(right) ? 1 : 0
   )));
@@ -351,6 +375,7 @@ export async function resolveTeamCredentialResourceTestCandidate(input: Readonly
   request: TeamCredentialResourceTestApplicationRequestV1;
 }> | null> {
   const targetKeys = [...new Set(input.agentTargetKeys)].sort();
+  let sourceFailure: unknown;
   for (const agentTargetKey of targetKeys) {
     input.signal?.throwIfAborted();
     const candidates = await projectCandidates({
@@ -361,6 +386,10 @@ export async function resolveTeamCredentialResourceTestCandidate(input: Readonly
       source: input.source,
       agentTargetKey,
       projectModels: input.projectModels,
+    }).catch(caught => {
+      if (!isTeamCredentialSourceModelProjectionFailureV1(caught)) throw caught;
+      sourceFailure ??= caught;
+      return [];
     });
     const candidate = [...candidates].sort(compareCandidates)[0];
     if (candidate) {
@@ -375,5 +404,6 @@ export async function resolveTeamCredentialResourceTestCandidate(input: Readonly
       });
     }
   }
+  if (sourceFailure !== undefined) throw sourceFailure;
   return null;
 }
