@@ -262,8 +262,10 @@ export const MultiPaneHost = React.memo((props: MultiPaneHostProps) => {
                         testID={mainModalActive ? 'multi-pane-main-scrim' : 'multi-pane-right-scrim'}
                         accessibilityRole="button" accessibilityLabel={t('ui.modalPane.dismiss', { pane: mainModalActive ? mainLabel : rightModalLabel })}
                         onPress={mainModalActive ? mainPresence.requestClose : rightPresence.requestClose}
+                        // The session drawer dims the editor (lab F10); Files over the editor is a light,
+                        // non-blocking overlay (lab F12): a press outside still closes it, nothing dims.
                         animatedStyle={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: overlayZIndexBase + 4,
-                            backgroundColor: theme.dark ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.18)' }} /> : null}
+                            backgroundColor: mainModalActive ? (theme.dark ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.18)') : 'transparent' }} /> : null}
                 </PaneColumn>
             ) : null}
             {rightPresence.present ? (

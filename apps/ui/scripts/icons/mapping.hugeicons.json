@@ -253,5 +253,6 @@
   "scales": "JusticeScale01Icon",
   "binoculars": "BinocularsIcon",
   "layout": "GroupItemsIcon",
-  "exclude-square": "UngroupItemsIcon"
+  "exclude-square": "UngroupItemsIcon",
+  "pane-arrangement": "LayoutRightIcon"
 }

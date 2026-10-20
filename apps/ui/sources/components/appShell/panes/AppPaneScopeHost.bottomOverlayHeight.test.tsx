@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -68,7 +69,7 @@ describe('AppPaneScopeHost bottom height', () => {
     it('uses a newly measured height even while the reported width is zero', async () => {
         const { screen, geometry, columns } = await renderBottomHost(320);
         const before = columns().props.bottomDockMaxHeightPx;
-        const host = screen.root.findAll(node => node.type === 'View' && typeof node.props.onLayout === 'function')[0];
+        const host = screen.root.findAllByType(View).find(node => typeof node.props.onLayout === 'function');
         if (!host) throw new Error('Missing measured pane root');
         await act(async () => host.props.onLayout({ nativeEvent: { layout: { width: 0, height: 500 } } }));
         expect(geometry()).toMatchObject({ containerHeightPx: 500, containerWidthPx: 1200, bottomPresentation: 'overlay', mainRegionHeightPx: 500 });

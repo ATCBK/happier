@@ -16,6 +16,11 @@ export type PaneHeaderLineSegment =
     /** The one fact that needs the person ("1 waiting for you"): drawn in the attention colour. */
     | Readonly<{ text: string; attention: true }>
     /**
+     * Something that failed ("3 problems"): drawn in the failure colour. With `onPress` it leads to
+     * where the failures are listed.
+     */
+    | Readonly<{ text: string; failure: true; onPress?: () => void; accessibilityLabel?: string; testID?: string }>
+    /**
      * A fact led by its glyph (the task a conversation hangs off, "Invited only" behind a lock). With
      * `onPress` it is a way back to that thing: a link that keeps the line's quiet tone until pointed at.
      */

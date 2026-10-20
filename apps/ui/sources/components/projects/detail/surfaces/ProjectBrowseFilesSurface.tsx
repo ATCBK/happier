@@ -9,6 +9,7 @@ import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domai
 import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { buildWorkspaceFileLink } from '@/utils/url/sessionFileDeepLink';
+import type { WorkspaceFileTarget } from '@happier-dev/protocol/actions/workspaceActionFamily';
 
 export const ProjectBrowseFilesSurface = React.memo((props: Readonly<{
     scopeId: string;
@@ -34,10 +35,11 @@ export const ProjectBrowseFilesSurface = React.memo((props: Readonly<{
         else if (props.onNavigate) props.onNavigate(next);
         else setLocation(next);
     }, [props.onNavigate, props.onOpenFile, setLocation]);
-    const fileHref = React.useCallback((path: string) => buildWorkspaceFileLink({ target: {
+    const fileLinkTarget = React.useMemo<WorkspaceFileTarget>(() => ({
         kind: 'project', workspaceRefId: props.workspaceRef.id, serverId: props.workspaceRef.serverId,
-        machineId: props.scope.machineId, rootPath: props.scope.rootPath }, path }),
+        machineId: props.scope.machineId, rootPath: props.scope.rootPath }),
     [props.scope.machineId, props.scope.rootPath, props.workspaceRef.id, props.workspaceRef.serverId]);
+    const fileHref = React.useCallback((path: string) => buildWorkspaceFileLink({ target: fileLinkTarget, path }), [fileLinkTarget]);
     const files = pane.scopeState?.right.tabState.files as { revealRequest?: Readonly<{ path: string }> } | undefined;
     // The row of the file open in Details stays selected while its tab is open (lab F1).
     const selectedPath = resolveOpenDetailsFilePath(pane.scopeState?.details);
@@ -50,6 +52,7 @@ export const ProjectBrowseFilesSurface = React.memo((props: Readonly<{
             onOpenFile={props.onOpenFile}
             onOpenHistory={props.onOpenHistory}
             fileHref={fileHref}
+            fileLinkTarget={fileLinkTarget}
             scope={props.scope}
             onOpenFilePinned={props.onOpenFilePinned}
             onEditFile={props.onOpenFilePinned}

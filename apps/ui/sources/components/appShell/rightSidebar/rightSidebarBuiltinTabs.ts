@@ -12,6 +12,8 @@ export type RightSidebarPresentation = 'desktop' | 'mobile';
 export type RightSidebarBuiltInTabId =
     | 'git'
     | 'files'
+    | 'problems'
+    | 'references'
     | 'scripts'
     | 'navigation'
     | 'agents'
@@ -97,6 +99,11 @@ export type RightSidebarAvailabilityInput = Readonly<{
     sourceControlTabAvailable: boolean;
     /** A Session working in an accepted Project checkout offers that checkout's Scripts beside it. */
     sessionProjectCheckoutAvailable?: boolean;
+    /**
+     * A File page in this pane answers language questions (P7): Problems and References read it. The
+     * tabs exist only while that producer is registered.
+     */
+    codeIntelligenceAvailable?: boolean;
 }>;
 
 export const RIGHT_SIDEBAR_BUILTIN_TABS: readonly RightSidebarBuiltinTabDefinition[] = [
@@ -128,6 +135,29 @@ export const RIGHT_SIDEBAR_BUILTIN_TABS: readonly RightSidebarBuiltinTabDefiniti
             session: 'browse',
             project: 'browse',
         },
+    },
+    {
+        // P7 (LS1 L2): problems in the files open in this pane, from their language servers.
+        id: 'problems',
+        owner: 'builtin',
+        railGroup: 'code',
+        labelKey: 'files.pane.intelligence.problemsTitle',
+        icon: 'warning-circle',
+        order: 22,
+        scopes: ['session', 'project'],
+        available: (input) => input.codeIntelligenceAvailable === true && input.presentation === 'desktop',
+    },
+    {
+        // P7 (LS1 L1): Find references opens it; it is not a destination of its own.
+        id: 'references',
+        owner: 'builtin',
+        railGroup: 'code',
+        labelKey: 'files.pane.intelligence.referencesTitle',
+        icon: 'list',
+        order: 23,
+        scopes: ['session', 'project'],
+        hiddenInLauncher: true,
+        available: (input) => input.codeIntelligenceAvailable === true && input.presentation === 'desktop',
     },
     {
         id: 'scripts',

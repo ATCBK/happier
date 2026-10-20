@@ -85,6 +85,8 @@ import { useSessionViewShellSession } from '@/components/sessions/shell/sessionV
 import { useSessionSourceControlAvailability } from '@/hooks/session/sourceControl/sessionSourceControlAvailability';
 import type { SessionBoardPrimaryMountResolver } from '@/sync/domains/session/board';
 import { useMountedSessionBoardController } from '@/components/sessions/board/SessionBoardControllerProvider';
+import { CodeIntelligencePaneTab } from '@/components/workspaces/files/intelligence/CodeIntelligencePaneTab';
+import { useCodeIntelligencePaneProducer } from '@/components/workspaces/files/intelligence/codeIntelligencePaneStore';
 
 const loadSessionCollaborationSurface = async () => (await import('@/components/sessions/collaboration/SessionCollaborationSurface')).SessionCollaborationSurface;
 
@@ -241,8 +243,10 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
     const sourceControlTabAvailable = useSessionSourceControlAvailability(props.sessionId, pluginRuntime.serverId);
     // The Session's accepted Project checkout, when it works in one: Scripts beside the transcript (lab `s-agent` PANE).
     const projectCheckout = useSessionProjectCheckout(session, pluginRuntime.serverId);
+    const codeIntelligenceAvailable = useCodeIntelligencePaneProducer(props.scopeId) !== null;
     const rightPanelTabs = React.useMemo(() => resolveSessionRightSidebarTabs({
         ...appTabInputs,
+        codeIntelligenceAvailable,
         sessionSharingAvailable,
         sourceControlTabAvailable,
         sessionProjectCheckoutAvailable: projectCheckout !== null,
@@ -265,6 +269,7 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
         sourceControlTabAvailable,
         projectCheckout,
         terminalTabAvailable,
+        codeIntelligenceAvailable,
     ]);
     const rightTabSelection = React.useMemo(() => resolveRightSidebarTabSelection<RightTabId>({
         activeTabId: scopeState?.right.activeTabId,
@@ -537,6 +542,16 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
                                 />
                             </React.Suspense>
                         </SessionRetainedPane>
+                        {availableTabIds.has('problems') ? (
+                            <SessionRetainedPane tabId="problems" isActive={activeTab === 'problems'} mode="absolute-overlay">
+                                <CodeIntelligencePaneTab scopeId={props.scopeId} kind="problems" active={activeTab === 'problems'} />
+                            </SessionRetainedPane>
+                        ) : null}
+                        {availableTabIds.has('references') ? (
+                            <SessionRetainedPane tabId="references" isActive={activeTab === 'references'} mode="absolute-overlay">
+                                <CodeIntelligencePaneTab scopeId={props.scopeId} kind="references" active={activeTab === 'references'} />
+                            </SessionRetainedPane>
+                        ) : null}
                         <SessionRetainedPane
                             tabId="agents"
                             isActive={activeTab === 'agents'}

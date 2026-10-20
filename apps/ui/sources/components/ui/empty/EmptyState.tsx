@@ -17,6 +17,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { CenteredInfoTile } from '@/components/ui/lists/CenteredInfoTile';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
@@ -36,6 +37,8 @@ export type EmptyStatePrimaryAction = Readonly<{
     onPress: () => void | Promise<unknown>;
     disabled?: boolean;
     testID?: string;
+    /** The keyboard shortcut that does the same thing, drawn as a keycap inside the button. */
+    shortcut?: string;
 }>;
 
 type EmptyStateProps = Readonly<{
@@ -208,6 +211,7 @@ export const EmptyState = React.memo((props: EmptyStateProps) => {
             accessibilityLabel={props.primaryAction.label}
             disabled={props.primaryAction.disabled}
             action={() => Promise.resolve(props.primaryAction!.onPress())}
+            trailing={props.primaryAction.shortcut ? <KeyHint label={props.primaryAction.shortcut} tone="onFill" /> : undefined}
         />
     ) : null;
     const actionContent = primaryButton && props.secondaryAction ? (

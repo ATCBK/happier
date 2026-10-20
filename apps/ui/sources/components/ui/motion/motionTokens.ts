@@ -6,6 +6,9 @@ export const motionTokens = {
         /** Shared movement tolerance before a tap becomes a drag. */
         slopPx: 12,
         doubleTapMs: 300,
+        /** A held on-screen key (the editor's arrow keys) repeats like a hardware key: first after the delay, then every interval. */
+        keyRepeatDelayMs: 400,
+        keyRepeatIntervalMs: 60,
     },
     durationMs: {
         instant: 0,

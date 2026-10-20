@@ -70,6 +70,7 @@ import { normalizeWorkspaceRootPath } from '@/sync/domains/workspaces/workspaceS
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useReviewListHunkReview } from '@/components/workspaces/scm/review/hunkReview/useReviewListHunkReview';
 
 /** The same comparison body serves Changes and explicit review Details destinations. */
 const WORKSPACE_REVIEW_DETAILS_HEADER = Object.freeze({});
@@ -186,6 +187,9 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
     const { snapshot, loading, error, refresh } = useWorkspaceScmSnapshotController(scope);
     // The checkout's machine isn't answering: the review waits with it, in the one shared state, rather than loading without end.
     const reachability = useCheckoutReachability(scope);
+    // Keep / Discard on each file's changes in the Uncommitted list (P5); Discard needs the checkout's write capability.
+    const hunkReview = useReviewListHunkReview({ scope, discard: scmWriteEnabled && snapshot?.capabilities?.writeDiscard === true,
+        refresh: () => { void refresh(); } });
     const comparison = props.comparison ?? { kind: 'workingTree' };
     const view = props.view ?? 'files';
     const explain = props.explain === true;
@@ -490,6 +494,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                 onDeleteReviewCommentDraft={reviewDraftHandlers.onDeleteReviewCommentDraft}
                 onReviewCommentError={reviewDraftHandlers.onReviewCommentError}
                 workspaceScope={scope}
+                hunkReview={hunkReview}
                 fetchUnifiedDiffForPath={fetchUnifiedDiffForPath}
                 comparisonChrome={comparisonChrome}
                 initialScrollTop={mountedInitialReviewState.scrollTop} onScrollTopChange={onScrollTopChange}

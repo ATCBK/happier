@@ -13,6 +13,8 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { SidebarCollapseIcon } from './SidebarIcons';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 /**
  * The sheet that holds the column and the page lies on the window's canvas, inset from the window's
@@ -150,7 +152,7 @@ export function AppShellMaterialFrame(props: Readonly<{
     leftOffsetPx: number;
     sidebarWidth: number;
     /** Resize feedback supplied by the shared core; the sidebar presentation owns its paint. */
-    columnResizeState?: Readonly<{ collapseArmed: boolean; overshootPx: number }>;
+    columnResizeState?: Readonly<{ collapseArmed: boolean; overshootPx: number; dragging: boolean }>;
     titleStrip: React.ReactNode;
     rail: React.ReactNode;
     column: React.ReactNode;
@@ -159,6 +161,15 @@ export function AppShellMaterialFrame(props: Readonly<{
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
+    const reducedMotion = useReducedMotionPreference();
+    // Released past a bound, the edge springs back to the width it kept instead of snapping; while the
+    // pointer holds it, it follows 1:1. Reduced motion: it is placed at once.
+    const columnSpringBack = Platform.OS === 'web' && !reducedMotion && props.columnResizeState?.dragging !== true ? {
+        transitionProperty: 'width',
+        transitionDuration: `${motionTokens.spring.travel.durationMs}ms`,
+        transitionTimingFunction: motionTokens.easingCss.standard,
+    // react-native-web transition style keys; React Native's ViewStyle does not declare them.
+    } as unknown as ViewStyle : null;
     return <DesktopMainContentDragSurface enabled={props.dragEnabled} leftOffsetPx={props.leftOffsetPx}
         style={styles.root}>
         {/* The atmosphere's picture lies under every plane; route changes only change the content coat. */}
@@ -181,7 +192,7 @@ export function AppShellMaterialFrame(props: Readonly<{
                     translucentColor={theme.colors.surface.selected} style={[appShellColumnSurface.column, {
                         // Past either bound the edge gives a little (rubber band), a pure function of the drag.
                         width: Math.max(0, props.sidebarWidth + (props.columnResizeState?.overshootPx ?? 0) * COLUMN_RUBBER_BAND_RESISTANCE),
-                    }]}>
+                    }, columnSpringBack]}>
                     <View style={[styles.columnContent, props.columnResizeState?.collapseArmed ? styles.columnArmed : null]}>
                         {props.column}
                     </View>

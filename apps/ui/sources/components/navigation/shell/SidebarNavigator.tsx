@@ -200,7 +200,7 @@ export const SidebarNavigator = React.memo(() => {
             dragEnabled={showSidebar && Platform.OS === 'web' && isDesktopHost()}
             leftOffsetPx={shellLeftPx}
             sidebarWidth={sidebarWidth}
-            columnResizeState={{ collapseArmed: sidebarCollapseArmed, overshootPx: sidebarOvershootPx }}
+            columnResizeState={{ collapseArmed: sidebarCollapseArmed, overshootPx: sidebarOvershootPx, dragging: dragSidebarWidthPx !== null }}
             titleStrip={showSidebar || workspace?.active ? (
                 <AppShellTitleStrip key="title-strip" columnVisible={columnShown}
                     columnToggleAvailable={column.kind !== 'none'} onToggleColumn={handleToggleColumn}

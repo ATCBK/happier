@@ -6,7 +6,8 @@ import { renderScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
 import { AppPaneProvider } from '../AppPaneProvider';
 import { useAppPaneScope, type AppPaneScopeApi } from '../hooks/useAppPaneScope';
-import { useFileTabFront } from './useFileTabFront';
+import { useFileTabFront, useSessionFileTabFront } from './useFileTabFront';
+import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 
 const initialState = storage.getState();
 beforeEach(() => storage.setState(initialState, true));
@@ -42,6 +43,27 @@ describe('file tab front subscription', () => {
         expect(renders).toEqual(beforeUnrelated);
         await act(async () => pane!.closeDetails());
         expect(selected.get('b.ts')).toBe(false);
+        await screen.unmount();
+    });
+
+    it('answers a transcript chip for the Session pane the opener opens its file in', async () => {
+        let pane: AppPaneScopeApi | undefined;
+        const scopeId = createSessionPaneScopeId('s1', 'srv1', null);
+        function Controls() {
+            pane = useAppPaneScope(scopeId);
+            return null;
+        }
+        const selected = new Map<string, boolean>();
+        function Chip({ sessionId, path }: { sessionId: string; path: string }) {
+            selected.set(`${sessionId}:${path}`, useSessionFileTabFront(sessionId, 'srv1', path));
+            return null;
+        }
+        const screen = await renderScreen(<AppPaneProvider><Controls /><Chip sessionId="s1" path="a.ts" />
+            <Chip sessionId="s2" path="a.ts" /></AppPaneProvider>);
+        await act(async () => pane!.openDetailsTab({ key: 'file:a.ts', title: 'a.ts', kind: 'file', resource: { kind: 'file', path: 'a.ts' } }, { intent: 'pinned' }));
+        expect(selected.get('s1:a.ts')).toBe(true);
+        // The same path in another Session's transcript is a different tab.
+        expect(selected.get('s2:a.ts')).toBe(false);
         await screen.unmount();
     });
 });

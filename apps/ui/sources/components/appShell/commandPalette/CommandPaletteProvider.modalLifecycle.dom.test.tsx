@@ -5,6 +5,9 @@ import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { installModalComponentCommonModuleMocks } from '@/modal/components/modalComponentTestHelpers';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
+
+const route = vi.hoisted(() => ({ pathname: '/', params: {} as Record<string, string> }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 installModalComponentCommonModuleMocks({
@@ -17,13 +20,18 @@ installModalComponentCommonModuleMocks({
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({ segments: [] }).module;
+    return createExpoRouterMock({ segments: [], pathname: () => route.pathname, params: () => route.params }).module;
 });
 vi.mock('@/utils/web/radixCjs', async () => {
     const { createRadixCjsRealModule } = await import('@/dev/testkit/mocks/radixCjs');
     return await createRadixCjsRealModule();
 });
 installDisconnectedServerSocketBoundary();
+// Load these after the native boundary has selected real React Native Web;
+// the testkit barrel otherwise evaluates its render helpers before that choice.
+const [{ serveActionHomes }, { applyProjectAccountRowsFixture, installBrowserStorageLockBoundary }] = await Promise.all([
+    import('@/dev/testkit/harness/actionHomesHttpHarness'), import('@/dev/testkit'),
+]);
 
 // The complete palette, command dispatcher, modal manager/host, controller and
 // presentation stay real; only the navigator, native UI and network leave this process.
@@ -32,6 +40,73 @@ const { CommandPaletteProvider } = await import('./CommandPaletteProvider');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { storage } = await import('@/sync/domains/state/storage');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const [{ WorkspaceProvider }, { AppPaneProvider }, { resolveCompactAppDestinations },
+    { useUniversalSearchRuntime }, { invokeWorkspaceAction }, { recordRecentWorkspaceFile },
+    { tryBuildWorkspaceCacheKey }] = await Promise.all([
+    import('@/components/appShell/workspace/WorkspaceProvider'), import('@/components/appShell/panes/AppPaneProvider'),
+    import('@/components/appShell/destinations/compactAppDestinationCatalog'),
+    import('@/components/appShell/search/UniversalSearchRuntimeContext'),
+    import('@/components/appShell/workspace/workspaceActionRuntime'),
+    import('@/sync/domains/workspaces/files/recentWorkspaceFiles'), import('@/sync/domains/workspaces/workspaceScope'),
+]);
+
+it('keeps the canonical file opener when Search renders in the global modal outside Workspace context', async () => {
+    const restoreLocks = installBrowserStorageLockBoundary();
+    const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-search-portal.test',
+        accountId: 'alice', currentAccount: true }], route: () => undefined });
+    let disconnect: (() => Promise<unknown>) | undefined;
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const initial = storage.getState();
+    try {
+        disconnect = await homes.restoreActiveConnection();
+        const scope = storage.getState().profileScope!;
+        const workspace = { serverId: scope.serverId, machineId: 'studio', rootPath: '/repo' };
+        const workspaceKey = tryBuildWorkspaceCacheKey(workspace)!;
+        route.pathname = '/projects/portal-project/overview';
+        route.params = { workspaceRefId: 'portal-project', serverId: scope.serverId };
+        window.history.replaceState(null, '', `${route.pathname}?serverId=${encodeURIComponent(scope.serverId)}`);
+        storage.setState({ isDataReady: true, settings: { ...storage.getState().settings, commandPaletteEnabled: true },
+            localSettings: { ...storage.getState().localSettings, recentWorkspaceFilesV1:
+                recordRecentWorkspaceFile({}, workspaceKey, 'from-search.ts') } });
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [{ id: 'portal-project', ...workspace,
+            label: null, createdAtMs: 1 }] });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false } });
+        let runtime!: ReturnType<typeof useUniversalSearchRuntime>;
+        let navigation!: WorkspaceNavigationContextValue;
+        function SearchOpener() { runtime = useUniversalSearchRuntime(); return null; }
+        // This is the actual global host: React owns the Search controller
+        // outside Workspace, so only the captured opener can reach its Action.
+        await act(async () => root.render(<InjectedAuthProvider credentials={null}><ModalProvider><AppPaneProvider>
+            <WorkspaceProvider enabled catalog={catalog}>{owner => { navigation = owner;
+                return <CommandPaletteProvider><SearchOpener /></CommandPaletteProvider>;
+            }}</WorkspaceProvider></AppPaneProvider></ModalProvider></InjectedAuthProvider>));
+        await vi.waitFor(async () => {
+            expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.list', input: {} })).toMatchObject({ ok: true });
+        });
+        await act(async () => runtime.open(undefined, { ...workspace, accountId: scope.accountId, sessionId: null }, { source: 'files' }));
+        await vi.waitFor(() => expect(document.querySelector('[data-testid="universal-search-host"]')).not.toBeNull());
+        const fileRow = () => document.querySelector<HTMLElement>('[data-testid="universal-search:option:files:from-search.ts"]');
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            expect(fileRow(), document.querySelector('[data-testid="universal-search-host"]')?.textContent ?? 'Search host missing').not.toBeNull();
+        });
+        await act(async () => { fileRow()!.click(); });
+        await vi.waitFor(() => {
+            const tab = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+            expect(tab.target).toMatchObject({ kind: 'project', params: { workspaceRefId: 'portal-project',
+                serverId: scope.serverId, initialFile: 'from-search.ts' } });
+        });
+    } finally {
+        await act(async () => root.unmount());
+        route.pathname = '/'; route.params = {};
+        container.remove();
+        try { await disconnect?.(); }
+        finally { await homes.dispose(); restoreLocks(); storage.setState(initial, true); }
+    }
+});
 
 it('reopens Search through the app-shell shortcut after its route-modal host retires', async () => {
     const container = document.createElement('div');

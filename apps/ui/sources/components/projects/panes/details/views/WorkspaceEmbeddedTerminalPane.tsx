@@ -25,6 +25,8 @@ export type WorkspaceEmbeddedTerminalPaneProps = Readonly<{
     title?: string;
     focused?: boolean;
     chrome?: 'toolbar' | 'none';
+    ownerStatesExit?: boolean;
+    sizing?: 'fill' | 'content';
 }>;
 
 export const WorkspaceEmbeddedTerminalPane = React.memo(function WorkspaceEmbeddedTerminalPane(props: WorkspaceEmbeddedTerminalPaneProps) {
@@ -56,6 +58,11 @@ export const WorkspaceEmbeddedTerminalPane = React.memo(function WorkspaceEmbedd
         if (props.terminalInstanceId) void execute('session.terminals.restart', { terminalId: props.terminalInstanceId });
     }, [execute, props.terminalInstanceId]);
     const surfaceController = React.useMemo(() => ({ ...controller, requestRestart: restart, onOpenApproval: presentation.onOpenApproval }), [controller, restart, presentation.onOpenApproval]);
+    // No Session here: Ask goes where the Account's "Ask without a session" setting says (D-3).
+    const askSelection = React.useMemo(() => props.rootPath
+        ? { scopeId: props.scopeId, sessionId: null,
+            workspaceScope: { serverId: props.serverId, machineId: props.machineId, rootPath: props.rootPath } }
+        : null, [props.machineId, props.rootPath, props.scopeId, props.serverId]);
 
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -67,9 +74,12 @@ export const WorkspaceEmbeddedTerminalPane = React.memo(function WorkspaceEmbedd
                 testIdPrefix="workspace-embedded-terminal"
                 nativeSurfaceKey={terminalKey}
                 chrome={props.chrome}
+                ownerStatesExit={props.ownerStatesExit}
+                sizing={props.sizing}
                 machineName={machine.name}
                 focused={props.focused}
                 findSurfaceId={presentation.findSurfaceId}
+                askSelection={askSelection}
             />
         </View>
     );

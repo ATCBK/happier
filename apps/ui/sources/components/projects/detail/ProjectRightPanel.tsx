@@ -61,6 +61,8 @@ import type { ProjectPageV1 } from './projectRouteState';
 import { useActiveServerAccountScope, useProjectAccountRows } from '@/sync/domains/state/storage';
 import { resolveProjectTerminalScope } from './projectTerminalScope';
 import { CheckoutReachabilityLine, CheckoutReachabilityScope } from '@/components/workspaces/reachability/checkoutReachability';
+import { CodeIntelligencePaneTab } from '@/components/workspaces/files/intelligence/CodeIntelligencePaneTab';
+import { useCodeIntelligencePaneProducer } from '@/components/workspaces/files/intelligence/codeIntelligencePaneStore';
 
 type ProjectRightTabId = string;
 
@@ -153,8 +155,10 @@ function useProjectRightSidebarModel(props: ProjectRightPanelProps) {
         formFactor: resolvePluginUiRuntimeFormFactor({ deviceType }),
     }), [deviceType, pluginProjection.platform]);
     const appTabInputs = useAppRightSidebarTabInputs();
+    const codeIntelligenceAvailable = useCodeIntelligencePaneProducer(props.scopeId) !== null;
     const rightPanelTabs = React.useMemo(() => resolveProjectRightSidebarTabs({
         ...appTabInputs,
+        codeIntelligenceAvailable,
         terminalTabAvailable,
         activePage: props.activePage,
         presentation: deviceType === 'phone' ? 'mobile' : 'desktop',
@@ -164,6 +168,7 @@ function useProjectRightSidebarModel(props: ProjectRightPanelProps) {
         localize: localizePluginText,
     }), [
         appTabInputs,
+        codeIntelligenceAvailable,
         terminalTabAvailable,
         deviceType,
         localizePluginText,
@@ -424,6 +429,16 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                             />
                         </React.Suspense>
                     </RetainedPanelSurface>
+                    {availableTabIds.has('problems') ? (
+                        <RetainedPanelSurface isActive={activeTab === 'problems'} testID="project-rightpanel-surface-problems">
+                            <CodeIntelligencePaneTab scopeId={props.scopeId} kind="problems" active={activeTab === 'problems'} />
+                        </RetainedPanelSurface>
+                    ) : null}
+                    {availableTabIds.has('references') ? (
+                        <RetainedPanelSurface isActive={activeTab === 'references'} testID="project-rightpanel-surface-references">
+                            <CodeIntelligencePaneTab scopeId={props.scopeId} kind="references" active={activeTab === 'references'} />
+                        </RetainedPanelSurface>
+                    ) : null}
                     {availableTabIds.has('scripts') ? (
                         <RetainedPanelSurface isActive={activeTab === 'scripts'} testID="project-rightpanel-surface-scripts">
                             <React.Suspense fallback={<PaneLoadingFallback />}>

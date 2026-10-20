@@ -19,6 +19,10 @@ import {
     dispatchPluginAppPageHeaderAction,
     PluginAppPageHeaderActions,
 } from './pluginAppPageHeaderActions';
+import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
+import { getInstalledPluginUiClientExecutableComposition } from '@/components/plugins/reactNative/clientExecutableContributions';
+import { createPluginUiCommonJsLoaderBackend } from '@/components/plugins/reactNative/commonJsLoaderBackend';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 
 function page(): PluginAppPage {
     // The dispatcher needs only the catalog-issued page identity. This narrow
@@ -74,6 +78,42 @@ const resolveUnavailableDaemonTargetAction = createPluginUiProjectedActionResolv
 });
 
 describe('dispatchPluginAppPageHeaderAction', () => {
+    it('enables a committed Account Action in the page header without Machine authority', async () => {
+        const pluginId = 'acme.notes';
+        const target = { realm: 'account' as const, artifactId: 'account-header', exportName: 'activate', platform: 'web' as const };
+        const authority = { kind: 'account' as const, serverId: 'home', accountId: 'account', custodyId: 'header-custody' };
+        const action = { ...projectedAction({ target: 'account', account: { artifactId: target.artifactId, exportName: target.exportName } }), occurrenceId: authority.custodyId,
+            hostAccountOrigin: { ...authority, sourceCustody: { kind: 'bundled_first_party',
+                packagedRuntime: { kind: 'app_bundle', bundleId: 'app' } } },
+            authorization: { generation: { targetGeneration: authority.custodyId, desiredGeneration: authority.custodyId,
+                appliedGeneration: authority.custodyId }, resourceSelections: [], scopedGrants: [], serviceAvailability: [], operatingSystemAuthorization: [] } };
+        const identity = { pluginId, contributionId: 'refresh-index', artifactId: target.artifactId, platform: target.platform,
+            artifactDigest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as const };
+        const cache = createPluginReactNativeBundleCache();
+        cache.putInstalledArtifact({ identity, format: 'plainJs', bytes: new TextEncoder().encode(
+            "exports.activate = function(api) { api.actions.register('refresh-index', async function() { return null; }); };",
+        ) });
+        const composition = getInstalledPluginUiClientExecutableComposition();
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            expect(await composition.reconcile([{ pluginId, contributes: { actions: [action] }, target, executionOrigin: null,
+                occurrenceId: authority.custodyId, pluginVersion: '1.0.0', hostUiApiRange: '^1.0.0', authority,
+                cache, identity, moduleReference: { exportName: target.exportName }, backend: createPluginUiCommonJsLoaderBackend(),
+                isCurrent: () => true }])).toMatchObject([{ result: { ok: true } }]);
+            await act(async () => {
+                tree = renderer.create(React.createElement(PluginAppPageHeaderActions, {
+                    actions: [{ id: 'account-refresh', title: 'Refresh', command: { kind: 'executeAction',
+                        action: { pluginId, localId: action.id } } }], page: page(),
+                    projection: { ...EMPTY_PLUGIN_UI_PROJECTION, actionsById: { [`${pluginId}/${action.id}`]: action } },
+                    actionAuthority: null, openSurface: vi.fn(),
+                }));
+            });
+            expect(tree!.root.findByProps({ testID: 'plugin-app-page-header-action:account-refresh' }).props.disabled).toBe(false);
+        } finally {
+            await act(async () => { tree?.unmount(); });
+            await composition.unload();
+        }
+    });
     it('withdraws daemon execution independently of still-current page navigation', async () => {
         const execute = vi.fn(async () => ({ supported: true as const, result: { ok: true as const, result: {} } }));
         const openSurface = vi.fn(async () => ({ ok: true as const }));

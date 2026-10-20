@@ -32,7 +32,7 @@ function isToneSegment(segment: PaneHeaderLineSegment): boolean {
 }
 
 function isLinkSegment(segment: PaneHeaderLineSegment): boolean {
-    return typeof segment !== 'string' && 'icon' in segment && segment.onPress !== undefined;
+    return typeof segment !== 'string' && ('icon' in segment || 'failure' in segment) && segment.onPress !== undefined;
 }
 
 function readSegmentText(segment: PaneHeaderLineSegment): string {
@@ -108,6 +108,23 @@ export const PaneHeaderLineView = React.memo(function PaneHeaderLineView(props: 
                                 </View>
                             );
                         }
+                        if (typeof segment !== 'string' && 'failure' in segment && segment.onPress) {
+                            // A failure count that leads to its list ("3 problems" opens Problems).
+                            const onPress = segment.onPress;
+                            return (
+                                <View key={index} style={[styles.iconFact, index === 0 ? null : styles.followingFact]}>
+                                    {separator ? <Text style={[styles.subtitle, large ? styles.largeSubtitle : null]}>{separator}</Text> : null}
+                                    <HappierPressable testID={segment.testID} accessibilityRole="link" accessibilityLabel={segment.accessibilityLabel ?? segment.text}
+                                        onPress={onPress} style={(state) => [state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
+                                            focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}>
+                                        {(state) => (
+                                            <Text numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null, styles.failure,
+                                                state.hovered || state.focused ? styles.failureHovered : null]}>{segment.text}</Text>
+                                        )}
+                                    </HappierPressable>
+                                </View>
+                            );
+                        }
                         return (
                             <Text
                                 key={index}
@@ -121,6 +138,8 @@ export const PaneHeaderLineView = React.memo(function PaneHeaderLineView(props: 
                                         ? <Text style={segment.tone === 'added' ? styles.added : styles.removed}>{segment.text}</Text>
                                         : 'attention' in segment
                                             ? <Text style={styles.attention}>{segment.text}</Text>
+                                            : 'failure' in segment
+                                                ? <Text style={styles.failure}>{segment.text}</Text>
                                             : <Text style={styles.emphasis}>{segment.text}</Text>}
                             </Text>
                         );
@@ -336,6 +355,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     attention: {
         ...Typography.default('semiBold'),
         color: theme.colors.state.warning.foreground,
+    },
+    failure: {
+        color: theme.colors.state.danger.foreground,
+        fontVariant: ['tabular-nums'],
+    },
+    failureHovered: {
+        textDecorationLine: 'underline',
     },
     added: {
         color: theme.colors.diff.success,

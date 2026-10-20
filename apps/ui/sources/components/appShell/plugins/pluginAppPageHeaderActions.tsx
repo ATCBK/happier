@@ -113,8 +113,8 @@ export async function dispatchPluginAppPageHeaderAction(input: Readonly<{
                 },
             }
             : {}),
-        ...(projectedAction?.execution.target === 'client'
-            && occurrenceId !== null
+        ...((projectedAction.execution.target === 'account'
+            || (projectedAction.execution.target === 'client' && occurrenceId !== null))
             ? {
                 clientAction: {
                     ...(input.execute ? { execute: input.execute } : {}),
@@ -177,7 +177,7 @@ export function PluginAppPageHeaderActions(props: Readonly<{
         if (!isPluginProjectedActionExecutable(projectedAction)) return false;
         const locallyCurrent = props.actionAuthority?.accountLifetime?.isCurrent() !== false
             && props.isCurrent?.() !== false;
-        if (projectedAction.execution.target === 'client') {
+        if (projectedAction.execution.target !== 'daemon') {
             return locallyCurrent
                 && resolvePluginUiClientActionRegistration({
                     action: projectedAction,

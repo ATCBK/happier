@@ -17,6 +17,9 @@ const TRAVELLING_COLUMN_SELECTOR = [
 ].join(',');
 const RAIL_SELECTOR = '[data-testid="pane-action-rail-column"]';
 
+/** Each travelling column's own stacking order, put back when its travel lands. */
+const restingZIndex = new WeakMap<HTMLElement, string>();
+
 export type ArrangementTravelStart = Readonly<{ rects: ReadonlyMap<HTMLElement, DOMRect> }>;
 
 function asElement(node: unknown): HTMLElement | null {
@@ -48,7 +51,7 @@ export function playArrangementTravel(hostNode: unknown, start: ArrangementTrave
     if (reducedMotion) {
         cancelTravel(host);
         const fade = host.animate([{ opacity: 0.4 }, { opacity: 1 }], {
-            duration: motionTokens.overlay.modal.reducedMotionFadeMs, easing: motionTokens.easingCss.standard,
+            duration: motionTokens.overlay.panel.reducedMotionFadeMs, easing: motionTokens.easingCss.standard,
         });
         (fade as Animation & { id: string }).id = 'pane-arrangement-travel';
         return;
@@ -61,11 +64,21 @@ export function playArrangementTravel(hostNode: unknown, start: ArrangementTrave
         const dx = from.left - to.left;
         if (Math.abs(dx) < 1 || to.width === 0) return;
         const main = element.matches('[data-testid="multi-pane-main-column"]');
+        // Only transform is keyframed, so the travel stays on the compositor while the new layout
+        // settles on the main thread; the stacking order is a plain style held for the travel.
+        if (!restingZIndex.has(element)) restingZIndex.set(element, element.style.zIndex);
+        element.style.zIndex = main ? '2' : '1';
         const travel = element.animate(
-            [{ transform: `translateX(${dx}px)`, zIndex: main ? 2 : 1 }, { transform: 'translateX(0px)', zIndex: main ? 2 : 1 }],
+            [{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0px)' }],
             { duration: durationMs, easing: motionTokens.easingCss.standard },
         );
         (travel as Animation & { id: string }).id = 'pane-arrangement-travel';
+        // A retargeted travel replaces this one; only the last one to finish puts the order back.
+        travel.addEventListener('finish', () => {
+            if (element.getAnimations().some(animation => (animation as Animation & { id?: string }).id === 'pane-arrangement-travel' && animation !== travel)) return;
+            element.style.zIndex = restingZIndex.get(element) ?? '';
+            restingZIndex.delete(element);
+        });
     });
     host.querySelectorAll<HTMLElement>(RAIL_SELECTOR).forEach((rail) => {
         cancelTravel(rail);

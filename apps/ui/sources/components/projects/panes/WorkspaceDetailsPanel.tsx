@@ -57,6 +57,7 @@ import { createWorkspaceSyncConflictDetailsTab } from '@/components/workspaces/s
 import { createWorkspaceSyncRelationshipDetailsTab } from '@/components/workspaces/sync/workspaceSyncRelationshipDetailsTab';
 import { buildActiveDetailsRouteParams, parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { buildProjectRouteHref } from '@/components/projects/detail/projectRouteState';
+import { EmptyEditorPage } from '@/components/workspaces/files/EmptyEditorPage';
 import { useWorkspaceFileWriteTabPresentation } from '@/components/workspaces/files/useWorkspaceFileWriteTabPresentation';
 
 export type WorkspaceDetailsPanelHeaderActionRenderParams = Readonly<{
@@ -117,7 +118,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     const navigateChanges = React.useCallback(() => {
         if (deviceType === 'phone') filesController.navigateToSurface('git');
     }, [deviceType, filesController]);
-    const { revealInFilesTree, openChanges, openFileInDetails, openFileInDetailsPinned } = useProjectSurfaceActions({
+    const { revealInFilesTree, openChanges, openFileInDetails, openFileInDetailsPinned, openReviewAllChanges } = useProjectSurfaceActions({
         scopeId: props.scopeId, workspaceRef: props.workspaceRef, activeRootPath: effectiveRootPath,
         onRevealInFilesTreeNavigate: navigateFiles, onOpenChangesNavigate: navigateChanges,
     });
@@ -239,7 +240,12 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         }, openWorkspaceSyncDetails);
     }, [effectiveRootPath, openWorkspaceSyncDetails, props.workspaceRef.machineId, props.workspaceRef.serverId, selectedWorkspaceRef]);
 
-    const renderEmptyState = React.useCallback(() => (
+    const emptyEditorScope = React.useMemo(() => ({
+        serverId: props.workspaceRef.serverId, machineId: props.workspaceRef.machineId, rootPath: effectiveRootPath,
+    }), [effectiveRootPath, props.workspaceRef.machineId, props.workspaceRef.serverId]);
+    // The editor column with nothing open (lab EM1). The Project's own facts live on its Overview, so
+    // the column invites opening a file instead of repeating them; a forced overview keeps the facts.
+    const renderEmptyState = React.useCallback(() => props.forceOverviewMode ? (
         <ItemList testID="project-details-info" containerStyle={{ paddingTop: theme.space.s12 }}>
             <ItemGroup title={t('projects.detail.groupTitle')}>
                 <Item title={t('projects.detail.fields.name')} detail={displayName} mode="info" />
@@ -261,7 +267,19 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
                 </Text>
             </View>
         </ItemList>
+    ) : (
+        <EmptyEditorPage
+            scope={emptyEditorScope}
+            title={t('panes.emptyEditor.projectTitle')}
+            reason={t('panes.emptyEditor.projectReason')}
+            changedTitle={t('panes.emptyEditor.changedInProject')}
+            onOpenFile={openFileInDetailsPinned}
+            onReview={openReviewAllChanges}
+        />
     ), [
+        emptyEditorScope,
+        openFileInDetailsPinned,
+        openReviewAllChanges,
         displayName,
         displayPath,
         localServiceLauncherState,

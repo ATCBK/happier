@@ -6,7 +6,7 @@ import { HAPPIER_ICON_BUTTON_SIZE, useHappierMaterialColorResolver } from '@happ
 import { PaneHeader, type PaneHeaderLineSegment } from '@/components/appShell/panes/PaneHeader';
 import { useClaimedStackHeaderActions } from '@/components/navigation/stackHeaderActions';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
-import type { IconName } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { Text } from '@/components/ui/text/Text';
@@ -19,7 +19,7 @@ import { DETAILS_TAB_HEADER_METRICS } from './detailsTabHeaderMetrics';
  * (a branch, an author); a `diffStat` reads as one fact (`+4 −2`).
  */
 export type DetailsTabHeaderMetaFact =
-    | Readonly<{ key: string; kind?: 'text'; text: string; tone?: 'default' | 'muted' | 'strong' | 'mono'; shrink?: boolean; testID?: string;
+    | Readonly<{ key: string; kind?: 'text'; text: string; tone?: 'default' | 'muted' | 'strong' | 'mono' | 'failure'; shrink?: boolean; testID?: string;
         /** A glyph leading the fact (the task a conversation hangs off, a lock before who can read it). */
         icon?: IconName;
         /** A glyph-led fact that leads back to its thing (the Session, Doc or task a conversation hangs off). */
@@ -34,6 +34,8 @@ export type DetailsTabHeaderAction = Readonly<{
     busy?: boolean;
     /** `primary` is the surface's one filled action (Save, Restore); `default` a quiet bordered one (Stage). */
     tone?: 'primary' | 'default' | 'danger';
+    /** A leading glyph in the button's own colour (the File page's bordered "Edit" carries its pencil). */
+    iconName?: IconName;
     accessibilityLabel?: string;
     testID?: string;
 }>;
@@ -80,6 +82,8 @@ function toLineSegments(meta: readonly DetailsTabHeaderMetaFact[] | undefined): 
         }
         segments.push(fact.icon ? { text: fact.text, icon: fact.icon,
             ...(fact.onPress ? { onPress: fact.onPress, testID: fact.testID, ...(fact.accessibilityLabel ? { accessibilityLabel: fact.accessibilityLabel } : {}) } : {}) }
+            : fact.tone === 'failure' ? { text: fact.text, failure: true,
+                ...(fact.onPress ? { onPress: fact.onPress, testID: fact.testID, ...(fact.accessibilityLabel ? { accessibilityLabel: fact.accessibilityLabel } : {}) } : {}) }
             : fact.tone === 'strong' ? { text: fact.text, emphasis: true } : fact.text);
     }
     return segments;
@@ -189,6 +193,8 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                     busy={button.busy}
                     tone={button.tone ?? 'default'}
                     size={phone ? 'md' : 'sm'}
+                    icon={button.iconName ? <Icon name={button.iconName} size={ICON_SIZE.sm}
+                        color={button.tone === 'primary' ? theme.colors.button.primary.tint : theme.colors.text.primary} /> : undefined}
                 />
             </View>
         );

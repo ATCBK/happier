@@ -23,13 +23,14 @@ import {
     resolveProviderSessionDetailsTabIconName,
 } from '@/agents/registry/sessionSubagentUiBehavior';
 import { t } from '@/text';
+import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { SidebarCollapseIcon, SidebarExpandIcon } from '@/components/navigation/shell/SidebarIcons';
 import { resolveOptionalSessionScreenTestId, useSessionScreenTestIdsEnabled } from '../shell/sessionScreenTestIds';
-import { createSessionBoardDetailsTab } from './details/sessionDetailsTabBuilders';
+import { createSessionBoardDetailsTab, createSessionScmReviewDetailsTab } from './details/sessionDetailsTabBuilders';
 import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
-import { SessionDetailsEmptyState } from './details/SessionDetailsEmptyState';
+import { EmptyEditorPage } from '@/components/workspaces/files/EmptyEditorPage';
 import { SafeIonicons } from '@/components/ui/icons/SafeIonicons';
 import {
     createSessionDetailsSurfaceRenderers,
@@ -434,13 +435,25 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         session,
     ]);
 
+    const openEmptyEditorFile = React.useCallback((path: string) => {
+        openDetailsTab(createWorkspaceFileDetailsTab(path), { intent: 'pinned' });
+    }, [openDetailsTab]);
+    const openEmptyEditorReview = React.useCallback(() => {
+        openDetailsTab(createSessionScmReviewDetailsTab(), { intent: 'pinned' });
+    }, [openDetailsTab]);
+    // The editor column with nothing open (lab EM1). It mounts only while Details is empty, so the
+    // always-mounted panel never subscribes to the working tree.
     const renderEmptyState = React.useCallback(() => (
-        <SessionDetailsEmptyState
+        <EmptyEditorPage
+            scope={fileWriteScope}
             sessionId={props.sessionId}
-            serverId={pluginRuntime.serverId}
-            openDetailsTab={openDetailsTab}
+            title={t('panes.emptyEditor.title')}
+            reason={t('panes.emptyEditor.reason')}
+            changedTitle={t('panes.emptyEditor.changedInSession')}
+            onOpenFile={openEmptyEditorFile}
+            onReview={openEmptyEditorReview}
         />
-    ), [openDetailsTab, pluginRuntime.serverId, props.sessionId]);
+    ), [fileWriteScope, openEmptyEditorFile, openEmptyEditorReview, props.sessionId]);
 
     const renderOverlay = React.useCallback((overlay: NonNullable<typeof pane.scopeState>['details']['overlay']) => {
         if (!overlay) return null;

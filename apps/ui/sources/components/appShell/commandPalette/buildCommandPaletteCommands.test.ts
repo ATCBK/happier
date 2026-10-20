@@ -17,6 +17,7 @@ import {
   type PluginContributedActionCurrentSnapshot,
 } from '@/components/plugins/actions/pluginContributedActionController';
 import { buildCommandPaletteCommands } from './buildCommandPaletteCommands';
+import { readActiveFileViewActionOwner, registerFileViewActionOwner, type FileViewActionOwner } from '@/sync/ops/actions/scopeActionFamily';
 
 const createSessionActionDraftSpy = vi.fn();
 const pluginActionModalAlert = vi.hoisted(() => vi.fn());
@@ -75,6 +76,34 @@ it('exposes mounted column controls with the host label and routes them through 
     expect(commands.find(command => command.id === 'panes.side.toggle')).toBeUndefined();
     await commands.find(command => command.id === 'panes.arrangement.toggle')!.action();
     expect(toggleArrangement).toHaveBeenCalledOnce();
+});
+
+it('offers Show/Hide blame only for the one active File page that supports it', () => {
+    const toggleBlame = vi.fn();
+    const page = (key: string, over: Partial<FileViewActionOwner>) => registerFileViewActionOwner(key, () => ({
+        tabId: key, active: true, serverId: 'server-a', accountId: 'account-a', mode: 'view', blame: false,
+        availableModes: ['view'], blameAvailable: true, changesScopeAvailable: false, set: () => true, ...over }));
+    const build = () => buildCommandPaletteCommands({
+        sessionsById: {}, isDev: false, activeSessionId: null,
+        features: { executionRunsEnabled: false, voiceEnabled: false },
+        nav: { push: () => {}, openNewSession: () => {}, navigateToSession: () => {} },
+        actions: { execute: async () => ({ ok: true }) }, alert: () => {},
+        fileViewControls: { readActive: readActiveFileViewActionOwner, toggleBlame },
+    }).find(command => command.id === 'file.blame.toggle');
+    const noBlame = page('a', { blameAvailable: false });
+    expect(build()).toBeUndefined();
+    noBlame();
+    const off = page('a', {});
+    expect(build()?.title).toBe('Show blame');
+    void build()!.action();
+    expect(toggleBlame).toHaveBeenCalledOnce();
+    off();
+    const on = page('a', { blame: true });
+    expect(build()?.title).toBe('Hide blame');
+    // Two active pages are ambiguous for `file.view.set` without a tab id, so the palette offers nothing.
+    const other = page('b', {});
+    expect(build()).toBeUndefined();
+    on(); other();
 });
 
 it('does not advertise unavailable host destinations as invokable UI commands while retaining plugin tombstones', () => {

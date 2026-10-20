@@ -584,6 +584,8 @@ describe('pluginDetailsDestination', () => {
             candidates: [{ id: 'builtin', label: 'Built-in', selected: true }],
             selectCandidate: async () => {},
         }));
+        // The File page's mode-less header rides the same host-private handoff as the chooser.
+        const header = vi.fn(() => null);
         const receipt = stage({
             store,
             accountLifetime: null,
@@ -593,6 +595,7 @@ describe('pluginDetailsDestination', () => {
             input: { opaqueFileRef: 'viewer-ref-1' },
             binding: privateBinding,
             viewerChoice,
+            header,
         });
 
         expect(receipt).toEqual({
@@ -615,6 +618,7 @@ describe('pluginDetailsDestination', () => {
         expect(launch?.input).toEqual({ opaqueFileRef: 'viewer-ref-1' });
         expect(launch?.binding).toBe(privateBinding);
         expect(launch?.viewerChoice).toBe(viewerChoice);
+        expect(launch?.header).toBe(header);
 
         expect(resolve({
             store,

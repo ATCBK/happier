@@ -55,7 +55,7 @@ import { getFeatureBuildPolicyDecision } from '@/sync/domains/features/featureBu
 import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
-import { buildCommandPaletteCommands, type PetCommandControls } from './buildCommandPaletteCommands';
+import { buildCommandPaletteCommands, type FileViewCommandControls, type PetCommandControls } from './buildCommandPaletteCommands';
 import { useWorkflowsAvailability } from '@/components/workflows/gating/workflowsAvailability';
 import { useWorkflowAgentAuthoring } from '@/components/workflows/authoring/useWorkflowAgentAuthoring';
 import { buildWorkflowAgentAuthoringSeed } from '@/sync/domains/workflows/workflowAgentAuthoringSeed';
@@ -73,7 +73,7 @@ import { TERMINAL_JUMP_ROUTE_PARAM } from '@/components/sessions/terminal/jump/t
 import { NextPendingNavigationHost } from '@/components/sessions/pendingNavigation/NextPendingNavigationHost';
 import { t } from '@/text';
 import { usePaneArrangement } from '@/components/appShell/panes/arrangement/usePaneArrangement';
-import { readShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
+import { readActiveFileViewActionOwner, readShellColumnActionOwner } from '@/sync/ops/actions/scopeActionFamily';
 import { focusPaneRegion } from '@/components/appShell/panes/paneRegionFocus';
 import { useAskHappierStarter } from '@/components/sessions/bots/useAskHappierOffer';
 import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
@@ -297,6 +297,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             'settings.open': () => undefined,
             'search.textInFiles': () => undefined,
             'search.replaceInFiles': () => undefined,
+            'file.blame.toggle': () => undefined,
             'search.files': () => undefined,
             'search.symbols': () => undefined,
             ...(commandPaletteEnabled ? { 'commandPalette.open': () => undefined } : {}),
@@ -334,6 +335,14 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         }),
         [router],
     );
+    // One path for the palette row and a user-bound shortcut: the active File page's `file.view.set`.
+    const fileViewControls = useMemo<FileViewCommandControls>(() => ({
+        readActive: readActiveFileViewActionOwner,
+        toggleBlame: () => {
+            const owner = readActiveFileViewActionOwner();
+            if (owner?.blameAvailable) void actionExecutor.execute('file.view.set', { blame: !owner.blame }, { surface: 'ui' });
+        },
+    }), [actionExecutor]);
     const petControls = useMemo<PetCommandControls>(() => {
         const desktop = isDesktopHost();
         const surface = desktop ? 'desktopOverlay' : Platform.OS === 'web' ? 'appShell' : 'none';
@@ -407,6 +416,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             features: { executionRunsEnabled, voiceEnabled, petsCompanionEnabled, workflowsEnabled },
             shortcutLabels,
             petControls,
+            fileViewControls,
             paneControls: {
                 readColumn: readShellColumnActionOwner,
                 focusRegion: direction => { focusPaneRegion(direction); },
@@ -445,7 +455,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
                 await Modal.alertAsync(title, message);
             },
         });
-    }, [commandContextSessionId, commandContextServerId, currentUiContextReader, executionRunsEnabled, voiceEnabled, petsCompanionEnabled, workflowsEnabled, paletteDestinations, activateCompactAppDestination, shortcutLabels, petControls, pluginActionPresentation, router, openNewSession, openNewWorkflow, openWorkflowAgentAuthoring, navigateToSession, actionExecutor, startAskHappier, togglePaneArrangement]);
+    }, [commandContextSessionId, commandContextServerId, currentUiContextReader, executionRunsEnabled, voiceEnabled, petsCompanionEnabled, workflowsEnabled, paletteDestinations, activateCompactAppDestination, shortcutLabels, petControls, pluginActionPresentation, router, openNewSession, openNewWorkflow, openWorkflowAgentAuthoring, navigateToSession, actionExecutor, fileViewControls, startAskHappier, togglePaneArrangement]);
 
     const actionCommandBuilder = React.useRef(buildCommands);
     actionCommandBuilder.current = buildCommands;
@@ -509,6 +519,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
                 params: {
                     ...(initialQuery ? { q: initialQuery } : {}),
                     ...(options?.source ? { source: options.source } : {}),
+                    ...(options?.replace ? { replace: '1' } : {}),
                     ...(invocationScope.sessionId ? { sessionId: invocationScope.sessionId } : {}),
                     ...(invocationScope.accountId ? { accountId: invocationScope.accountId } : {}),
                     ...(invocationScope.serverId ? { serverId: invocationScope.serverId } : {}),
@@ -577,11 +588,16 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             'search.replaceInFiles': () => showCommandPalette(undefined, undefined, { source: 'fileContent', replace: true }),
             'search.files': () => showCommandPalette(undefined, undefined, { source: 'files' }),
             'search.symbols': () => showCommandPalette(undefined, undefined, { source: 'symbols' }),
+            'file.blame.toggle': () => {
+                if (!readActiveFileViewActionOwner()?.blameAvailable) return 'pass';
+                fileViewControls.toggleBlame();
+                return 'handled';
+            },
             'settings.open': () => {
                 router.push('/settings' as any);
             },
         }),
-        [commandPaletteEnabled, workflowsEnabled, openNewSession, openNewWorkflow, openWorkflowAgentAuthoring, router, showCommandPalette, toggleTheme, togglePaneArrangement],
+        [commandPaletteEnabled, workflowsEnabled, fileViewControls, openNewSession, openNewWorkflow, openWorkflowAgentAuthoring, router, showCommandPalette, toggleTheme, togglePaneArrangement],
     );
     const keyboardEnabledWhenDisabledCommandIds = useMemo(
         () => commandPaletteEnabled ? ['commandPalette.open'] as const : [],

@@ -85,6 +85,12 @@ export type PaneCommandControls = Readonly<{
   focusRegion?: (direction: 'next' | 'previous') => void;
 }>;
 
+/** The active File page's view, read through the `file.view.*` owner; toggling goes through `file.view.set`. */
+export type FileViewCommandControls = Readonly<{
+  readActive(): Readonly<{ blame: boolean; blameAvailable: boolean }> | null;
+  toggleBlame: () => void;
+}>;
+
 type BuildCommandPaletteCommandsBaseParams = Readonly<{
   sessionsById: Record<string, any>;
   isDev: boolean;
@@ -100,6 +106,7 @@ type BuildCommandPaletteCommandsBaseParams = Readonly<{
   shortcutLabels?: Partial<Record<KeyboardCommandId, string>>;
   petControls?: PetCommandControls;
   paneControls?: PaneCommandControls;
+  fileViewControls?: FileViewCommandControls;
   askHappierRelease?: Readonly<ChangelogEntry>;
   nav: Readonly<{
     push: (path: string) => void;
@@ -241,6 +248,14 @@ export function buildCommandPaletteCommands(
       ['previous', 'panes.region.previous', 'settingsKeyboard.commands.panesRegionPrevious'],
     ] as const) cmds.push({ id, title: t(titleKey), category: t('settingsKeyboard.paneGroups.panes'),
       shortcut: params.shortcutLabels?.[id], action: () => focusRegion(direction) });
+  }
+
+  const fileView = params.fileViewControls?.readActive();
+  if (fileView?.blameAvailable && params.fileViewControls) {
+    cmds.push({ id: 'file.blame.toggle', actionSpecId: 'file.view.set',
+      title: t(fileView.blame ? 'files.pane.menu.hideBlame' : 'files.pane.menu.showBlame'), icon: 'file',
+      category: t('commandPalette.commands.actionsCategory'), shortcut: params.shortcutLabels?.['file.blame.toggle'],
+      action: params.fileViewControls.toggleBlame });
   }
 
   if (nav.openAskHappier) {

@@ -219,6 +219,7 @@ import { SpeakerHighIcon } from 'phosphor-react-native/src/icons/SpeakerHigh';
 import { SpeakerLowIcon } from 'phosphor-react-native/src/icons/SpeakerLow';
 import { SpeakerSlashIcon } from 'phosphor-react-native/src/icons/SpeakerSlash';
 import { SpeedometerIcon } from 'phosphor-react-native/src/icons/Speedometer';
+import { SquareHalfIcon } from 'phosphor-react-native/src/icons/SquareHalf';
 import { SquareIcon } from 'phosphor-react-native/src/icons/Square';
 import { SquareSplitHorizontalIcon } from 'phosphor-react-native/src/icons/SquareSplitHorizontal';
 import { SquareSplitVerticalIcon } from 'phosphor-react-native/src/icons/SquareSplitVertical';
@@ -431,6 +432,7 @@ export const ICON_REGISTRY = {
     'octagon-x': ProhibitIcon,
     'paint-brush': PaintBrushIcon,
     'palette': PaletteIcon,
+    'pane-arrangement': SquareHalfIcon,
     'paper-plane': PaperPlaneIcon,
     'paper-plane-tilt': PaperPlaneTiltIcon,
     'paperclip': PaperclipIcon,

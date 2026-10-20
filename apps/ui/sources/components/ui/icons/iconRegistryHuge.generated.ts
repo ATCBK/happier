@@ -136,6 +136,7 @@ import Key01Icon from '@hugeicons/core-free-icons/Key01Icon';
 import KeyboardIcon from '@hugeicons/core-free-icons/KeyboardIcon';
 import LaptopIcon from '@hugeicons/core-free-icons/LaptopIcon';
 import Layers01Icon from '@hugeicons/core-free-icons/Layers01Icon';
+import LayoutRightIcon from '@hugeicons/core-free-icons/LayoutRightIcon';
 import LayoutTwoColumnIcon from '@hugeicons/core-free-icons/LayoutTwoColumnIcon';
 import LayoutTwoRowIcon from '@hugeicons/core-free-icons/LayoutTwoRowIcon';
 import Leaf01Icon from '@hugeicons/core-free-icons/Leaf01Icon';
@@ -421,6 +422,7 @@ export const HUGE_ICON_REGISTRY = {
     'octagon-x': OctagonXIcon,
     'paint-brush': PaintBrush01Icon,
     'palette': PaintBoardIcon,
+    'pane-arrangement': LayoutRightIcon,
     'paper-plane': Sent02Icon,
     'paper-plane-tilt': SentIcon,
     'paperclip': Attachment02Icon,

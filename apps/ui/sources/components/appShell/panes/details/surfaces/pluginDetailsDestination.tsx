@@ -147,6 +147,11 @@ export type PluginDetailsDestinationLaunch = Readonly<{
     /** Host-owned chooser model/factory; never a plugin-rendered chrome node. */
     viewerChoice?: (context: PluginDetailsDestinationRenderContext) => PluginDetailsViewerChoiceModel | null;
     /**
+     * Host-owned page header for the content the viewer shows (the File page's mode-less header: name,
+     * breadcrumb, facts, Edit, `⋯`); drawn above the chooser. Never a plugin-rendered node.
+     */
+    header?: (context: PluginDetailsDestinationRenderContext) => React.ReactNode;
+    /**
      * Host-private recovery for a previously delivered opaque launch. It may
      * replace this tab with an incumbent built-in tab, but never receives a
      * plugin-facing path/ref through persistence or Protocol.
@@ -258,6 +263,7 @@ export type PluginDetailsDestinationLaunchStageInput = Readonly<{
     input: PluginUiLaunchInputV1 | undefined;
     binding?: BoundPluginSurfaceBinding;
     viewerChoice?: (context: PluginDetailsDestinationRenderContext) => PluginDetailsViewerChoiceModel | null;
+    header?: (context: PluginDetailsDestinationRenderContext) => React.ReactNode;
     unavailableFallback?: (fallback: PluginDetailsDestinationFallback) => void;
 }>;
 
@@ -341,6 +347,7 @@ export function stagePluginDetailsDestinationLaunch(input: Readonly<{
         input: parsedInput.data,
         ...(input.binding === undefined ? {} : { binding: input.binding }),
         ...(input.viewerChoice === undefined ? {} : { viewerChoice: input.viewerChoice }),
+        ...(input.header === undefined ? {} : { header: input.header }),
         ...(input.unavailableFallback === undefined ? {} : { unavailableFallback: input.unavailableFallback }),
     }));
     return staged ? Object.freeze({ resource, tabKey }) : null;
@@ -1134,12 +1141,14 @@ export function PluginDetailsViewerChoiceChrome(props: Readonly<{
 }
 
 function PluginDetailsDestinationSurfaceFrame(props: Readonly<{
-    viewerChoice: PluginDetailsViewerChoiceModel;
+    header?: React.ReactNode;
+    viewerChoice: PluginDetailsViewerChoiceModel | null;
     children: React.ReactNode;
 }>): React.ReactElement {
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-            <PluginDetailsViewerChoiceChrome model={props.viewerChoice} />
+            {props.header ?? null}
+            {props.viewerChoice ? <PluginDetailsViewerChoiceChrome model={props.viewerChoice} /> : null}
             <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
                 {props.children}
             </View>
@@ -1326,6 +1335,12 @@ function PluginDetailsDestinationSurfaceMount(props: Readonly<{
     } catch {
         viewerChoice = null;
     }
+    let header: React.ReactNode = null;
+    try {
+        header = launch?.header?.(context) ?? null;
+    } catch {
+        header = null;
+    }
     const placementHost = (
         <PluginSurfaceFocusEligibilityProvider active>
             <PluginSurfacePlacementHost
@@ -1344,8 +1359,8 @@ function PluginDetailsDestinationSurfaceMount(props: Readonly<{
             />
         </PluginSurfaceFocusEligibilityProvider>
     );
-    return viewerChoice
-        ? <PluginDetailsDestinationSurfaceFrame viewerChoice={viewerChoice}>{placementHost}</PluginDetailsDestinationSurfaceFrame>
+    return viewerChoice || header
+        ? <PluginDetailsDestinationSurfaceFrame header={header} viewerChoice={viewerChoice}>{placementHost}</PluginDetailsDestinationSurfaceFrame>
         : placementHost;
 }
 

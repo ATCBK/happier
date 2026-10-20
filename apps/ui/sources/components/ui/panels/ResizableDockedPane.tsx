@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { t } from '@/text';
 import { Platform, View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 import { useResizableSize, type DockedPaneResizeCommitMeta, HappierResizeHandle as ResizablePaneDividerHandle } from '@happier-dev/plugin-ui/presentation';
 
 export type ResizableDockedPaneCommitMeta = DockedPaneResizeCommitMeta;
@@ -21,9 +22,11 @@ export type ResizableDockedPaneProps = Readonly<{
 }>;
 
 export const ResizableDockedPane = React.memo((props: ResizableDockedPaneProps) => {
+    const { theme } = useUnistyles();
     const resizeEdge = props.resizeEdge ?? 'left';
     const {
         effectiveSizePx,
+        dragging,
         canResize,
         panHandlers,
         webHandleProps,
@@ -61,6 +64,8 @@ export const ResizableDockedPane = React.memo((props: ResizableDockedPaneProps) 
                 zIndex: 1000,
             }}
             showIndicator={false}
+            active={dragging}
+            inkColor={theme.colors.text.primary}
         />
     ) : null;
 

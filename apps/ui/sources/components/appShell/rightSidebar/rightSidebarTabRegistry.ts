@@ -44,6 +44,8 @@ export type ResolveRightSidebarTabsInput = Readonly<{
     sourceControlTabAvailable?: boolean;
     /** Omitted means unavailable; see `RightSidebarAvailabilityInput.sessionProjectCheckoutAvailable`. */
     sessionProjectCheckoutAvailable?: boolean;
+    /** A File page of this pane registered its language features (P7 Problems / References). */
+    codeIntelligenceAvailable?: boolean;
     presentation?: RightSidebarPresentation;
     pluginPlacements?: readonly PluginUiSurfacePlacementProjection[];
     projectionGeneration?: number | null;
@@ -60,11 +62,11 @@ export type ResolveRightSidebarTabsInput = Readonly<{
 }>;
 
 export type SessionRightSidebarTabId =
-    | Extract<RightSidebarBuiltInTabId, 'git' | 'files' | 'scripts' | 'navigation' | 'agents' | 'collaboration' | 'board' | 'terminal' | 'browser' | 'services'>
+    | Extract<RightSidebarBuiltInTabId, 'git' | 'files' | 'problems' | 'references' | 'scripts' | 'navigation' | 'agents' | 'collaboration' | 'board' | 'terminal' | 'browser' | 'services'>
     | `plugin:${string}`;
 
 export type ProjectRightSidebarTabId =
-    | Extract<RightSidebarBuiltInTabId, 'git' | 'files' | 'scripts' | 'widgets' | 'terminal' | 'browser' | 'services'>
+    | Extract<RightSidebarBuiltInTabId, 'git' | 'files' | 'problems' | 'references' | 'scripts' | 'widgets' | 'terminal' | 'browser' | 'services'>
     | `plugin:${string}`;
 
 export type { RightSidebarTabDefinitionFor };
@@ -98,6 +100,7 @@ export function resolveRightSidebarTabs(
         sessionSharingAvailable: input.sessionSharingAvailable === true,
         sourceControlTabAvailable: input.sourceControlTabAvailable !== false,
         sessionProjectCheckoutAvailable: input.sessionProjectCheckoutAvailable === true,
+        codeIntelligenceAvailable: input.codeIntelligenceAvailable === true,
     };
     const builtInTabs = RIGHT_SIDEBAR_BUILTIN_TABS
         .filter((tab) => isTabAvailable(tab, availabilityInput))
