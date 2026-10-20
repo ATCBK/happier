@@ -664,7 +664,8 @@ function SetupRow(
   const attachment = props.operation?.snapshot.domainRef?.kind === 'projectCommand' ? props.operation.snapshot.domainRef : null;
   const openOutput = () => {
     if (props.operation)
-      void output.open(props.operation, { title: `${t('projects.scripts.setup.title')} · ${reviewMachine.machineName}` });
+      void output.open(props.operation, { title: `${t('projects.scripts.setup.title')} · ${reviewMachine.machineName}`,
+        name: t('projects.scripts.setup.title') });
   };
   // The review opens from the row or from a preparation that needs consent; it never runs anything.
   const [open, setOpen] = React.useState(false);

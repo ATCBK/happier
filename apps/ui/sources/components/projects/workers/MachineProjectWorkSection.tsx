@@ -130,7 +130,7 @@ function RunningHereRow(
             display="secondary"
             title={t('projectWorkers.open')}
             testID={`${props.testID}.open`}
-            onPress={() => void output.open(props.operation, { title: `${name} · ${props.machineName}` })}
+            onPress={() => void output.open(props.operation, { title: `${name} · ${props.machineName}`, name })}
           />
         </View>
       }

@@ -143,7 +143,7 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
   const openOutput = output.open;
   const outputTitle = targetName ? `${props.name} · ${targetName}` : props.name;
   const openDetail = () => {
-    if (props.operation) void openOutput(props.operation, { title: outputTitle });
+    if (props.operation) void openOutput(props.operation, { title: outputTitle, name: props.name, command: props.command });
   };
   // A Run never opens the terminal by itself: the row owns the running state (elapsed time and the
   // producer's latest output line) and the output stays one press away.
