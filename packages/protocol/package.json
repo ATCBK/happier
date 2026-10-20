@@ -5270,6 +5270,16 @@
       "types": "./dist/diff/splitUnifiedDiffByFile.d.ts",
       "default": "./dist/diff/splitUnifiedDiffByFile.js"
     },
+    "./diff/hunks": {
+      "happier-source": "./src/diff/hunks.ts",
+      "types": "./dist/diff/hunks.d.ts",
+      "default": "./dist/diff/hunks.js"
+    },
+    "./scm/comparisonOccurrences": {
+      "happier-source": "./src/scm/comparisonOccurrences.ts",
+      "types": "./dist/scm/comparisonOccurrences.d.ts",
+      "default": "./dist/scm/comparisonOccurrences.js"
+    },
     "./connect/normalizeConnectedServiceSelectionInput": {
       "happier-source": "./src/connect/normalizeConnectedServiceSelectionInput.ts",
       "types": "./dist/connect/normalizeConnectedServiceSelectionInput.d.ts",
