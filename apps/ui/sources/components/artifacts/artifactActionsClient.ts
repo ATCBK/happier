@@ -4,7 +4,7 @@ import type { z } from 'zod/mini';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ArtifactActionOutputSchemasV1, type ArtifactActionInputV1, type ArtifactStorageUsageV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { DocCollaborationActionInputSchemasV1, DocCollaborationActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
-import { ArtifactAccessActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ArtifactAccessActionOutputSchemasV1, type ArtifactAccessGrantSetInputV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
@@ -32,10 +32,11 @@ export type ArtifactActionFailure = Readonly<{
 
 export type ArtifactActionOutcome<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; failure: ArtifactActionFailure }>;
 
-type SurfaceMutationActionId = 'artifact.create' | 'artifact.update' | 'artifact.revisions.restore' | 'artifact.delete' | 'doc.comment.reply' | 'doc.edit.propose' | 'doc.edit.accept' | 'doc.edit.decline';
+type SurfaceMutationActionId = 'artifact.create' | 'artifact.publish_from_file' | 'artifact.access.grants.set'
+    | 'artifact.update' | 'artifact.revisions.restore' | 'artifact.delete' | 'doc.comment.reply' | 'doc.edit.propose' | 'doc.edit.accept' | 'doc.edit.decline';
 type SurfaceActionId = 'artifact.revisions.list' | 'artifact.storage.usage' | 'doc.read' | 'artifact.access.grants.list' | SurfaceMutationActionId;
 const SURFACE_OUTPUT_SCHEMAS = { ...ArtifactActionOutputSchemasV1, ...DocCollaborationActionOutputSchemasV1,
-    'artifact.access.grants.list': ArtifactAccessActionOutputSchemasV1['artifact.access.grants.list'] };
+    ...ArtifactAccessActionOutputSchemasV1 };
 type SurfaceActionResult<Id extends SurfaceActionId> = z.infer<(typeof SURFACE_OUTPUT_SCHEMAS)[Id]>;
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -58,11 +59,12 @@ export function readArtifactActionFailure(result: unknown): ArtifactActionFailur
 }
 
 export function createArtifactActionsClient(scope: ServerAccountScope, execute = createFrontDoorActionExecute()) {
-    const dispatch = (actionId: SurfaceActionId, input: unknown, operation?: Pick<UiActionOperation, 'presentUserConfirmation'>) => execute(actionId, input, {
+    const dispatch = (actionId: SurfaceActionId, input: unknown, operation?: Pick<UiActionOperation, 'presentUserConfirmation' | 'defaultSessionId'>) => execute(actionId, input, {
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
         // These private UI methods are direct person intents, not an agent/plugin authority adapter.
-        ...(actionId === 'doc.edit.accept' || actionId === 'doc.edit.decline'
+        ...(actionId === 'doc.edit.accept' || actionId === 'doc.edit.decline' || actionId === 'artifact.publish_from_file'
             ? { authority: 'present_user', actionCaller: { kind: 'host' } } as const : {}),
+        ...(operation?.defaultSessionId ? { defaultSessionId: operation.defaultSessionId } : {}),
         ...(operation?.presentUserConfirmation ? { authority: 'present_user', actionCaller: { kind: 'host' },
             presentUserConfirmation: operation.presentUserConfirmation } as const : {}),
     }).catch(() => null);
@@ -78,7 +80,7 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
         return readOutcome(actionId, await dispatch(actionId, input));
     };
     const runMutation = async <Id extends SurfaceMutationActionId>(actionId: Id, input: unknown,
-        operation?: Pick<UiActionOperation, 'presentUserConfirmation'>) => {
+        operation?: Pick<UiActionOperation, 'presentUserConfirmation' | 'defaultSessionId'>) => {
         const result = await dispatch(actionId, input, operation);
         const pending = result?.ok ? ActionApprovalRequestCreatedResultSchema.safeParse(result.result) : null;
         return pending?.success
@@ -112,6 +114,10 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
         acceptEdit: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.edit.accept']>) => runMutation('doc.edit.accept', input),
         declineEdit: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.edit.decline']>) => runMutation('doc.edit.decline', input),
         createArtifact: (input: ArtifactActionInputV1<'artifact.create'>) => runMutation('artifact.create', input),
+        /** The captured Session supplies source custody; this remains a person's copy operation. */
+        publishWorkspaceFile: (input: ArtifactActionInputV1<'artifact.publish_from_file'>, source: Readonly<{ sessionId: string }>) =>
+            runMutation('artifact.publish_from_file', input, { defaultSessionId: source.sessionId }),
+        setAccessGrant: (input: ArtifactAccessGrantSetInputV1) => runMutation('artifact.access.grants.set', input),
         updateArtifact: (input: ArtifactActionInputV1<'artifact.update'>) => runMutation('artifact.update', input),
         storageUsage: () => run('artifact.storage.usage', {}),
         listRevisions: (artifactId: string) => run('artifact.revisions.list', { artifactId }),
