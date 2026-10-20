@@ -2240,7 +2240,12 @@ test('remote Stack server projects feature configuration without secrets on POSI
   };
   const config = resolveRemoteServerRuntimeConfig({
     serverComponentName: 'happier-server-light',
-    env: { ...environment, HAPPIER_MASTER_SECRET: 'private-secret', UNRELATED_SETTING: 'unrelated' },
+    env: {
+      ...environment,
+      HAPPIER_MASTER_SECRET: 'private-secret',
+      HAPPIER_AUTH_EMAIL_SMTP_PASSWORD: 'smtp-secret-do-not-forward',
+      UNRELATED_SETTING: 'unrelated',
+    },
   });
   assert.deepEqual(config.environment, environment);
   for (const target of [posix, windows]) {
@@ -2255,7 +2260,7 @@ test('remote Stack server projects feature configuration without secrets on POSI
     for (const [key, value] of Object.entries(environment)) {
       assert.ok(rendered.includes(`${key}=${value}`), `${target.platform} omitted ${key}`);
     }
-    assert.doesNotMatch(rendered, /private-secret|UNRELATED_SETTING/);
+    assert.doesNotMatch(rendered, /HAPPIER_MASTER_SECRET|HAPPIER_AUTH_EMAIL_SMTP_PASSWORD|private-secret|smtp-secret-do-not-forward|UNRELATED_SETTING/);
   }
 });
 
