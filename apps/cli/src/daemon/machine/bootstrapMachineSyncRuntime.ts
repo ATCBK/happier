@@ -720,6 +720,9 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   resolveManagedPurposeBindingIntent?: Parameters<
     typeof createRuntimeProviderModelManagementServices
   >[0]['resolveManagedPurposeBindingIntent'];
+  resolveManagedPurposeBindingIntentSelection?: Parameters<
+    typeof createRuntimeProviderModelManagementServices
+  >[0]['resolveManagedPurposeBindingIntentSelection'];
   openTeamDirect?: Parameters<
     typeof createRuntimeProviderModelManagementServices
   >[0]['openTeamDirect'];
@@ -1258,6 +1261,9 @@ export async function bootstrapMachineSyncRuntime(
       happyHomeDir: configuration.happyHomeDir,
       featureGate: providerFeatureGate,
       resolveSharedGateway,
+      ...(params.resolveManagedPurposeBindingIntentSelection
+        ? { resolveManagedPurposeBindingIntentSelection: params.resolveManagedPurposeBindingIntentSelection }
+        : {}),
       ...(readProviderModelProjection ? { readModelProjection: readProviderModelProjection } : {}),
       modelSettingsMutation: providerConnectionRuntimeServices?.service.mutateModelSettings
         ?? providerConnectionUnavailable,

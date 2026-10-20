@@ -67,6 +67,20 @@ describe('SavedSecretSlotBindingsV1Schema', () => {
 });
 
 describe('ProviderSettingsV1Schema', () => {
+  it('round-trips source-scoped confirmations without accepting orphan saved-connection confirmations', () => {
+    const connectedAccountTarget = { kind: 'group', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool-a' };
+    const confirmation = { v: 1, connectionId: 'connected-source:catalog-a', connectedAccountTarget,
+      agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5.5',
+      compatibilityFingerprint: 'compatibility:v1:a', confirmedAt: 1 };
+    const settings = { ...DEFAULT_PROVIDER_SETTINGS_V1, experimentalBindingConfirmations: [confirmation] };
+    expect(ProviderSettingsV1Schema.parse(settings)).toEqual(settings);
+    expect(parseProviderSettingsV1Narrow(settings)).toMatchObject({ settings, diagnostics: [] });
+    const { connectedAccountTarget: _target, ...orphan } = confirmation;
+    expect(ProviderSettingsV1Schema.safeParse({ ...settings, experimentalBindingConfirmations: [orphan] }).success).toBe(false);
+    expect(ProviderSettingsV1Schema.safeParse({ ...validSettings(), experimentalBindingConfirmations: [
+      { ...confirmation, connectionId: 'pc_1' },
+    ] }).success).toBe(false);
+  });
   it('retains sparse source visibility and rejects unknown connection overrides', () => {
     const settings = { ...validSettings(), modelPickerVisibilityByConnectionId: { pc_1: false } };
     expect(ProviderSettingsV1Schema.parse(settings)).toEqual(settings);

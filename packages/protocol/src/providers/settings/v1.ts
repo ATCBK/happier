@@ -9,6 +9,8 @@ import { ProviderAgentTargetKeySchema, ProviderConnectionIdSchema, ProviderContr
 import { deserializeModelVisibilityRefV1, ProviderBoundModelRefSchema, SessionModelSelectionV1Schema } from '../selection/v1.js';
 import { PROVIDER_SETTINGS_LIMITS_V1 } from './limits.js';
 import { ProfileRecordIdV1Schema } from '../../profiles/v2/profileId.js';
+import { QualifiedConnectedAccountPurposeBindingTargetV1Schema } from '../../connect/connectedAccountPurposeBindings.js';
+import { canonicalizeFingerprintValue } from '../fingerprints.js';
 export { PROVIDER_SETTINGS_LIMITS_V1 } from './limits.js';
 
 export const ProviderManualModelV1Schema = lazyZodSchema(() => z.strictObject({
@@ -120,11 +122,20 @@ export type ProviderSettingsMigrationStateV1 = z.infer<typeof ProviderSettingsMi
 export const ProviderExperimentalBindingConfirmationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   connectionId: ProviderConnectionIdSchema,
+  // Source projections reuse the connection-shaped catalog ref without saving
+  // a Provider connection. The qualified target distinguishes that source.
+  connectedAccountTarget: z.optional(QualifiedConnectedAccountPurposeBindingTargetV1Schema),
   agentTargetKey: ProviderAgentTargetKeySchema,
   modelId: z.nullable(ProviderModelIdSchema),
   compatibilityFingerprint: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
   confirmedAt: z.number().check(z.nonnegative()),
 }));
+
+export function getProviderExperimentalConfirmationSourceKeyV1(source: Pick<
+  z.infer<typeof ProviderExperimentalBindingConfirmationV1Schema>, 'connectionId' | 'connectedAccountTarget'
+>): string {
+  return JSON.stringify([source.connectionId, canonicalizeFingerprintValue(source.connectedAccountTarget ?? null)]);
+}
 
 export function isCanonicalProviderSavedSecretIdV1(value: unknown): value is string {
   return typeof value === 'string'
@@ -236,8 +247,12 @@ export function refineProviderSettingsV1(value: z.infer<typeof ProviderSettingsV
 
   const confirmations = new Set<string>();
   value.experimentalBindingConfirmations.forEach((confirmation, index) => {
-    assertConnectionRef(confirmation.connectionId, ['experimentalBindingConfirmations', index, 'connectionId']);
-    const key = `${confirmation.connectionId}\0${confirmation.agentTargetKey}\0${confirmation.modelId ?? ''}\0${confirmation.compatibilityFingerprint}`;
+    if (!confirmation.connectedAccountTarget) {
+      assertConnectionRef(confirmation.connectionId, ['experimentalBindingConfirmations', index, 'connectionId']);
+    } else if (connectionIds.has(confirmation.connectionId)) {
+      ctx.addIssue({ code: 'custom', path: ['experimentalBindingConfirmations', index, 'connectionId'], message: 'Source confirmation cannot reference a saved connection' });
+    }
+    const key = `${getProviderExperimentalConfirmationSourceKeyV1(confirmation)}\0${confirmation.agentTargetKey}\0${confirmation.modelId ?? ''}\0${confirmation.compatibilityFingerprint}`;
     if (confirmations.has(key)) ctx.addIssue({ code: 'custom', path: ['experimentalBindingConfirmations', index], message: 'Duplicate experimental confirmation' });
     confirmations.add(key);
   });
@@ -474,11 +489,13 @@ export function parseProviderSettingsV1Narrow(value: unknown): ProviderSettingsR
   }
 
   const experimentalBindingConfirmations = uniqueFirst(
-    keepRef(
-      parseArray('experimentalBindingConfirmations', ProviderExperimentalBindingConfirmationV1Schema, PROVIDER_SETTINGS_LIMITS_V1.experimentalBindingConfirmations),
-      'experimentalBindingConfirmations',
-    ),
-    (entry) => `${entry.connectionId}\0${entry.agentTargetKey}\0${entry.modelId ?? ''}\0${entry.compatibilityFingerprint}`,
+    parseArray('experimentalBindingConfirmations', ProviderExperimentalBindingConfirmationV1Schema, PROVIDER_SETTINGS_LIMITS_V1.experimentalBindingConfirmations)
+      .filter((entry, index) => {
+        if (entry.connectedAccountTarget ? !connectionIds.has(entry.connectionId) : connectionIds.has(entry.connectionId)) return true;
+        diagnostics.push({ path: `experimentalBindingConfirmations[${index}]`, reason: 'invalid_reference' });
+        return false;
+      }),
+    (entry) => `${getProviderExperimentalConfirmationSourceKeyV1(entry)}\0${entry.agentTargetKey}\0${entry.modelId ?? ''}\0${entry.compatibilityFingerprint}`,
     'experimentalBindingConfirmations',
   );
 

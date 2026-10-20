@@ -632,7 +632,29 @@ end-to-end broker, direct-delivery, selection, usage, recovery, and revocation j
 
 The source Account keeps credential custody. A Team resource stores a typed reference to the
 current source plus audience and use policy; it does not copy a Provider definition or create a
-second credential store. Resource access has two intentionally different privacy contracts:
+second credential store.
+
+For brokered Connected Account and Pool sources, the daemon's model projector reads
+the CLIProxyAPI contribution's credential-free catalog for the exact upstream
+purpose. The plugin generates those rows from its pinned SDK source. This read
+requires a current selection from the Connected Account purpose-binding owner;
+it neither starts a Gateway nor schedules a probe. A saved Gateway does not replace
+this source catalog. Ordinary saved Gateway model reads retain their probe path.
+These rows describe static compatibility, with account entitlement unverified.
+Unknown model capabilities retain experimental compatibility and require explicit
+per-Agent confirmation by the person selecting the model in their own Account.
+The existing `providers.models.experimental.confirm` Action and private catalog
+also accept the projection's exact `connectedAccountTarget` and source-qualified
+catalog ref. This creates no saved Provider connection or grant. Source projections
+use revision zero; saved Gateways retain their captured connection revision.
+The same confirmation matcher checks the source, Agent, model scope and current
+compatibility fingerprint. Confirmed rows stay experimental and account-unverified;
+only then can the existing Team eligibility, Test, request-policy and source-catalog
+consumers admit them. Ordinary Pool member changes and access-token refresh do not
+change this static compatibility confirmation. A changed target or compatibility
+fingerprint requires its own confirmation.
+
+Resource access has two intentionally different privacy contracts:
 
 - **Brokered** access keeps usable credential material on one exact broker Machine. A custodian
   can configure that Machine directly or choose a personal Machine Pool. For a genuinely new
@@ -696,6 +718,12 @@ grant internals, revisions, limits, and encrypted material remain manager/source
 Readiness and failures use the typed Team-credential result unions; clients must preserve the
 reported recovery action and must not silently fall back to a personal connection or from direct
 to brokered delivery.
+
+The development readiness owner may attach `application_unavailable` or
+`model_unavailable` to `broker_unavailable` when every evaluated candidate reports
+that same typed refusal. Empty, mixed, and transport-failed observations remain
+generic. This diagnostic carries no model, account, or credential details and
+does not change admission or recovery authority.
 
 The development Temporary-computer flow resolves its Team credential before a Session exists. It
 authorizes the named resource through the planned-Session admission owner before it discovers any

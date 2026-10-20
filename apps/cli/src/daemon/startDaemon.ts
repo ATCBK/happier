@@ -3844,6 +3844,8 @@ export async function startDaemon(
         acquireLocalServicePreviewApplication,
         resolveManagedPurposeBindingIntent:
           connectedAccountPurposeBindingRuntime.resolveBindingIntent,
+        resolveManagedPurposeBindingIntentSelection:
+          connectedAccountPurposeBindingRuntime.resolveBindingIntentSelection,
         mcpServers: {
           readCredentials: async () => credentials,
           issueRequestAuth: createDaemonMcpRequestAuthForTest({ credentials, materializationBaseDir: connectedServicesMaterializationBaseDir,

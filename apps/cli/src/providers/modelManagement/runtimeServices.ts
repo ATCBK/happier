@@ -6,8 +6,6 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
 import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { sameQualifiedConnectedAccountGroupRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
-import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { selectProviderRuntimeCredentialTransportV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import { resolveProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol/providers/catalog/currentSelectionRecoveryV1';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
@@ -90,6 +88,7 @@ import {
   resolveTeamCredentialBrokerEligibility,
   resolveTeamCredentialResourceTestCandidate,
 } from '@/providers/broker/resourceTestCandidate';
+import { projectConnectedAccountCatalog, type ResolveManagedProviderPurposeBindingIntentSelection } from './connectedAccountCatalog';
 
 export type ProviderModelManagementFeatureGate = Readonly<{
   isEnabled(featureId: 'providers' | 'providers.localModelManagement'): boolean;
@@ -161,6 +160,7 @@ function resolveAgentRoutingIdForTarget(
 export type RuntimeProviderAccountModelProjectionContext = Readonly<{
   getAccountSettingsSnapshot(): ActiveAccountSettingsSnapshot | null;
   resolveManagedPurposeBindingIntent: ResolveManagedProviderPurposeBindingIntent;
+  resolveManagedPurposeBindingIntentSelection?: ResolveManagedProviderPurposeBindingIntentSelection;
   signal: AbortSignal;
   isCurrent(): boolean | Promise<boolean>;
 }>;
@@ -256,6 +256,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     typeof createRuntimeProviderServices
   >[0]['managedCatalogRuntime'];
   resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
+  resolveManagedPurposeBindingIntentSelection?: ResolveManagedProviderPurposeBindingIntentSelection;
   readModelProjection?: ProviderRuntimeModelProjectionReader;
   openTeamDirect?: Parameters<typeof createRuntimeProviderServices>[0]['openTeamDirect'];
 }>): RuntimeProviderModelManagementServices {
@@ -364,7 +365,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       // Current-only reads serve containing launch/broker admission and never
       // dispatch a catalog probe. Their caller owns cancellation; borrowing a
       // probe budget here would cut off that admission on a slow Home read.
-      ...(request.refreshPolicy !== 'current_only'
+      ...(request.refreshPolicy !== 'current_only' && !request.connectedAccountTarget
         ? { wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs }
         : {}),
     });
@@ -451,6 +452,35 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         lease.registry.generation,
         lease.registry.readPluginOccurrenceId,
       );
+      // A Connected Account/Pool catalog belongs to its declared upstream
+      // purpose, independently of any saved Gateway configuration. Taking this
+      // branch before connection resolution prevents a second competing
+      // catalog, DNS work, or a managed-process probe for the same source.
+      if (request.connectedAccountTarget) {
+        const resolveSelection = accountContext?.resolveManagedPurposeBindingIntentSelection
+          ?? input.resolveManagedPurposeBindingIntentSelection;
+        const unavailable = () => ({ status: 'error' as const,
+          error: createProviderErrorV1('provider_catalog_unavailable', { machineId: request.machineId }) });
+        if (!resolveSelection || request.providerConnection || request.sourceConnectionId) return unavailable();
+        const projection = await awaitWithinProviderOperation(projectConnectedAccountCatalog({
+          request, registry, support: adapter.support, adapterVersion: adapter.adapter.adapterVersion,
+          providerSettings: settingsRead.settings, resolveSelection, signal: operationLifetime.signal,
+        }), operationLifetime);
+        if (projection.groups.length === 0
+          || !await awaitWithinProviderOperation(projection.isCurrent(), operationLifetime) || !await isAccountCurrent()
+          || (accountContext && accountContext.getAccountSettingsSnapshot() !== snapshot)) return unavailable();
+        return DaemonProviderModelProjectionResponseV1Schema.parse({
+          status: 'success', agentTargetKey: request.agentTargetKey,
+          groups: projection.groups.map(group => ({ ...group, rows: group.rows.map(row => {
+            const requestPolicySupport = request.includeTeamCredentialRequestPolicySupport && row.application
+              ? projectDaemonProviderTeamCredentialRequestPolicySupportV1({
+                  application: row.application, sourceRevision: group.sourceRevision!, descriptor: row.descriptor,
+                }) : null;
+            return { ...row, ...(requestPolicySupport ? { requestPolicySupport } : {}) };
+          }) })),
+          currentSelectionRecovery: null,
+        });
+      }
       const modelNameCatalog = readProviderModelNameCatalog(registry);
       // Exact-source browse and launch admission must not resolve DNS, purpose
       // bindings or catalogs belonging to an unrelated connection.
@@ -634,25 +664,6 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           if (context.status === 'error') continue;
           if (request.providerConnection && context.connection.connectionSecurityFingerprint
             !== request.providerConnection.expectedConnectionSecurityFingerprint) continue;
-          if (request.connectedAccountTarget) {
-            if (context.connection.deployment.kind !== 'managedLocal') continue;
-            const expectedTarget = request.connectedAccountTarget;
-            const expectedConsumer = request.application?.implementationIdentity
-              ?? context.connection.deployment.implementationIdentity;
-            const targetMatches = context.connection.deployment.purposeBindingIntents.bindings.some((binding) => {
-              if (
-                binding.purpose.consumer.pluginId !== expectedConsumer.pluginId
-                || binding.purpose.consumer.localId !== expectedConsumer.localId
-                || binding.target.kind !== expectedTarget.kind
-              ) return false;
-              return expectedTarget.kind === 'account'
-                ? binding.target.kind === 'account'
-                  && sameQualifiedConnectedAccountRef(binding.target.account, expectedTarget.account)
-                : binding.target.kind === 'group'
-                  && sameQualifiedConnectedAccountGroupRef(binding.target, expectedTarget);
-            });
-            if (!targetMatches) continue;
-          }
           resolvedConnectionById.set(connection.id, context.connection);
           const authorizedForDemand = context.connection.authorization.authorized && hasPickerDemand(connection.id,
             context.connection.source.kind === 'custom' ? 'custom' : context.connection.source.definition.kind);
@@ -745,7 +756,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             catalogs.push({ ...group, agentTargetKey: request.agentTargetKey, sourceKind,
               authorization: group.authorization.authorized ? { authorized: true }
                 : { authorized: false, errorCode: group.authorization.error.code },
-              rows: group.rows.map(row => ({ ...row, presentation: {
+              rows: group.rows.map(row => ({ ...row, ref: { ...row.ref, providerConnectionId: group.connectionId }, presentation: {
                 compatibility: row.compatibility, endpointHealth: null, catalog: row.catalog, loadState: row.loadState,
               } })), staleRows: [],
             });
@@ -1222,7 +1233,9 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       const projection = await projectModels({
         machineId: request.machineId,
         agentTargetKey: request.agentTargetKey,
-        sourceConnectionId: request.connectionId,
+        ...(request.connectedAccountTarget
+          ? { connectedAccountTarget: request.connectedAccountTarget, refreshPolicy: 'current_only' as const }
+          : { sourceConnectionId: request.connectionId }),
         mode: 'management',
       });
       if (projection.status === 'error') return projection;

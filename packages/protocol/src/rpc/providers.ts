@@ -38,7 +38,7 @@ import {
 } from '../providers/capabilities/v1.js';
 import { PROVIDER_CATALOG_LIMITS_V1 } from '../providers/catalog/limits.js';
 import { ProviderCatalogProbeModelsV1Schema } from '../providers/catalog/merge.js';
-import { QualifiedConnectedAccountPurposeBindingV1Schema } from '../connect/connectedAccountPurposeBindings.js';
+import { QualifiedConnectedAccountPurposeBindingV1Schema, QualifiedConnectedAccountPurposeBindingTargetV1Schema } from '../connect/connectedAccountPurposeBindings.js';
 import { PROVIDER_SETTINGS_LIMITS_V1 } from '../providers/settings/v1.js';
 import {
   ProviderDiscoveryCandidateIdV1Schema,
@@ -57,7 +57,6 @@ import {
   ConnectedAccountPurposeIdSchema,
   PluginConnectedAccountMaterializationKindsSchema,
 } from '../connect/connectedAccountPurposes.js';
-import { QualifiedConnectedAccountPurposeBindingTargetV1Schema } from '../connect/connectedAccountPurposeBindings.js';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
 import { PluginLocalizedStringV2Schema } from '../plugins/contributions/publicTypes.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
@@ -842,6 +841,7 @@ export type DaemonProviderModelProjectionRowV1 = z.infer<typeof DaemonProviderMo
 
 export const DaemonProviderModelProjectionGroupV1Schema = lazyZodSchema(() => z.strictObject({
   connectionId: ProviderConnectionIdSchema,
+  connectedAccountTarget: z.optional(QualifiedConnectedAccountPurposeBindingTargetV1Schema),
   providerName: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   connectionName: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   connectionRole: z.enum(['default', 'named']),
@@ -1080,6 +1080,7 @@ export const DaemonProviderModelSettingsMutationRequestV1Schema = lazyZodSchema(
   })),
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderModelSettingsMutationBaseV1Schema, {
     action: z.literal('confirmExperimental'), connectionId: ProviderConnectionIdSchema,
+    connectedAccountTarget: z.optional(QualifiedConnectedAccountPurposeBindingTargetV1Schema),
     expectedConnectionRevision: z.number().check(z.int(), z.nonnegative()),
     agentTargetKey: BackendTargetKeyV2Schema, modelId: z.nullable(ProviderModelIdSchema),
     compatibilityFingerprint: ProviderCompatibilityFingerprintV1Schema,
