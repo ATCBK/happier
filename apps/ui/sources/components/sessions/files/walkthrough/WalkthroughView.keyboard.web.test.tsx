@@ -1,15 +1,16 @@
 /** @vitest-environment jsdom */
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { SPECIMEN_ANALYSIS_COMPLETE, SPECIMEN_COMPARISON, SPECIMEN_WALKTHROUGH } from '@/components/dev/changes/walkthroughSpecimenFixture';
 import { buildWalkthroughReading } from './walkthroughReading';
+import { KeyboardShortcutProvider } from '@/keyboard/KeyboardShortcutProvider';
+import { storage } from '@/sync/domains/state/storage';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
-// Vitest uses the native file by default; this suite exercises the real web platform entry.
-vi.mock('./WalkthroughKeyboardShortcuts', async () => import('./WalkthroughKeyboardShortcuts.web'));
 // Native code/Markdown rendering is outside the keyboard composition under test.
 vi.mock('@/components/ui/code/diff/DiffViewer', () => ({ DiffViewer: () => null }));
 vi.mock('@/components/markdown/MarkdownView', () => ({ MarkdownView: () => null }));
@@ -18,7 +19,12 @@ const { WalkthroughView } = await import('./WalkthroughView');
 const reading = buildWalkthroughReading({ comparison: SPECIMEN_COMPARISON,
     walkthrough: { state: 'complete', value: SPECIMEN_WALKTHROUGH }, analysis: SPECIMEN_ANALYSIS_COMPLETE, reviewed: null });
 
-afterEach(() => { standardCleanup(); document.body.replaceChildren(); });
+const initialSettings = storage.getState().settings;
+beforeEach(() => { storage.setState({ settings: { ...initialSettings,
+    keyboardShortcutsV2Enabled: true, keyboardSingleKeyShortcutsEnabled: true,
+    keyboardShortcutOverridesV1: {}, keyboardShortcutDisabledCommandIdsV1: [],
+} }); });
+afterEach(() => { standardCleanup(); storage.setState({ settings: initialSettings }); document.body.replaceChildren(); });
 
 async function composition() {
     const root = document.createElement('section');
@@ -34,18 +40,20 @@ async function composition() {
     document.body.append(root, chat, other);
     const asked: string[] = [];
     const marked: string[] = [];
-    const screen = await renderScreen(<WalkthroughView reading={reading} scopeLabel="Pending changes" layout="wide"
-        onAsk={stop => asked.push(stop.id)} onToggleReviewed={stop => marked.push(stop.id)} />, {
+    const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}><WalkthroughView reading={reading} scopeLabel="Pending changes" layout="wide"
+        onAsk={stop => asked.push(stop.id)} onToggleReviewed={stop => marked.push(stop.id)} /></KeyboardShortcutProvider>, {
         createNodeMock: element => element.props.testID === 'walkthrough-view' ? root
             : element.type === 'ScrollView' ? { scrollTo() {} } : null,
     });
     const key = async (target: HTMLElement, value: string, options: KeyboardEventInit = {}) => {
-        const event = new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true, ...options });
+        const event = new KeyboardEvent('keydown', { key: value,
+            code: /^[a-z]$/i.test(value) ? `Key${value.toUpperCase()}` : value === '/' ? 'Slash' : '',
+            bubbles: true, cancelable: true, ...options });
         await act(async () => { target.dispatchEvent(event); });
         return event;
     };
     const point = async (target: HTMLElement) => {
-        await act(async () => { target.dispatchEvent(new Event('pointerdown', { bubbles: true })); });
+        await act(async () => { screen.findByTestId('walkthrough-view')?.props.onPointerDown({ target }); });
     };
     return { root, stop, chat, composer, other, asked, marked, screen, key, point };
 }
@@ -102,8 +110,8 @@ describe('walkthrough keyboard beside chat', () => {
         c.root.hidden = true;
         expect((await c.key(c.root, 'r')).defaultPrevented).toBe(false);
         c.root.hidden = false;
-        await c.screen.update(<WalkthroughView reading={reading} scopeLabel="Pending changes" layout="wide" active={false}
-            onAsk={stop => c.asked.push(stop.id)} onToggleReviewed={stop => c.marked.push(stop.id)} />);
+        await c.screen.update(<KeyboardShortcutProvider handlers={{}}><WalkthroughView reading={reading} scopeLabel="Pending changes" layout="wide" active={false}
+            onAsk={stop => c.asked.push(stop.id)} onToggleReviewed={stop => c.marked.push(stop.id)} /></KeyboardShortcutProvider>);
         expect((await c.key(c.root, 'j')).defaultPrevented).toBe(false);
         expect(c.marked).toEqual([]);
     });
