@@ -232,9 +232,6 @@ export function readSessionRuntimePresentationFreshnessSignals(
     if (runtimePresentation.freshOptimisticPendingInput) {
         addFreshnessSignal(input.optimisticThinkingAt, SESSION_OPTIMISTIC_PENDING_THINKING_MS);
     }
-    if (runtimePresentation.freshPermissionRequired || runtimePresentation.freshActionRequired) {
-        addFreshnessSignal(input.pendingRequestObservedAt, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS);
-    }
     return signals;
 }
 

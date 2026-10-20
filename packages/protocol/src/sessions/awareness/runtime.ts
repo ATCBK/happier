@@ -1,3 +1,4 @@
+import { hasActiveSessionRuntimeActivity } from '../runtime/activity/sessionRuntimeActivity.js';
 import type { PrimaryTurnStatusV1 } from '../control/runtimeIssueV1.js';
 import {
   normalizeAwarenessCountV1,
@@ -243,16 +244,11 @@ export function projectSessionAwarenessRuntimeV1(
     || freshOptimisticPendingInput
     || (resuming && !hasTerminalPrimaryTurnProjection && !waitingForAction);
 
-  const hasProviderRuntimeActivity = !archived
-    && runtime.activityState === 'active'
-    && normalizeAwarenessCountV1(runtime.activityActiveCount) > 0;
+  const hasProviderRuntimeActivity = !archived && hasActiveSessionRuntimeActivity({
+    state: runtime.activityState, activeCount: normalizeAwarenessCountV1(runtime.activityActiveCount),
+  });
   const backgroundActive = !working && hasProviderRuntimeActivity;
 
-  const hasFreshPendingRequest = isFreshAwarenessTimestampV1(
-    pending.pendingRequestObservedAtMs,
-    nowMs,
-    SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS,
-  );
   // Pending facts and runtime reachability are orthogonal. A host can observe the runtime's
   // active projection without owning a presence channel (the CLI V2 row is the concrete case).
   // Preserve actionable pending evidence unless reachability is known offline; unavailable
@@ -261,12 +257,14 @@ export function projectSessionAwarenessRuntimeV1(
     && !unservable
     && runtime.active === true
     && runtime.presence !== 'offline';
+  // Keep an outstanding request visible until its count clears or its owning runtime is no
+  // longer live. The request timestamp need not advance while it waits, so age is not settlement
+  // evidence. Updated CLIs retain and retry settlement intents; older producers can leave an
+  // unresolved count after a failed cancellation write.
   const freshActionRequired = waitingForAction || (pending.hasPendingUserActionRequests === true
-    && potentiallyLive
-    && (working || hasFreshPendingRequest));
+    && potentiallyLive);
   const freshPermissionRequired = pending.hasPendingPermissionRequests === true
-    && potentiallyLive
-    && (working || hasFreshPendingRequest);
+    && potentiallyLive;
 
   const runtimeObservedAtMs = normalizeAwarenessTimestampV1(runtime.lastObservedAtMs);
   const currentnessObservedAtMs = normalizeAwarenessTimestampV1(input.currentnessObservedAtMs);
