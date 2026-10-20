@@ -13,7 +13,10 @@ import { describe, expect, it } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 
 import { TranscriptRowShell } from './ChatListRows';
-import { createTestTranscriptItemHeightCache } from './measurement/transcriptItemHeightCache';
+import {
+    createTestTranscriptItemHeightCache,
+    type TranscriptItemHeightValiditySignature,
+} from './measurement/transcriptItemHeightCache';
 import { createTestTranscriptMeasurementReconciler } from './measurement/transcriptMeasurementReconciler';
 
 const SIGNATURE = {
@@ -121,4 +124,49 @@ describe('TranscriptRowShell stale exact reservation', () => {
       minHeight: 202,
     });
   });
+
+    it('records a layout that reaches the row before its signature follows the resize under the new width', async () => {
+        const { reconciler, row } = setup(null);
+        const narrow = { ...SIGNATURE, widthBucket: 'width:448' } as const;
+        const wide = { ...SIGNATURE, widthBucket: 'width:960' } as const;
+        const screen = await renderScreen(row(0, wide));
+
+        // The DOM has already reflowed to the narrow width; the signature moves in the same commit.
+        await act(async () => {
+            (content(screen)!.props.onLayout as (event: unknown) => void)(layoutEvent(202));
+            screen.update(row(1, narrow));
+        });
+
+        expect(reconciler.resolveReservation(narrow)).toEqual({ kind: 'exact', minHeight: 202 });
+        expect(reconciler.resolveReservation(wide)).toBeUndefined();
+    });
+
+    it('releases a cached height the already laid out content contradicts when the signature settles on its width', async () => {
+        const { reconciler, row } = setup(null);
+        const narrow = { ...SIGNATURE, widthBucket: 'width:448' } as const;
+        const wide = { ...SIGNATURE, widthBucket: 'width:960' } as const;
+        // 242 was cached for the narrow width from a transient layout, wider than the content really is.
+        reconciler.recordMeasuredHeight({ signature: narrow, heightPx: 242 });
+        const screen = await renderScreen(row(0, wide));
+        await contentLayout(screen, 202);
+
+        await act(async () => screen.update(row(1, narrow)));
+
+        expect(reservedMinHeight(screen)).toBeUndefined();
+    });
+
+    it('does not file the old content height under a new width before the content has been laid out at it', async () => {
+        const { reconciler, row } = setup(null);
+        const narrow = { ...SIGNATURE, widthBucket: 'width:448' } as const;
+        const wide = { ...SIGNATURE, widthBucket: 'width:960' } as const;
+        const screen = await renderScreen(row(0, narrow));
+        await contentLayout(screen, 130);
+
+        // The signature follows the resize first; the row's layout at the new width has not arrived.
+        await act(async () => screen.update(row(1, wide)));
+        expect(reconciler.resolveReservation(wide)).toBeUndefined();
+
+        await contentLayout(screen, 88);
+        expect(reconciler.resolveReservation(wide)).toEqual({ kind: 'exact', minHeight: 88 });
+    });
 });

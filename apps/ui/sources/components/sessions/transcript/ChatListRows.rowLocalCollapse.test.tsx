@@ -56,8 +56,11 @@ function shell(screen: Screen) {
     return node;
 }
 
+// The row's measurement is its natural content, reported by the wrapper inside the shell.
 const layout = (screen: Screen, height: number) => act(async () => {
-    (shell(screen).props.onLayout as (event: unknown) => void)({ nativeEvent: { layout: { height } } });
+    const content = screen.findByTestId(`transcript-row-content-${SIGNATURE.itemId}`);
+    if (!content) throw new Error('row content not rendered');
+    (content.props.onLayout as (event: unknown) => void)({ nativeEvent: { layout: { height } } });
 });
 
 const reservedMinHeight = (screen: Screen) => (shell(screen).props.style as { minHeight?: number } | undefined)?.minHeight;
