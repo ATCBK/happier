@@ -48,7 +48,7 @@ import {
     resolveRpcMethodAvailabilityGraceMs,
     resolveRpcMethodAvailabilityPollMs,
 } from "./rpcMethodAvailability";
-import { discoverRpcTargets, isMachineRpcTargetUnavailable } from "./rpcTargetDiscovery";
+import { discoverRpcTargets, readMachineRpcTargetPresence } from "./rpcTargetDiscovery";
 import type { RpcAckResponseEmitter, RpcForwardTargetGuard } from "./_types";
 
 export type RpcForwardResult =
@@ -70,9 +70,10 @@ function recordMethodUnavailable(params: Readonly<{
     method: string;
     callStartedAt: number;
     targetUnavailable?: boolean;
+    methodNotFound?: boolean;
 }>): Extract<RpcForwardResult, { ok: false; error: string }> {
     recordRpcMethodNotAvailable(params.method);
-    recordRpcCallFailure(params.method, params.targetUnavailable ? "target_unavailable" : "method_not_available");
+    recordRpcCallFailure(params.method, params.targetUnavailable ? "target_unavailable" : params.methodNotFound ? "method_not_found" : "method_not_available");
     observeRpcCall({
         method: params.method,
         durationMs: Date.now() - params.callStartedAt,
@@ -80,8 +81,8 @@ function recordMethodUnavailable(params: Readonly<{
     });
     return {
         ok: false,
-        error: params.targetUnavailable ? "RPC target unavailable" : RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
-        errorCode: params.targetUnavailable ? "target_unavailable" : RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+        error: params.targetUnavailable ? "RPC target unavailable" : params.methodNotFound ? RPC_ERROR_MESSAGES.METHOD_NOT_FOUND : RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
+        errorCode: params.targetUnavailable ? "target_unavailable" : params.methodNotFound ? RPC_ERROR_CODES.METHOD_NOT_FOUND : RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
     };
 }
 
@@ -91,6 +92,8 @@ async function readLatestRpcTargetBySocketId(params: Readonly<{
     fetchTimeoutMs?: number;
 }>): Promise<RpcAckResponseEmitter | null> {
     try {
+        const localTarget = params.io.sockets.sockets.get(params.targetSocketId);
+        if (localTarget?.connected) return localTarget;
         const targetRoom = params.io.in(params.targetSocketId);
         const targets = typeof params.fetchTimeoutMs === "number" && params.fetchTimeoutMs > 0
             ? await targetRoom.timeout(params.fetchTimeoutMs).fetchSockets() as RpcAckResponseEmitter[]
@@ -162,6 +165,8 @@ export async function forwardRpcCall(params: Readonly<{
 }>): Promise<RpcForwardResult> {
     const callStartedAt = Date.now();
     const lookupStartedAt = Date.now();
+    let methodRegistrationAbsent = false;
+    let discoveryFailed = false;
     const selection = await waitForRpcTargetAvailability({
         graceMs: resolveRpcMethodAvailabilityGraceMs(params.method),
         pollMs: resolveRpcMethodAvailabilityPollMs(),
@@ -169,15 +174,18 @@ export async function forwardRpcCall(params: Readonly<{
         answeringClient: params.answeringClient,
         ...(params.callerLifetime ? { callerLifetime: params.callerLifetime } : {}),
         discoverTargets: async () => {
-            const targets = await discoverRpcTargets({
+            const discovery = await discoverRpcTargets({
                 io: params.io,
                 userId: params.targetUserId,
                 method: params.sessionDecisionTargetMethod ?? params.method,
                 fetchTimeoutMs: resolveRpcClusterFetchTimeoutMs(params.method),
+                excludedSocketId: params.callerSocketId,
+                answeringClient: params.answeringClient,
+                targetGuard: params.targetGuard,
             });
-            return params.targetGuard
-                ? await params.targetGuard.filterTargets(targets)
-                : targets;
+            discoveryFailed = discovery === null;
+            methodRegistrationAbsent = discovery?.methodRoomEmpty === true;
+            return discovery?.targets ?? [];
         },
     });
     observeRpcTargetLookup({
@@ -207,16 +215,24 @@ export async function forwardRpcCall(params: Readonly<{
     }
 
     if (selection.type === "not-available") {
+        if (discoveryFailed) {
+            recordRpcCallFailure(params.method, 'request_error');
+            observeRpcCall({ method: params.method, durationMs: Date.now() - callStartedAt, result: 'error' });
+            return { ok: false, error: 'RPC target discovery unavailable', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE };
+        }
         if (params.answeringClient) return { ok: false, error: 'Answering client unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
+        const presence = params.isTargetUnavailable ? null : await readMachineRpcTargetPresence({
+            io: params.io,
+            userId: params.targetUserId,
+            method: params.sessionDecisionTargetMethod ?? params.method,
+            fetchTimeoutMs: resolveRpcClusterFetchTimeoutMs(params.method),
+        });
         return recordMethodUnavailable({
             method: params.method,
             callStartedAt,
-            targetUnavailable: params.isTargetUnavailable ? await params.isTargetUnavailable() : await isMachineRpcTargetUnavailable({
-                io: params.io,
-                userId: params.targetUserId,
-                method: params.sessionDecisionTargetMethod ?? params.method,
-                fetchTimeoutMs: resolveRpcClusterFetchTimeoutMs(params.method),
-            }),
+            targetUnavailable: params.isTargetUnavailable ? await params.isTargetUnavailable() : presence === 'disconnected',
+            // A failed census, guard rejection or cancelled wake is not method absence.
+            methodNotFound: methodRegistrationAbsent && presence === 'method-absent' && !params.callerLifetime,
         });
     }
 

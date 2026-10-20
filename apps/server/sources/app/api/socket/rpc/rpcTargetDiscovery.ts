@@ -1,13 +1,16 @@
 import type { Server } from "socket.io";
+import type { SocketRpcAnsweringClientV1 } from '@happier-dev/protocol/socketRpc';
 
-import { readMachineAvailabilityState } from "@/app/machines/machineStateGuards";
+import { classifyMachineAvailabilityState, readMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { recordSocketClusterFetchSockets } from "@/app/monitoring/metrics/index";
 import { log } from "@/utils/logging/log";
 import { db } from "@/storage/db";
 import { getMachineSocketRoom } from "../../socketRooms";
 
-import type { RpcAckResponseEmitter } from "./_types";
+import type { RpcAckResponseEmitter, RpcForwardTargetGuard } from "./_types";
 import { buildRpcMethodRoom } from "./rpcMethodRoom";
+import { readSocketRegisteredRpcMethods } from './rpcRegisteredMethods';
+import { selectRpcTarget } from './rpcTargetSelection';
 
 function classifySocketClusterFetchFailureReason(error: unknown): "timeout" | "transport" | "unknown" {
     if (!(error instanceof Error)) {
@@ -17,34 +20,42 @@ function classifySocketClusterFetchFailureReason(error: unknown): "timeout" | "t
     return message.includes("timeout") ? "timeout" : "unknown";
 }
 
-/** Distinguish a missing daemon from a missing method using authenticated Machine-room membership. */
-export async function isMachineRpcTargetUnavailable(params: Readonly<{
+/** Only a successful authenticated Machine-room census proves presence or absence. */
+export async function readMachineRpcTargetPresence(params: Readonly<{
     io: Server;
     userId: string;
     method: string;
     fetchTimeoutMs?: number;
-}>): Promise<boolean> {
+}>): Promise<'method-absent' | 'disconnected' | 'unknown'> {
     const separator = params.method.indexOf(':');
-    if (separator <= 0) return false;
+    if (separator <= 0) return 'unknown';
     const machineId = params.method.slice(0, separator);
     try {
         // Session and Machine RPC namespaces share the transport. Only the canonical Machine
         // row establishes that this namespace denotes a Machine, including legacy installations.
         const machine = await db.machine.findFirst({
             where: { accountId: params.userId, id: machineId },
-            select: { id: true },
+            select: { revokedAt: true, replacedByMachineId: true },
         });
-        if (!machine) return false;
+        if (!machine) return 'unknown';
+        if (classifyMachineAvailabilityState(machine) !== 'available') return 'disconnected';
         const room = params.io.in(getMachineSocketRoom(params.userId, machineId));
         const targets = typeof params.fetchTimeoutMs === 'number' && params.fetchTimeoutMs > 0
             ? await room.timeout(params.fetchTimeoutMs).fetchSockets() as RpcAckResponseEmitter[]
             : await room.fetchSockets() as RpcAckResponseEmitter[];
-        return !targets.some(target => target.data?.clientType === 'machine-scoped'
+        const daemons = targets.filter(target => target.data?.clientType === 'machine-scoped'
             && target.data.machineId === machineId);
+        if (daemons.length === 0) return 'disconnected';
+        // A daemon still registering, or a registered handler missing from its method
+        // room, does not prove unsupported. Use the existing Home registration owner.
+        return daemons.every(target => {
+            const methods = readSocketRegisteredRpcMethods(target);
+            return methods !== null && !methods.includes(params.method);
+        }) ? 'method-absent' : 'unknown';
     } catch {
         // A failed cluster/DB lookup is not affirmative evidence that a daemon disconnected.
         log({ module: 'websocket-rpc', level: 'warn', machineId }, 'Machine RPC daemon presence lookup failed');
-        return false;
+        return 'unknown';
     }
 }
 
@@ -53,14 +64,42 @@ export async function discoverRpcTargets(params: Readonly<{
     userId: string;
     method: string;
     fetchTimeoutMs?: number;
-}>): Promise<RpcAckResponseEmitter[]> {
+    excludedSocketId?: string;
+    answeringClient?: SocketRpcAnsweringClientV1;
+    targetGuard?: RpcForwardTargetGuard;
+}>): Promise<Readonly<{ targets: RpcAckResponseEmitter[]; methodRoomEmpty: boolean }> | null> {
     const room = buildRpcMethodRoom({
         userId: params.userId,
         method: params.method,
     });
     const startedAt = Date.now();
 
+    const admitTargets = async (targets: RpcAckResponseEmitter[]) => {
+        const availableTargets: RpcAckResponseEmitter[] = [];
+        for (const target of targets) {
+            const clientType = typeof target.data?.clientType === 'string' ? target.data.clientType : '';
+            const machineId = typeof target.data?.machineId === 'string' ? target.data.machineId : '';
+            if (clientType !== 'machine-scoped' || !machineId
+                || await readMachineAvailabilityState({ accountId: params.userId, machineId }) === 'available') {
+                availableTargets.push(target);
+            }
+        }
+        return params.targetGuard ? await params.targetGuard.filterTargets(availableTargets) : availableTargets;
+    };
+
     try {
+        // A local room member is positive routing evidence and does not depend on
+        // every Redis peer answering. Single-client discovery still needs a global census.
+        if (!params.answeringClient?.requireSingle || params.answeringClient.clientId) {
+            const localTargets: RpcAckResponseEmitter[] = [];
+            for (const socketId of params.io.sockets.adapter.rooms.get(room) ?? []) {
+                const socket = params.io.sockets.sockets.get(socketId);
+                if (socket?.connected) localTargets.push(socket);
+            }
+            const admitted = await admitTargets(localTargets);
+            if (selectRpcTarget({ targets: admitted, excludedSocketId: params.excludedSocketId,
+                answeringClient: params.answeringClient }).type === 'target') return { targets: admitted, methodRoomEmpty: false };
+        }
         const targets = typeof params.fetchTimeoutMs === "number" && params.fetchTimeoutMs > 0
             ? await params.io.in(room).timeout(params.fetchTimeoutMs).fetchSockets() as RpcAckResponseEmitter[]
             : await params.io.in(room).fetchSockets() as RpcAckResponseEmitter[];
@@ -68,20 +107,7 @@ export async function discoverRpcTargets(params: Readonly<{
             durationMs: Date.now() - startedAt,
             result: "ok",
         });
-        const availableTargets: RpcAckResponseEmitter[] = [];
-        for (const target of targets) {
-            const clientType = typeof target.data?.clientType === "string" ? target.data.clientType : "";
-            const machineId = typeof target.data?.machineId === "string" ? target.data.machineId : "";
-            if (clientType !== "machine-scoped" || !machineId) {
-                availableTargets.push(target);
-                continue;
-            }
-            const state = await readMachineAvailabilityState({ accountId: params.userId, machineId });
-            if (state === "available") {
-                availableTargets.push(target);
-            }
-        }
-        return availableTargets;
+        return { targets: await admitTargets(targets), methodRoomEmpty: targets.length === 0 };
     } catch (error) {
         recordSocketClusterFetchSockets({
             durationMs: Date.now() - startedAt,
@@ -92,6 +118,7 @@ export async function discoverRpcTargets(params: Readonly<{
             { module: "websocket-rpc", level: "warn", room },
             `RPC target discovery failed for ${room}: ${error instanceof Error ? error.message : String(error)}`,
         );
-        return [];
+        // An unsuccessful census cannot prove that a connected daemon lacks a method.
+        return null;
     }
 }

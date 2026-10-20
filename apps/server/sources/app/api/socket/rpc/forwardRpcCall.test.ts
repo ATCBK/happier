@@ -3,7 +3,7 @@ import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/acti
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
-import { Server } from 'socket.io';
+import { Server, type Socket } from 'socket.io';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RpcAckResponseEmitter } from './_types';
 
@@ -26,12 +26,68 @@ vi.mock('@/app/monitoring/metrics/index', () => ({
 
 
 import { forwardRpcCall } from './forwardRpcCall';
+import { buildRpcMethodRoom } from './rpcMethodRoom';
 
 describe('forwardRpcCall', () => {
+    it('recovers discovery within the existing availability grace before dispatching once', async () => {
+        vi.useFakeTimers();
+        const io = new Server();
+        const emitWithAck = vi.fn().mockResolvedValue('recovered-result');
+        const target = { id: 'remote-app', data: { clientType: 'user-scoped' }, timeout: () => ({ emitWithAck }) };
+        const fetchSockets = vi.fn().mockRejectedValueOnce(new Error('cluster unavailable')).mockResolvedValue([target]);
+        vi.spyOn(io, 'in').mockReturnValue({ fetchSockets, timeout: () => ({ fetchSockets }) } as unknown as ReturnType<Server['in']>);
+        try {
+            const result = forwardRpcCall({ io, targetUserId: 'user-1', method: 'machine-1:read', callParams: {} });
+            await vi.runAllTimersAsync();
+            await expect(result).resolves.toMatchObject({ ok: true, result: 'recovered-result' });
+            expect(emitWithAck).toHaveBeenCalledOnce();
+        } finally { vi.restoreAllMocks(); vi.useRealTimers(); }
+    });
+    it('reports failed discovery as transient transport failure, not missing capability or client', async () => {
+        const io = new Server();
+        const fetchSockets = vi.fn().mockRejectedValue(new Error('timeout reached: only 18 responses received out of 19'));
+        vi.spyOn(io, 'in').mockReturnValue({ fetchSockets } as unknown as ReturnType<Server['in']>);
+        try {
+            for (const answeringClient of [undefined, { clientId: 'exact-app' }]) {
+                expect(await forwardRpcCall({ io, targetUserId: 'user-1', method: 'unscoped-read',
+                    callParams: {}, answeringClient })).toMatchObject({ ok: false, errorCode: 'RPC_TRANSPORT_UNAVAILABLE' });
+            }
+        } finally { vi.restoreAllMocks(); }
+    });
+
+    it('routes an eligible local socket without an adapter-wide census but preserves global single-client selection', async () => {
+        const io = new Server();
+        const method = 'unscoped-read';
+        const emitWithAck = vi.fn().mockResolvedValue('local-result');
+        const target = { id: 'local-app', connected: true, data: { clientType: 'user-scoped' },
+            timeout: () => ({ emitWithAck }) };
+        // Socket.IO's network boundary is synthetic; discovery, admission and selection remain real.
+        io.sockets.sockets.set(target.id, target as unknown as Socket);
+        io.sockets.adapter.rooms.set(buildRpcMethodRoom({ userId: 'user-1', method }), new Set([target.id]));
+        const fetchSockets = vi.fn().mockRejectedValue(new Error('cluster unavailable'));
+        vi.spyOn(io, 'in').mockReturnValue({ fetchSockets } as unknown as ReturnType<Server['in']>);
+        try {
+            expect(await forwardRpcCall({ io, targetUserId: 'user-1', method, callParams: {} }))
+                .toMatchObject({ ok: true, result: 'local-result' });
+            expect(fetchSockets).not.toHaveBeenCalled();
+            expect(await forwardRpcCall({ io, targetUserId: 'user-1', method, callParams: {},
+                answeringClient: { requireSingle: true } })).toMatchObject({ ok: false, errorCode: 'RPC_TRANSPORT_UNAVAILABLE' });
+            expect(await forwardRpcCall({ io, targetUserId: 'user-1', method, callParams: {},
+                callerSocketId: target.id })).toMatchObject({ ok: false, errorCode: 'RPC_TRANSPORT_UNAVAILABLE' });
+            expect(await forwardRpcCall({ io, targetUserId: 'user-1', method, callParams: {},
+                answeringClient: { clientId: 'other-app' } })).toMatchObject({ ok: false, errorCode: 'RPC_TRANSPORT_UNAVAILABLE' });
+            expect(emitWithAck).toHaveBeenCalledOnce();
+            Object.assign(target.data, { clientType: 'machine-scoped', machineId: 'revoked-machine' });
+            machineFindFirstMock.mockResolvedValue({ revokedAt: new Date(), replacedByMachineId: null });
+            expect(await forwardRpcCall({ io, targetUserId: 'user-1', method, callParams: {} }))
+                .toMatchObject({ ok: false, errorCode: 'RPC_TRANSPORT_UNAVAILABLE' });
+            expect(emitWithAck).toHaveBeenCalledOnce();
+        } finally { io.sockets.sockets.clear(); vi.restoreAllMocks(); }
+    });
     it('refuses an ambiguous answering-client mutation before either app receives it', async () => {
         const emitWithAck = vi.fn(async () => 'applied');
         const targets = ['app-a', 'app-b'].map(id => ({ id, data: { clientType: 'user-scoped' }, timeout: () => ({ emitWithAck }) }));
-        const io = { in: () => ({ fetchSockets: async () => targets,
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } }, in: () => ({ fetchSockets: async () => targets,
             timeout: () => ({ fetchSockets: async () => targets }) }) } as unknown as Server;
         const args = { io, targetUserId: 'user-1', method: `machine-1:${RPC_METHODS.UI_ACTION_EXECUTE}`,
             callParams: 'sealed-action', answeringClient: { requireSingle: true as const } };
@@ -44,22 +100,29 @@ describe('forwardRpcCall', () => {
             .toMatchObject({ ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' });
         expect(emitWithAck).toHaveBeenCalledOnce();
     });
-    it.each(['absent', 'connected', 'other-machine', 'lookup-failed', 'session'] as const)(
+    it.each(['absent', 'connected', 'registration-lost', 'not-registered-yet', 'other-machine', 'lookup-failed', 'method-lookup-failed', 'revoked', 'session'] as const)(
         'distinguishes an unavailable Machine from an unavailable operation (%s)', async state => {
-            const target = { id: 'daemon', data: { clientType: 'machine-scoped', machineId: state === 'other-machine' ? 'machine-2' : 'machine-1' },
+            const target = { id: 'daemon', data: { clientType: 'machine-scoped', machineId: state === 'other-machine' ? 'machine-2' : 'machine-1',
+                ...(state === 'not-registered-yet' ? {} : { rpcRegisteredMethods: state === 'registration-lost'
+                    ? [`machine-1:${RPC_METHODS.SESSION_AGENT_TRANSITION}`] : ['machine-1:capabilities.describe'] }) },
                 timeout: () => ({ emitWithAck: vi.fn() }) };
             const fetchSockets = vi.fn(async (room: string) => {
-                if (room.startsWith('rpc:')) return [];
+                if (room.startsWith('rpc:')) {
+                    if (state === 'method-lookup-failed') throw new Error('cluster unavailable');
+                    return [];
+                }
                 if (state === 'lookup-failed') throw new Error('cluster unavailable');
-                return state === 'connected' || state === 'other-machine' ? [target] : [];
+                return ['connected', 'registration-lost', 'not-registered-yet', 'method-lookup-failed', 'revoked', 'other-machine'].includes(state) ? [target] : [];
             });
-            const io = { in: (room: string) => ({ timeout: () => ({ fetchSockets: () => fetchSockets(room) }),
+            const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } }, in: (room: string) => ({ timeout: () => ({ fetchSockets: () => fetchSockets(room) }),
                 fetchSockets: () => fetchSockets(room) }) } as unknown as Server;
             if (state === 'session') machineFindFirstMock.mockResolvedValue(null);
+            if (state === 'revoked') machineFindFirstMock.mockResolvedValue({ revokedAt: new Date(), replacedByMachineId: null });
             const result = await forwardRpcCall({ io, targetUserId: 'user-1',
                 method: `machine-1:${RPC_METHODS.SESSION_AGENT_TRANSITION}`, callParams: {} });
-            expect(result).toMatchObject({ ok: false, errorCode: state === 'absent' || state === 'other-machine'
-                ? 'target_unavailable' : 'RPC_METHOD_NOT_AVAILABLE' });
+            expect(result).toMatchObject({ ok: false, errorCode: state === 'absent' || state === 'other-machine' || state === 'revoked'
+                ? 'target_unavailable' : state === 'connected' ? RPC_ERROR_CODES.METHOD_NOT_FOUND
+                : state === 'method-lookup-failed' ? RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE : RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
         },
     );
     it('does not return a private continuation transport error echo', async () => {
@@ -67,7 +130,7 @@ describe('forwardRpcCall', () => {
         const emitWithAck = vi.fn().mockRejectedValue(new Error(`socket echoed ${secret}`));
         const target = { id: 'receiver', data: { clientType: 'session-scoped' }, timeout: () => ({ emitWithAck }) };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = { in: () => ({ timeout: () => ({ fetchSockets }), fetchSockets }) } as unknown as Server;
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } }, in: () => ({ timeout: () => ({ fetchSockets }), fetchSockets }) } as unknown as Server;
         const result = await forwardRpcCall({ io, targetUserId: 'user-1',
             method: 'machine-1:daemon.approval.request.secretContinue.v1', callParams: { value: secret } });
         expect(JSON.stringify(result)).not.toContain(secret);
@@ -142,7 +205,7 @@ describe('forwardRpcCall', () => {
             timeout: vi.fn(() => ({ emitWithAck })),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets })),
                 fetchSockets,
@@ -173,7 +236,7 @@ describe('forwardRpcCall', () => {
         const emitWithAck = vi.fn().mockResolvedValue('ok');
         const target = { id: 'receiver', data: { clientType: 'session-scoped' }, timeout: () => ({ emitWithAck }) };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = { in: () => ({ timeout: () => ({ fetchSockets }), fetchSockets }) } as unknown as Server;
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } }, in: () => ({ timeout: () => ({ fetchSockets }), fetchSockets }) } as unknown as Server;
         await expect(forwardRpcCall({
             io,
             targetUserId: 'user-1',
@@ -228,7 +291,7 @@ describe('forwardRpcCall', () => {
             timeout: vi.fn(() => ({ emitWithAck })),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets })),
                 fetchSockets,
@@ -288,7 +351,7 @@ describe('forwardRpcCall', () => {
             timeout: vi.fn(() => ({ emitWithAck })),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets })),
                 fetchSockets,
@@ -328,7 +391,7 @@ describe('forwardRpcCall', () => {
             timeout: vi.fn(() => ({ emitWithAck })),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets })),
                 fetchSockets,
@@ -366,7 +429,7 @@ describe('forwardRpcCall', () => {
             timeout: vi.fn(() => ({ emitWithAck })),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets })),
                 fetchSockets,
@@ -414,7 +477,7 @@ describe('forwardRpcCall', () => {
                 timeout,
             };
             const fetchSockets = vi.fn().mockResolvedValue([target]);
-            const io = {
+            const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
                 in: vi.fn(() => ({
                     timeout: vi.fn(() => ({ fetchSockets })),
                     fetchSockets,
@@ -484,7 +547,7 @@ describe('forwardRpcCall', () => {
                 timeout,
             };
             const fetchSockets = vi.fn().mockResolvedValue([target]);
-            const io = {
+            const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
                 in: vi.fn(() => ({
                     timeout: vi.fn(() => ({ fetchSockets })),
                     fetchSockets,
@@ -597,7 +660,7 @@ describe('forwardRpcCall', () => {
             timeout: vi.fn(() => ({ emitWithAck })),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets })),
                 fetchSockets,
@@ -627,7 +690,7 @@ describe('forwardRpcCall', () => {
             }),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets })),
                 fetchSockets,
@@ -655,7 +718,7 @@ describe('forwardRpcCall', () => {
             timeout: vi.fn(() => ({ emitWithAck })),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
+        const io = { sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets })),
                 fetchSockets,

@@ -82,6 +82,107 @@ describe('forwarded RPC ACK lifetime across Redis adapter nodes', () => {
         return { source, target, targetSocket, method, assertDisposed };
     }
 
+    it.each([0, 1] as const)('disposes ACK custody after an exact successful reply on node %s', async destinationIndex => {
+        const { source, target, method, assertDisposed } = await fixture(destinationIndex);
+        const received = receiveRpcRequest(target);
+        const response = forwardRpcCall({ io: source.io, targetUserId: 'account-one', method,
+            callParams: {}, timeoutMs: null });
+        const [, acknowledge] = await received;
+        acknowledge({ from: 'exact-target' });
+        await expect(response).resolves.toMatchObject({ ok: true, result: { from: 'exact-target' } });
+        await assertDisposed();
+    });
+
+    it('keeps a local target reachable when adapter-wide discovery fails', async () => {
+        const { source, target, method, assertDisposed } = await fixture(0);
+        const census = vi.spyOn(source.io.of('/').adapter, 'fetchSockets')
+            .mockRejectedValue(new Error('timeout reached: only 1 responses received out of 2'));
+        const received = receiveRpcRequest(target);
+        const response = forwardRpcCall({ io: source.io, targetUserId: 'account-one', method,
+            callParams: {}, timeoutMs: null });
+        const [, acknowledge] = await received;
+        acknowledge({ from: 'local-during-cluster-failure' });
+        await expect(response).resolves.toMatchObject({ ok: true, result: { from: 'local-during-cluster-failure' } });
+        expect(census).not.toHaveBeenCalled();
+        await assertDisposed();
+    });
+
+    it.each([0, 1] as const)('retires a timed-out ACK on node %s before a later call succeeds', async destinationIndex => {
+        const { source, target, targetSocket, method } = await fixture(destinationIndex);
+        const received = receiveRpcRequest(target);
+        const response = forwardRpcCall({ io: source.io, targetUserId: 'account-one', method,
+            callParams: {}, timeoutMs: 100 });
+        const [, acknowledgeLate] = await received;
+        await expect(response).resolves.toMatchObject({ ok: false, error: 'operation has timed out' });
+        await vi.waitFor(() => {
+            expect((targetSocket as unknown as { acks: Map<number, unknown> }).acks.size).toBe(0);
+            expect((source.io.of('/').adapter as unknown as { ackRequests: Map<string, unknown> }).ackRequests.size).toBe(0);
+        });
+        const freshReceived = receiveRpcRequest(target);
+        const fresh = forwardRpcCall({ io: source.io, targetUserId: 'account-one', method,
+            callParams: {}, timeoutMs: 2_000 });
+        const [, acknowledgeFresh] = await freshReceived;
+        acknowledgeLate({ from: 'expired-call' });
+        acknowledgeFresh({ from: 'fresh-call' });
+        await expect(fresh).resolves.toMatchObject({ ok: true, result: { from: 'fresh-call' } });
+    });
+
+    it('ignores a forged acknowledgement from a different socket for the exact pending packet', async () => {
+        const { source, target, targetSocket, method, assertDisposed } = await fixture();
+        const destination = cluster.nodes[1];
+        const accepted = once(destination.io, 'connection');
+        const other = connect(`http://127.0.0.1:${destination.port}`, {
+            path: '/v1/updates', transports: ['websocket'], reconnection: false, forceNew: true,
+        });
+        clients.push(other);
+        await new Promise<void>(resolve => other.once('connect', resolve));
+        const [otherSocket] = await accepted as [Socket];
+        const received = receiveRpcRequest(target);
+        let settled = false;
+        const response = forwardRpcCall({ io: source.io, targetUserId: 'account-one', method,
+            callParams: {}, timeoutMs: null }).finally(() => { settled = true; });
+        const [, acknowledge] = await received;
+        const pending = (targetSocket as unknown as { acks: Map<number, unknown> }).acks;
+        const [packetId] = pending.keys();
+        expect(packetId).toBeTypeOf('number');
+        // Deliberately mis-wire the real wire ACK: the packet id is correct,
+        // but its sender is not the socket whose callback owns that packet.
+        const forgedReceived = once(otherSocket.client.conn, 'packet');
+        other.io.engine.write(`3${packetId}[{"from":"wrong-socket"}]`);
+        await forgedReceived;
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(pending.has(packetId!)).toBe(true);
+        acknowledge({ from: 'exact-target' });
+        await expect(response).resolves.toMatchObject({ ok: true, result: { from: 'exact-target' } });
+        await assertDisposed();
+    });
+
+    it('still waits for every recipient when the caller requests a broadcast acknowledgement', async () => {
+        const { source, target, method } = await fixture();
+        const accepted = once(source.io, 'connection');
+        const other = connect(`http://127.0.0.1:${source.port}`, {
+            path: '/v1/updates', transports: ['websocket'], reconnection: false, forceNew: true,
+        });
+        clients.push(other);
+        await new Promise<void>(resolve => other.once('connect', resolve));
+        const [otherSocket] = await accepted as [Socket];
+        const room = buildRpcMethodRoom({ userId: 'account-one', method });
+        await otherSocket.join(room);
+        const firstReceived = receiveRpcRequest(target);
+        const otherReceived = receiveRpcRequest(other);
+        let settled = false;
+        const response = source.io.in(room).timeout(2_000).emitWithAck(SOCKET_RPC_EVENTS.REQUEST, { method })
+            .finally(() => { settled = true; });
+        const [[, acknowledgeFirst], [, acknowledgeOther]] = await Promise.all([firstReceived, otherReceived]);
+        acknowledgeFirst({ from: 'first' });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(settled).toBe(false);
+        acknowledgeOther({ from: 'other' });
+        await expect(response).resolves.toEqual(expect.arrayContaining([{ from: 'first' }, { from: 'other' }]));
+        expect(await response).toHaveLength(2);
+    });
+
     it.each([0, 1] as const)('settles exact target loss on node %s once as unknown and disposes original ACK resources', async destinationIndex => {
         const { source, target, targetSocket, method, assertDisposed } = await fixture(destinationIndex);
         const submittedUnknown = vi.fn();

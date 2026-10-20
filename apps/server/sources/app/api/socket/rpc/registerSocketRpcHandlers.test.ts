@@ -185,6 +185,7 @@ function createIo(params: { targetsByRoom?: Record<string, unknown[]> } = {}) {
 
     return {
         io: {
+            sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: inMock,
         } as unknown as Server,
         inMock,
@@ -196,6 +197,7 @@ function createTargetRoutingIo(targetsByRoom: Record<string, unknown[]>) {
     const fetchSockets = vi.fn(async (room: string) => targetsByRoom[room] ?? []);
     return {
         io: {
+            sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn((room: string) => ({
                 timeout: vi.fn(() => ({
                     fetchSockets: () => fetchSockets(room),
@@ -216,6 +218,7 @@ function createRoomAwareIo() {
     });
     const fetchSockets = vi.fn(async (room: string) => [...(rooms.get(room) ?? [])]);
     const io = {
+        sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
         in: vi.fn((room: string) => ({
             timeout: vi.fn(() => ({
                 fetchSockets: () => fetchSockets(room),
@@ -2735,6 +2738,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         };
         const targetCancelEmit = vi.fn();
         const io = {
+            sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets: async () => [target] })),
                 fetchSockets: async () => [target],
@@ -2846,6 +2850,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         };
         const targetCancelEmit = vi.fn();
         const io = {
+            sockets: { sockets: new Map(), adapter: { rooms: new Map() } },
             in: vi.fn(() => ({
                 timeout: vi.fn(() => ({ fetchSockets: async () => [target] })),
                 fetchSockets: async () => [target],
@@ -3376,8 +3381,8 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         expect(timeout).toHaveBeenCalledWith(1000);
         expect(callback).toHaveBeenCalledWith({
             ok: false,
-            error: "RPC method not available",
-            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            error: "RPC target unavailable",
+            errorCode: 'target_unavailable',
         });
     });
 
@@ -4318,8 +4323,8 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         expect(secondEffect).not.toHaveBeenCalled();
         expect(callback).toHaveBeenCalledWith({
             ok: false,
-            error: "RPC method not available",
-            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            error: "RPC target unavailable",
+            errorCode: 'target_unavailable',
         });
     });
 

@@ -37,6 +37,31 @@ proof. This is not a second accounting ledger or an inferred attribution shim.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.
 
+## Machine RPC method absence (0.3 development)
+
+The Home distinguishes unsupported Machine operations from temporary routing
+failures before forwarding. A successful empty method-room lookup plus a
+connected, available Machine whose Home-owned acknowledged registration list
+omits the method returns `RPC_METHOD_NOT_FOUND`. The daemon uses that same code
+for an absent local handler. Failed discovery retains the existing availability
+grace, then returns `RPC_TRANSPORT_UNAVAILABLE` before dispatch, not evidence of
+an absent capability or client. An eligible local socket is preferred without
+an adapter-wide census; global single-answering-client selection still requires
+that census. An unknown registration list or a registered method missing from
+its room remains `RPC_METHOD_NOT_AVAILABLE`;
+an absent daemon retains `target_unavailable`. Session-owned routes keep their
+own current-publisher availability decision.
+
+Resource clients classify only affirmative `RPC_METHOD_NOT_FOUND` as unsupported.
+The existing unsupported latch and daemon-state recovery remain unchanged;
+temporary failures retain the ordinary retry/recovery path. No wire field,
+registration protocol, timer or retry policy is added. The registration shape
+is pinned to CLI `cli-v0.2.16` / `cli-v0.2.16-preview.1` at
+`b8d1c449c46ab4dfa8637db36b66f643d149e66d`, whose Machine socket sends
+`{ method: '<machineId>:<method>' }` only for installed handlers. This preserves
+the reachable 0.2-daemon → 0.3-Home direction without supporting undeployed 0.3
+intermediates or a 0.3 client against a 0.2 Home.
+
 ## Confirmed background runner refresh (0.3 development)
 
 Ordinary runner-refresh V1 and process-attested V2 request bodies are unchanged.
