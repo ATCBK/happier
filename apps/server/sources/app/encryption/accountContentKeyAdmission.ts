@@ -179,14 +179,6 @@ export async function admitAccountContentKey(
         contentPublicKeySignature: Uint8Array;
     }>,
 ): Promise<AccountContentKeyAdmissionResult> {
-    try {
-        await acquireAccountSessionOwnerMetadataFenceInTx(client, params.accountId, "exclusive");
-    } catch (error) {
-        if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
-            return { status: "account_not_found" };
-        }
-        throw error;
-    }
     const readAccount = async () => await client.account.findUnique({
         where: { id: params.accountId },
         select: {
@@ -198,7 +190,34 @@ export async function admitAccountContentKey(
     let account = await readAccount();
     if (!account) return { status: "account_not_found" };
 
-    const binding = verifyAccountContentKeyBindingForAccountPublicKey({
+    let binding = verifyAccountContentKeyBindingForAccountPublicKey({
+        accountPublicKeyHex: account.publicKey,
+        contentPublicKey: params.contentPublicKey,
+        contentPublicKeySignature: params.contentPublicKeySignature,
+    });
+    if (!binding) return { status: "invalid_binding" };
+
+    // A complete stored binding is a read-only rejoin, linearized at the
+    // Account read. It neither initializes keys nor publishes currentness.
+    if (account.contentPublicKey !== null && account.contentPublicKeySig !== null) {
+        if (!bytesEqual(account.contentPublicKey, binding.contentPublicKey)) return { status: "key_mismatch" };
+        const storedBinding = verifyStoredAccountContentKeyBinding(account);
+        return storedBinding ? { status: "unchanged", binding: storedBinding } : { status: "invalid_binding" };
+    }
+
+    try {
+        await acquireAccountSessionOwnerMetadataFenceInTx(client, params.accountId, "exclusive");
+    } catch (error) {
+        if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
+            return { status: "account_not_found" };
+        }
+        throw error;
+    }
+    // A key/mode writer may have committed while admission waited. Mutation
+    // always decides from the newly fenced Account, never the optimistic read.
+    account = await readAccount();
+    if (!account) return { status: "account_not_found" };
+    binding = verifyAccountContentKeyBindingForAccountPublicKey({
         accountPublicKeyHex: account.publicKey,
         contentPublicKey: params.contentPublicKey,
         contentPublicKeySignature: params.contentPublicKeySignature,

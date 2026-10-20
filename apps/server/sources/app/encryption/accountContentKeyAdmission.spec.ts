@@ -198,6 +198,11 @@ describe("accountContentKeyAdmission", () => {
                 },
                 {
                     publicKey: binding.accountPublicKeyHex,
+                    contentPublicKey: null,
+                    contentPublicKeySig: null,
+                },
+                {
+                    publicKey: binding.accountPublicKeyHex,
                     contentPublicKey: binding.contentPublicKey,
                     contentPublicKeySig: new Uint8Array(
                         tweetnacl.sign.signatureLength,
@@ -218,7 +223,7 @@ describe("accountContentKeyAdmission", () => {
         );
 
         expect(result).toEqual({ status: "invalid_binding" });
-        expect(client.findUnique).toHaveBeenCalledTimes(2);
+        expect(client.findUnique).toHaveBeenCalledTimes(3);
     });
 
     it("reports an e2ee Account missing its signing key as inconsistent", () => {

@@ -304,6 +304,31 @@ describe("Account Session owner-metadata fence database contract", () => {
         });
     });
 
+    it.skipIf(provider !== "postgres")("requires exclusive entry for a username unique-key assignment", async () => {
+        const account = await db.account.create({ data: { publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        let pending: Promise<unknown> | undefined;
+        let assigned = false;
+        try {
+            await inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "content");
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                pending = db.account.update({ where: { id: account.id }, data: { username: `key-${randomUUID()}` } })
+                    .then(() => { assigned = true; });
+                void pending.catch(() => undefined);
+                let blocked = false;
+                while (!assigned && !blocked) {
+                    [{ blocked }] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+                        SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                            WHERE datname = current_database() AND ${pid} = ANY(pg_blocking_pids(pid))) AS blocked
+                    `;
+                }
+                expect(blocked, "PostgreSQL implicitly locks a changed unique key against KEY SHARE").toBe(true);
+                expect(assigned).toBe(false);
+            });
+        } finally { await pending; }
+        expect(assigned).toBe(true);
+    });
+
     it.skipIf(provider !== 'postgres')('admits a projection-only lower recipient before an exclusive lifecycle entry', async () => {
         const fixtureId = randomUUID();
         const recipient = await db.account.create({ data: {
