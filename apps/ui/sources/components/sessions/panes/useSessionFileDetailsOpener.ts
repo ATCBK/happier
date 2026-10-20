@@ -11,36 +11,6 @@ import { resolvePaneLayout } from '@/components/ui/panels/paneBreakpoints';
 import { PANE_SIZING_DEFAULTS } from '@/components/appShell/panes/layout/paneSizing';
 import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
 
-import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { deferOnWeb } from '@/utils/platform/deferOnWeb';
-import { createSessionFileDetailsTab } from './details/sessionDetailsTabBuilders';
-
-export function useSessionFileDetailsOpener(scopeId: string): Readonly<{
-    openFileInDetails: (fullPath: string) => void;
-    openFileInDetailsPinned: (fullPath: string) => void;
-}> {
-    const pane = useAppPaneScope(scopeId);
-
-    const openFileDetailsTab = React.useCallback((fullPath: string, intent?: { intent: 'pinned' }) => {
-        deferOnWeb(() => {
-            pane.openDetailsTab(createSessionFileDetailsTab(fullPath), intent);
-        });
-    }, [pane]);
-
-    const openFileInDetails = React.useCallback((fullPath: string) => {
-        openFileDetailsTab(fullPath);
-    }, [openFileDetailsTab]);
-
-    const openFileInDetailsPinned = React.useCallback((fullPath: string) => {
-        openFileDetailsTab(fullPath, { intent: 'pinned' });
-    }, [openFileDetailsTab]);
-
-    return {
-        openFileInDetails,
-        openFileInDetailsPinned,
-    };
-}
-
 /** Session placement wraps the shared workspace command with the current cockpit/route owner. */
 export function useSessionFilePaneNavigation(params: Readonly<{ scopeId: string; sessionId: string; serverId?: string | null }>) {
     const router = useRouter();
@@ -49,13 +19,14 @@ export function useSessionFilePaneNavigation(params: Readonly<{ scopeId: string;
     const deviceType = useDeviceType();
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     const paneLayout = useOptionalAppPaneScopeLayout();
+    const paneSupportsMultiPane = paneLayout ? paneLayout.multiPaneEnabled && paneLayout.deviceType !== 'phone' : null;
     const onNavigate = React.useCallback((tabId: 'files' | 'git') => {
         const surface = tabId === 'files' ? 'browse' : 'git';
         if (cockpit) {
             cockpit.switchSurface(surface);
             return;
         }
-        const single = paneLayout ? !paneLayout.multiPaneEnabled || paneLayout.deviceType === 'phone' : resolvePaneLayout({
+        const single = paneSupportsMultiPane !== null ? !paneSupportsMultiPane : resolvePaneLayout({
             containerWidthPx: width,
             deviceType: resolveMultiPaneDeviceType({ platform: Platform.OS, deviceType }),
             multiPaneEnabled,
@@ -68,6 +39,6 @@ export function useSessionFilePaneNavigation(params: Readonly<{ scopeId: string;
         if (single) {
             router.push(resolveSessionRoutePathForSurface(params.sessionId, surface, { serverId: params.serverId }));
         }
-    }, [cockpit, deviceType, multiPaneEnabled, paneLayout, params.serverId, params.sessionId, router, width]);
+    }, [cockpit, deviceType, multiPaneEnabled, paneSupportsMultiPane, params.serverId, params.sessionId, router, width]);
     return useWorkspaceFilePaneNavigation(params.scopeId, onNavigate);
 }
