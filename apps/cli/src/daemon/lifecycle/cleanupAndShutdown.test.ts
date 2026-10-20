@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,6 +8,7 @@ import { createDeferred } from '@/testkit/async/deferred';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import type { DaemonState } from '@/api/types';
+import type { PluginProtocolClientHandle } from '@happier-dev/plugin-sdk/exec/protocol-clients';
 
 const envScope = createEnvKeyScope([
     'HAPPIER_HOME_DIR',
@@ -19,6 +22,80 @@ describe('cleanupAndShutdown', () => {
         vi.resetModules();
     });
 
+    it('retires a pending native language-server query before draining admitted work', async () => {
+        await withTempDir('happier-cleanup-lsp-drain-', async homeDir => {
+            envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: 'cloud' });
+            vi.resetModules();
+            const { cleanupAndShutdown } = await import('./cleanupAndShutdown');
+            const { configureLanguageServerHost, getLanguageServerHost, disposeLanguageServerHost } = await import('@/lsp/languageServerHost');
+            const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
+            const { createStablePluginExecService } = await import('@/plugins/runtime/invocation/services/exec');
+            const { DEFAULT_JSON_RPC_MAX_FRAME_BYTES } = await import('@/plugins/runtime/exec/jsonRpc');
+            const { readSupervisedPluginProcessIdForHost } = await import('@/plugins/runtime/exec/processSupervisor');
+            const { isPidAlive } = await import('@/testkit/process/spawn');
+            const log = join(homeDir, 'messages.jsonl');
+            await writeFile(log, '');
+            await writeFile(join(homeDir, 'a.ts'), 'pending');
+            const registry = createResolvedContributionRegistry({ languageServers: [{
+                provenance: 'external', source: { kind: 'path' }, pluginId: 'fixture',
+                identity: { pluginId: 'fixture', localId: 'server' }, manifestPath: join(homeDir, 'plugin.json'),
+                definition: { id: 'server', title: 'Fixture', languageIds: { typescript: 'typescript' },
+                    executable: { kind: 'systemTool', id: 'native' }, args: [] },
+            }] });
+            const handles: PluginProtocolClientHandle<'jsonRpc'>[] = [];
+            configureLanguageServerHost({ readCurrentContributionRegistry: () => registry, async openProtocol(input) {
+                // The real stdio child is the OS boundary; host lifecycle, codec and supervision remain real.
+                const service = createStablePluginExecService({ allowedExecutables: [input.definition.executable],
+                    processOwner: input.processOwner, signal: input.signal, isOccurrenceCurrent: () => !input.signal.aborted,
+                    resolveExecutable: async () => ({ command: process.execPath,
+                        args: [resolve('src/lsp/__fixtures__/languageServer.cjs'), log, JSON.stringify({ delayHover: true })] }),
+                    resolvePath: async () => homeDir,
+                });
+                const handle = await service.clients.spawn({ kind: 'jsonRpc', framing: 'contentLength',
+                    maxFrameBytes: DEFAULT_JSON_RPC_MAX_FRAME_BYTES, cancellationMethod: '$/cancelRequest',
+                    launch: { executable: input.definition.executable, cwd: homeDir } });
+                handles.push(handle);
+                return handle;
+            } });
+            const host = getLanguageServerHost();
+            let querySettled = false;
+            let drainSnapshot: { retired: boolean; querySettled: boolean; childGone: boolean } | undefined;
+            const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+            try {
+                expect((await host.sync({ rootPath: homeDir, op: { op: 'open', path: 'a.ts', languageId: 'typescript', text: 'pending', version: 1, unsaved: false } })).status).toBe('ok');
+                const pending = host.query({ rootPath: homeDir, path: 'a.ts', kind: 'hover', position: { line: 0, character: 0 } });
+                void pending.then(() => { querySettled = true; }, () => { querySettled = true; });
+                await expect.poll(async () => (await readFile(log, 'utf8')).includes('"method":"textDocument/hover"')).toBe(true);
+                const handle = handles[0];
+                if (!handle) throw new Error('Native language server was not launched');
+                const pid = readSupervisedPluginProcessIdForHost(handle.process);
+                if (pid === null) throw new Error('Native language-server identity is unavailable');
+                expect(querySettled).toBe(false);
+                await cleanupAndShutdown({
+                    source: 'happier-cli', processEnv: {}, resolvePositiveIntEnv: (_raw, fallback) => fallback,
+                    restartOnStaleVersionAndHeartbeat: null, connectedServiceRefreshLoopHandle: null,
+                    connectedServiceQuotasLoopHandle: null, apiMachine: null, machineConnectionStateCleanup: null,
+                    automationWorker: null, memoryWorker: null, voiceInferenceWorker: null, trackedSessionCount: 0,
+                    stopDirectPeerServer: async () => {}, stopTailscaleTransferServeLifecycle: async () => {},
+                    stopControlServer: async () => {}, stopKeepAwake: async () => {}, daemonLockHandle: null, releaseDaemonLock: async () => {},
+                    async beforeShutdown() {
+                        const closed = await host.sync({ rootPath: homeDir, op: { op: 'close', path: 'unused.ts' } });
+                        drainSnapshot = { retired: closed.status === 'unavailable', querySettled, childGone: !isPidAlive(pid) };
+                        // Record a regression without hanging RED on the still-pending request.
+                    },
+                });
+                expect(drainSnapshot).toEqual({ retired: true, querySettled: true, childGone: true });
+                expect((await pending).status).not.toBe('ok');
+                await handle.wait();
+                expect(isPidAlive(pid)).toBe(false);
+            } finally {
+                exitSpy.mockRestore();
+                await disposeLanguageServerHost();
+                await Promise.all(handles.map(handle => handle.dispose()));
+            }
+        });
+    });
+
     it('drains admitted work before stopping background loops or data transport', async () => {
         await withTempDir('happier-cleanup-shutdown-', async (homeDir) => {
             envScope.patch({
@@ -28,6 +105,9 @@ describe('cleanupAndShutdown', () => {
             vi.resetModules();
 
             const { cleanupAndShutdown } = await import('./cleanupAndShutdown');
+            const { getLanguageServerHost } = await import('@/lsp/languageServerHost');
+            const languageHost = getLanguageServerHost();
+            expect((await languageHost.sync({ rootPath: homeDir, op: { op: 'close', path: 'unused.ts' } })).status).toBe('ok');
             const calls: string[] = [];
             const beforeShutdown = vi.fn(async () => {
                 calls.push('beforeShutdown');
@@ -89,6 +169,9 @@ describe('cleanupAndShutdown', () => {
             };
 
             await cleanupAndShutdown(params);
+
+            expect(await languageHost.sync({ rootPath: homeDir, op: { op: 'close', path: 'unused.ts' } }))
+                .toEqual({ status: 'unavailable', reason: 'session_unavailable' });
 
             expect(beforeShutdown).toHaveBeenCalledTimes(1);
             expect(calls).toEqual([

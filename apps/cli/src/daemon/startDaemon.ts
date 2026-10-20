@@ -646,6 +646,10 @@ export async function startDaemon(
         return disk?.reported ? disk.volumes.map(volume => volume.totalBytes) : [];
       },
     });
+    const { configureLanguageServerHost } = await import('@/lsp/languageServerHost');
+    configureLanguageServerHost({
+      readPolicy: () => machineResourcesPolicy?.read() ?? { status: 'unavailable' },
+    });
     const machineVitalsHistory = await createMinuteHistoryStore({
       directory: join(dirname(configuration.daemonStateFile), 'vitals'),
     });

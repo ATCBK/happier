@@ -16,12 +16,14 @@ const responses: unknown[] = [];
 const requests: { method: string; params: unknown }[] = [];
 const replacementRows: { id: string; replacedByMachineId?: string }[] = [];
 let releaseHome = () => {};
+let observeRequest: (() => void) | undefined;
 
 describe('CLI machine terminal Action', () => {
   beforeEach(() => {
     responses.length = 0;
     requests.length = 0;
     replacementRows.length = 0;
+    observeRequest = undefined;
     releaseHome = publishServerHttpRuntimeOrigin('https://home.invalid', 'https');
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
@@ -32,21 +34,22 @@ describe('CLI machine terminal Action', () => {
           storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } } };
     });
     bindApiSessionSocketMock(io, createApiSessionSocketStub({
-      emitWithAck: (event, payload) => {
+      emitWithAck: async (event, payload) => {
         if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object'
           || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) {
           throw new Error('Unexpected Machine RPC boundary request');
         }
         requests.push({ method: payload.method, params: payload.params });
+        observeRequest?.();
         if (!responses.length) throw new Error(`Unexpected Machine RPC: ${payload.method}`);
-        const response = responses.shift();
+        const response = await responses.shift();
         if (response && typeof response === 'object' && 'ok' in response && response.ok === false
           && 'errorCode' in response) return response;
         return { ok: true, result: response };
       },
     }));
   });
-  afterEach(() => { releaseHome(); vi.restoreAllMocks(); });
+  afterEach(() => { releaseHome(); vi.useRealTimers(); vi.restoreAllMocks(); });
   it.each(['session', 'different-session', 'busy', 'activity_unavailable'])('preserves exact refresh acknowledgement and diagnostics (%s)', async scenario => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
     const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
@@ -153,14 +156,86 @@ describe('CLI machine terminal Action', () => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
     const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
       sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
-    responses.push({ ok: true, files: [{ path: 'src/a.ts', matches: [{ line: 2, column16: 1, length16: 6,
+    responses.push({ status: 'unavailable', reason: 'no_capable_server' }, { ok: true, files: [{ path: 'src/a.ts', matches: [{ line: 2, column16: 1, length16: 6,
       text: 'needle()', before: [], after: [] }] }], hasMore: false, coverage: 'complete' });
     expect(await executor.execute('code.references.list', { machineId: 'machine', rootPath: '/project', path: 'src/a.ts', line: 2, symbol: 'needle' },
       { surface: 'cli', serverId: 'home' })).toMatchObject({ ok: true, result: { status: 'ok', source: 'text_matches',
         locations: [{ path: 'src/a.ts', range: { start: { line: 1, character: 0 } } }] } });
-    expect(requests).toMatchObject([{ method: `machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH}`, params: {
+    expect(requests).toMatchObject([{ method: `machine:${RPC_METHODS.DAEMON_LSP_QUERY}`, params: {
+      rootPath: '/project', path: 'src/a.ts', kind: 'references', position: { line: 1, symbol: 'needle' }, text: 'disk',
+    } }, { method: `machine:${RPC_METHODS.DAEMON_WORKSPACE_FILES_SEARCH}`, params: {
       rootPath: '/project', query: expect.stringContaining('needle'), regex: true, matchCase: true,
     } }]);
+  });
+
+  it('composes semantic disk queries and restart without confusing Home and language-server ids', async () => {
+    const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
+    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+      sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
+    const answer = { status: 'ok', kind: 'hover', fileHash: 'a'.repeat(64), sections: [
+      { serverId: 'typescript', label: 'TypeScript', markdown: 'const needle: number' },
+    ] };
+    responses.push(answer, { status: 'ok' }, { ok: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
+      errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+    const context = { surface: 'cli', authority: 'present_user', serverId: 'home' } as const;
+    const input = { machineId: 'machine', rootPath: '/project', path: 'src/a.ts', line: 2, symbol: 'needle', occurrence: 2 };
+    expect(await executor.execute('code.hover.get', input, context)).toEqual({ ok: true, result: answer });
+    expect(await executor.execute('code.restart', { machineId: 'machine', rootPath: '/project', serverId: 'typescript' }, context))
+      .toEqual({ ok: true, result: { status: 'ok' } });
+    expect(await executor.execute('code.hover.get', input, context))
+      .toEqual({ ok: true, result: { status: 'unavailable', reason: 'update_required' } });
+    expect(requests).toEqual([
+      { method: `machine:${RPC_METHODS.DAEMON_LSP_QUERY}`, params: { rootPath: '/project', path: 'src/a.ts',
+        kind: 'hover', text: 'disk', position: { line: 1, symbol: 'needle', occurrence: 2 } } },
+      { method: `machine:${RPC_METHODS.DAEMON_LSP_RESTART}`, params: { rootPath: '/project', serverId: 'typescript' } },
+      { method: `machine:${RPC_METHODS.DAEMON_LSP_QUERY}`, params: { rootPath: '/project', path: 'src/a.ts',
+        kind: 'hover', text: 'disk', position: { line: 1, symbol: 'needle', occurrence: 2 } } },
+    ]);
+  });
+
+  it.each(['code.hover.get', 'code.restart'] as const)('keeps a slow %s reply cancellation-owned beyond the generic Machine deadline', async actionId => {
+    const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32) } };
+    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+      sessionId: 'session', serverId: 'home', serverHttpBaseUrl: 'https://home.invalid', mode: 'plain', ctx: null }));
+    const answer = actionId === 'code.restart' ? { status: 'ok' } : { status: 'ok', kind: 'hover', fileHash: 'a'.repeat(64), sections: [] };
+    let releaseReply!: () => void;
+    const reply = new Promise<unknown>(resolve => { releaseReply = () => resolve(answer); });
+    responses.push(reply);
+    let sent = false;
+    observeRequest = () => { sent = true; };
+    const controller = new AbortController();
+    const input = actionId === 'code.restart' ? { machineId: 'machine', rootPath: '/project' }
+      : { machineId: 'machine', rootPath: '/project', path: 'a.ts', line: 1, character: 0 };
+    vi.useFakeTimers();
+    let settled = false;
+    const pending = executor.execute(actionId, input, { surface: 'cli', authority: 'present_user', serverId: 'home', signal: controller.signal })
+      .finally(() => { settled = true; });
+    try {
+      await vi.waitUntil(() => sent);
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect(settled).toBe(false);
+      releaseReply();
+      expect(await pending).toEqual({ ok: true, result: answer });
+      expect(controller.signal.aborted).toBe(false);
+      sent = false;
+      let releaseCancelledReply!: () => void;
+      responses.push(new Promise<unknown>(resolve => { releaseCancelledReply = () => resolve(answer); }));
+      const cancelController = new AbortController();
+      const cancelled = executor.execute(actionId, input, { surface: 'cli', authority: 'present_user', serverId: 'home', signal: cancelController.signal });
+      try {
+        await vi.waitUntil(() => sent);
+        cancelController.abort();
+        expect(await cancelled).toMatchObject({ ok: false });
+      } finally {
+        releaseCancelledReply();
+        cancelController.abort();
+        await cancelled;
+      }
+    } finally {
+      releaseReply();
+      controller.abort();
+      await pending;
+    }
   });
 
   it('searches workspace content through the exact machine transport with cancellation', async () => {

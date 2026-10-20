@@ -30,10 +30,10 @@ describe('workspace file content search through the registered daemon owner', ()
         await mkdir(join(root, 'src'));
         await writeFile(join(root, 'src', 'a.ts'), 'export function greet() {}\ngreet(); greet();\nconst greeting = 1;\n');
         await writeFile(join(root, 'far.ts'), 'export function greet() {}\n');
-        const executor = createActionExecutor({ workspaceFilesSearch: async ({ machineId, ...request }, context) => {
+        const executor = createActionExecutor({ languageIntelligenceQuery: async () => ({ status: 'unavailable', reason: 'no_capable_server' }), workspaceFilesSearch: async ({ machineId, ...request }, context) => {
             expect(machineId).toBe('machine');
             return DaemonWorkspaceFileSearchResponseSchema.parse(await handler(request, { signal: context.signal }));
-        } } satisfies Pick<ActionExecutorDeps, 'workspaceFilesSearch'> as unknown as ActionExecutorDeps);
+        } } satisfies Pick<ActionExecutorDeps, 'workspaceFilesSearch' | 'languageIntelligenceQuery'> as unknown as ActionExecutorDeps);
         const input = { machineId: 'machine', rootPath: root, path: 'src/a.ts', line: 2, symbol: 'greet', languageId: 'typescript' };
         const definition = await executor.execute('code.definition.get', input, { surface: 'agent' });
         expect(definition).toMatchObject({ ok: true, result: { source: 'text_matches', coverage: 'complete', hasMore: false,

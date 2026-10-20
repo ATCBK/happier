@@ -92,6 +92,7 @@ import { resolveWorkspaceSyncTransportAddress } from '@happier-dev/protocol/work
 import { readWorkspaceSyncChildMachineFacts } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import type { WorkspaceSyncTargetPhaseDescriptor } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
+import { registerLanguageIntelligenceHandlers } from '@/rpc/handlers/languageIntelligence';
 import { registerAutomationReplyHandoffRpcHandler } from '@/rpc/handlers/automationReplyHandoff';
 import { createWorkflowRunStorageClient } from '@/daemon/workflows/workflowRunStorageClient';
 import {
@@ -1380,6 +1381,9 @@ export class ApiMachineClient {
                     this.connectedAccountPurposeBindingRuntime
                 ),
             },
+        });
+        registerLanguageIntelligenceHandlers(this.rpcHandlerManager, this.machineRpcWorkingDirectory, {
+            accessPolicy: this.filesystemAccessPolicy,
         });
         registerAutomationReplyHandoffRpcHandler(this.rpcHandlerManager, {
             machineId: this.machine.id,

@@ -5,7 +5,9 @@ import { resolveProcessOwnershipLevel } from '../ownership/levelRules';
 import type { LeftBehindItem } from '../leftBehind/leftBehindTracker';
 import { compareProcessPrincipals } from '@/processes/ownership/principal';
 import { ancestorsOf, indexCensus } from '@/processes/tree/processTree';
-import { classifyProcessRole } from '@/processes/classification/classifyProcessRole';
+import { classifyProcessRole, type LocalServiceProcessClassification } from '@/processes/classification/classifyProcessRole';
+import { serviceOwnerDisplayName, serviceOwnerRole } from '@/lsp/processOwner';
+import { readLanguageServerDefinitions } from '@/lsp/languageServerDefinitions';
 import type { ProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';
 import { redactProcessCommand } from '@/processes/redaction/redactProcessCommand';
 import type { ProcessCensusRow } from '@/processes/census/processCensus';
@@ -114,7 +116,11 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
             continue;
         }
         const command = row.argv ? redactProcessCommand(row.argv) : row.commandLine ? redactProcessCommand(row.commandLine) : undefined;
-        const classification = classifyProcessRole({ command: command ?? row.name, cwd: row.cwd,
+        const ownerRole = serviceOwnerRole(resolved.owner);
+        const ownerDisplayName = ownerRole ? serviceOwnerDisplayName(resolved.owner, readLanguageServerDefinitions()) : undefined;
+        const classification: LocalServiceProcessClassification = ownerRole
+            ? { role: ownerRole, ...(ownerDisplayName ? { displayName: ownerDisplayName } : {}), signals: [] }
+            : classifyProcessRole({ command: command ?? row.name, cwd: row.cwd,
             ...options.roleCatalog, ancestors: ancestorsOf(index, row.pid).map(ancestor => ({ command: ancestor.argv ? redactProcessCommand(ancestor.argv) : redactProcessCommand(ancestor.commandLine ?? ancestor.name) })) });
         const parent = row.ppid === null ? undefined : index.byPid.get(row.ppid);
         const parentOwner = parent ? ownership.get(parent.pid) : undefined;

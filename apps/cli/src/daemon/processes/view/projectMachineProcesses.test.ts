@@ -10,6 +10,24 @@ import { createProcessMetrics } from './processMetrics';
 
 const scope = '123456789abc';
 
+it('classifies a language-server service by its owner even when its binary is tsc', () => {
+    const read = setup();
+    const snapshot = { ...read.snapshot, rows: read.snapshot.rows.map(row => row.pid === 21
+        ? { ...row, name: 'tsc', argv: ['tsc', '--lsp', '--stdio'] } : row) };
+    const roots = [...read.roots, { owner: { kind: 'service' as const, serviceId: 'lsp:example.typescript:0123456789ab' },
+        pid: 21, start: snapshot.rows.find(row => row.pid === 21)!.start, live: true, ownerCreatedAtMs: 0, ownerCreatedStartTimeMs: 0 }];
+    const current = { ...read, snapshot, roots, rows: resolveProcessOwnership({ snapshot, roots,
+        daemonPrincipal: snapshot.rows[0].principal, daemonScopeKey: scope, platform: 'linux' }) };
+    const answer = projectMachineProcesses(current, request, { accountId: 'owner', custodianAccountId: 'owner' }, options);
+    expect(answer.owners.flatMap(owner => owner.members).find(row => row.pid === 21)).toMatchObject({ role: 'language_server' });
+    expect(MachineProcessesAnswerV1Schema.safeParse(answer).success).toBe(true);
+
+    const compiler = { ...current, roots: read.roots, rows: resolveProcessOwnership({ snapshot, roots: read.roots,
+        daemonPrincipal: snapshot.rows[0].principal, daemonScopeKey: scope, platform: 'linux' }) };
+    expect(projectMachineProcesses(compiler, request, { accountId: 'owner', custodianAccountId: 'owner' }, options)
+        .owners.flatMap(owner => owner.members).find(row => row.pid === 21)).toMatchObject({ role: 'type_checker' });
+});
+
 it('preserves existing tool and catalog display names beside native identity without enriching external rows', () => {
     const read = setup();
     const snapshot = { ...read.snapshot, rows: [

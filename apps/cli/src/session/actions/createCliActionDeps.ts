@@ -1,6 +1,7 @@
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1, admitActionAgentStartV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { SessionSpawnNewIncompatibleTargetV1Schema, type SessionSpawnNewIncompatibleTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { homedir } from 'node:os';
+import { DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
 import { logger } from '@/ui/logger';
 import { executeCapturedMachineAction } from '@/api/machine/capturedMachineAction';
 import { isOriginalSessionInputAccountActionCustody } from "@/daemon/sessionEncryption/requesterAccountActionProjection";
@@ -6953,6 +6954,39 @@ export function createCliActionDeps(params: Readonly<{
         ...(context.signal ? { signal: context.signal } : {}),
       }));
       return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());
+    },
+    languageIntelligenceQuery: async ({ machineId, request }, context) => {
+      if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      try {
+        const invoke = async () => DaemonLspQueryResponseSchema.safeParse(await callMachineAction({
+          machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_LSP_QUERY, request, timeoutMs: null,
+          ...(context.signal ? { signal: context.signal } : {}),
+        }));
+        const result = await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());
+        return result.success ? result.data : { status: 'unavailable', reason: 'invalid_response' };
+      } catch (error) {
+        if (context.signal?.aborted) throw error;
+        const code = readRpcErrorCode(error);
+        if (code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE || code === RPC_ERROR_CODES.METHOD_NOT_FOUND || code === RPC_ERROR_CODES.UPDATE_REQUIRED) return { status: 'unavailable', reason: 'update_required' };
+        throw error;
+      }
+    },
+    languageIntelligenceRestart: async ({ machineId, request }, context) => {
+      if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      try {
+        const invoke = async () => DaemonLspRestartResponseSchema.safeParse(await callMachineAction({
+          machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_LSP_RESTART, request, timeoutMs: null,
+          context, authority: context.authority, effectActionId: 'code.restart', exactMachine: true,
+          ...(context.signal ? { signal: context.signal } : {}),
+        }));
+        const result = await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());
+        return result.success ? result.data : { status: 'unavailable', reason: 'invalid_response' };
+      } catch (error) {
+        if (context.signal?.aborted) throw error;
+        const code = readRpcErrorCode(error);
+        if (code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE || code === RPC_ERROR_CODES.METHOD_NOT_FOUND || code === RPC_ERROR_CODES.UPDATE_REQUIRED) return { status: 'unavailable', reason: 'update_required' };
+        throw error;
+      }
     },
     workspaceFilesSearch: async ({ machineId, ...request }, context) => {
       if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) {

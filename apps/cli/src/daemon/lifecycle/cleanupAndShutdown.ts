@@ -79,8 +79,17 @@ export async function cleanupAndShutdown(params: CleanupAndShutdownParams): Prom
     }
 
     // Admission has already been stopped synchronously by the outer lifecycle
-    // owner. Drain admitted Action/RPC work while control and data transports
-    // and their supporting loops are still live.
+    // owner. Retire native language-server work before joining admitted requests
+    // that may be waiting for a native response.
+    try {
+        const { disposeLanguageServerHost } = await import('@/lsp/languageServerHost');
+        await disposeLanguageServerHost();
+    } catch (error) {
+        logger.infoFile('[DAEMON RUN] Language-server shutdown did not complete', error);
+    }
+
+    // Drain admitted Action/RPC work while control and data transports and their
+    // supporting loops are still live.
     if (params.beforeShutdown) {
         try {
             await params.beforeShutdown();

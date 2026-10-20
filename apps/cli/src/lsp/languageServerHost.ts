@@ -1,0 +1,517 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { relative, resolve } from 'node:path';
+import type { DaemonLspSyncRequest, DaemonLspSyncResponse, DaemonLspQueryRequest, DaemonLspQueryResponse, DaemonLspWatchRequest, DaemonLspWatchResponse, DaemonLspRestartRequest, DaemonLspRestartResponse, LanguageIntelligenceCapabilities, LanguageIntelligenceDiagnostic, LanguageIntelligenceDiagnosticsEntry, } from '@happier-dev/protocol/machines/languageIntelligence';
+import { MachineProcessesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import { getFileLanguageFromPath } from '@happier-dev/protocol/machines/fileLanguage';
+import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
+import { DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES } from '@happier-dev/protocol/features/payload/capabilities/machineTunnelCapabilities';
+import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
+import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
+import type { MachineResourcesPolicyReader } from '@/processes/toolIdleTimeouts';
+import { parkWatch } from '@/daemon/lifecycle/parkWatch';
+import { resolveCanonicalAbsolutePathComparisonIdentity } from '@/utils/path/expandHomeDirPath';
+import { logger } from '@/ui/logger';
+import { createLanguageServerDefinitions, type LanguageServerDefinition } from './languageServerDefinitions';
+import { createServerSession, LanguageServerSessionError, type OpenLanguageServerProtocol, type ServerSession, type ServerSessionAnswer } from './serverSession';
+import { LspDocumentTextError, readDocumentLine, resolveDocumentPosition } from './documentText';
+import { LspWorkspacePathError, resolveWorkspacePath, workspaceUriToPath } from './workspaceUris';
+import { resolveLanguageServerRoot } from './rootResolution';
+import { normalizeLspDocumentSymbols, normalizeLspHover, readLspObject, readLspRange } from './languageServerResults';
+type RequestContext = Readonly<{
+    signal?: AbortSignal;
+}>;
+export type LanguageServerHost = Readonly<{
+    sync(input: DaemonLspSyncRequest, context?: RequestContext): Promise<DaemonLspSyncResponse>;
+    query(input: DaemonLspQueryRequest, context?: RequestContext): Promise<DaemonLspQueryResponse>;
+    watch(input: DaemonLspWatchRequest, context?: RequestContext): Promise<DaemonLspWatchResponse>;
+    restart(input: DaemonLspRestartRequest, context?: RequestContext): Promise<DaemonLspRestartResponse>;
+    dispose(): Promise<void>;
+}>;
+export type LanguageServerHostOptions = Readonly<{
+    readCurrentContributionRegistry?: () => ResolvedContributionRegistry | null | undefined;
+    openProtocol?: OpenLanguageServerProtocol;
+    readPolicy?: MachineResourcesPolicyReader;
+    platform?: NodeJS.Platform;
+}>;
+type RootDocument = {
+    languageId: string;
+    references: number;
+    sessions: Set<string>;
+};
+type RootState = {
+    path: string;
+    generation: string;
+    revision: number;
+    documents: Map<string, RootDocument>;
+    sessions: Set<string>;
+    listeners: Set<() => void>;
+    watchers: number;
+    diagnostics: Map<string, Map<string, {
+        revision: number;
+        entry: LanguageIntelligenceDiagnosticsEntry;
+    }>>;
+};
+type HostedSession = {
+    session: ServerSession;
+    timer: (() => void) | undefined;
+    lastActivity: number;
+    activeOperations: number;
+};
+type QueryOk = Extract<DaemonLspQueryResponse, {
+    status: 'ok';
+}>;
+const emptyCapabilities = (): LanguageIntelligenceCapabilities => ({ hover: false, definition: false, references: false, documentSymbol: false, diagnostics: 'none', acceptsExternalChanges: false });
+function combineCapabilities(sessions: readonly ServerSession[]): LanguageIntelligenceCapabilities {
+    const all = sessions.map(s => s.capabilities());
+    return { hover: all.some(c => c.hover), definition: all.some(c => c.definition), references: all.some(c => c.references), documentSymbol: all.some(c => c.documentSymbol), acceptsExternalChanges: all.some(c => c.acceptsExternalChanges), diagnostics: all.some(c => c.diagnostics === 'pull') ? 'pull' : all.some(c => c.diagnostics === 'push') ? 'push' : 'none' };
+}
+function unique<T>(items: T[], key: (item: T) => string): T[] { const seen = new Set<string>(); return items.filter(item => { const k = key(item); if (seen.has(k))
+    return false; seen.add(k); return true; }); }
+export function createLanguageServerHost(options: LanguageServerHostOptions = {}): LanguageServerHost {
+    const platform = options.platform ?? process.platform;
+    const definitions = createLanguageServerDefinitions({ readCurrentContributionRegistry: options.readCurrentContributionRegistry ?? readCurrentContributionRegistry });
+    const openProtocol: OpenLanguageServerProtocol = options.openProtocol ?? (async (input) => (await import('./managedProtocol')).openLanguageServerProtocol(input));
+    const roots = new Map<string, RootState>();
+    const sessions = new Map<string, HostedSession>();
+    let disposed = false;
+    function key(path: string): string {
+        const identity = resolveCanonicalAbsolutePathComparisonIdentity(path, { platform });
+        if (identity === null)
+            throw new LspWorkspacePathError('invalid_path', 'An absolute workspace root is required');
+        return identity;
+    }
+    function rootFor(rootPath: string): RootState {
+        resolveWorkspacePath({ rootPath, platform }, '.');
+        const id = key(rootPath);
+        let root = roots.get(id);
+        if (!root) {
+            root = { path: rootPath, generation: randomUUID(), revision: 0, documents: new Map(), sessions: new Set(), listeners: new Set(), watchers: 0, diagnostics: new Map() };
+            roots.set(id, root);
+        }
+        return root;
+    }
+    const rootSessions = (root: RootState) => [...root.sessions].flatMap(id => { const hosted = sessions.get(id); return hosted ? [hosted.session] : []; });
+    function retireEmptySession(id: string, session: ServerSession): void {
+        const hosted = sessions.get(id);
+        if (hosted?.session !== session || session.paths().length !== 0)
+            return;
+        hosted.timer?.();
+        sessions.delete(id);
+        for (const root of roots.values())
+            root.sessions.delete(id);
+    }
+    function localPath(session: ServerSession, root: RootState, path: string): string {
+        const absolute = resolveWorkspacePath({ rootPath: root.path, platform }, path);
+        const local = relative(session.workspaceRoot, absolute).replaceAll('\\', '/');
+        resolveWorkspacePath({ rootPath: session.workspaceRoot, platform }, local);
+        return local;
+    }
+    function projectChange(sessionKey: string): void {
+        const session = sessions.get(sessionKey)?.session;
+        if (!session)
+            return;
+        for (const root of roots.values()) {
+            if (!root.sessions.has(sessionKey))
+                continue;
+            root.revision++;
+            for (const [path, document] of root.documents) {
+                if (!document.sessions.has(sessionKey))
+                    continue;
+                const entry = session.diagnostics.get(localPath(session, root, path));
+                const prior = root.diagnostics.get(path)?.get(session.definition.id);
+                if (!entry && !prior)
+                    continue;
+                let perServer = root.diagnostics.get(path);
+                if (!perServer) {
+                    perServer = new Map();
+                    root.diagnostics.set(path, perServer);
+                }
+                perServer.set(session.definition.id, { revision: root.revision, entry: entry ? { ...entry, items: entry.items.map(item => ({ ...item, path })) } : { state: 'ready', version: prior!.entry.version, generation: session.status().generation, items: [] } });
+            }
+            for (const listener of root.listeners)
+                listener();
+        }
+    }
+    function idleMs(): number | null {
+        if (!options.readPolicy)
+            return MachineProcessesPolicyV1Schema.parse({}).toolIdleCloseMs;
+        const policy = options.readPolicy();
+        return policy.status === 'ready' ? policy.policy.processes.toolIdleCloseMs : null;
+    }
+    function touch(sessionKey: string): void {
+        const hosted = sessions.get(sessionKey);
+        if (!hosted)
+            return;
+        hosted.lastActivity = Date.now();
+        hosted.timer?.();
+        const duration = idleMs();
+        if (duration === null || hosted.session.status().state === 'idle' || hosted.session.status().state === 'stopped') {
+            hosted.timer = undefined;
+            return;
+        }
+        hosted.timer = armDeadlineTimer(hosted.lastActivity + duration, () => {
+            hosted.timer = undefined;
+            if (hosted.activeOperations > 0 || [...roots.values()].some(root => root.sessions.has(sessionKey) && root.watchers > 0)) {
+                touch(sessionKey);
+                return;
+            }
+            const current = idleMs();
+            if (current === null)
+                return;
+            if (Date.now() - hosted.lastActivity < current) {
+                touch(sessionKey);
+                return;
+            }
+            void hosted.session.dispose().then(() => { sessions.delete(sessionKey); for (const root of roots.values())
+                root.sessions.delete(sessionKey); }, error => logger.debug('[LSP] Idle cleanup failed', { error }));
+        }, { unref: true });
+    }
+    async function ensureSession(root: RootState, path: string, definition: LanguageServerDefinition, isCurrent?: () => boolean): Promise<{
+        id: string;
+        session: ServerSession;
+    }> {
+        const nativeRoot = await resolveLanguageServerRoot({ rootPath: root.path, path, rootMarkers: definition.rootMarkers, platform });
+        if (disposed || (isCurrent && !isCurrent())) throw new LanguageServerSessionError('cancelled');
+        const id = JSON.stringify([definition.id, key(nativeRoot)]);
+        let hosted = sessions.get(id);
+        if (!hosted) {
+            const session = createServerSession({ definition, rootPath: nativeRoot, workspaceRoot: nativeRoot, platform, openProtocol, onChange: () => { projectChange(id); touch(id); } });
+            hosted = { session, timer: undefined, lastActivity: Date.now(), activeOperations: 0 };
+            sessions.set(id, hosted);
+        }
+        root.sessions.add(id);
+        return { id, session: hosted.session };
+    }
+    function errorResponse(error: unknown): Extract<DaemonLspQueryResponse, {
+        status: 'error' | 'unavailable';
+    }> {
+        if (error instanceof LspWorkspacePathError)
+            return error.code === 'unsupported_root' ? { status: 'unavailable', reason: 'unsupported_root' } : { status: 'error', errorCode: 'path_not_allowed' };
+        if (error instanceof LspDocumentTextError)
+            return error.code === 'symbol_not_found' ? { status: 'error', errorCode: 'symbol_not_found', candidates: [...(error.candidates ?? [])] } : { status: 'error', errorCode: 'invalid_position' };
+        if (error instanceof LanguageServerSessionError)
+            return { status: 'error', errorCode: error.code };
+        const native = readLspObject(error);
+        if (native?.code === 'ENOENT')
+            return { status: 'error', errorCode: 'root_not_found' };
+        if (native?.name === 'AbortError')
+            return { status: 'error', errorCode: 'cancelled' };
+        logger.debug('[LSP] Host operation failed', { error });
+        return { status: 'error', errorCode: 'request_failed' };
+    }
+    function watchSnapshot(root: RootState, sinceRevision = -1): Extract<DaemonLspWatchResponse, {
+        status: 'ok';
+    }> {
+        const paths: Array<[string, Record<string, LanguageIntelligenceDiagnosticsEntry>]> = [];
+        for (const [path, entries] of root.diagnostics) {
+            const changedEntries: Array<[string, LanguageIntelligenceDiagnosticsEntry]> = [];
+            for (const [serverId, entry] of entries) {
+                if (entry.revision > sinceRevision) changedEntries.push([serverId, entry.entry]);
+            }
+            if (changedEntries.length) paths.push([path, Object.fromEntries(changedEntries)]);
+        }
+        const diagnostics = Object.fromEntries(paths);
+        return { status: 'ok', revision: root.revision, servers: rootSessions(root).map(session => session.status()), diagnostics };
+    }
+    const host: LanguageServerHost = {
+        async sync(input, context) {
+            try {
+                if (disposed)
+                    return { status: 'unavailable', reason: 'session_unavailable' };
+                context?.signal?.throwIfAborted();
+                const root = rootFor(input.rootPath), op = input.op;
+                if (op.op === 'external') {
+                    for (const path of op.paths)
+                        resolveWorkspacePath({ rootPath: root.path, platform }, path);
+                    await Promise.all(rootSessions(root).map(session => session.external(op.paths, root.path)));
+                }
+                else if (op.op === 'close') {
+                    const document = root.documents.get(op.path);
+                    if (document) {
+                        await Promise.all([...document.sessions].map(async (id) => { const hosted = sessions.get(id); if (hosted)
+                            await hosted.session.close(localPath(hosted.session, root, op.path)); }));
+                        document.references--;
+                        if (document.references === 0)
+                            root.documents.delete(op.path);
+                        for (const id of document.sessions) {
+                            const session = sessions.get(id)?.session;
+                            if (session)
+                                retireEmptySession(id, session);
+                        }
+                    }
+                }
+                else if (op.op === 'change') {
+                    const document = root.documents.get(op.path);
+                    if (!document)
+                        return { status: 'error', errorCode: 'document_out_of_sync' };
+                    await Promise.all([...document.sessions].map(id => { const session = sessions.get(id)?.session; return session?.change({ ...op, path: localPath(session, root, op.path) }); }));
+                }
+                else {
+                    resolveWorkspacePath({ rootPath: root.path, platform }, op.path);
+                    const matching = definitions.findDefinitionsForDocument({ languageId: op.languageId, path: op.path });
+                    if (!matching.length)
+                        return { status: 'unavailable', reason: 'no_capable_server' };
+                    const prior = root.documents.get(op.path);
+                    if (op.op === 'snapshot' && !prior)
+                        return { status: 'error', errorCode: 'document_out_of_sync' };
+                    const document = prior ?? { languageId: op.languageId, references: 0, sessions: new Set<string>() };
+                    root.documents.set(op.path, document);
+                    if (op.op === 'open')
+                        document.references++;
+                    const isCurrent = () => !disposed && root.documents.get(op.path) === document && document.references > 0;
+                    for (const definition of matching) {
+                        const { id, session } = await ensureSession(root, op.path, definition, isCurrent);
+                        if (!isCurrent()) throw new LanguageServerSessionError('cancelled');
+                        document.sessions.add(id);
+                        const text = { path: localPath(session, root, op.path), languageId: op.languageId, text: op.text, version: op.version, unsaved: op.unsaved };
+                        if (op.op === 'open' || !session.document(text.path)) {
+                            const holders = session.document(text.path) ? 1 : document.references;
+                            for (let index = 0; index < holders; index++) await session.open(text);
+                            if (!isCurrent()) throw new LanguageServerSessionError('cancelled');
+                            const hosted = sessions.get(id)!;
+                            hosted.activeOperations++;
+                            try {
+                                await session.start();
+                            }
+                            catch (error) {
+                                if (session.status().state !== 'unavailable' && session.status().state !== 'crashed')
+                                    throw error;
+                            }
+                            finally {
+                                hosted.activeOperations--;
+                                touch(id);
+                            }
+                        }
+                        else
+                            await session.snapshot(text);
+                    }
+                }
+                for (const id of root.sessions)
+                    touch(id);
+                const active = rootSessions(root);
+                return { status: 'ok', generation: root.generation, ...('version' in op ? { version: op.version } : {}), servers: active.map(s => s.status()), capabilities: active.length ? combineCapabilities(active) : emptyCapabilities() };
+            }
+            catch (error) {
+                if (context?.signal?.aborted) return { status: 'error', errorCode: 'cancelled' };
+                return errorResponse(error);
+            }
+        },
+        async query(input, context) {
+            const transient: Array<{
+                id: string;
+                session: ServerSession;
+                path: string;
+            }> = [];
+            try {
+                if (disposed)
+                    return { status: 'unavailable', reason: 'session_unavailable' };
+                context?.signal?.throwIfAborted();
+                const root = rootFor(input.rootPath);
+                if (input.generation !== undefined && input.generation !== root.generation)
+                    return { status: 'error', errorCode: 'stale_query' };
+                const sourceDocument = root.documents.get(input.path);
+                const languageId = input.languageId ?? sourceDocument?.languageId ?? getFileLanguageFromPath(input.path) ?? '';
+                const matching = definitions.findDefinitionsForDocument({ languageId: languageId || null, path: input.path }).filter(d => !input.serverId || d.id === input.serverId);
+                if (!matching.length)
+                    return { status: 'unavailable', reason: 'no_capable_server' };
+                const selected = await Promise.all(matching.map(definition => ensureSession(root, input.path, definition)));
+                const absolute = resolveWorkspacePath({ rootPath: root.path, platform }, input.path);
+                let diskText: string | undefined, fileHash: string | undefined;
+                const existing = selected.flatMap(({ session }) => { const document = session.document(localPath(session, root, input.path)); return document ? [document] : []; })[0];
+                if (input.text === 'disk' || !existing) {
+                    const bytes = await readFile(absolute);
+                    diskText = bytes.toString('utf8');
+                    fileHash = createHash('sha256').update(bytes).digest('hex');
+                }
+                for (const { session } of selected) {
+                    const path = localPath(session, root, input.path), held = session.document(path);
+                    if (input.text === 'disk' && held?.unsaved)
+                        return { status: 'error', errorCode: 'unsaved_editor_changes', diskHash: fileHash! };
+                }
+                for (const { id, session } of selected) {
+                    const path = localPath(session, root, input.path), held = session.document(path);
+                    if (held) {
+                        if (diskText !== undefined && diskText !== held.text)
+                            await session.snapshot({ ...held, text: diskText, version: held.version + 1, unsaved: false });
+                    }
+                    else {
+                        const document = { path, languageId, text: diskText ?? existing?.text ?? '', version: existing?.version ?? 0, unsaved: existing?.unsaved ?? false };
+                        for (let i = 0; i < (sourceDocument?.references ?? 1); i++)
+                            await session.open(document);
+                        if (sourceDocument)
+                            sourceDocument.sessions.add(id);
+                        else
+                            transient.push({ id, session, path });
+                    }
+                }
+                const document = selected[0].session.document(localPath(selected[0].session, root, input.path));
+                if (!document)
+                    return { status: 'error', errorCode: 'session_unavailable' };
+                if (input.version !== undefined && input.version !== document.version)
+                    return { status: 'error', errorCode: 'stale_query' };
+                const position = input.position === undefined ? undefined : resolveDocumentPosition(document.text, input.position);
+                if ((input.kind === 'hover' || input.kind === 'definition' || input.kind === 'references') && !position)
+                    return { status: 'error', errorCode: 'invalid_position' };
+                const requestedGeneration = root.generation;
+                const answers = await Promise.allSettled(selected.map(async ({ id, session }) => { const hosted = sessions.get(id)!; hosted.activeOperations++; touch(id); try {
+                    const answer = await session.query({ path: localPath(session, root, input.path), kind: input.kind, position, includeDeclaration: input.includeDeclaration, signal: context?.signal });
+                    return { session, answer };
+                }
+                finally {
+                    hosted.activeOperations--;
+                    touch(id);
+                } }));
+                if (requestedGeneration !== root.generation)
+                    return { status: 'error', errorCode: 'stale_query' };
+                const ready = answers.flatMap(answer => answer.status === 'fulfilled' ? [answer.value] : []);
+                if (!ready.length) {
+                    const errors = answers.flatMap(answer => answer.status === 'rejected' ? [answer.reason as unknown] : []);
+                    if (errors.every(error => error instanceof LanguageServerSessionError && error.code === 'unsupported'))
+                        return { status: 'unavailable', reason: 'no_capable_server' };
+                    const failed = selected.map(({ session }) => session.status()).find(status => status.reason);
+                    if (failed?.reason)
+                        return { status: 'unavailable', reason: failed.reason };
+                    return errorResponse(errors[0]);
+                }
+                const provenance = { status: 'ok' as const, version: document.version, generation: root.generation, ...(fileHash ? { fileHash } : {}) };
+                let result = await projectResults(root, input.kind, ready, provenance);
+                if (result.kind === 'references')
+                    result = pageLanguageServerReferences(result);
+                if (requestedGeneration !== root.generation || ready.some(({ session, answer }) => session.status().generation !== answer.generation || answer.version !== document.version || session.document(localPath(session, root, input.path))?.version !== answer.version || session.document(localPath(session, root, input.path))?.text !== document.text))
+                    return { status: 'error', errorCode: 'stale_query' };
+                const isEmpty = result.kind === 'hover' ? result.sections.length === 0 : result.kind === 'documentSymbols' ? result.symbols.length === 0 : result.kind === 'diagnostics' ? result.diagnostics.length === 0 : result.locations.length === 0;
+                return isEmpty && ready.some(answer => answer.answer.loading) ? { status: 'loading' } : result;
+            }
+            catch (error) {
+                return errorResponse(error);
+            }
+            finally {
+                await Promise.all(transient.map(async ({ id, session, path }) => { try {
+                    await session.close(path);
+                    retireEmptySession(id, session);
+                }
+                catch (error) {
+                    logger.debug('[LSP] Transient cleanup failed', { error });
+                } }));
+            }
+        },
+        async watch(input, context) {
+            try {
+                if (disposed)
+                    return { status: 'unavailable', reason: 'session_unavailable' };
+                const root = rootFor(input.rootPath);
+                for (const id of root.sessions)
+                    touch(id);
+                if (input.sinceRevision === undefined)
+                    return watchSnapshot(root);
+                root.watchers++;
+                try {
+                    const result = await parkWatch({ signal: context?.signal, windowMs: MACHINE_WATCH_WINDOW_MS, isNewer: () => root.revision > input.sinceRevision!, subscribe: listener => { root.listeners.add(listener); return () => root.listeners.delete(listener); }, read: () => watchSnapshot(root, input.sinceRevision) });
+                    return result.changed ? result.snapshot : watchSnapshot(root, input.sinceRevision);
+                }
+                finally {
+                    root.watchers--;
+                    for (const id of root.sessions)
+                        touch(id);
+                }
+            }
+            catch (error) {
+                return errorResponse(error);
+            }
+        },
+        async restart(input) {
+            try {
+                const root = rootFor(input.rootPath), selected = rootSessions(root).filter(s => !input.serverId || s.definition.id === input.serverId);
+                if (!selected.length)
+                    return { status: 'unavailable', reason: 'session_unavailable' };
+                root.generation = randomUUID();
+                await Promise.all(selected.map(session => session.restart()));
+                return { status: 'ok' };
+            }
+            catch (error) {
+                return errorResponse(error);
+            }
+        },
+        async dispose() { disposed = true; for (const hosted of sessions.values())
+            hosted.timer?.(); await Promise.all([...sessions.values()].map(({ session }) => session.dispose())); sessions.clear(); for (const root of roots.values())
+            for (const listener of root.listeners)
+                listener(); roots.clear(); },
+    };
+    async function projectResults(root: RootState, kind: DaemonLspQueryRequest['kind'], ready: Array<{
+        session: ServerSession;
+        answer: ServerSessionAnswer;
+    }>, provenance: Readonly<{
+        status: 'ok';
+        version: number;
+        generation: string;
+        fileHash?: string;
+    }>): Promise<QueryOk> {
+        if (kind === 'hover')
+            return { ...provenance, kind, sections: ready.flatMap(({ session, answer }) => { const hover = normalizeLspHover(answer.value); return hover ? [{ serverId: session.definition.id, label: session.definition.title, ...hover }] : []; }) };
+        if (kind === 'documentSymbols')
+            return { ...provenance, kind, symbols: unique(ready.flatMap(({ session, answer }) => normalizeLspDocumentSymbols(session.definition.id, answer.value)), item => JSON.stringify([item.name, item.kind, item.selectionRange])), hasMore: false };
+        if (kind === 'diagnostics')
+            return { ...provenance, kind, diagnostics: unique(ready.flatMap(({ session, answer }) => (answer.value as LanguageIntelligenceDiagnostic[]).map(item => ({ ...item, path: relative(root.path, resolve(session.workspaceRoot, item.path)).replaceAll('\\', '/') }))), item => JSON.stringify([item.path, item.range, item.severity, item.code, item.message])), hasMore: false };
+        const locations: Array<{
+            serverId: string;
+            path: string;
+            outsideWorkspace?: boolean;
+            range: ReturnType<typeof readLspRange>;
+            lineText: string;
+        }> = [];
+        for (const { session, answer } of ready) {
+            const items = answer.value === null ? [] : Array.isArray(answer.value) ? answer.value : [answer.value];
+            for (const item of items) {
+                const location = readLspObject(item);
+                if (!location)
+                    throw new Error('Invalid language-server location');
+                const uri = location.uri ?? location.targetUri;
+                if (typeof uri !== 'string')
+                    throw new Error('Invalid language-server location URI');
+                const target = workspaceUriToPath({ rootPath: root.path, platform }, uri), range = readLspRange(location.range ?? location.targetSelectionRange ?? location.targetRange);
+                if (kind === 'references' && target.outsideWorkspace)
+                    continue;
+                let lineText = '';
+                if (kind === 'references') {
+                    const absolute = resolveWorkspacePath({ rootPath: root.path, platform }, target.path), held = session.document(relative(session.workspaceRoot, absolute).replaceAll('\\', '/'));
+                    lineText = readDocumentLine(held?.text ?? (await readFile(absolute)).toString('utf8'), range.start.line);
+                }
+                locations.push({ serverId: session.definition.id, ...target, range, lineText });
+            }
+        }
+        const deduped = unique(locations, item => JSON.stringify([item.path, item.range]));
+        if (kind === 'references')
+            return { ...provenance, kind, locations: deduped.map(({ outsideWorkspace, ...item }) => item), hasMore: false };
+        return { ...provenance, kind, locations: deduped.map(({ lineText, ...item }) => item), hasMore: false };
+    }
+    return host;
+}
+let configuredOptions: LanguageServerHostOptions | undefined;
+let sharedHost: LanguageServerHost | undefined;
+export function configureLanguageServerHost(options: LanguageServerHostOptions): void {
+    if (sharedHost)
+        throw new Error('Language-server host is already serving');
+    configuredOptions = options;
+}
+export function getLanguageServerHost(): LanguageServerHost { return sharedHost ??= createLanguageServerHost(configuredOptions); }
+export async function disposeLanguageServerHost(): Promise<void> { const host = sharedHost; sharedHost = undefined; configuredOptions = undefined; await host?.dispose(); }
+export function pageLanguageServerReferences(result: Extract<DaemonLspQueryResponse, {
+    status: 'ok';
+    kind: 'references';
+}>): typeof result {
+    if (Buffer.byteLength(JSON.stringify(result), 'utf8') <= DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES)
+        return result;
+    // A changed completeness flag must mean at least one location was omitted;
+    // `true` itself occupies one fewer JSON byte than `false`.
+    let first = 0, last = Math.max(0, result.locations.length - 1);
+    while (first < last) {
+        const middle = Math.ceil((first + last) / 2);
+        if (Buffer.byteLength(JSON.stringify({ ...result, locations: result.locations.slice(0, middle), hasMore: true }), 'utf8') <= DEFAULT_MACHINE_TUNNEL_SERVER_ROUTED_MAX_RAW_PAYLOAD_BYTES)
+            first = middle;
+        else
+            last = middle - 1;
+    }
+    return { ...result, locations: result.locations.slice(0, first), hasMore: true };
+}
