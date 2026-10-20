@@ -44,11 +44,41 @@ let warmCacheStorageUnopenable = false;
 let legacyPlaintextWarmCachePurged = false;
 let warmCacheAccountScope: string | null = null;
 type WarmCacheSavedValue = Readonly<{
-    raw: string;
+    /** null means storage has not accepted this process's latest value. */
+    raw: string | null;
     value: Record<string, unknown>;
 }>;
 
 const warmCacheSavedValueByKey = new Map<string, WarmCacheSavedValue>();
+
+type WarmCacheStorageFailure = Readonly<{
+    operation: 'open' | 'read' | 'write' | 'delete' | 'enumerate' | 'serialize';
+    reason: 'quota_exceeded' | 'storage_error';
+}>;
+let warmCacheStorageFailureReported = false;
+
+function attemptWarmCacheStorage<T>(
+    operation: WarmCacheStorageFailure['operation'],
+    action: () => T,
+): Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; failure: WarmCacheStorageFailure }> {
+    try {
+        return { ok: true, value: action() };
+    } catch (error) {
+        const name = error && typeof error === 'object' && 'name' in error ? error.name : null;
+        const failure: WarmCacheStorageFailure = {
+            operation,
+            reason: name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED'
+                ? 'quota_exceeded'
+                : 'storage_error',
+        };
+        if (!warmCacheStorageFailureReported) {
+            warmCacheStorageFailureReported = true;
+            // One diagnostic per process, without Account ids, cache contents or storage error prose.
+            console.warn('[warm-cache] Persistence failed; keeping the in-memory projection.', failure);
+        }
+        return { ok: false, failure };
+    }
+}
 
 /**
  * On a native build everything this module persists is decrypted session content — names,
@@ -194,9 +224,10 @@ function getWarmCacheStorage(): MMKV | null {
     const placement = resolveWarmCacheStoragePlacement(storageScope);
     if (!placement) return null;
 
-    try {
-        warmCacheStorage = new MMKV(placement);
-    } catch {
+    const opened = attemptWarmCacheStorage('open', () => new MMKV(placement));
+    if (opened.ok) {
+        warmCacheStorage = opened.value;
+    } else {
         // A store we cannot open stays unopened for this process: retrying per read would turn one
         // unusable cache into a throw on every session-list update.
         warmCacheStorageUnopenable = true;
@@ -249,7 +280,7 @@ export function loadArtifactInventoryWarmCache(serverId: string, accountId: stri
     const key = buildScopedKey(ARTIFACT_INVENTORY_WARM_CACHE_PREFIX, serverId, accountId);
     const entry = loadScopedRecord(key, ArtifactInventoryWarmCacheSchema);
     if (entry?.binding === binding) return entry;
-    if (entry && key) { getWarmCacheStorage()?.delete(key); warmCacheSavedValueByKey.delete(key); }
+    if (entry && key) forgetScopedRecord(key);
     return null;
 }
 
@@ -261,10 +292,11 @@ subscribeHomeCredentialMutations(event => {
     if (event.kind !== 'credentials_removed') return;
     const prefix = `${ARTIFACT_INVENTORY_WARM_CACHE_PREFIX}:${event.serverId}:`;
     const storage = getWarmCacheStorage();
-    for (const key of storage?.getAllKeys() ?? []) {
+    const storedKeys = attemptWarmCacheStorage('enumerate', () => storage?.getAllKeys() ?? []);
+    const keys = new Set([...warmCacheSavedValueByKey.keys(), ...(storedKeys.ok ? storedKeys.value : [])]);
+    for (const key of keys) {
         if (!key.startsWith(prefix)) continue;
-        storage?.delete(key);
-        warmCacheSavedValueByKey.delete(key);
+        forgetScopedRecord(key);
     }
 });
 /**
@@ -524,6 +556,74 @@ const EMPTY_SESSION_LIST_QUERY_MEMBERSHIP_CACHE_ENTRIES = EMPTY_WARM_CACHE_ENTRI
 const MachineDisplayCacheEntriesSchema = z.record(z.string(), MachineDisplayCacheEntryV1Schema);
 const PluginUiProjectionCacheEntriesSchema = z.record(z.string(), PluginUiProjectionCacheEntryV1Schema);
 
+// Presentation is Machine-qualified, but translation bytes commonly repeat verbatim across
+// Machines. Pool those bytes only in the storage encoding; callers still read the canonical
+// complete projection. Rebuild the pool on every replacement so retired revisions cannot accumulate.
+const CompactPluginUiProjectionCacheSchema = z.object({
+    v: z.literal(2),
+    entries: PluginUiProjectionCacheEntriesSchema,
+    translationBundles: z.array(z.record(z.string(), z.unknown())),
+    translationBundleRefs: z.record(z.string(), z.record(z.string(), z.number().check(z.int(), z.nonnegative()))),
+});
+
+function serializePluginUiProjectionCache(entries: Record<string, PluginUiProjectionCacheEntryV1>): string {
+    const translationBundles: Record<string, unknown>[] = [];
+    const bundleIndexByRaw = new Map<string, number>();
+    const translationBundleRefs: Record<string, Record<string, number>> = {};
+    let shared = false;
+    const compactEntries = Object.fromEntries(Object.entries(entries).map(([key, entry]) => {
+        const pluginUi = entry.projection.familiesById.pluginUi;
+        if (!pluginUi) return [key, entry];
+        const refs: Record<string, number> = {};
+        const entriesById = Object.fromEntries(Object.entries(pluginUi.entriesById).map(([id, row]) => {
+            if (row.contributionKind !== 'translations') return [id, row];
+            const bundles = row.bundles;
+            if (!bundles || typeof bundles !== 'object' || Array.isArray(bundles)) return [id, row];
+            const raw = JSON.stringify(bundles);
+            let index = bundleIndexByRaw.get(raw);
+            if (index === undefined) {
+                index = translationBundles.length;
+                bundleIndexByRaw.set(raw, index);
+                translationBundles.push(bundles as Record<string, unknown>);
+            } else {
+                shared = true;
+            }
+            refs[id] = index;
+            return [id, { ...row, bundles: {} }];
+        }));
+        translationBundleRefs[key] = refs;
+        return [key, { ...entry, projection: { ...entry.projection,
+            familiesById: { ...entry.projection.familiesById, pluginUi: { ...pluginUi, entriesById } },
+        } }];
+    }));
+    return JSON.stringify(shared
+        ? { v: 2, entries: compactEntries, translationBundles, translationBundleRefs }
+        : entries);
+}
+
+function deserializePluginUiProjectionCache(raw: string): unknown {
+    const value: unknown = JSON.parse(raw);
+    // Existing flat V1 records remain readable. This is a device-local cache encoding, not a wire ABI.
+    if (!value || typeof value !== 'object' || !('v' in value) || value.v !== 2) return value;
+    const compact = createStoredReadSchema(CompactPluginUiProjectionCacheSchema).parse(value);
+    for (const [key, refs] of Object.entries(compact.translationBundleRefs)) {
+        const entry = compact.entries[key];
+        const pluginUi = entry?.projection.familiesById.pluginUi;
+        if (!entry || !pluginUi) throw new Error('invalid_plugin_ui_warm_cache_reference');
+        const entriesById = { ...pluginUi.entriesById };
+        for (const [id, index] of Object.entries(refs)) {
+            const row = entriesById[id];
+            const bundles = compact.translationBundles[index];
+            if (!row || row.contributionKind !== 'translations' || !bundles) throw new Error('invalid_plugin_ui_warm_cache_reference');
+            entriesById[id] = { ...row, bundles };
+        }
+        compact.entries[key] = { ...entry, projection: { ...entry.projection,
+            familiesById: { ...entry.projection.familiesById, pluginUi: { ...pluginUi, entriesById } },
+        } };
+    }
+    return compact.entries;
+}
+
 function normalizeScopePart(value: string | null | undefined): string {
     const normalized = String(value ?? '').trim();
     return normalized;
@@ -561,70 +661,85 @@ function buildScopedKey(prefix: string, serverId: string | null | undefined, acc
 function loadScopedRecord<T>(
     key: string | null,
     schema: z.ZodMiniType<T>,
+    deserialize: (raw: string) => unknown = JSON.parse,
 ): T | null {
-    if (!key) return null;
+    if (!key || isEmbedWindowContext()) return null;
+    const cachedValue = warmCacheSavedValueByKey.get(key);
+    // A rejected write must not let an older disk value replace the live projection.
+    if (cachedValue?.raw === null) return hasAnyOwnEntries(cachedValue.value) ? cachedValue.value as T : null;
     const storage = getWarmCacheStorage();
-    if (!storage) return null;
-    const raw = storage.getString(key);
+    if (!storage) return (cachedValue?.value as T | undefined) ?? null;
+    const read = attemptWarmCacheStorage('read', () => storage.getString(key));
+    if (!read.ok) return (cachedValue?.value as T | undefined) ?? null;
+    const raw = read.value;
     if (!raw) {
         warmCacheSavedValueByKey.delete(key);
         return null;
     }
 
-    const cachedValue = warmCacheSavedValueByKey.get(key);
     if (cachedValue?.raw === raw) {
         return cachedValue.value as T;
     }
 
     try {
-        const parsedJson = JSON.parse(raw);
+        const parsedJson = deserialize(raw);
         const parsed = createStoredReadSchema(schema).safeParse(parsedJson);
         if (!parsed.success) {
-            storage.delete(key);
-            warmCacheSavedValueByKey.delete(key);
+            forgetScopedRecord(key);
             return null;
         }
         warmCacheSavedValueByKey.set(key, { raw, value: parsed.data as Record<string, unknown> });
         return parsed.data;
     } catch {
-        storage.delete(key);
-        warmCacheSavedValueByKey.delete(key);
+        forgetScopedRecord(key);
         return null;
     }
 }
 
-function saveScopedRecord<T extends Record<string, unknown>>(key: string | null, value: T): void {
-    if (isServerProfilePersistenceSuspendedForDemo()) return;
-    persistScopedRecord(key, value);
-}
-
-function persistScopedRecord<T extends Record<string, unknown>>(key: string | null, value: T): void {
-    if (!key) return;
+function forgetScopedRecord(key: string): void {
+    // Keep a memory-only empty value until deletion succeeds, so failed removals cannot resurrect bytes.
+    warmCacheSavedValueByKey.set(key, { raw: null, value: EMPTY_WARM_CACHE_ENTRIES });
     const storage = getWarmCacheStorage();
     if (!storage) return;
+    const removed = attemptWarmCacheStorage('delete', () => {
+        if (storage.getString(key) !== undefined) storage.delete(key);
+    });
+    if (removed.ok) warmCacheSavedValueByKey.delete(key);
+}
+
+function saveScopedRecord<T extends Record<string, unknown>>(key: string | null, value: T, serialize?: (value: T) => string): void {
+    if (isServerProfilePersistenceSuspendedForDemo()) return;
+    persistScopedRecord(key, value, serialize);
+}
+
+function persistScopedRecord<T extends Record<string, unknown>>(key: string | null, value: T, serialize?: (value: T) => string): void {
+    if (!key || isEmbedWindowContext()) return;
+    const storage = getWarmCacheStorage();
+    // A pending native keystore (or an embed) never admitted a cache lifetime. Preserve its
+    // existing cold-boot behavior; memory fallback is for storage that actually failed to open/write.
+    if (!storage && !warmCacheStorageUnopenable) return;
     if (!hasAnyOwnEntries(value)) {
-        if (storage.getString(key) !== undefined) {
-            storage.delete(key);
-        }
-        warmCacheSavedValueByKey.delete(key);
+        forgetScopedRecord(key);
         return;
     }
     const cachedValue = warmCacheSavedValueByKey.get(key);
-    if (cachedValue?.value === value) {
+    if (cachedValue?.value === value && cachedValue.raw !== null) {
         return;
     }
-    const nextRaw = JSON.stringify(value);
-    if (storage.getString(key) === nextRaw) {
-        warmCacheSavedValueByKey.set(key, { raw: nextRaw, value });
-        return;
-    }
-    storage.set(key, nextRaw);
-    warmCacheSavedValueByKey.set(key, { raw: nextRaw, value });
+    warmCacheSavedValueByKey.set(key, { raw: null, value });
+    const encoded = attemptWarmCacheStorage('serialize', () => serialize ? serialize(value) : JSON.stringify(value));
+    if (!encoded.ok) return;
+    if (!storage) return;
+    const written = attemptWarmCacheStorage('write', () => {
+        if (storage.getString(key) !== encoded.value) storage.set(key, encoded.value);
+    });
+    if (written.ok) warmCacheSavedValueByKey.set(key, { raw: encoded.value, value });
 }
 
 function peekScopedRecord<T extends Record<string, unknown>>(key: string | null): T | null {
-    if (!key) return null;
-    return (warmCacheSavedValueByKey.get(key)?.value as T | undefined) ?? null;
+    if (!key || isEmbedWindowContext()) return null;
+    const value = warmCacheSavedValueByKey.get(key)?.value;
+    return value && hasAnyOwnEntries(value) ? value as T : null;
 }
 
 function normalizeEmptyWarmCacheRecord<T extends Record<string, unknown>>(value: T): T {
@@ -700,6 +815,7 @@ export function loadPluginUiProjectionWarmCacheEntries(
     const loaded = loadScopedRecord(
         buildScopedKey(PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX, serverId, accountId),
         PluginUiProjectionCacheEntriesSchema,
+        deserializePluginUiProjectionCache,
     );
     if (!loaded) return EMPTY_PLUGIN_UI_PROJECTION_WARM_CACHE_ENTRIES;
     return normalizeEmptyWarmCacheRecord(loaded);
@@ -710,7 +826,7 @@ export function savePluginUiProjectionWarmCacheEntries(
     accountId: string | null | undefined,
     entries: Record<string, PluginUiProjectionCacheEntryV1>,
 ): void {
-    saveScopedRecord(buildScopedKey(PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX, serverId, accountId), entries);
+    saveScopedRecord(buildScopedKey(PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX, serverId, accountId), entries, serializePluginUiProjectionCache);
 }
 
 type PendingMachineDisplayWarmCacheSave = Readonly<{

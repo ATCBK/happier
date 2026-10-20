@@ -145,10 +145,13 @@ export function savePluginUiProjectionAdmissionSnapshot(input: Readonly<{
     // A projection refresh replaces the presentation slice, not the target
     // admissions recorded against the same machine: in a live process the
     // machine-wide describe re-runs on every reconnect, so dropping them here
-    // would leave nothing to restore. A different machine keeps none of them,
-    // and a superseded generation is rejected by the exact-target read below.
+    // would leave nothing to restore. Keep only admissions this same machine's
+    // current presentation still admits; removed or superseded plugins release their old rows.
     const targetedContributionsByPluginId = previousEntry?.machineId === input.machineId
-        ? previousEntry.targetedContributionsByPluginId
+        && previousEntry.targetedContributionsByPluginId
+        ? Object.fromEntries(Object.entries(previousEntry.targetedContributionsByPluginId).filter(
+            ([, admission]) => admitsExactTarget(retained, admission.target),
+        ))
         : undefined;
     savePluginUiProjectionWarmCacheEntries(input.scope.serverId, input.scope.accountId, {
         ...previous,

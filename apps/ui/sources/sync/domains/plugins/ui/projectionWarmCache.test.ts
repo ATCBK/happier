@@ -30,6 +30,7 @@ vi.mock('react-native-mmkv', () => {
 
 import { prepareWarmCacheEncryptionKey } from '@/sync/domains/state/warmCacheEncryptionKey';
 import * as projectionNormalizer from './projection';
+import { resolvePluginUiTranslationText } from './i18n';
 
 import {
     loadPluginUiProjectionWarmCacheEntries,
@@ -169,6 +170,53 @@ describe('plugin UI projection admission custody', () => {
         forgetPluginUiProjectionAdmissionSnapshots(ACCOUNT_B);
     });
 
+    it('stores shared translation bytes once and restores every Machine and locale in a fresh process', async () => {
+        const base = projectionAtGeneration('browser-generation-a', 77);
+        const projection = PluginProjectionV2Schema.parse({ ...base, familiesById: { pluginUi: {
+            ...base.familiesById.pluginUi,
+            entriesById: { 'translations:acme.browser': { ...base.familiesById.pluginUi?.entriesById['translations:acme.browser'],
+                locales: ['en', 'fr', 'de'], bundles: { en: { title: 'English', fallback: 'Fallback', description: 'Warm presentation data '.repeat(1000) }, fr: { title: 'Français' }, de: { title: 'Deutsch' } },
+            } },
+        } } });
+        const machines = ['one', 'two', 'three'];
+        for (const machineId of machines) {
+            const targetKey = pluginUiProjectionAdmissionTargetKey({ serverId: ACCOUNT_A.serverId, machineId });
+            savePluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey, machineId, projection });
+        }
+        const uncompressed = loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+        const key = `plugin-ui-projection-warm-cache-v1:${ACCOUNT_A.serverId}:${ACCOUNT_A.accountId}`;
+        const serialized = store.get(key)!;
+        // Saving one complete duplicate bundle's bytes is material to browser storage, not formatting.
+        expect(serialized.length).toBeLessThan(JSON.stringify(uncompressed).length - JSON.stringify(projection.familiesById.pluginUi?.entriesById['translations:acme.browser'].bundles).length);
+        vi.resetModules();
+        const fresh = await import('./projectionWarmCache');
+        await (await import('@/sync/domains/state/warmCacheEncryptionKey')).prepareWarmCacheEncryptionKey();
+        for (const machineId of machines) {
+            const targetKey = fresh.pluginUiProjectionAdmissionTargetKey({ serverId: ACCOUNT_A.serverId, machineId });
+            const restored = fresh.readPluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey, machineId, platform: 'web' });
+            expect(resolvePluginUiTranslationText({ projection: restored, pluginId: 'acme.browser', key: 'title', locale: 'fr' })).toBe('Français');
+            expect(resolvePluginUiTranslationText({ projection: restored, pluginId: 'acme.browser', key: 'title', locale: 'de' })).toBe('Deutsch');
+            expect(resolvePluginUiTranslationText({ projection: restored, pluginId: 'acme.browser', key: 'fallback', locale: 'fr' })).toBe('Fallback');
+        }
+        for (const machineId of machines) {
+            const targetKey = fresh.pluginUiProjectionAdmissionTargetKey({ serverId: ACCOUNT_A.serverId, machineId });
+            fresh.savePluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey, machineId,
+                projection: projectionAtGeneration('browser-generation-b', 78) });
+        }
+        expect(store.get(key)).not.toContain('Warm presentation data '.repeat(1000));
+        const replacedSize = store.get(key)!.length;
+        fresh.savePluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A,
+            targetKey: fresh.pluginUiProjectionAdmissionTargetKey({ serverId: ACCOUNT_A.serverId, machineId: 'one' }), machineId: 'one',
+            projection: projectionAtGeneration('browser-generation-b', 78) });
+        expect(store.get(key)!.length).toBe(replacedSize);
+        const corrupt = JSON.parse(serialized);
+        corrupt.translationBundleRefs[Object.keys(corrupt.entries)[0]]['translations:acme.browser'] = corrupt.translationBundles.length;
+        store.set(key, JSON.stringify(corrupt));
+        expect(fresh.readPluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A,
+            targetKey: fresh.pluginUiProjectionAdmissionTargetKey({ serverId: ACCOUNT_A.serverId, machineId: 'one' }), machineId: 'one', platform: 'web' })).toBeNull();
+        expect(store.has(key)).toBe(false);
+    });
+
     it('refuses a target admission the retained presentation slice does not admit', () => {
         savePluginUiProjectionAdmissionSnapshot({
             scope: ACCOUNT_A,
@@ -249,6 +297,7 @@ describe('plugin UI projection admission custody', () => {
             machineId: MACHINE_ID,
             projection: projectionAtGeneration('browser-generation-b', 79),
         });
+        expect(loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId)[TARGET_KEY]?.targetedContributionsByPluginId?.['acme.browser']).toBeUndefined();
         expect(readPluginUiProjectionTargetedAdmissionSnapshot({
             scope: ACCOUNT_A,
             targetKey: TARGET_KEY,
