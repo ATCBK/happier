@@ -5,6 +5,10 @@ import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalR
 import { captureDocPassageV1 } from '@happier-dev/protocol/artifacts/artifactPassageV1';
 import { describeApprovalActionFields } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { DocReadResultV1Schema } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { ArtifactActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { SessionTargetPreviewV1Schema } from '@happier-dev/protocol/actions/sessionTargetV1';
 
 import {
   formatQualifiedPluginActionId,
@@ -22,6 +26,69 @@ const { createDefaultActionExecutor } = await import('@/sync/ops/actions/default
 describe('Voice Action reference catalog', () => {
   beforeEach(async () => { await home.reset(); });
   afterEach(async () => { await home.reset(); });
+  it('projects the safe target-preview and existing notice Artifact read/write Actions into Voice', () => {
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+    for (const [actionId, effect] of [
+      ['session.targets.resolve', 'read_only'], ['artifact.get', 'read_only'], ['artifact.update', 'mutation'],
+    ] as const) {
+      const tool = actionId.replaceAll('.', '_');
+      expect(handlers[tool], actionId).toBeTypeOf('function');
+      expect(resolveVoiceToolEffectClass(tool)).toBe(effect);
+    }
+  });
+  it('inspects targets through the real Voice front door and publishes the canonical preview DTO', async () => {
+    const serverId = await home.addHome({ name: 'Target Voice Home', serverUrl: 'https://target-preview-voice.test', accountId: 'alice', currentAccount: true });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => 'current-session' });
+    const input = { actionId: 'session.message.send', target: { selector: 'self' } };
+    const outcome = JSON.parse(await handlers.action_execute!({ actionId: 'session.targets.resolve', input }, { serverId }));
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true });
+    expect(SessionTargetPreviewV1Schema.parse(outcome.result)).toEqual({ coverage: 'complete',
+      addresses: [{ serverId, sessionId: 'current-session' }], error: null });
+  });
+  it('reads and dismisses an owned notice through Voice and the existing approved Artifact CAS writer', async () => {
+    const serverId = await home.addHome({ name: 'Notice Voice Home', serverUrl: 'https://notice-voice.test', accountId: 'alice', currentAccount: true });
+    const artifacts = createArtifactActionsClient({ serverId, accountId: 'alice' });
+    const created = await artifacts.createArtifact({ header: { kind: 'markdown', title: 'Notice fixture' }, body: 'Fixture' });
+    if (!('ok' in created) || !created.ok) throw new Error(`Expected fixture: ${JSON.stringify(created)}`);
+    const stored = home.artifacts(serverId).read(created.value.artifactId);
+    if (!stored) throw new Error('Expected stored fixture');
+    const content = AccountNoticeArtifactBodyV1Schema.parse({ v: 1, source: { kind: 'plugin', pluginId: 'acme.review', itemId: 'review-42' },
+      type: 'update', resolved: false, body: 'Review updated' });
+    const header = AccountNoticeArtifactHeaderV1Schema.parse({ ...content, kind: 'account_notice.v1', status: 'open', title: 'Review updated' });
+    const body = JSON.stringify(content);
+    // A notice written by its producer arrives across the existing Home persistence boundary.
+    home.artifacts(serverId).replaceStoredRow({ ...stored, kind: undefined,
+      header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body }) });
+    const handlers = createVoiceToolHandlers({ resolveSessionId: () => null });
+    const read = JSON.parse(await handlers.action_execute!({ actionId: 'artifact.get', input: { artifactId: stored.id } }, { serverId }));
+    expect(read, JSON.stringify(read)).toMatchObject({ ok: true });
+    const current = ArtifactActionOutputSchemasV1['artifact.get'].parse(read.result).artifact;
+    expect(current).toMatchObject({ ownerAccountId: 'alice', header: { status: 'open' } });
+    if (!current) throw new Error('Expected owned notice');
+    const input = { artifactId: stored.id, expectedRevision: current.revision,
+      header: { ...current.header, status: 'dismissed' }, body: current.body };
+    let announceCreated: () => void = () => { throw new Error('Missing creation observer'); };
+    const askCreated = new Promise<void>(resolve => { announceCreated = resolve; });
+    home.artifacts(serverId).afterNextCreate(async () => { announceCreated(); });
+    const pending = handlers.action_execute!({ actionId: 'artifact.update', input }, { serverId, effectId: 'dismiss-notice' });
+    await askCreated;
+    const ask = home.artifacts(serverId).list().find(row => {
+      const parsed = ApprovalRequestSchema.safeParse(JSON.parse(home.artifacts(serverId).readPlainBody(row.id) ?? 'null'));
+      return parsed.success && parsed.data.actionId === 'artifact.update';
+    });
+    if (!ask) throw new Error('Expected notice update Ask');
+    expect(ApprovalRequestSchema.parse(JSON.parse(home.artifacts(serverId).readPlainBody(ask.id) ?? 'null')))
+      .toMatchObject({ status: 'open', actionId: 'artifact.update', requestedSurface: 'voice', approval: { flow: 'blocking' } });
+    expect(home.artifacts(serverId).read(stored.id)?.headerVersion).toBe(current.revision.headerVersion);
+    const result = await createDefaultActionExecutor().execute('approval.request.decide', {
+      artifactId: ask.id, decision: 'approve',
+    }, { surface: 'ui', serverId, authority: 'present_user', actionCaller: { kind: 'host' } });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(JSON.parse(await pending)).toMatchObject({ ok: true, result: { artifactId: stored.id } });
+    const dismissed = JSON.parse(await handlers.action_execute!({ actionId: 'artifact.get', input: { artifactId: stored.id } }, { serverId }));
+    expect(ArtifactActionOutputSchemasV1['artifact.get'].parse(dismissed.result).artifact)
+      .toMatchObject({ header: { status: 'dismissed', source: content.source }, body });
+  });
   it('reads an admitted Doc and publishes exact reviewed Voice comments and proposals through the existing approval and C3 owners', async () => {
     const serverUrl = 'https://doc-voice.test';
     const serverId = await home.addHome({ name: 'Doc Voice Home', serverUrl, accountId: 'alice', currentAccount: true });
