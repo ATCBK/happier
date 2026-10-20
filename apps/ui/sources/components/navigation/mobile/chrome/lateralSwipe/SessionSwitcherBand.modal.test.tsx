@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
-import { act } from 'react-test-renderer';
 
 const modalState = vi.hoisted(() => ({ open: false }));
 vi.mock('react-native', async () => {
@@ -12,7 +11,7 @@ vi.mock('react-native', async () => {
 });
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock();
+    return createExpoRouterMock().module;
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -24,22 +23,23 @@ vi.mock('@/text', async () => {
 });
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({ useSetting: (key: string) => key === 'sessionCockpitSwipeNavigationEnabled' });
+    return createStorageModuleStub({ useSetting: (key: string) => key.endsWith('Enabled') ? true : undefined });
 });
 
 describe('phone session gestures under a modal', () => {
     it('disables the real band while a stage owns the phone and restores it after closing', async () => {
         const { SessionSwitcherBand } = await import('./SessionSwitcherBand');
         const { SessionCockpitChromeRegistryProvider } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
-        const render = () => <SessionCockpitChromeRegistryProvider><SessionSwitcherBand sessionId="session" serverId="server"><React.Fragment /></SessionSwitcherBand></SessionCockpitChromeRegistryProvider>;
+        const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+        const render = () => <InjectedAuthProvider credentials={null}><SessionCockpitChromeRegistryProvider><SessionSwitcherBand sessionId="session" serverId="server"><React.Fragment /></SessionSwitcherBand></SessionCockpitChromeRegistryProvider></InjectedAuthProvider>;
         const screen = await renderScreen(render());
         const gestures = () => screen.findByType('GestureDetector').props.gesture.gestures as { __config: { enabled: boolean } }[];
         expect(gestures().every(gesture => gesture.__config.enabled)).toBe(true);
         modalState.open = true;
-        await act(async () => screen.tree.update(render()));
+        await screen.update(render());
         expect(gestures().every(gesture => !gesture.__config.enabled)).toBe(true);
         modalState.open = false;
-        await act(async () => screen.tree.update(render()));
+        await screen.update(render());
         expect(gestures().every(gesture => gesture.__config.enabled)).toBe(true);
     });
 });
