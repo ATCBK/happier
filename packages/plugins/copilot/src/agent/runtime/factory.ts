@@ -8,6 +8,8 @@ import { buildCopilotAcpArgv } from '../acp/callbacks.js';
 import { COPILOT_ACP_RUNTIME_DEFINITION } from '../acp/definition.js';
 import { COPILOT_ACP_COMMAND } from '../acp/preflight.js';
 
+export { copilotExternalSessionsContribution } from '../externalSessions/contribution.js';
+
 function createCopilotAcpOptions(configuration: AgentSessionConfigurationSnapshot | undefined): AgentAcpRuntimeOptions {
   if (!configuration) throw new Error('Copilot requires the host-projected Agent session configuration');
   return {

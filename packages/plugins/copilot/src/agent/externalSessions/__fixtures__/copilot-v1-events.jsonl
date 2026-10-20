@@ -1,0 +1,8 @@
+{"type":"session.start","id":"start","timestamp":"2026-07-13T15:13:19.211Z","parentId":null,"data":{"sessionId":"native","version":1,"producer":"copilot-agent","copilotVersion":"1.0.100","startTime":"2026-07-13T15:13:19.211Z","context":{"cwd":"/repo"}}}
+{"type":"user.message","id":"user","timestamp":"2026-07-13T15:13:21.061Z","parentId":"start","data":{"content":"ordinary title","transformedContent":"model-only transformed input","interactionId":"interaction"}}
+{"type":"assistant.message_delta","id":"delta","timestamp":"2026-07-13T15:13:22.061Z","parentId":"user","ephemeral":true,"data":{"messageId":"answer","deltaContent":"delta-only duplicate"}}
+{"type":"assistant.message","id":"answer","timestamp":"2026-07-13T15:13:23.939Z","parentId":"user","data":{"messageId":"answer-message","content":"body-only phrase with \"quotes\"\n\u6771\u4eac café","toolRequests":[],"interactionId":"interaction","outputTokens":12}}
+{"type":"tool.execution_start","id":"tool","timestamp":"2026-07-13T15:13:24.939Z","parentId":"answer","data":{"toolCallId":"call","toolName":"bash","arguments":{"command":"metadata-only phrase"}}}
+{"type":"tool.execution_complete","id":"result","timestamp":"2026-07-13T15:13:25.939Z","parentId":"tool","data":{"toolCallId":"call","success":true,"result":{"content":"concise result","detailedContent":"settled tool output"}}}
+{"type":"session.compaction_complete","id":"compact","timestamp":"2026-07-13T15:13:26.939Z","parentId":"result","data":{"success":true,"summaryContent":"internal compaction summary"}}
+{"type":"session.resume","id":"resume","timestamp":"2026-07-13T15:13:27.939Z","parentId":"compact","data":{"resumeTime":"2026-07-13T15:13:27.939Z","eventCount":7}}

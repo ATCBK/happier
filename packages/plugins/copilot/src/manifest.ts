@@ -6,6 +6,7 @@ import { createCopilotAgentRuntime } from './agent/runtime/factory.js';
 import { COPILOT_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
 import { COPILOT_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 import { COPILOT_PREFLIGHT_SESSION_CONTROLS } from './agent/acp/preflight.js';
+import { copilotExternalSessionsContribution } from './agent/externalSessions/contribution.js';
 
 const COPILOT_AUTH_ENV_KEYS = [
   'COPILOT_GITHUB_TOKEN',
@@ -74,7 +75,8 @@ export const COPILOT_PLUGIN = definePlugin({
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
-          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
+          surfaces: ['externalSessions'],
+          skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported',
             nativeRoots: { user: [['.copilot', 'skills'], ['.agents', 'skills']], project: [['.github', 'skills'], ['.agents', 'skills'], ['.claude', 'skills']] } },
           sessions: {
             open: ['create', 'resume'],
@@ -83,13 +85,26 @@ export const COPILOT_PLUGIN = definePlugin({
             executionRunContext: { versions: [1] },
           },
         }),
+        surfaces: { externalSession: {
+          externalLinkedTakeover: { writerSafety: 'unsupported' },
+          sources: [{ sourceKind: 'copilotHome', contentSearch: true,
+            schema: { fields: [
+              { kind: 'literal', name: 'kind', value: 'copilotHome' },
+              { kind: 'string', name: 'homeDir', min: 1, max: 10_000, nullish: true },
+            ] },
+            key: { segments: [{ kind: 'literal', value: 'copilotHome' }, { kind: 'field', field: 'homeDir' }] },
+            instances: [{ kind: 'default', constants: {} }],
+          }],
+        } },
       },
       factory: createCopilotAgentRuntime,
+      externalSessions: copilotExternalSessionsContribution,
       preflightSessionControls: COPILOT_PREFLIGHT_SESSION_CONTROLS,
       sessionRunnerFactory: {
         module: './agent/runtime/factory',
         export: 'createCopilotAgentRuntime',
         runtimeApiVersion: 1,
+        externalSessionsExport: 'copilotExternalSessionsContribution',
       },
     },
   },

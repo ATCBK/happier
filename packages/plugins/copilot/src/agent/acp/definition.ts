@@ -10,4 +10,7 @@ export const COPILOT_ACP_RUNTIME_DEFINITION = Object.freeze({
   toolNameInference: COPILOT_ACP_TOOL_NAME_INFERENCE,
   stderrRules: COPILOT_ACP_STDERR_RULES,
   mcp: { policy: 'pass_through' },
+  skills: { sessionDelivery: {
+    kind: 'env_path_list', envKey: 'COPILOT_SKILLS_DIRS', separator: ',', value: 'skills_root',
+  } },
 } satisfies NonNullable<AgentAcpRuntimeOptions['definition']>);

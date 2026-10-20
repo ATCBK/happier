@@ -9,7 +9,7 @@ describe('Copilot plugin manifest', () => {
   it('projects only the observed current model controls through the declared ACP process', async () => {
     // Host registration and JSON-RPC execution are the plugin's external boundaries.
     const register = vi.fn();
-    await COPILOT_PLUGIN.activate({ agents: { register } } as never);
+    await COPILOT_PLUGIN.activate({ agents: { register, registerExternalSessions() {} } } as never);
     const preflight: AgentPreflightSessionControlsContributionV1 | undefined = register.mock.calls[0]?.[2]?.preflightSessionControls;
     expect(preflight).toBeDefined();
     const payload = {
@@ -84,7 +84,7 @@ describe('Copilot plugin manifest', () => {
 
   it('does not register an unrelated GitHub CLI auth probe', async () => {
     const register = vi.fn();
-    await COPILOT_PLUGIN.activate({ agents: { register } } as never);
+    await COPILOT_PLUGIN.activate({ agents: { register, registerExternalSessions() {} } } as never);
 
     expect(register).toHaveBeenCalledWith('copilot', expect.any(Function), expect.not.objectContaining({
       cliAuth: expect.anything(),
