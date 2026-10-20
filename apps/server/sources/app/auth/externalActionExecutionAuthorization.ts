@@ -1105,6 +1105,11 @@ function isDiscussionActionHttpPreparation(verified: VerifiedExternalActionExecu
     const matchesInput = (body?: unknown) => proof.routeInput === undefined
         || sameManagedInput(proof.routeInput, { ...params.data,
             ...(body && typeof body === 'object' && !Array.isArray(body) ? body : {}) });
+    // Reply policy is an original-root companion read, not a separately
+    // authorized participants Action or permission to change the roster.
+    if (verified.binding.actionId === actionId && (actionId === 'discussion.post' || actionId === 'discussion.reply')
+        && method === 'GET' && proof.body === undefined
+        && url.pathname === atDiscussion(DISCUSSION_HTTP_PATHS_V1.participants)) return matchesInput();
     const preparesContent = actionId === 'discussion.read' || actionId === 'discussion.post'
         || actionId === 'discussion.reply' || actionId === 'discussion.rename'
         || actionId === 'discussion.invite' || actionId === 'discussion.access.grants.set';
