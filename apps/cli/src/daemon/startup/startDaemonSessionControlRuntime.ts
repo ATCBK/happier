@@ -17245,8 +17245,12 @@ export async function startDaemonSessionControlRuntime(
             }
           }
           const executionRunSnapshotId = request.context.executionRunSnapshotId;
-          const runSnapshot = executionRunSnapshotId ? runnerExecutionRunSnapshots.read(executionRunSnapshotId, context) : null;
-          if (executionRunSnapshotId && !runSnapshot?.projection.agent) {
+          // Exact close authenticates against the invocation's retained snapshot and parent.
+          // Snapshot release can precede it; every other operation still needs the live lease.
+          const closesPluginServices = request.operation.kind === 'plugin_services.close_v1';
+          const runSnapshot = executionRunSnapshotId && !closesPluginServices
+            ? runnerExecutionRunSnapshots.read(executionRunSnapshotId, context) : null;
+          if (executionRunSnapshotId && !closesPluginServices && !runSnapshot?.projection.agent) {
             return { ok: false as const, error: { code: 'execution_run_contribution_snapshot_unavailable',
               message: 'Execution Run executable snapshot is unavailable' } };
           }

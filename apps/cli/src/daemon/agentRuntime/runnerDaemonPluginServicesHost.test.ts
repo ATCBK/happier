@@ -204,6 +204,9 @@ describe('runner daemon PluginServices host', () => {
         const disposed: string[] = [];
         const host = createRunnerDaemonPluginServicesHost({
             async createInvocation({ executionRunSnapshotId }) {
+                if (executionRunSnapshotId === 'invalid-snapshot') {
+                    throw new PluginError({ code: 'execution_run_contribution_snapshot_unavailable', message: 'Snapshot is unavailable' });
+                }
                 return {
                     services, resourceDescriptors: {},
                     subscriptionCapabilities: { settingsWatch: false, eventSubscriptions: [], resourceWatches: [], notificationPreferencesWatch: false },
@@ -223,14 +226,28 @@ describe('runner daemon PluginServices host', () => {
         try {
             await host.dispatch({ ...first, operation: prepare });
             await expect(host.dispatch({ ...first, operation: prepare })).rejects.toMatchObject({ code: 'plugin_services_invocation_duplicate' });
+            await expect(host.dispatch({ ...first, executionRunSnapshotId: 'invalid-snapshot', operation: prepare }))
+                .rejects.toMatchObject({ code: 'execution_run_contribution_snapshot_unavailable' });
+            expect(disposed).toEqual([]);
             // A resumed occurrence may prepare before the old signal-driven close arrives.
             await host.dispatch({ ...second, operation: prepare });
             expect(disposed).toEqual(['run-snapshot-1']);
             await expect(host.dispatch({ ...second, executionRunSnapshotId: 'run-snapshot-3',
                 runnerRetainedAgent: binding, operation: prepare }))
                 .rejects.toMatchObject({ code: 'plugin_services_invocation_duplicate' });
+            await expect(host.dispatch({ ...second, executionRunSnapshotId: 'run-snapshot-3',
+                runnerRetainedAgent: undefined, operation: prepare }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_duplicate' });
+            await expect(host.dispatch({ ...second, executionRunSnapshotId: 'run-snapshot-3',
+                runner: { ...runner, snapshotIdentity: 'foreign-runner' }, operation: prepare }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_duplicate' });
             // Cleanup retains the daemon-authenticated parent binding after the child snapshot releases.
             const cleanup = { ...second, retainedAgent: parentBinding, operation: close };
+            const read = { kind: 'plugin_storage.get_v1' as const, ...requestBase(), scope: 'ephemeral' as const, key: 'state' };
+            await expect(host.dispatch({ ...second, executionRunSnapshotId: first.executionRunSnapshotId, operation: read }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
+            await expect(host.dispatch({ ...cleanup, operation: read }))
+                .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
             await expect(host.dispatch({ ...cleanup, executionRunSnapshotId: first.executionRunSnapshotId }))
                 .rejects.toMatchObject({ code: 'plugin_services_invocation_unavailable' });
             await expect(host.dispatch({ ...cleanup, runnerRetainedAgent: binding }))
@@ -1944,6 +1961,7 @@ describe('runner daemon PluginServices host', () => {
                     pluginId: 'fixture.plugin',
                     materialization: fixturePluginMaterialization.materialization,
                     occurrenceId: 'generation-1',
+                    originSurface: 'cli',
                 },
                 signal: expect.any(AbortSignal),
             }),

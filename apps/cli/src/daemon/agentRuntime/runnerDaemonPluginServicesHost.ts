@@ -125,6 +125,8 @@ type Invocation = {
     readonly sessionId: string;
     readonly runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
     readonly retainedAgent: AgentSessionRunnerBindingV1;
+    readonly executionRunSnapshotId?: string;
+    readonly runnerRetainedAgent?: AgentSessionRunnerBindingV1;
     readonly services: PluginServices;
     readonly prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation;
     readonly managedProvider: ManagedProviderInvocation | null;
@@ -492,6 +494,10 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
         runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity,
         retainedAgent: AgentSessionRunnerBindingV1,
         operation: RunnerDaemonPluginServiceOperationV1,
+        runAuthority: Readonly<{
+            executionRunSnapshotId?: string;
+            runnerRetainedAgent?: AgentSessionRunnerBindingV1;
+        }>,
     ): Invocation => {
         const invocation = invocations.get(
             invocationKey(sessionId, operation.invocationId),
@@ -499,12 +505,16 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
         if (
             !invocation
             || invocation.disposed
-            || !hasExactInvocationAuthority(
-                invocation,
-                sessionId,
-                runner,
+            || invocation.sessionId !== sessionId
+            || !isDeepStrictEqual(invocation.runner, runner)
+            || !isDeepStrictEqual(
+                operation.kind === 'plugin_services.close_v1' && invocation.executionRunSnapshotId
+                    ? invocation.runnerRetainedAgent
+                    : invocation.retainedAgent,
                 retainedAgent,
             )
+            || invocation.executionRunSnapshotId !== runAuthority.executionRunSnapshotId
+            || !isDeepStrictEqual(invocation.runnerRetainedAgent, runAuthority.runnerRetainedAgent)
         ) {
             return fail(
                 'plugin_services_invocation_unavailable',
@@ -832,19 +842,27 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
         if (operation.kind === 'plugin_services.prepare_v1') {
             const key = invocationKey(sessionId, operation.invocationId);
             const existing = invocations.get(key);
+            const replacesRun = existing?.executionRunSnapshotId !== undefined
+                && dispatchInput.executionRunSnapshotId !== undefined
+                && existing.executionRunSnapshotId !== dispatchInput.executionRunSnapshotId
+                && existing.runnerRetainedAgent !== undefined
+                && isDeepStrictEqual(existing.runner, runner)
+                && isDeepStrictEqual(existing.runnerRetainedAgent, dispatchInput.runnerRetainedAgent);
             if (existing) {
-                if (hasExactInvocationAuthority(
-                    existing,
-                    sessionId,
-                    runner,
-                    retainedAgent,
-                )) {
+                if ((existing.executionRunSnapshotId || dispatchInput.executionRunSnapshotId)
+                    ? !replacesRun
+                    : hasExactInvocationAuthority(
+                        existing,
+                        sessionId,
+                        runner,
+                        retainedAgent,
+                    )) {
                     return fail(
                         'plugin_services_invocation_duplicate',
                         'Runner PluginServices invocation already exists',
                     );
                 }
-                await disposeInvocation(existing);
+                if (!replacesRun) await disposeInvocation(existing);
             }
             if (disposed) {
                 return fail(
@@ -933,6 +951,18 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                     'Runner managed Provider PluginServices authority is unavailable',
                 );
             }
+            // Creation positively validates the new snapshot before retiring the old Run.
+            // A rejected preparation must leave the existing invocation available for cleanup.
+            if (replacesRun && existing) {
+                try {
+                    await disposeInvocation(existing);
+                } catch (error) {
+                    controller.abort();
+                    try { await created.dispose(); }
+                    finally { completePendingCreation(); }
+                    throw error;
+                }
+            }
             if (disposed) {
                 try {
                     controller.abort();
@@ -950,6 +980,10 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                 sessionId,
                 runner,
                 retainedAgent,
+                ...(dispatchInput.executionRunSnapshotId ? {
+                    executionRunSnapshotId: dispatchInput.executionRunSnapshotId,
+                    runnerRetainedAgent: dispatchInput.runnerRetainedAgent,
+                } : {}),
                 services: created.services,
                 ...(created.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: created.prepareAgentNativeLaunch } : {}),
                 managedProvider,
@@ -1062,6 +1096,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
             runner,
             retainedAgent,
             operation,
+            dispatchInput,
         );
         if (
             operation.kind !== 'plugin_services.close_v1'
@@ -2578,7 +2613,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                 const prepareAgentNativeLaunch: HostAgentNativeLaunchPreparation | undefined = nativeLaunch
                     ? async (nativeSignal, nativeCwd, nativeEnvironment) => {
                         const prepared = await invocation.prepareAgentNativeLaunch?.(nativeSignal, nativeCwd, nativeEnvironment);
-                        requireInvocation(sessionId, runner, retainedAgent, operation);
+                        requireInvocation(sessionId, runner, retainedAgent, operation, dispatchInput);
                         if (nativeSignal.aborted) return fail('plugin_exec_aborted', 'Process operation was aborted');
                         return prepared;
                     } : undefined;
@@ -2588,7 +2623,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                     launch = await authorizeResolvedProjectExecLaunchForHost({
                         launch: { ...resolved, ...(stdin === undefined ? {} : { stdin: new Uint8Array(Buffer.from(stdin, 'base64')) }) },
                         prepareAgentNativeLaunch, signal: preparationSignal,
-                        assertCurrent() { requireInvocation(sessionId, runner, retainedAgent, operation); },
+                        assertCurrent() { requireInvocation(sessionId, runner, retainedAgent, operation, dispatchInput); },
                     });
                 } else {
                 let executable = operation.request.executable;

@@ -471,11 +471,12 @@ export async function runRequesterAttributionCase(source: 'protected child' | 'o
       if (request.operation.kind.startsWith('execution_run.')) return await snapshots.dispatch(request, context);
       const serviceOperation = RunnerDaemonPluginServiceOperationV1Schema.safeParse(request.operation);
       if (serviceOperation.success) {
-        const retained = request.context.executionRunSnapshotId
+        const closesPluginServices = serviceOperation.data.kind === 'plugin_services.close_v1';
+        const retained = request.context.executionRunSnapshotId && !closesPluginServices
           ? snapshots.read(request.context.executionRunSnapshotId, context) : null;
-        if (!retained?.projection.agent || !await context.isCurrent()) throw new Error('Missing retained Run snapshot');
+        if ((!closesPluginServices && !retained?.projection.agent) || !await context.isCurrent()) throw new Error('Missing retained Run snapshot');
         const serviceRequest = { ...context, operation: serviceOperation.data,
-          retainedAgent: retained.projection.agent.binding, runnerRetainedAgent: context.retainedAgent,
+          retainedAgent: retained?.projection.agent?.binding ?? context.retainedAgent, runnerRetainedAgent: context.retainedAgent,
           executionRunSnapshotId: request.context.executionRunSnapshotId };
         return { ok: true as const, result: await services.dispatch(serviceRequest) };
       }
