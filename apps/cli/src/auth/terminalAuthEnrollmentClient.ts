@@ -146,7 +146,9 @@ export function resolveAuthenticatedExactHomeConnectionDescriptorObservation(par
     || observedIdentity !== params.expectedHomeServerIdentityId
     || descriptor.homeServerIdentityId !== observedIdentity
   ) {
-    throw new Error('Authenticated Home descriptor identity does not match the selected Home');
+    throw new TerminalAuthEnrollmentVerificationError(
+      'HOME_AUTHORITY_MISMATCH', 'Authenticated Home descriptor identity does not match the selected Home',
+    );
   }
 
   return { kind: 'available', descriptor };

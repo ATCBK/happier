@@ -177,7 +177,10 @@ describe('server profiles', () => {
           homeConnectionDescriptor: published, homeConnectionDescriptorAuthority: 'exact' });
         expect((await getServerProfile(id)).homeConnectionDescriptor).toEqual(published);
       } else {
-        await expect(update).rejects.toThrow();
+        if (scenario === 'stale') await expect(update).rejects.toMatchObject({ code: 'stale_home_descriptor' });
+        else if (scenario === 'conflict') await expect(update).rejects.toMatchObject({ code: 'home_descriptor_conflict' });
+        else if (scenario === 'other-home') await expect(update).rejects.toMatchObject({ code: 'HOME_AUTHORITY_MISMATCH' });
+        else await expect(update).rejects.toThrow();
         expect(await getServerProfile(id)).toMatchObject({ serverUrl: oldOrigin, homeConnectionDescriptor: oldDescriptor });
         if (scenario === 'unsafe-http') expect(fetch).not.toHaveBeenCalled();
       }

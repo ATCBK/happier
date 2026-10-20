@@ -16,6 +16,10 @@ export function mapUnknownErrorToControlError(error: unknown): ControlCliMappedE
     return { code: 'not_authenticated', unexpected: false, ...(error instanceof Error && error.message ? { message: error.message } : {}) };
   }
 
+  if (rawCode === 'HOME_AUTHORITY_MISMATCH') {
+    return { code: 'identity_mismatch', unexpected: false, ...(error instanceof Error && error.message ? { message: error.message } : {}) };
+  }
+
   if (rawCode === 'target_unavailable') {
     return { code: rawCode, unexpected: false, ...(error instanceof Error && error.message ? { message: error.message } : {}) };
   }
@@ -33,6 +37,11 @@ export function mapUnknownErrorToControlError(error: unknown): ControlCliMappedE
     || rawCode === 'mcp_oauth_endpoints_require_https'
     || rawCode === 'connected_services_default_unavailable'
     || rawCode === 'invalid-mutation'
+    || rawCode === 'identity_mismatch'
+    || rawCode === 'duplicate_identity'
+    || rawCode === 'invalid_home_descriptor'
+    || rawCode === 'stale_home_descriptor'
+    || rawCode === 'home_descriptor_conflict'
   ) {
     return { code: rawCode, unexpected: false, ...(error instanceof Error && error.message ? { message: error.message } : {}) };
   }

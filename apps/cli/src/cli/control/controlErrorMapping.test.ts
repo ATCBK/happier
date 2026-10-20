@@ -4,6 +4,18 @@ import { mapUnknownErrorToControlError } from './controlErrorMapping';
 import { ConnectedServicesDefaultUnavailableError } from '@/session/services/spawnConnectedServicesDefaults';
 
 describe('mapUnknownErrorToControlError', () => {
+  it.each(['stale_home_descriptor', 'home_descriptor_conflict', 'identity_mismatch', 'duplicate_identity', 'invalid_home_descriptor'] as const)(
+    'preserves the Home profile refusal %s', code => {
+      expect(mapUnknownErrorToControlError(Object.assign(new Error('Home profile refused'), { code })))
+        .toMatchObject({ code, unexpected: false });
+    },
+  );
+
+  it('maps an authenticated descriptor identity mismatch to the profile identity refusal', () => {
+    expect(mapUnknownErrorToControlError(Object.assign(new Error('Home identity mismatch'), { code: 'HOME_AUTHORITY_MISMATCH' })))
+      .toMatchObject({ code: 'identity_mismatch', unexpected: false });
+  });
+
   it('retains the typed missing capability error at the CLI output boundary', () => {
     const error = Object.assign(new Error('Capability not found: missing'), { code: 'not_found' });
     expect(mapUnknownErrorToControlError(error)).toMatchObject({ code: 'not_found', unexpected: false });

@@ -147,6 +147,20 @@ export class ServerProfileDescriptorInvalidError extends Error {
   }
 }
 
+export class ServerProfileDescriptorRevisionError extends Error {
+  readonly name = 'ServerProfileDescriptorRevisionError';
+
+  constructor(
+    readonly code: 'stale_home_descriptor' | 'home_descriptor_conflict',
+    readonly storedRevision: number,
+    readonly observedRevision: number,
+  ) {
+    super(code === 'stale_home_descriptor'
+      ? `Home descriptor revision ${observedRevision} is older than the saved revision ${storedRevision}; restore this Home's descriptor continuity before retrying`
+      : `Home descriptor conflicts with the saved revision ${storedRevision}`);
+  }
+}
+
 function asStringId(raw: string): string {
   const id = String(raw ?? '').trim();
   if (!id) {
@@ -628,7 +642,7 @@ export async function adoptServerProfileHomeConnectionDescriptor(opts: Readonly<
     }
     if (!promotesAdvisory && previous && previous.revision === descriptor.revision) {
       if (!isDeepStrictEqual(previous, descriptor)) {
-        throw new Error('Home descriptor conflicts with the persisted profile revision');
+        throw new ServerProfileDescriptorRevisionError('home_descriptor_conflict', previous.revision, descriptor.revision);
       }
       adoptedProfile = requireProfileProjection(rawExisting, resolvedId);
       return current;
@@ -812,7 +826,9 @@ export async function setServerProfileEndpointsById(opts: Readonly<{
       descriptor: observation.descriptor, expectedProfileId: id, observation: 'exact',
     });
     if (adopted.outcome === 'stale') {
-      throw new Error('Home endpoint refresh was rejected by descriptor revision admission');
+      throw new ServerProfileDescriptorRevisionError(
+        'stale_home_descriptor', adopted.profile.homeConnectionDescriptor!.revision, observation.descriptor.revision,
+      );
     }
   }
   const now = Date.now();
