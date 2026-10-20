@@ -314,7 +314,7 @@ export function resolveUsagePageAccountingRequests(queries: readonly UsageQuery[
   return resolveUsagePageAccountingReads(queries, nowMs).map(read => read.query);
 }
 
-function retainAccountingOnReadFailure(observed: UsageAccountingSourceSnapshot | undefined,
+export function retainAccountingOnReadFailure(observed: UsageAccountingSourceSnapshot | undefined,
   value: UsageAnalyticsQueryResponse | undefined, asOfMs: number | undefined): UsageAccountingSourceSnapshot | undefined {
   // Authority loss/cancellation never revives previously disclosed facts.
   if (!observed || observed.value !== undefined || value === undefined || observed.status !== 'error'

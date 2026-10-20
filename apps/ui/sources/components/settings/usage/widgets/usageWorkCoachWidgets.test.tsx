@@ -515,8 +515,8 @@ describe('Work and Coach widget bodies', () => {
         modelId: 'third-party/model-snapshot', machineId: 'unknown-machine-uuid' }], evidence: [] }));
       await screen.update(<UsageSessionValueWidget {...props} query={sessionQuery}
         slice={{ ...slice, shownQuery: sessionQuery, work: unknownWork }} id="usage_session_value" testID="value" />);
-      expect(screen.getTextContent()).toContain('Third Party Model Snapshot');
-      expect(screen.getTextContent()).not.toContain('third-party/model-snapshot');
+      expect(screen.getTextContent()).toContain('third-party/model-snapshot');
+      expect(screen.getTextContent()).not.toContain('Third Party Model Snapshot');
       expect(screen.getTextContent()).not.toContain('unknown-machine-uuid');
     } finally { await act(async () => { storage.setState({ machineDisplayById: previous }); }); }
   });
@@ -740,6 +740,11 @@ describe('Work and Coach widget bodies', () => {
     expect(metaText).not.toContain(evidenceLine);
     expect(screen.getTextContent()).not.toContain(evidenceLine);
     await screen.pressByTestIdAsync('coach.finding.compaction_storms.why-header');
+    expect(screen.getTextContent()).toContain(evidenceLine);
+    await screen.update(<UsageCoachWidget {...props} id="usage_coach" testID="coach"
+      model={{ ...props.model, pending: true, refreshing: true, freshness: 'stale' }}
+      slice={{ ...slice, pending: true, coach: { ...coach, currentness: 'stale', asOfMs: 1100 } }} />);
+    expect(screen.findByTestId('coach.finding.compaction_storms.evidence')).toBeTruthy();
     expect(screen.getTextContent()).toContain(evidenceLine);
   });
 

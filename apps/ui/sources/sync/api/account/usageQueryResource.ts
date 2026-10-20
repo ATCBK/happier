@@ -3,7 +3,7 @@ import type { ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/pl
 import { createCanonicalJsonSigningInput } from '@happier-dev/plugin-sdk';
 import { getUsageQueryBatchKey, getUsageQueryKey, normalizeUsageQueryBatchInput, resolveUsageQueryPeriod, usageQueryToAnalyticsRequest, type UsageQuery, type UsageQueryBatchInput } from '@happier-dev/protocol/inputs/usageQuery';
 import { collectUsageWorkSources } from '@happier-dev/protocol/usage/usageWorkSources';
-import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainUsageQueryResultReferences, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsageHowYouWorkSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainAccountingOnReadFailure, retainUsageQueryResultReferences, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsageHowYouWorkSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { ConnectedServicePoolSelectionGetRequestV1Schema, type ConnectedServicePoolSelectionGetRequestV1, type ConnectedServicePoolSelectionGetResponseV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { computePluginUiArtifactSha256Digest } from '@/sync/domains/plugins/ui/artifactIntegrity';
@@ -904,7 +904,11 @@ export async function readUiUsageQueryBatch(
             requireCurrent(context, signal);
             const errorCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'usage_query_failed';
             if (['denied', 'permission_denied', 'stale_surface'].includes(errorCode)) throw error;
-            snapshot = { query, period: periods.get(getUsageQueryKey(query)), status: 'error', errorCode };
+            const retained = priorAccounting.get(getUsageQueryKey(query));
+            // Detail/Work membership must see the same retained accounting as
+            // aggregation, rather than shrinking to the currently hydrated Sessions.
+            snapshot = retainAccountingOnReadFailure({ query, period: periods.get(getUsageQueryKey(query)), status: 'error', errorCode },
+                retained?.value, retained?.asOfMs)!;
         }
         requireCurrent(context, signal);
         accounting.set(getUsageQueryKey(query), snapshot);

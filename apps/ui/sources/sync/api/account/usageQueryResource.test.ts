@@ -15,6 +15,7 @@ import { planSyncActionsFromChanges, plannedChangesAffectUsageQuery } from '@/sy
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { UsageAnalyticsQueryRequestSchema, QualifiedConnectedAccountGroupV4Schema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -3043,6 +3044,63 @@ describe('usage query captured Resource adapter', () => {
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
       await expect.poll(agentTime).toBeUndefined();
     } finally { release(); }
+  });
+
+  it('keeps Account Coach membership on a failed accounting refresh and isolates a Session-scoped sibling', async () => {
+    const ids = ['first', 'second', 'third'];
+    let membership = ids;
+    let failing = false;
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') {
+        const pinned = UsageAnalyticsQueryRequestSchema.parse(request.body).filters?.sessionIds;
+        if (failing && !pinned?.length) return Response.json({ error: 'unavailable' }, { status: 503 });
+        return Response.json({ ...value, contributions: membership.filter(id => !pinned?.length || pinned.includes(id))
+          .map(id => ({ ...workContribution, id, sessionId: id, turnId: null })) });
+      }
+      const detail = /^\/v2\/sessions\/(first|second|third)$/.exec(request.path);
+      if (detail) return Response.json({ session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: detail[1]!,
+        seq: 1, updatedAt: 900, agentStateVersion: 1 }), agentState: JSON.stringify({ completedRequests: {
+          approval: { tool: 'Bash', arguments: {}, turnId: 'turn', createdAt: 100, completedAt: 200, status: 'approved' },
+        } }) } });
+      const turns = /^\/v1\/sessions\/(first|second|third)\/turns$/.exec(request.path);
+      if (turns) return Response.json({ v: 1, sessionId: turns[1]!, updatedAt: 900, turns: [] });
+      if (request.path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
+      return undefined;
+    });
+    const serverId = captured.accountLifetime.scope.serverId;
+    // Accounting admits historical Sessions independently of the small hydrated detail cache.
+    storage.setState({ sessions: { first: createSessionFixture({ id: 'first', serverId, encryptionMode: 'plain' }) } });
+    const store = getUsageQueryResourceStore(captured);
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false });
+    const broad = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const pinned = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ ...query, session: 'first' })],
+    }) });
+    const coach = (entry: typeof broad) => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!.coach!;
+    await broad.refresh();
+    await pinned.refresh();
+    expect(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+    const finding = coach(broad).findings.find(row => row.detectorId === 'approval_friction')!;
+    expect(finding.measurements.find(row => row.metric === 'permission_requests')?.value).toBe(3);
+    // Failed A retains the same displayed accounting; private evidence must use that same population.
+    // Alternate success/failure and a scoped sibling as periodic background reads do.
+    for (let pass = 0; pass < 2; pass++) {
+      await pinned.refresh();
+      failing = true;
+      await broad.refresh();
+      expect.soft(coach(pinned).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
+      expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+      expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+      const failed = decodeUsageQueryResource(broad.getSnapshot().value!);
+      expect(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'accounting', status: 'error' }));
+      expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+      failing = false;
+      await broad.refresh();
+      expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+    }
+    membership = ['first'];
+    await broad.refresh();
+    expect(coach(broad).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
   });
 
   it('reuses a list-only Session marker and refreshes it when that row advances', async () => {
